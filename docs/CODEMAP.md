@@ -8,14 +8,17 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.2.1"`).
+Package docstring + `__version__` (`"0.3.0"`).
 
 ### `perun/config.py`
 Filesystem layout + persisted settings.
 * Constants: `PACKAGE_DIR`, `REPO_ROOT`, `HOME`, `DB_PATH`, `CONFIG_PATH`,
   `LOGS_DIR`, `RUNS_DIR`, `WEB_DIR`, `MCP_SERVER`, `TEMPLATES_DIR`.
-* `_resolve_home()`, `_default_roots()`.
+* `_resolve_home()`, `_default_roots()`, `is_control_path()` (True when a path is
+  the Perun repo root — identifies the control-plane project, so it can never be
+  confused with a user project).
 * `Settings` (dataclass): `roots host port default_model default_agent
+  orchestrator_model orchestrator_agent orchestrator_instructions
   max_concurrent_runs run_timeout ollama_host embed_model embed_dim
   telegram_token telegram_allowed_chats auto_discover_on_start
   index_docs_on_discover`.
@@ -34,15 +37,31 @@ SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 ### `perun/registry.py`
 Registry CRUD (projects, sessions, runs, activity, bridge links).
 * Helpers: `now_iso()`, `slugify()`, `project_dict()` (parses the stored
-  manifest snapshot, adds `has_manifest`).
+  manifest snapshot, adds `has_manifest` and `is_control` — set from
+  `config.is_control_path()`).
 * Projects: `add_project()`, `update_project()`, `touch_project()`,
   `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`,
   `set_project_manifest()`, `get_project_manifest()`.
 * Sessions: `create_session()`, `get_session()`, `find_session_by_opencode()`,
   `update_session()`, `list_sessions()`, `delete_session()`.
-* Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`.
+* Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`,
+  `list_active_runs()` (queued/running runs joined with their project — the data
+  behind the dashboard storm layer).
 * Activity: `log_activity()`, `list_activity()`.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
+
+### `perun/control.py`
+The **control plane** — Perun as an always-present, undeletable orchestrator
+project, identified by `config.is_control_path()` rather than a reserved slug.
+* `ORCHESTRATOR_INSTRUCTIONS` (the default orchestrator persona), `is_control()`,
+  `ensure()` (idempotent; called on server lifespan, Telegram `/projects`, and
+  MCP import — re-creates the row if the registry is wiped), `resolve()`.
+
+### `perun/projects.py`
+Shared project creation/registration, used by **both** the HTTP wizard
+(`POST /api/projects`) and the MCP tools.
+* `ProjectError`, `name_from_repo()`, `sync_manifest()`, `register_or_update()`,
+  `create()` (the `existing` / `new` / `clone` methods + optional git/index steps).
 
 ### `perun/embeddings.py`
 Ollama transport + vector math (project-agnostic).
@@ -95,9 +114,13 @@ Start / stream / cancel `opencode run`.
 * `EventBus` (`subscribe`, `unsubscribe`, `publish`, `subscribe_all`,
   `unsubscribe_all`, `close`).
 * Process helpers: `resolve_opencode()`, `terminate_tree()`, `parse_event()`,
-  `compose_prompt()` (prepends project instructions to new sessions).
+  `compose_prompt(project, prompt, settings=…)` (prepends project instructions to a
+  new session; for the control project it injects
+  `Settings.orchestrator_instructions` instead).
 * `Orchestrator`: `start_run()`, `run_and_wait()`, `cancel()`, `is_final()`,
-  `active()`, `_worker()`, `_execute()`, `_finalize()`, `stream()`.
+  `active()`, `_worker()`, `_execute()`, `_finalize()`, `stream()`. Model/agent
+  precedence: explicit arg → project override → (control only)
+  `orchestrator_model`/`orchestrator_agent` → global `default_model`/`default_agent`.
 * Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `INSTRUCTION_OPEN`,
   `INSTRUCTION_CLOSE`.
 
@@ -105,9 +128,13 @@ Start / stream / cancel `opencode run`.
 Shared Telegram ⇄ Perun bridge.
 * Formatting: `format_html()`, `chunk()`, `_esc()`.
 * `PidLock` (single-instance; `acquire()`, `release()`, side-effect-free
-  `is_held()`, `_default_mutex_name()` namespaces the mutex by `PERUN_HOME`), `_pid_alive()`.
+  `is_held()`, `_default_mutex_name()` namespaces the mutex by `PERUN_HOME`),
+  `_pid_alive()`. One poller machine-wide (`getUpdates` allows a single consumer);
+  a second start is refused rather than fighting with HTTP 409s.
 * `PerunTelegramBridge`: `api()`, `send()`, `handle_command()`,
-  `run_message()`, `worker()`, `authorised()`, `run()`.
+  `_current_project()` (single-user-project auto-select, else the control plane),
+  `run_message()`, `worker()`, `authorised()`, `run()`. Commands include
+  `/orchestrator` (`/perun`, `/overseer`).
 * Entry: `run_bridge()`, `_setup_logging()`.
 
 ### `perun/server.py`
@@ -115,21 +142,26 @@ FastAPI app + SSE + static dashboard.
 * Globals: `SETTINGS`, `ORCH`, `app`, `STARTED_AT`, `_SSE_HEADERS`.
 * Guard: `_origin_guard` middleware + `_hostname()`, `_host_allowed()`,
   `_origin_ok()` — anti-CSRF / anti-DNS-rebinding, applied to `/api/*` only.
-* Helpers: `_project_or_404()`, `_resolve_project()`, `_ok()`, `_sse()`,
-  `_max_activity_id()`, `_new_activity()`.
-* Endpoint groups: health (`/api/health`, `/api/models`), projects
-  (`/api/projects…` incl. the creation wizard, `/api/projects/{slug}/instructions`,
-  `/api/projects/{slug}/manifest…`, `/api/projects/{slug}/git…`), filesystem
+* Helpers: `_project_or_404()`, `_resolve_project()`, `_control_project()`,
+  `_control_slug()`, `_ok()`, `_sse()`, `_max_activity_id()`, `_new_activity()`.
+* Endpoint groups: health (`/api/health` — includes the `control` slug — and the
+  structured `/api/models`), projects (`/api/projects…` incl. the creation wizard,
+  `/api/projects/{slug}/instructions`, `/api/projects/{slug}/manifest…`,
+  `/api/projects/{slug}/git…`; `DELETE` refuses the control project), filesystem
   (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
-  (`/api/runs…`, `/api/runs/{id}/stream`, `/api/stream`), memory
-  (`/api/memory/*`), activity (`/api/activity`), settings (`/api/settings`),
-  telegram (`/api/telegram/*`).
+  (`/api/runs…`, `/api/runs/active` — declared before `/api/runs/{id}` —
+  `/api/runs/{id}/stream`, `/api/stream`; `POST /api/runs` defaults to the
+  orchestrator), memory (`/api/memory/*`), activity (`/api/activity`), settings
+  (`/api/settings`), telegram (`/api/telegram/*`).
 * `_register_project()`, `_sync_manifest()`, `serve()` (uvicorn launcher).
 
 ### `perun/__main__.py`
 CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
 `cmd_status`, `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_import_legacy`,
 `cmd_install`, `cmd_mcp`, `build_parser()`, `main()`.
+* `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
+  — the `serve --bridge` path starts the bridge at most once per process and keeps
+  the single-instance mutex alive for the whole process.
 
 ### `perun/integrations/install_global.py`
 Idempotent global install into `~/.config/opencode`.
@@ -144,35 +176,48 @@ Idempotent global install into `~/.config/opencode`.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). Tools: `perun_list_projects`, `perun_project_info`,
-`perun_memory_search`, `perun_memory_store`, `perun_docs_index`,
-`perun_get_instructions`, `perun_set_instructions`, `perun_get_manifest`,
-`perun_set_manifest`, `perun_start_session`, `perun_ask`, `perun_run_status`,
-`perun_telegram_send`.
-* `_resolve_project()`, `_project_line()`, `main()`.
+stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
+`perun_project_info`, `perun_create_project`, `perun_update_project`,
+`perun_delete_project`, `perun_discover`, `perun_memory_search`,
+`perun_memory_store`, `perun_docs_index`, `perun_get_instructions`,
+`perun_set_instructions`, `perun_get_manifest`, `perun_set_manifest`,
+`perun_start_session`, `perun_ask`, `perun_run_status`, `perun_telegram_send`.
+* `_resolve_project()`, `_project_line()`, `main()`; calls `control.ensure()` at
+  import time so the orchestrator always exists.
 
 ---
 
 ## Web dashboard `web/`
 
-* `web/index.html` — app shell (sidebar, topbar, view container, modal/toast
-  roots, hidden `#model-root` datalist host).
+* `web/index.html` — app shell (sidebar, topbar, storm meter, `#perun-fx` FX
+  canvas, `#perun-sigil` brand mark, view container, modal/toast roots, hidden
+  `#model-root` datalist host).
 * `web/css/perun.css` — design tokens & components (gold/dark theme), including
-  wizard, folder-browser, structured-editor, and manifest styles.
+  wizard, folder-browser, structured-editor, manifest, `modelSelect`, chat, and
+  the storm/FX styles (sigil eyes, storm meter, `.is-awake` / `.is-working`,
+  `.card-pip`, `.perun-flash`), with a `prefers-reduced-motion` guard.
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
-  `router()`, `renderMarkdown()`, and the view renderers (`viewDashboard`,
-  `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`, `mountGit`,
-  `mountManifest`, `manifestOverview`, `projectInstructionsForm`, `viewConsole`,
-  `viewMemory`, `viewActivity`, `viewTelegram`, `viewSettings`),
-  `mountConsole()`, `streamRun()`.
+  `router()`, `renderMarkdown()`, `modelSelect()`, the `perunFx` canvas engine
+  (`flash()`), presence (`presence`, `computePresence()`, `pipState()`,
+  `applyCardStates()`, `refreshPresence()`, `updateStormMeter()`), and the view
+  renderers (`viewDashboard`, `viewOrchestrator`, `viewProjects`, `projectWizard`,
+  `browseFolder`, `viewProject`, `mountGit`, `mountManifest`, `manifestOverview`,
+  `projectInstructionsForm`, `viewConsole`, `viewMemory`, `viewActivity`,
+  `viewTelegram`, `viewSettings`), `mountConsole()`, `streamRun()`,
+  `streamOrchestrator()`.
 * `web/assets/Cinzel.ttf` — heading font (shared with the company site).
+* `web/assets/perun.ico` / `perun.png` — gold-bolt app icon (favicon + Windows
+  shortcut), generated by `tools/make_icon.py`.
 
 ---
 
 ## Root files
 
+* `Perun.cmd` — Windows one-click launcher (idempotent dashboard start; never
+  starts a second Telegram bridge).
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
+* `tools/make_icon.py` — regenerates `web/assets/perun.ico` / `perun.png`.
 * `opencode.json` — repo-local OpenCode config (perun MCP + AGENTS.md).
 * `requirements.txt`, `.gitignore`, `README.md`, `AGENTS.md`.
 
@@ -192,5 +237,11 @@ stdio MCP server (`perun`). Tools: `perun_list_projects`, `perun_project_info`,
 * `test_git.py` — the `git` CLI wrapper against a temp repository.
 * `test_orchestrator.py` — `parse_event`, `resolve_opencode`, `EventBus`,
   `compose_prompt` instructions injection, end-to-end stdout-error capture.
-* `test_telegram_lock.py` — mutex namespacing + side-effect-free `is_held()`.
+* `test_telegram_lock.py` — mutex namespacing, side-effect-free `is_held()`, and
+  the second-acquire-is-refused guarantee (the bridge can never multiply).
+* `test_telegram_routing.py` — `_current_project` routing (single-project
+  auto-select, control-plane fallback, `/orchestrator`).
+* `test_control.py` — control plane: `ensure()` / `is_control()` / `resolve()`,
+  the delete guard, and "a run with no project targets the orchestrator".
+* `test_server_security.py` — the origin/host guard (`_origin_guard`) on `/api/*`.
 * `test_cli.py` — UTF-8 stdio hardening and non-ASCII recall output.

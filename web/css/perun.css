@@ -147,6 +147,8 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 /* ---------- project card ---------- */
 .proj-card { position: relative; }
 .proj-card .pc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.proj-card .pc-top > div:first-child { min-width: 0; }
+.proj-card .pc-flags { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
 .proj-card .pc-name { font-family: 'Cinzel', serif; font-size: 1.08rem; }
 .proj-card .pc-path { font-size: .74rem; color: var(--text-muted); word-break: break-all; margin-top: 2px; }
 .proj-card .pc-desc { color: var(--text-secondary); font-size: .85rem; margin-top: 10px; min-height: 2.4em; }
@@ -330,6 +332,149 @@ select { cursor: pointer; }
 .md-body code { background: var(--bg-inset); padding: 1px 5px; border-radius: 4px; font-family: 'Consolas', monospace; font-size: .82rem; }
 .md-body pre { background: var(--bg-inset); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
 .md-body a { color: var(--gold-light); }
+
+/* ---------- searchable model picker ---------- */
+.mselect-label { font-size: .72rem; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-muted); }
+.mselect { position: relative; display: inline-flex; align-items: center; min-width: 240px; width: 100%; }
+.mselect-input { width: 100%; padding-right: 34px; }
+.mselect-toggle { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 32px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: .9rem; border-radius: 0 7px 7px 0; }
+.mselect-toggle:hover { color: var(--gold-light); }
+.mselect-panel { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60; max-height: 300px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); padding: 4px; }
+.mselect-group { font-size: .66rem; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); padding: 8px 10px 4px; position: sticky; top: 0; background: var(--bg-card); }
+.mselect-item { padding: 7px 10px; font-size: .8rem; font-family: 'Cascadia Code', 'Consolas', monospace; color: var(--text-secondary); border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mselect-item:hover, .mselect-item.selected { background: var(--bg-card-hover); color: var(--text-primary); }
+.mselect-item.selected { color: var(--gold-light); }
+.mselect-empty { padding: 10px; color: var(--text-muted); font-size: .82rem; }
+
+/* ---------- orchestrator chat ---------- */
+.orch-head-tools { align-items: center; }
+.chat { display: flex; flex-direction: column; padding: 0; overflow: hidden; height: calc(100vh - var(--topbar-h) - 200px); min-height: 340px; }
+.chat-log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.chat-msg { display: flex; flex-direction: column; gap: 5px; max-width: 88%; }
+.chat-msg.user { align-self: flex-end; align-items: flex-end; }
+.chat-msg.assistant { align-self: flex-start; }
+.chat-role { font-size: .66rem; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-muted); }
+.chat-body { padding: 11px 14px; border-radius: 12px; background: var(--bg-inset); border: 1px solid var(--border); font-size: .88rem; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }
+.chat-msg.user .chat-body { background: rgba(201, 162, 39, 0.1); border-color: var(--border-strong); color: var(--text-primary); }
+.chat-body > :first-child { margin-top: 0; }
+.chat-body > :last-child { margin-bottom: 0; }
+.chat-body .err { color: var(--red); }
+.chat-composer { display: flex; gap: 10px; align-items: flex-end; padding: 14px 16px; border-top: 1px solid var(--border); background: var(--bg-secondary); }
+.chat-composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 160px; }
+.chat-composer .btn { height: 44px; }
+
+/* ==========================================================================
+   Perun FX — the storm layer
+   --------------------------------------------------------------------------
+   Three escalating states drive every effect, published on <body> as
+   data-storm:
+
+       calm   nothing is happening
+       awake  a project was touched recently — the eyes glow softly
+       storm  at least one agent run is executing — full lightning
+
+   Project cards additionally carry .is-awake / .is-working. Every animation is
+   disabled under prefers-reduced-motion.
+   ========================================================================== */
+:root { --storm-hot: #fff3c4; }
+
+/* full-viewport lightning canvas — never intercepts clicks */
+#perun-fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 45; }
+
+/* one-shot full-screen flash (perunFx.flash) */
+.perun-flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; z-index: 44;
+    background: radial-gradient(circle at 50% 0%, rgba(228,196,106,.3), transparent 62%); }
+.perun-flash.go { animation: flash-fade .55s ease-out; }
+@keyframes flash-fade { 0% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ---------- the Perun sigil (glowing eyes) ---------- */
+.brand-mark { transition: box-shadow .45s ease, border-color .45s ease, background .45s ease; }
+.brand-mark svg { width: 26px; height: 26px; overflow: visible; display: block; }
+.brand-mark .sigil-brow { fill: none; stroke: rgba(201, 162, 39, .45); stroke-width: 1.6; stroke-linecap: round; }
+.brand-mark .sigil-bolt { fill: rgba(201, 162, 39, .28); transition: fill .45s ease, filter .45s ease; }
+.brand-mark .sigil-eye { fill: #4a3c14; transform-box: fill-box; transform-origin: center;
+    transition: fill .45s ease, filter .45s ease; }
+body[data-storm="awake"] .brand-mark { border-color: var(--gold); box-shadow: 0 0 15px rgba(201, 162, 39, .35); }
+body[data-storm="awake"] .sigil-eye { fill: var(--gold-light); filter: drop-shadow(0 0 3px rgba(228, 196, 106, .85)); }
+body[data-storm="awake"] .sigil-bolt { fill: rgba(201, 162, 39, .5); }
+body[data-storm="storm"] .brand-mark { border-color: var(--storm-hot);
+    box-shadow: 0 0 22px rgba(228, 196, 106, .6), 0 0 48px rgba(201, 162, 39, .28); }
+body[data-storm="storm"] .sigil-eye { fill: var(--storm-hot); filter: drop-shadow(0 0 6px var(--gold-light)); animation: eye-pulse 1.6s ease-in-out infinite; }
+body[data-storm="storm"] .sigil-bolt { fill: var(--gold-light); filter: drop-shadow(0 0 5px rgba(228, 196, 106, .9)); animation: bolt-flicker 2.4s steps(1, end) infinite; }
+@keyframes eye-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+@keyframes bolt-flicker { 0%, 92%, 96%, 100% { opacity: 1; } 93% { opacity: .3; } 94% { opacity: .95; } }
+
+/* ---------- topbar storm meter ---------- */
+.storm-meter { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--bg-inset); font-size: .7rem; letter-spacing: 1.3px;
+    text-transform: uppercase; color: var(--text-muted); transition: all .35s ease; }
+.storm-meter .sm-eyes { display: inline-flex; gap: 5px; }
+.storm-meter .sm-eye { width: 7px; height: 7px; border-radius: 50%; background: #3a3320; transition: background .35s ease, box-shadow .35s ease; }
+body[data-storm="awake"] .storm-meter { color: var(--gold-light); border-color: var(--border-strong); }
+body[data-storm="awake"] .sm-eye { background: var(--gold-light); box-shadow: 0 0 6px rgba(228, 196, 106, .8); }
+body[data-storm="storm"] .storm-meter { color: var(--storm-hot); border-color: var(--gold); background: rgba(201, 162, 39, .1); }
+body[data-storm="storm"] .sm-eye { background: var(--storm-hot); box-shadow: 0 0 10px var(--gold-light); animation: eye-pulse 1.4s ease-in-out infinite; }
+
+/* a slow storm-current running under the topbar while agents work */
+.topbar { position: relative; }
+.topbar::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; opacity: 0;
+    background: linear-gradient(90deg, transparent, var(--gold-light), transparent);
+    background-size: 40% 100%; background-repeat: no-repeat; transition: opacity .4s ease; pointer-events: none; }
+body[data-storm="storm"] .topbar::after { opacity: .9; animation: bar-sweep 2.2s linear infinite; }
+@keyframes bar-sweep { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+
+/* ---------- project cards: awake & working ---------- */
+.proj-card.is-awake { border-color: rgba(201, 162, 39, .42); }
+.proj-card.is-working { border-color: var(--gold); animation: card-breathe 2.6s ease-in-out infinite; }
+@keyframes card-breathe {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(201, 162, 39, 0), var(--shadow); }
+    50% { box-shadow: 0 0 24px rgba(201, 162, 39, .3), var(--shadow); }
+}
+/* a travelling energy rim around a working card */
+.proj-card.is-working::before {
+    content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+    background: conic-gradient(from 0deg, transparent 0 60%, rgba(228, 196, 106, .9) 76%, #fff3c4 83%, transparent 92% 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: rim-spin 2.6s linear infinite;
+}
+@keyframes rim-spin { to { transform: rotate(360deg); } }
+.proj-card.is-working .pc-name { text-shadow: 0 0 12px rgba(228, 196, 106, .5); }
+
+/* per-card status pip (a pair of eyes) */
+.card-pip { display: inline-flex; align-items: center; gap: 6px; font-size: .66rem; letter-spacing: 1.1px;
+    text-transform: uppercase; color: var(--text-muted); }
+.card-pip .pip-eyes { display: inline-flex; gap: 4px; }
+.card-pip .pip-eye { width: 6px; height: 6px; border-radius: 50%; background: #3a3320; transition: all .3s ease; }
+.card-pip .pip-bolt { opacity: 0; color: var(--storm-hot); }
+.card-pip.awake { color: var(--gold-light); }
+.card-pip.awake .pip-eye { background: var(--gold-light); box-shadow: 0 0 5px rgba(228, 196, 106, .75); }
+.card-pip.working { color: var(--storm-hot); }
+.card-pip.working .pip-eye { background: var(--storm-hot); box-shadow: 0 0 8px var(--gold-light); animation: eye-pulse 1.2s ease-in-out infinite; }
+.card-pip.working .pip-bolt { opacity: 1; animation: bolt-flicker 1.8s steps(1, end) infinite; }
+
+/* the live run banner inside a working card */
+.pc-running { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: .76rem; color: var(--gold-light);
+    background: rgba(201, 162, 39, .07); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 6px 10px; }
+.pc-running .pr-prompt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+
+/* ---------- legend ---------- */
+.storm-legend { display: flex; gap: 20px; flex-wrap: wrap; margin: 14px 0 2px; font-size: .78rem; color: var(--text-secondary); }
+.storm-legend .lg { display: inline-flex; align-items: center; gap: 8px; }
+.storm-legend .lg-eye { width: 8px; height: 8px; border-radius: 50%; background: #3a3320; }
+.storm-legend .lg.awake .lg-eye { background: var(--gold-light); box-shadow: 0 0 6px rgba(228, 196, 106, .7); }
+.storm-legend .lg.working .lg-eye { background: var(--storm-hot); box-shadow: 0 0 8px var(--gold-light); }
+
+@media (prefers-reduced-motion: reduce) {
+    .proj-card.is-working, .proj-card.is-working::before,
+    body[data-storm="storm"] .sigil-eye, body[data-storm="storm"] .sigil-bolt,
+    body[data-storm="storm"] .sm-eye, .card-pip.working .pip-eye, .card-pip.working .pip-bolt {
+        animation: none !important;
+    }
+    #perun-fx { display: none; }
+}
 
 @media (max-width: 900px) {
     .app { grid-template-columns: 64px 1fr; }

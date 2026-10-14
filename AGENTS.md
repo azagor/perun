@@ -22,6 +22,9 @@ A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
    Markdown body) with a `perun.json` fallback (`manifest.py`).
 7. Ships a global **MCP server** (`mcp/perun_mcp.py`) so every project inherits
    Perun's tools.
+8. Provides an **always-available orchestrator** — the "control plane"
+   (`control.py`), reachable with **zero** projects registered, with a dashboard
+   chat (`#/orchestrator`) and its own Settings.
 
 ## Core rules for working here
 
@@ -42,6 +45,10 @@ A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve
   unrelated config keys, back up before writing, and be fully reversible.
+* **The Telegram bridge is a singleton.** `getUpdates` allows one consumer per
+  bot token; keep `telegram.PidLock` (a machine-global named mutex) as the guard
+  and never start a second poller. `serve --bridge`, `perun bridge`, the
+  `PerunBridge` logon task, and `Perun.cmd` must all defer to that lock.
 
 ## Adding a new source file
 
@@ -79,6 +86,12 @@ python -m pytest tests/ -q
 
 # boot the dashboard (temp state dir)
 $env:PERUN_HOME="$env:TEMP\perun_dev"; python -m perun serve
+
+# one-click launcher (Windows; idempotent, opens the browser)
+.\Perun.cmd
+
+# regenerate the app icon (web/assets/perun.ico + .png)
+python tools/make_icon.py
 
 # discover + index everything
 python -m perun discover --index

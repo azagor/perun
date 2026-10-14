@@ -93,10 +93,14 @@ def test_settings_get_patch(client):
 
 
 def test_start_run_validation(client):
-    r = client.post("/api/runs", json={"prompt": "hi"})
-    assert r.status_code == 400  # missing project
+    # A missing prompt is an error.
+    r = client.post("/api/runs", json={"project": "ghost"})
+    assert r.status_code == 400
+    # An unknown project is an error.
     r = client.post("/api/runs", json={"project": "ghost", "prompt": "hi"})
-    assert r.status_code == 400  # unknown project
+    assert r.status_code == 400
+    # (A *missing* project is no longer an error — it targets the orchestrator;
+    #  that path is covered with a stubbed orchestrator in test_control.py.)
 
 
 def test_activity_endpoint(client):
@@ -110,6 +114,30 @@ def test_runs_list(client):
 
 
 def test_404_for_unknown_run(client):
+    assert client.get("/api/runs/nope").status_code == 404
+
+
+def test_active_runs_endpoint(client):
+    """The FX endpoint maps active runs to projects and isn't shadowed by
+    the ``/api/runs/{run_uid}`` path parameter."""
+    from perun import registry
+
+    p = registry.add_project("Active", r"C:\active")
+    body = client.get("/api/runs/active").json()
+    assert body["ok"] and body["runs"] == [] and body["projects"] == []
+    assert set(body) >= {"runs", "live", "projects", "count"}
+
+    registry.create_run("run-active", p["id"], "do work", model="m", agent="a")
+    registry.update_run("run-active", status="running")
+    body = client.get("/api/runs/active").json()
+    assert [r["run_uid"] for r in body["runs"]] == ["run-active"]
+    assert body["projects"] == ["active"]
+    assert body["runs"][0]["project_slug"] == "active"
+    assert body["runs"][0]["project_name"] == "Active"
+
+    registry.update_run("run-active", status="done")
+    assert client.get("/api/runs/active").json()["runs"] == []
+    # Still a 404 for a genuinely unknown run — proof the order is right.
     assert client.get("/api/runs/nope").status_code == 404
 
 

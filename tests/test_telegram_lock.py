@@ -63,3 +63,27 @@ def test_status_probe_is_not_fooled_by_bare_name(tmp_path: Path):
 def test_home_is_used_for_namespacing():
     # Sanity: config.HOME is resolved (the conftest points it at a temp dir).
     assert config.HOME is not None
+
+
+def test_second_lock_cannot_acquire_while_held(tmp_path: Path):
+    """The core guarantee: the bridge can never multiply.
+
+    ``getUpdates`` allows a single consumer per bot token, so a second poller
+    would fight with HTTP 409s. A distinct ``PidLock`` (a fresh object, standing
+    in for a second process: another launcher, ``perun bridge``, or the
+    ``PerunBridge`` logon task) must be *refused* while the first holds it, and
+    may take over only after the first releases.
+    """
+    pid_path = tmp_path / "telegram.pid"
+    first = PidLock(pid_path)
+    assert first.acquire() is True
+
+    second = PidLock(pid_path)
+    assert second.acquire() is False          # refused: would be a duplicate poller
+    assert second.acquired is False
+    assert first.acquired is True             # the original keeps the lock
+
+    first.release()
+    assert second.acquire() is True           # now exactly one holder, the second
+    second.release()
+    assert PidLock.is_held(pid_path) is False

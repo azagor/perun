@@ -1,11 +1,16 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.2.1 — security hardening of the dashboard API
-(anti-CSRF / anti-DNS-rebinding guard on `/api/*`, plus stored-XSS fixes) on top
-of v0.2.0 (project management: creation wizard, per-project Git, custom project
-instructions, self-describing `perun.md` manifest, model picker) and the v0.1.0
-core (machine-wide registry + unified memory, agent orchestrator, web dashboard,
-shared Telegram bridge, and a globally-installed MCP server).
+**Latest release:** v0.3.0 — the **control plane** (an always-present
+orchestrator reachable with zero projects registered), a **dashboard chat for the
+orchestrator** with its own custom instructions and a searchable model picker,
+project-management MCP tools, the **storm layer** (Perun's lightning + glowing
+eyes as live idle/awake/working feedback), and a **one-click Windows launcher**
+(`Perun.cmd`). It builds on v0.2.1 (security
+hardening: anti-CSRF / anti-DNS-rebinding guard on `/api/*`, plus stored-XSS
+fixes), v0.2.0 (project management: creation wizard, per-project Git, custom
+project instructions, self-describing `perun.md` manifest, model picker), and the
+v0.1.0 core (machine-wide registry + unified memory, agent orchestrator, web
+dashboard, shared Telegram bridge, and a globally-installed MCP server).
 
 ---
 
@@ -26,6 +31,7 @@ Ollama instance for embeddings.
 | Embeddings | local Ollama `nomic-embed-text` via `/api/embed` |
 | Telegram | a long-polling thread (`PerunTelegramBridge`) |
 | Global integration | stdio MCP server `mcp/perun_mcp.py` + `~/.config/opencode` merge |
+| One-click startup (Windows) | `Perun.cmd` — idempotent dashboard launcher; never starts a second Telegram bridge |
 
 ### Runtime layout (`~/.perun`, override with `PERUN_HOME`)
 
@@ -36,6 +42,24 @@ Ollama instance for embeddings.
   logs/           telegram.log, service logs
   runs/           <run_uid>.log — raw opencode stdout per run
 ```
+
+### One-click launcher (Windows)
+
+`Perun.cmd` at the repo root is the double-click entry point. It finds a Python
+interpreter (`PERUN_PYTHON` → `C:\Python314\python.exe` → `py -3` → `python`),
+resolves the port from `~/.perun/config.json` (`PERUN_PORT` overrides it), then:
+
+* if something is already listening on the port, opens the dashboard and exits —
+  so repeated double-clicks never spawn a second server;
+* otherwise prints a banner, opens the browser, and runs
+  `python -m perun serve --port <N>` in the foreground (close the window or
+  Ctrl+C to stop).
+
+It **never** runs `perun bridge` or `serve --bridge`. Telegram is owned solely by
+the `PerunBridge` logon task, which the launcher only `schtasks /run`s; together
+with the named-mutex singleton (§9) that guarantees exactly one `getUpdates`
+poller. The desktop shortcut's `.ico` is generated deterministically by
+`tools/make_icon.py`.
 
 ---
 
@@ -119,7 +143,8 @@ discovered/registry value. The parsed manifest is snapshotted into the
 ## 5. Project management
 
 **Creation wizard** (`POST /api/projects`, `web/js/perun.js: projectWizard`). A
-single endpoint handles three methods:
+single endpoint handles three methods (the reusable create/register/sync logic
+lives in `perun/projects.py` and is shared with the MCP tools):
 
 * `existing` — register a path (may not exist yet; created lazily on first use);
 * `new` — create the directory and optionally **bootstrap** a starter project
@@ -154,6 +179,33 @@ prepends
 
 Continuations of an existing session inherit the rules from history, so they are
 not re-injected. The raw user prompt is what gets stored on the run row.
+
+### The control plane (always-available orchestrator)
+
+A machine with **nothing registered** must still be reachable, so Perun registers
+*itself* as a protected, always-present project — the **control plane**
+(`perun/control.py`). It is identified by its path (`config.is_control_path()` ==
+the Perun repo root, `config.REPO_ROOT`), not by a reserved slug, so it can never
+be confused with — or deleted as — a user project.
+
+* `control.ensure()` is idempotent and called on server startup (lifespan), on
+  every Telegram `/projects`, and at MCP-server import; `control.resolve()`
+  returns the control project dict. It re-creates the row if the registry is
+  wiped, so the orchestrator survives.
+* `registry.project_dict()` sets `is_control` on the row; the dashboard badges it
+  `orchestrator`, links its card to `#/orchestrator`, and hides its delete
+  button. `DELETE /api/projects/{slug}` and the MCP `perun_delete_project` tool
+  refuse it.
+* `POST /api/runs` with no `project` targets the control slug, and `/api/health`
+  reports it as `control`.
+
+**Orchestrator instructions** (`Settings.orchestrator_instructions`) are the
+control-plane analogue of project instructions: a machine-wide persona/rules
+block injected ahead of every orchestrator prompt. They live in **Settings**, not
+on the project row, because the orchestrator is a singleton and its config must
+survive a registry wipe + `control.ensure()` re-creation. `compose_prompt(
+project, prompt, settings=…)` injects them only when the target project
+`is_control`.
 
 ---
 
@@ -208,7 +260,9 @@ Free-form notes rendered on the project page.
 
 `Orchestrator.start_run(project, prompt, …)`:
 
-1. resolves model/agent (arg → project → global default),
+1. resolves model/agent with a control-only tier: explicit call arg → project
+   override → (when the target `is_control`) `Settings.orchestrator_model` /
+   `orchestrator_agent` → global `default_model` / `default_agent`,
 2. writes a `runs` row (`status=queued`) and an activity entry,
 3. spawns a daemon thread running `_execute`, guarded by
    `threading.Semaphore(max_concurrent_runs)`.
@@ -252,13 +306,13 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | version, uptime, project count, active runs |
-| GET | `/api/models` | `opencode models` listing |
+| GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
+| GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
 | GET | `/api/projects` | list projects |
 | POST | `/api/projects` | wizard: register / create / clone `{method,path,…}` |
 | GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
 | PATCH | `/api/projects/{slug}` | update fields |
-| DELETE | `/api/projects/{slug}` | unregister |
+| DELETE | `/api/projects/{slug}` | unregister (refuses the control project) |
 | POST | `/api/projects/{slug}/index` | sync manifest, then index docs |
 | GET | `/api/projects/{slug}/sessions` | sessions |
 | DELETE | `/api/sessions/{pk}` | delete a session |
@@ -280,7 +334,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/discover` | scan roots & register |
 | GET | `/api/discover/scan` | dry-run scan |
 | GET | `/api/runs` | recent runs (`?project=`) |
-| POST | `/api/runs` | start a run `{project,prompt,model?,agent?,session_pk?}` |
+| GET | `/api/runs/active` | queued/running runs joined with their project (the live storm layer) |
+| POST | `/api/runs` | start a run `{project,prompt,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator |
 | GET | `/api/runs/{run_uid}` | run status/output |
 | POST | `/api/runs/{run_uid}/cancel` | cancel |
 | GET | `/api/runs/{run_uid}/stream` | **SSE** run events |
@@ -296,6 +351,9 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/telegram/status` | bot + allowed chats + `bridge_running` |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/` etc. | static dashboard from `web/` |
+
+`GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
+literal path is not swallowed by the parameterised route.
 
 ### SSE notes
 
@@ -321,15 +379,27 @@ it only on a trusted network.
 
 `PerunTelegramBridge` long-polls `getUpdates`. Routing state lives in
 `bridge_links` (chat → project → session), not a side file. Chat→project
-resolution (`_current_project`) defaults to the sole project when only one is
-registered.
+resolution (`_current_project`) keeps the single-user-project auto-select (the
+control plane is excluded from it) and otherwise falls back to the
+**orchestrator** (`control.ensure()`), so a chat can always be answered even with
+nothing registered.
 
-Commands: `/start` `/help`, `/projects`, `/project <name|#>`, `/new` `/reset`,
-`/status`, `/stop` `/cancel`, `/remember <fact>`, `/recall <query>`, `/index`.
-Anything else is treated as a prompt and answered by a Perun-orchestrated run,
-with a typing indicator and reply threading. `format_html()` renders a safe
-subset of Markdown into Telegram HTML; `chunk()` splits at 3900 chars.
-`PidLock` (named Windows mutex / POSIX pid-file) enforces one instance.
+Commands: `/start` `/help`, `/projects` (lists the orchestrator first),
+`/project <name|#>`, `/orchestrator` (`/perun`, `/overseer`) to switch to the
+control plane in place, `/new` `/reset`, `/status`, `/stop` `/cancel`,
+`/remember <fact>`, `/recall <query>`, `/index`. Anything else is treated as a
+prompt and answered by a Perun-orchestrated run, with a typing indicator and
+reply threading. `format_html()` renders a safe subset of Markdown into Telegram
+HTML; `chunk()` splits at 3900 chars.
+
+**Exactly one poller.** `getUpdates` allows a single consumer per bot token, so
+two bridges would fight with HTTP 409s. Single-instance is enforced machine-wide
+by `telegram.PidLock` (a named Windows mutex namespaced by `PERUN_HOME`; a POSIX
+pid-file) and honoured by both `run_bridge()` (the `bridge` CLI, and the
+`PerunBridge` logon task) and `_start_bridge_thread()` (`serve --bridge`, which now
+keeps the lock referenced for the process lifetime). A second attempt refuses
+instead of poller-fighting, and the `PerunBridge` task is registered with
+`IgnoreNew`.
 
 ---
 
@@ -354,12 +424,22 @@ exactly the Perun keys/files; runtime data in `~/.perun` is kept.
 ## 11. MCP server
 
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
-`db.init_db()`s, and exposes thirteen tools. `_resolve_project()` accepts a slug,
-a path, or `None` — for `None` it walks up from the current working directory to
-the nearest registered project. `perun_ask` is blocking; `perun_start_session`
-returns immediately with a run id. `perun_get_instructions` /
-`perun_set_instructions` read/write the project-scoped instructions;
-`perun_get_manifest` / `perun_set_manifest` read/write `perun.md`.
+`db.init_db()`s, calls `control.ensure()` at import, and exposes **seventeen**
+tools:
+
+* **Registry:** `perun_list_projects`, `perun_project_info`,
+  `perun_create_project`, `perun_update_project`, `perun_delete_project`
+  (requires `confirm=True`; refuses the control plane), `perun_discover`.
+* **Memory & docs:** `perun_memory_search`, `perun_memory_store`,
+  `perun_docs_index`.
+* **Instructions & manifest:** `perun_get_instructions`,
+  `perun_set_instructions`, `perun_get_manifest`, `perun_set_manifest`.
+* **Runs & messaging:** `perun_start_session` (returns a run id immediately),
+  `perun_ask` (blocking), `perun_run_status`, `perun_telegram_send`.
+
+`_resolve_project()` accepts a slug, a path, or `None` — for `None` it walks up
+from the current working directory to the nearest registered project. Project
+creation is shared with the HTTP wizard (`perun/projects.py`).
 
 ---
 
@@ -367,16 +447,30 @@ returns immediately with a run id. `perun_get_instructions` /
 
 `web/` is a dependency-free SPA (vanilla JS, hash routing).
 
-* **Views:** Dashboard, Projects (+ detail with tabs Overview/Console/Sessions/
-  Memory/Activity/Git/Manifest/Instructions/Config), Agent Console (live SSE),
-  Memory Explorer, Activity (live `/api/stream`), Telegram, Settings.
+* **Views:** Dashboard, Orchestrator chat (`#/orchestrator`), Projects (+ detail
+  with tabs Overview/Console/Sessions/Memory/Activity/Git/Manifest/Instructions/
+  Config), Agent Console (live SSE), Memory Explorer, Activity (live
+  `/api/stream`), Telegram, Settings.
+* **Orchestrator chat** targets the control plane; it streams in place and works
+  with zero other projects registered. Its Settings card edits the orchestrator's
+  **model**, **agent**, and **custom instructions**.
+* **Searchable model picker** (`modelSelect`): a reusable combobox that filters
+  the structured `/api/models` catalogue with a live search bar; the native
+  `<datalist>` is kept for wizard/manifest inputs.
+* **Storm layer** (`perunFx`): a full-viewport `<canvas>` lightning engine plus an
+  animated brand sigil whose **eyes glow**. Three escalating states — **idle**,
+  **awake** (a project touched in the last 15 min), **storm** (≥1 run running) —
+  are published on `<body data-storm>` and drive a topbar storm meter, a
+  travelling energy rim + eye pips on working cards, and a one-shot screen flash
+  when a run starts. All motion is disabled under `prefers-reduced-motion`.
 * **Project wizard & folder browser** are modal flows over `/api/projects` and
   `/api/fs/*`; **Git** and **Manifest** tabs load their own data lazily.
 * **Manifest body** is rendered by `renderMarkdown()` — a small, escaped-by-default
   Markdown subset (headings, lists, emphasis, code, links); link targets are
   restricted to `http(s)`, `mailto`, or relative URLs.
 * **Design tokens** mirror peruninthemachine.com: `#050505` background,
-  `#c9a227` gold, `Cinzel` headings (font copied to `web/assets/Cinzel.ttf`).
+  `#c9a227` gold, `Cinzel` headings (font copied to `web/assets/Cinzel.ttf`), and
+  the gold-bolt favicon `web/assets/perun.ico`.
 * **Live output** uses `EventSource`; streams are closed on navigation.
 
 ---
@@ -388,6 +482,8 @@ returns immediately with a run id. `perun_get_instructions` /
 | `roots` | `C:/my_apps` + `~/projects`/`~/src`/`~/code` that exist | discovery roots |
 | `host` / `port` | `127.0.0.1` / `8760` | dashboard bind |
 | `default_model` / `default_agent` | `""` | fallbacks when a project has none |
+| `orchestrator_model` / `orchestrator_agent` | `""` | control-plane (orchestrator) model/agent, outranking the global default |
+| `orchestrator_instructions` | `""` | machine-wide persona/rules injected into every orchestrator prompt |
 | `max_concurrent_runs` | `3` | orchestrator semaphore |
 | `run_timeout` | `1800` | seconds per run |
 | `ollama_host` | `http://127.0.0.1:11434` | embeddings provider |

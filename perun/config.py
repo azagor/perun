@@ -41,6 +41,23 @@ MCP_SERVER: Path = REPO_ROOT / "mcp" / "perun_mcp.py"
 TEMPLATES_DIR: Path = PACKAGE_DIR / "integrations" / "templates"
 
 
+def is_control_path(path: "str | Path | None") -> bool:
+    """True when *path* is the Perun repository itself.
+
+    The control plane (see :mod:`perun.control`) is the agent session whose
+    working directory is the Perun repo. It is identified by that path so it can
+    never be confused with — or deleted as — a user project, and so it survives
+    even when the registry is emptied.
+    """
+    if not path:
+        return False
+    try:
+        return (os.path.normcase(os.path.abspath(str(path)))
+                == os.path.normcase(os.path.abspath(str(REPO_ROOT))))
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def _default_roots() -> list[str]:
     env = os.environ.get("PERUN_ROOTS")
     if env and env.strip():
@@ -62,6 +79,9 @@ class Settings:
     port: int = 8760
     default_model: str = ""
     default_agent: str = ""
+    orchestrator_model: str = ""
+    orchestrator_agent: str = ""
+    orchestrator_instructions: str = ""
     max_concurrent_runs: int = 3
     run_timeout: int = 1800
     ollama_host: str = "http://127.0.0.1:11434"

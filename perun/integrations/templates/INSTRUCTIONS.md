@@ -7,6 +7,8 @@ regardless of which folder this repository lives in:
 * a **registry of all your projects** and their metadata,
 * a **unified, project-namespaced memory** (facts + semantic document search),
 * the ability to **start and inspect agent sessions in other projects**,
+* an **always-available orchestrator** (the "control plane") you can reach even
+  when no project is registered — and that can itself create/register projects,
 * a **shared Telegram bridge** for reaching you from a phone,
 * each project's **custom instructions** and self-describing **`perun.md` manifest**.
 
@@ -16,6 +18,10 @@ regardless of which folder this repository lives in:
 |------|---------|
 | `perun_list_projects` | List every registered project (slug, name, path, kind). |
 | `perun_project_info` | Details for one project (counts, recent activity, model/agent). |
+| `perun_create_project` | Create / register / clone a project (shared with the dashboard wizard). |
+| `perun_update_project` | Rename, re-describe, or re-tag a project. |
+| `perun_delete_project` | Unregister a project (requires `confirm=true`; refuses the orchestrator). |
+| `perun_discover` | Scan the discovery roots and register new projects. |
 | `perun_memory_search` | Semantic + keyword search across facts and indexed docs. |
 | `perun_memory_store` | Store a durable fact (global or project scope). |
 | `perun_docs_index` | (Re)index a project's `docs/*` into the vector store. |
@@ -39,6 +45,8 @@ target another project.
   `all_projects` enabled, or `perun_list_projects`.
 * **Remembering something durable** that should outlive this session →
   `perun_memory_store`.
+* **Creating / managing projects** (register an existing folder, scaffold a new
+  one, or scan the machine) → `perun_create_project` / `perun_discover`.
 * **Delegating work** to another project's agent → `perun_start_session` /
   `perun_ask`.
 * **Reaching the user** out-of-band → `perun_telegram_send`.
@@ -50,4 +58,6 @@ Perun's own registry.
 ## Dashboard
 
 If the per-project question is really about orchestration, the user can open
-Perun's dashboard at <http://127.0.0.1:8760> (`python -m perun serve`).
+Perun's dashboard at <http://127.0.0.1:8760> (`python -m perun serve`, or
+double-click `Perun.cmd` on Windows). Its **storm layer** shows which projects are
+awake or working, and `#/orchestrator` is a chat with Perun itself.

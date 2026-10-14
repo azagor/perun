@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from . import db
+from . import config, db
 
 
 def now_iso() -> str:
@@ -113,6 +113,9 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["favorite"] = bool(d.get("favorite"))
     d["enabled"] = bool(d.get("enabled"))
+    # The control plane is the self-registered Perun repo; the dashboard uses
+    # this flag to badge it and to protect it from deletion.
+    d["is_control"] = config.is_control_path(d.get("path"))
     # Expose the parsed manifest (front-matter data only; the body is served by
     # the dedicated /manifest endpoint to keep list payloads small).
     raw_manifest = d.get("manifest") or ""
@@ -279,6 +282,29 @@ def list_runs(project_id: int | None = None, limit: int = 50) -> list[dict[str, 
             )
         else:
             rows = db.rows(conn, "SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in rows]
+
+
+def list_active_runs() -> list[dict[str, Any]]:
+    """Runs that are queued or running right now, joined with their project.
+
+    This is the "an agent is actively working" signal the dashboard animates on:
+    unlike the in-memory :meth:`orchestrator.Orchestrator.active` list (which only
+    knows about live child processes in *this* server), it survives a restart and
+    carries the owning project's slug/name so each project card can light up.
+    """
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT r.run_uid, r.status, r.prompt, r.model, r.agent,
+                      r.session_pk, r.opencode_session_id,
+                      r.started_at,
+                      p.slug AS project_slug, p.name AS project_name,
+                      p.path AS project_path
+               FROM runs r JOIN projects p ON p.id = r.project_id
+               WHERE r.status IN ('queued', 'running')
+               ORDER BY r.id DESC""",
+        )
         return [dict(r) for r in rows]
 
 

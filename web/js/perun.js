@@ -31,6 +31,8 @@ const state = {
     models: [],
     runSource: null,
     activitySource: null,
+    // Orchestrator chat continuity (session per dashboard visit).
+    orchestrator: { sessionPk: null, ocSid: '' },
 };
 
 /* ---------------------------------------------------------------- api ---- */
@@ -139,7 +141,11 @@ const KIND_BADGE = { opencode: 'gold', git: 'blue', dir: 'muted' };
 const STATUS_BADGE = { done: 'green', queued: 'muted', running: 'amber', failed: 'red', cancelled: 'red', timeout: 'red' };
 
 /* --------------------------------------------------------------- data --- */
-async function loadProjects() { state.projects = (await api('/api/projects')).projects || []; }
+async function loadProjects() {
+    state.projects = (await api('/api/projects')).projects || [];
+    // Projects drive which cards are awake; recompute so the pips update too.
+    if (typeof computePresence === 'function') computePresence();
+}
 async function loadHealth() { state.health = await api('/api/health'); }
 async function loadSettings() { state.settings = (await api('/api/settings')).settings; }
 
@@ -149,12 +155,281 @@ async function loadModels(force) {
     if (state.models.length && !force) return;
     try { state.models = (await api('/api/models')).models || []; } catch (_) { state.models = []; }
 }
-const modelListHtml = () => `<datalist id="model-list">${(state.models || []).map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>`;
+// Model entries are structured ({id, provider, name}); tolerate plain strings.
+const modelId = (m) => (typeof m === 'string' ? m : (m && (m.id || m.label)) || '');
+const modelListHtml = () => `<datalist id="model-list">${(state.models || []).map((m) => `<option value="${esc(modelId(m))}"></option>`).join('')}</datalist>`;
 const nameFromPath = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'project';
+
+/* ============================================================= PERUN FX ==
+   The storm layer. A lightweight canvas draws Perun's lightning and the
+   escalating "eyes" keep the UI alive:
+       calm  → nothing
+       awake → a project was active recently (soft glow)
+       storm → at least one agent run is executing (lightning)
+   Purely cosmetic: it never captures input and is off under reduced motion. */
+const AWAKE_WINDOW_MS = 15 * 60 * 1000;
+
+const perunFx = (() => {
+    const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    let canvas = null, ctx = null, dpr = 1, w = 0, h = 0;
+    let bolts = [];
+    let raf = null;
+    let ambientAt = 0;
+    let level = 'calm';
+
+    function init() {
+        canvas = document.getElementById('perun-fx');
+        if (!canvas || reduced) return;
+        ctx = canvas.getContext('2d');
+        resize();
+        window.addEventListener('resize', resize);
+    }
+    function resize() {
+        if (!canvas) return;
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = window.innerWidth; h = window.innerHeight;
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    // One jagged polyline from (x, y0) down to y1.
+    function makeBolt(x, y0, y1, spread, segs) {
+        const pts = [{ x, y: y0 }];
+        let px = x;
+        for (let i = 1; i <= segs; i++) {
+            const t = i / segs;
+            px += (Math.random() - 0.5) * spread * (1 - t * 0.5);
+            pts.push({ x: px, y: y0 + (y1 - y0) * t });
+        }
+        return pts;
+    }
+    function strike(x, y0, opts = {}) {
+        if (!ctx || reduced) return;
+        const y1 = opts.y1 != null ? opts.y1 : Math.min(h, y0 + (opts.len || 220) + Math.random() * 120);
+        const main = makeBolt(x, y0, y1, opts.spread || 46, opts.segs || 9);
+        const branches = [];
+        const nBranch = opts.branches != null ? opts.branches : 2;
+        for (let b = 0; b < nBranch; b++) {
+            const p = main[2 + Math.floor(Math.random() * Math.max(1, main.length - 3))];
+            if (!p) continue;
+            const len = 40 + Math.random() * 90;
+            const shift = (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.6);
+            branches.push(makeBolt(p.x, p.y, p.y + len, (opts.spread || 46) * 0.6, 5)
+                .map((q) => ({ x: q.x + shift * (q.y - p.y), y: q.y })));
+        }
+        bolts.push({ main, branches, born: performance.now(), life: opts.life || 440 });
+        if (!raf) raf = requestAnimationFrame(frame);
+    }
+    function poly(pts, alpha, width, color) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.lineWidth = width;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = alpha;
+        ctx.stroke();
+    }
+    function frame(now) {
+        raf = null;
+        ctx.clearRect(0, 0, w, h);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        bolts = bolts.filter((b) => now - b.born < b.life);
+        for (const b of bolts) {
+            const a = Math.pow(1 - (now - b.born) / b.life, 1.6);
+            ctx.shadowColor = 'rgba(228,196,106,.9)'; ctx.shadowBlur = 16;
+            poly(b.main, a * 0.9, 3.2, '#fff3c4');
+            poly(b.main, a * 0.5, 6.5, 'rgba(201,162,39,.55)');
+            ctx.shadowBlur = 10;
+            for (const br of b.branches) poly(br, a * 0.7, 1.6, '#e4c46a');
+            ctx.shadowBlur = 0;
+        }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        if (level === 'storm' && now > ambientAt && bolts.length < 4) {
+            ambientAt = now + 1300 + Math.random() * 2600;
+            strike(w * (0.12 + Math.random() * 0.76), -10,
+                { len: h * (0.4 + Math.random() * 0.35), branches: 2 + Math.floor(Math.random() * 2) });
+        }
+        if (bolts.length || level === 'storm') raf = requestAnimationFrame(frame);
+    }
+    function setLevel(l) {
+        const prev = level;
+        level = l;
+        if (!ctx || reduced) return;
+        if (l === 'storm' && prev !== 'storm') {
+            strike(w * 0.5, -10, { len: h * 0.5, branches: 3 });  // a welcoming volley
+            ambientAt = performance.now() + 900;
+        }
+        if (!raf && (bolts.length || l === 'storm')) raf = requestAnimationFrame(frame);
+    }
+    function flash(originEl) {
+        if (reduced) return;
+        const node = document.createElement('div');
+        node.className = 'perun-flash';
+        document.body.appendChild(node);
+        requestAnimationFrame(() => node.classList.add('go'));
+        setTimeout(() => node.remove(), 620);
+        if (originEl && originEl.getBoundingClientRect) {
+            const r = originEl.getBoundingClientRect();
+            strike(r.left + r.width / 2, r.top, { len: 150 + Math.random() * 140 });
+        }
+    }
+    return { init, strike, setLevel, flash };
+})();
+
+/* --------------------------------------------------- storm presence ---- */
+const presence = { working: new Set(), awake: new Set(), level: 'calm' };
+
+function computePresence() {
+    const prevWorking = presence.working;
+    const working = new Set();
+    for (const r of (state.activeRuns || [])) if (r.project_slug) working.add(r.project_slug);
+    const awake = new Set(working);
+    const now = Date.now();
+    for (const p of (state.projects || [])) {
+        const la = p.last_activity && p.last_activity.ts ? Date.parse(p.last_activity.ts) : NaN;
+        const seen = p.last_seen_at ? Date.parse(p.last_seen_at) : NaN;
+        if ((Number.isFinite(la) && now - la < AWAKE_WINDOW_MS) || (Number.isFinite(seen) && now - seen < AWAKE_WINDOW_MS)) {
+            awake.add(p.slug);
+        }
+    }
+    presence.working = working;
+    presence.awake = awake;
+    presence.level = working.size ? 'storm' : (awake.size ? 'awake' : 'calm');
+    document.body.dataset.storm = presence.level;
+    perunFx.setLevel(presence.level);
+    updateStormMeter();
+    applyCardStates();
+    // Lightning greets a project the moment its agent starts working.
+    for (const slug of working) {
+        if (prevWorking.has(slug)) continue;
+        try {
+            const card = document.querySelector(`.proj-card[data-slug="${CSS.escape(slug)}"]`);
+            if (card) { const r = card.getBoundingClientRect(); perunFx.strike(r.left + r.width / 2, r.top - 8, { len: 170 }); }
+        } catch (_) { /* CSS.escape unavailable — skip the flourish */ }
+    }
+}
+
+const isWorking = (slug) => presence.working.has(slug);
+const isAwake = (slug) => presence.awake.has(slug);
+
+/* The three-level per-project state, in one place, so the card class, the pip
+   class and the pip label can never drift apart. */
+function pipState(slug) {
+    const working = isWorking(slug);
+    const awake = !working && isAwake(slug);
+    return { working, awake, cls: working ? 'working' : (awake ? 'awake' : ''), label: working ? 'working' : (awake ? 'awake' : 'idle') };
+}
+
+function applyCardStates() {
+    document.querySelectorAll('.proj-card[data-slug]').forEach((card) => {
+        const ps = pipState(card.dataset.slug);
+        card.classList.toggle('is-working', ps.working);
+        card.classList.toggle('is-awake', ps.awake);
+        const pip = card.querySelector('.card-pip');
+        if (!pip) return;
+        pip.classList.toggle('working', ps.working);
+        pip.classList.toggle('awake', ps.awake);
+        const lbl = pip.querySelector('[data-pip-label]');
+        if (lbl) lbl.textContent = ps.label;
+    });
+}
+
+function updateStormMeter() {
+    const txt = $('#storm-text');
+    if (txt) {
+        const n = presence.working.size;
+        txt.textContent = n ? `${n} working` : (presence.awake.size ? 'awake' : 'calm');
+    }
+    const meter = $('#storm-meter');
+    if (meter) {
+        const n = presence.working.size;
+        meter.title = n ? `${n} agent(s) working`
+            : (presence.awake.size ? `${presence.awake.size} project(s) active in the last 15 min` : 'All quiet');
+    }
+}
+
+async function refreshPresence() {
+    try { state.activeRuns = (await api('/api/runs/active')).runs || []; }
+    catch (_) { state.activeRuns = []; }
+    computePresence();
+}
+
+/* ------------------------------------------------- model picker (combobox) -
+   A text input with a search-filtered, grouped-by-provider dropdown. The input
+   stays editable, so an arbitrary model id can still be typed by hand. Used for
+   the orchestrator model and the default model. */
+const _openSelects = new Set();
+document.addEventListener('mousedown', (e) => {
+    for (const wrap of Array.from(_openSelects)) {
+        if (!wrap.contains(e.target)) wrap._close();
+    }
+});
+
+function modelSelect(opts = {}) {
+    const wrap = el('div', { class: 'mselect', id: opts.id || null });
+    const input = el('input', {
+        type: 'text', class: 'mselect-input', autocomplete: 'off', spellcheck: 'false',
+        placeholder: opts.placeholder || 'provider/model',
+    });
+    input.value = opts.value || '';
+    const toggle = el('button', { type: 'button', class: 'mselect-toggle', tabindex: '-1', title: 'Choose a model' }, '▾');
+    const panel = el('div', { class: 'mselect-panel' });
+    wrap.appendChild(input); wrap.appendChild(toggle); wrap.appendChild(panel);
+
+    let isOpen = false;
+    const refresh = () => {
+        const q = input.value.trim().toLowerCase();
+        const groups = new Map();
+        for (const m of (state.models || [])) {
+            const id = modelId(m);
+            if (!id || (q && !id.toLowerCase().includes(q))) continue;
+            const provider = (typeof m === 'object' && m.provider) || id.split('/')[0] || 'other';
+            if (!groups.has(provider)) groups.set(provider, []);
+            groups.get(provider).push(id);
+        }
+        panel.innerHTML = '';
+        if (!groups.size) {
+            panel.appendChild(el('div', { class: 'mselect-empty' }, (state.models || []).length ? 'No matching model' : 'No models detected'));
+            return;
+        }
+        const current = input.value.trim();
+        for (const [provider, ids] of groups) {
+            panel.appendChild(el('div', { class: 'mselect-group' }, esc(provider)));
+            for (const id of ids.slice(0, 200)) {
+                const item = el('div', { class: 'mselect-item' + (id === current ? ' selected' : '') }, esc(id));
+                item.addEventListener('mousedown', (ev) => {
+                    ev.preventDefault();
+                    input.value = id;
+                    close();
+                    if (opts.onSelect) opts.onSelect(id);
+                });
+                panel.appendChild(item);
+            }
+        }
+    };
+    const open = () => { if (isOpen) return; isOpen = true; refresh(); panel.style.display = 'block'; _openSelects.add(wrap); };
+    const close = () => { isOpen = false; panel.style.display = 'none'; _openSelects.delete(wrap); };
+    wrap._close = close;
+
+    input.addEventListener('focus', open);
+    input.addEventListener('input', () => { open(); refresh(); if (opts.onInput) opts.onInput(input.value.trim()); });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    toggle.addEventListener('click', () => { if (isOpen) close(); else { input.focus(); open(); } });
+
+    wrap.getValue = () => input.value.trim();
+    wrap.setValue = (v) => { input.value = v || ''; close(); };
+    wrap.input = input;
+    return wrap;
+}
 
 /* ============================================================ ROUTER ==== */
 const routes = {
     '#/dashboard': viewDashboard,
+    '#/orchestrator': viewOrchestrator,
     '#/projects': viewProjects,
     '#/console': viewConsole,
     '#/memory': viewMemory,
@@ -201,6 +476,7 @@ function goto(hash) { location.hash = hash; }
 async function viewDashboard() {
     $('#topbar-title').textContent = 'Dashboard';
     await Promise.all([loadProjects(), loadHealth()]);
+    await refreshPresence();
     const v = $('#view');
     v.innerHTML = '';
     const h = state.health;
@@ -211,27 +487,34 @@ async function viewDashboard() {
         `<div><div class="eyebrow">Overseer</div><h1>Command Dashboard</h1>
          <div class="sub">Every project, every agent, every memory — in one place.</div></div>`);
     v.appendChild(head);
+    v.appendChild(el('div', { class: 'storm-legend' },
+        `<span class="lg working"><i class="lg-eye"></i> Working — an agent is executing right now</span>
+         <span class="lg awake"><i class="lg-eye"></i> Awake — active in the last 15 min</span>
+         <span class="lg"><i class="lg-eye"></i> Idle — registered, quiet</span>`));
 
     const grid = el('div', { class: 'grid stats-grid' });
     const stat = (label, value, foot) => el('div', { class: 'card stat' },
         `<div class="stat-label">${esc(label)}</div><div class="stat-value">${esc(value)}</div><div class="stat-foot">${esc(foot || '')}</div>`);
     const opencodeCount = state.projects.filter((p) => p.kind === 'opencode').length;
     grid.appendChild(stat('Projects', state.projects.length, `${opencodeCount} OpenCode project(s)`));
-    grid.appendChild(stat('Active runs', (h.active_runs || []).length, h.active_runs && h.active_runs.length ? 'agent(s) working' : 'idle'));
+    grid.appendChild(stat('Working now', presence.working.size, presence.working.size ? 'agent(s) executing' : 'no active runs'));
+    grid.appendChild(stat('Awake', presence.awake.size, 'active in the last 15 min'));
     grid.appendChild(stat('Facts', stats.facts_total ?? 0, `${stats.facts_global ?? 0} global`));
     grid.appendChild(stat('Doc chunks', stats.chunks_total ?? 0, 'semantic index'));
     grid.appendChild(stat('Embeddings', stats.ollama_ok ? 'Online' : 'Offline', stats.ollama_ok ? 'Ollama ready' : 'start ollama serve'));
     v.appendChild(grid);
 
-    // Active runs
-    if (h.active_runs && h.active_runs.length) {
-        v.appendChild(sectionTitle('Active runs'));
+    // Working now — live runs, each mapped to its project
+    if ((state.activeRuns || []).length) {
+        v.appendChild(sectionTitle('Working now'));
         const box = el('div', { class: 'card' });
         const list = el('div', { class: 'list' });
-        for (const uid of h.active_runs) {
+        for (const r of state.activeRuns) {
             list.appendChild(el('div', { class: 'list-row' },
-                `<span class="badge amber">running</span><span class="grow mono">${esc(uid)}</span>
-                 <button class="btn sm ghost" data-run="${esc(uid)}">View</button>`));
+                `<span class="badge amber">${esc(r.status)}</span>
+                 <span class="grow"><b>${esc(r.project_name || r.project_slug)}</b>
+                 <span class="muted"> — ${esc((r.prompt || '').slice(0, 90))}</span></span>
+                 <button class="btn sm ghost" data-run="${esc(r.run_uid)}" data-project="${esc(r.project_slug || '')}">View</button>`));
         }
         box.appendChild(list);
         v.appendChild(box);
@@ -246,7 +529,10 @@ async function viewDashboard() {
     v.appendChild(sectionTitle('Recent activity'));
     v.appendChild(activityCard(act.activity || []));
 
-    v.querySelectorAll('[data-run]').forEach((b) => b.addEventListener('click', () => goto('#/console')));
+    v.querySelectorAll('[data-run]').forEach((b) => b.addEventListener('click', () => {
+        const slug = b.dataset.project;
+        goto(slug ? '#/console/' + slug : '#/console');
+    }));
 }
 
 function sectionTitle(text, extra) {
@@ -263,29 +549,45 @@ function projectGrid(projects) {
 }
 
 function projectCard(p) {
-    const badge = KIND_BADGE[p.kind] || 'muted';
+    const isControl = !!p.is_control;
+    const ps = pipState(p.slug);
+    const stateCls = ps.working ? ' is-working' : (ps.awake ? ' is-awake' : '');
+    const badge = isControl ? 'gold' : (KIND_BADGE[p.kind] || 'muted');
+    const badgeText = isControl ? 'orchestrator' : p.kind;
     const fav = p.favorite ? '★ ' : '';
-    const card = el('div', { class: 'card clickable proj-card' },
+    const delBtn = isControl ? '' :
+        `<button class="btn sm danger ghost" data-del title="Remove from Perun">✕</button>`;
+    const pip = `<span class="card-pip ${ps.cls}">
+            <span class="pip-eyes"><i class="pip-eye"></i><i class="pip-eye"></i></span>
+            <span class="pip-bolt">⚡</span>
+            <span data-pip-label>${ps.label}</span>
+         </span>`;
+    const run = ps.working ? (state.activeRuns || []).find((r) => r.project_slug === p.slug) : null;
+    const running = run ? `<div class="pc-running">⚡ <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span></div>` : '';
+    const card = el('div', { class: 'card clickable proj-card' + stateCls, dataset: { slug: p.slug } },
         `<div class="pc-top">
             <div><div class="pc-name">${fav}${esc(p.name)}</div><div class="pc-path">${esc(p.path)}</div></div>
-            <span class="badge ${badge}">${esc(p.kind)}</span>
+            <div class="pc-flags">${pip}</div>
          </div>
          <div class="pc-desc">${esc(p.description || 'No description.')}</div>
+         ${running}
          <div class="pc-meta">
+            <span class="badge ${badge}">${esc(badgeText)}</span>
             <span>◧ ${p.session_count || 0} sessions</span>
             <span>◉ ${p.memory_count || 0} facts</span>
             <span>▤ ${p.chunk_count || 0} chunks</span>
          </div>
          <div class="pc-actions">
-            <button class="btn sm primary" data-open>Open</button>
+            <button class="btn sm primary" data-open>${isControl ? 'Open chat' : 'Open'}</button>
             <button class="btn sm" data-ask>Ask</button>
             <button class="btn sm ghost" data-index>Index docs</button>
-            <button class="btn sm danger ghost" data-del title="Remove from Perun">✕</button>
+            ${delBtn}
          </div>`);
     card.addEventListener('click', (e) => {
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
-        if (e.target.closest('[data-ask]')) { goto('#/console/' + p.slug); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
+        if (isControl) { goto('#/orchestrator'); return; }
+        if (e.target.closest('[data-ask]')) { goto('#/console/' + p.slug); return; }
         goto('#/project/' + p.slug);
     });
     return card;
@@ -725,16 +1027,23 @@ function projectInstructionsForm(p) {
 }
 
 function projectConfigForm(p) {
+    const isControl = !!p.is_control;
+    const delBtn = isControl ? '' : '<button class="btn danger" id="pc-delete">Delete project</button>';
+    const note = isControl
+        ? '<p class="muted mt">This is the Perun orchestrator (control plane). It cannot be removed.</p>'
+        : '';
     const body = el('div', { class: 'card' },
-        `<label class="field"><span class="lab">Name</span><input type="text" id="pc-name" value="${esc(p.name)}"></label>
+        `${isControl ? '<div class="card-head"><h4>Orchestrator</h4><span class="badge gold">control plane</span></div>' : ''}
+         <label class="field"><span class="lab">Name</span><input type="text" id="pc-name" value="${esc(p.name)}"></label>
          <label class="field"><span class="lab">Description</span><input type="text" id="pc-desc" value="${esc(p.description || '')}"></label>
          <div class="form-row">
             <label class="field"><span class="lab">Model override</span><input type="text" list="model-list" id="pc-model" value="${esc(p.model || '')}" placeholder="provider/model"></label>
             <label class="field"><span class="lab">Agent override</span><input type="text" id="pc-agent" value="${esc(p.agent || '')}" placeholder="build"></label>
          </div>
+         ${note}
          <div class="form-actions">
             <button class="btn primary" id="pc-save">Save</button>
-            <button class="btn danger" id="pc-delete">Delete project</button>
+            ${delBtn}
          </div>`);
     body.querySelector('#pc-save').addEventListener('click', async () => {
         await api(`/api/projects/${p.slug}`, { method: 'PATCH', body: {
@@ -742,7 +1051,8 @@ function projectConfigForm(p) {
             model: $('#pc-model').value, agent: $('#pc-agent').value } });
         toast('Saved', 'ok'); await loadProjects(); viewProject(p.slug);
     });
-    body.querySelector('#pc-delete').addEventListener('click', () => {
+    const del = body.querySelector('#pc-delete');
+    if (del) del.addEventListener('click', () => {
         confirmDialog('Delete project', `Remove "${p.name}" from Perun? Memory and indexed docs for it are deleted. The files on disk are untouched.`, async () => {
             await api(`/api/projects/${p.slug}`, { method: 'DELETE' });
             toast('Deleted', 'ok'); await loadProjects(); goto('#/projects');
@@ -1100,6 +1410,152 @@ function gatherManifest(card) {
     return { data, body: card.querySelector('#mf-body').value };
 }
 
+/* ===================================================== ORCHESTRATOR ===== */
+async function viewOrchestrator() {
+    $('#topbar-title').textContent = 'Orchestrator';
+    await Promise.all([loadHealth(), loadSettings(), loadProjects(), loadModels()]);
+    const controlSlug = (state.health && state.health.control) || '';
+    const s = state.settings || {};
+    const v = $('#view');
+    v.innerHTML = '';
+
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow">Control plane</div><h1>Perun Orchestrator</h1>
+          <div class="sub">Talk to Perun directly — no project needed. It can list, describe, create, launch, and remove projects for you.</div></div>
+         <div class="row wrap orch-head-tools">
+            <span class="mselect-label">Model</span>
+            <span id="orch-model-host"></span>
+            <button class="btn ghost sm" id="orch-new">＋ New session</button>
+         </div>`));
+
+    const msModel = modelSelect({
+        value: s.orchestrator_model || s.default_model || '',
+        placeholder: 'choose model',
+        onSelect: (id) => persistOrchModel(id),
+    });
+    v.querySelector('#orch-model-host').appendChild(msModel);
+
+    const chat = el('div', { class: 'chat card' });
+    const log = el('div', { class: 'chat-log' });
+    const composer = el('div', { class: 'chat-composer' });
+    const ta = el('textarea', { id: 'orch-input', rows: '1', placeholder: 'Ask Perun to do something…  (Enter to send · Shift+Enter for a newline)' });
+    const sendBtn = el('button', { class: 'btn primary', id: 'orch-send' }, '➤ Send');
+    composer.appendChild(ta); composer.appendChild(sendBtn);
+    chat.appendChild(log); chat.appendChild(composer);
+    v.appendChild(chat);
+
+    const bubble = (role, text = '') => {
+        const msg = el('div', { class: 'chat-msg ' + role });
+        msg.appendChild(el('div', { class: 'chat-role' }, role === 'user' ? 'You' : 'Perun'));
+        const body = el('div', { class: 'chat-body md-body' });
+        if (text) body.innerHTML = renderMarkdown(text);
+        msg.appendChild(body);
+        log.appendChild(msg);
+        log.scrollTop = log.scrollHeight;
+        return body;
+    };
+    const greeting = () => {
+        log.innerHTML = '';
+        bubble('assistant', 'Ask me anything about your projects — or tell me to create, launch, or remove one. Use the model picker above to choose which model I run on.');
+    };
+    greeting();
+
+    v.querySelector('#orch-new').addEventListener('click', () => {
+        state.orchestrator = { sessionPk: null, ocSid: '' };
+        greeting();
+        toast('New orchestrator session', 'ok');
+    });
+
+    if (!controlSlug) {
+        log.appendChild(el('div', { class: 'empty' }, 'The orchestrator is not registered. Start Perun with `python -m perun serve`, then reload.'));
+        sendBtn.disabled = true; ta.disabled = true;
+        return;
+    }
+
+    let running = false;
+    const setRunning = (on) => { running = on; sendBtn.disabled = on; ta.disabled = on; };
+
+    const sendPrompt = async () => {
+        const prompt = ta.value.trim();
+        if (!prompt || running) return;
+        ta.value = '';
+        bubble('user', prompt);
+        const asst = bubble('assistant');
+        asst.innerHTML = '<span class="spinner"></span>';
+        setRunning(true);
+        let acc = '';
+        try {
+            const body = {
+                project: controlSlug,
+                prompt,
+                model: msModel.getValue(),
+                agent: s.orchestrator_agent || '',
+                session_pk: state.orchestrator.sessionPk,
+                opencode_session_id: state.orchestrator.ocSid,
+            };
+            const res = await api('/api/runs', { method: 'POST', body });
+            const uid = res.run.run_uid;
+            refreshPresence();
+            perunFx.flash($('#perun-sigil'));
+            streamOrchestrator(uid, (ev) => {
+                if (ev.type === 'text') {
+                    acc += ev.text || '';
+                    asst.innerHTML = renderMarkdown(acc) || '<span class="spinner"></span>';
+                    log.scrollTop = log.scrollHeight;
+                } else if (ev.type === 'error') {
+                    acc += `\n\n> ⚠ ${ev.text || 'error'}`;
+                    asst.innerHTML = renderMarkdown(acc);
+                }
+            }, async (status) => {
+                setRunning(false);
+                if (!acc) asst.innerHTML = `<span class="muted">(${esc(status || 'no output')})</span>`;
+                try {
+                    const r = await api(`/api/runs/${uid}`);
+                    const run = r.run || {};
+                    state.orchestrator.sessionPk = run.session_pk || state.orchestrator.sessionPk;
+                    state.orchestrator.ocSid = run.opencode_session_id || state.orchestrator.ocSid;
+                } catch (_) { /* keep the previous session */ }
+                loadProjects();
+                refreshPresence();
+            });
+        } catch (e) {
+            setRunning(false);
+            asst.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+            toast(e.message, 'err');
+        }
+    };
+
+    sendBtn.addEventListener('click', sendPrompt);
+    ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+    });
+    ta.focus();
+}
+
+async function persistOrchModel(id) {
+    try {
+        await api('/api/settings', { method: 'PATCH', body: { orchestrator_model: id } });
+        if (state.settings) state.settings.orchestrator_model = id;
+        toast('Orchestrator model saved', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+}
+
+function streamOrchestrator(uid, onEvent, onEnd) {
+    if (state.runSource) state.runSource.close();
+    const src = new EventSource(`/api/runs/${uid}/stream`);
+    state.runSource = src;
+    src.onmessage = (ev) => {
+        let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+        if (onEvent) onEvent(d);
+        if (d.type === 'end') {
+            src.close();
+            if (state.runSource === src) state.runSource = null;
+            if (onEnd) onEnd(d.status);
+        }
+    };
+    src.onerror = () => { /* server pings; keep the stream open */ };
+}
+
 /* ========================================================= CONSOLE ====== */
 async function viewConsole(slug) {
     $('#topbar-title').textContent = 'Agent Console';
@@ -1124,7 +1580,7 @@ function mountConsole(host, initial) {
         `<label class="field"><span class="lab">Project</span><select id="c-project">${options}</select></label>
          <label class="field"><span class="lab">Session</span><select id="c-session"><option value="">＋ New session</option></select></label>
          <div class="form-row">
-            <label class="field"><span class="lab">Model</span><input type="text" list="model-list" id="c-model" placeholder="(project default)"></label>
+            <label class="field"><span class="lab">Model</span><span id="c-model-host"></span></label>
             <label class="field"><span class="lab">Agent</span><input type="text" id="c-agent" placeholder="(project default)"></label>
          </div>
          <label class="field"><span class="lab">Prompt</span><textarea id="c-prompt" placeholder="What should the agent do?"></textarea></label>
@@ -1133,6 +1589,8 @@ function mountConsole(host, initial) {
             <button class="btn danger" id="c-stop" disabled>■ Stop</button>
             <button class="btn ghost" id="c-clear">Clear output</button>
          </div>`);
+    const cModel = modelSelect({ placeholder: '(project default)' });
+    left.querySelector('#c-model-host').appendChild(cModel);
     const term = el('div', { class: 'terminal', id: 'c-term' }, `<div class="term-line sys">Ready. Select a project and send a prompt.</div>`);
     grid.appendChild(left);
     grid.appendChild(term);
@@ -1176,7 +1634,7 @@ function mountConsole(host, initial) {
         const sessionOpt = $('#c-session').selectedOptions[0];
         const body = {
             project: slug, prompt,
-            model: $('#c-model').value.trim(),
+            model: cModel.getValue(),
             agent: $('#c-agent').value.trim(),
             session_pk: $('#c-session').value ? Number($('#c-session').value) : null,
             opencode_session_id: sessionOpt ? (sessionOpt.dataset.oc || '') : '',
@@ -1187,6 +1645,8 @@ function mountConsole(host, initial) {
             const res = await api('/api/runs', { method: 'POST', body });
             currentRun = res.run.run_uid;
             runBtn.disabled = true; stopBtn.disabled = false;
+            refreshPresence();
+            perunFx.flash($('#perun-sigil'));
             line(`[run ${currentRun}] starting in ${slug}…`, 'sys');
             streamRun(currentRun);
         } catch (e) { line('error: ' + e.message, 'err'); toast(e.message, 'err'); }
@@ -1215,7 +1675,7 @@ function mountConsole(host, initial) {
                 line(`[${d.status}]`, d.status === 'done' ? 'ok' : 'err');
                 runBtn.disabled = false; stopBtn.disabled = true; currentRun = null;
                 src.close(); state.runSource = null;
-                loadSessions(); loadProjects();
+                loadSessions(); loadProjects(); refreshPresence();
             }
         };
         src.onerror = () => { /* keep open; server pings */ };
@@ -1418,7 +1878,7 @@ async function viewSettings() {
             <label class="field"><span class="lab">Port</span><input type="number" id="s-port" value="${esc(s.port)}"></label>
          </div>
          <div class="form-row">
-            <label class="field"><span class="lab">Default model</span><input type="text" list="model-list" id="s-model" value="${esc(s.default_model || '')}"></label>
+            <label class="field"><span class="lab">Default model</span><span id="s-model-host"></span></label>
             <label class="field"><span class="lab">Default agent</span><input type="text" id="s-agent" value="${esc(s.default_agent || '')}"></label>
          </div>
          <div class="form-row">
@@ -1443,6 +1903,42 @@ async function viewSettings() {
          </div>`);
     v.appendChild(card);
 
+    await loadModels();
+    const msDefault = modelSelect({ value: s.default_model || '', placeholder: 'provider/model' });
+    card.querySelector('#s-model-host').appendChild(msDefault);
+
+    // ---- orchestrator (control plane) ----
+    v.appendChild(sectionTitle('Orchestrator'));
+    const orchCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Perun Orchestrator</h4><span class="badge gold">machine-wide</span></div>
+         <p class="secondary">The orchestrator is the agent you talk to when <b>no project is selected</b> — from the <a href="#/orchestrator">Orchestrator chat</a> or Telegram. Its model, agent, and custom instructions apply machine-wide.</p>
+         <div class="form-row">
+            <label class="field"><span class="lab">Orchestrator model</span><span id="s-orch-model-host"></span></label>
+            <label class="field"><span class="lab">Orchestrator agent</span><input type="text" id="s-orch-agent" value="${esc(s.orchestrator_agent || '')}" placeholder="(default)"></label>
+         </div>
+         <label class="field"><span class="lab">Custom instructions</span>
+            <textarea id="s-orch-instr" rows="6" placeholder="Standing instructions the orchestrator should always follow…">${esc(s.orchestrator_instructions || '')}</textarea></label>
+         <div class="form-actions">
+            <button class="btn primary" id="s-orch-save">Save orchestrator</button>
+            <button class="btn ghost" id="s-orch-open">▶ Open orchestrator chat</button>
+         </div>`);
+    v.appendChild(orchCard);
+    const msOrch = modelSelect({ value: s.orchestrator_model || '', placeholder: 'inherit default model' });
+    orchCard.querySelector('#s-orch-model-host').appendChild(msOrch);
+
+    orchCard.querySelector('#s-orch-save').addEventListener('click', async () => {
+        try {
+            await api('/api/settings', { method: 'PATCH', body: {
+                orchestrator_model: msOrch.getValue(),
+                orchestrator_agent: $('#s-orch-agent').value.trim(),
+                orchestrator_instructions: $('#s-orch-instr').value,
+            } });
+            toast('Orchestrator saved', 'ok');
+            await loadSettings();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    orchCard.querySelector('#s-orch-open').addEventListener('click', () => goto('#/orchestrator'));
+
     v.appendChild(sectionTitle('Global integration'));
     v.appendChild(el('div', { class: 'card' },
         `<p class="secondary">Install Perun into your user-level OpenCode config so <b>every</b> project inherits the MCP tools, memory, and commands.</p>
@@ -1454,7 +1950,7 @@ async function viewSettings() {
         const payload = {
             roots: $('#s-roots').value.split('\n').map((x) => x.trim()).filter(Boolean),
             host: $('#s-host').value, port: Number($('#s-port').value),
-            default_model: $('#s-model').value, default_agent: $('#s-agent').value,
+            default_model: msDefault.getValue(), default_agent: $('#s-agent').value,
             max_concurrent_runs: Number($('#s-max').value), run_timeout: Number($('#s-timeout').value),
             ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value,
             telegram_allowed_chats: $('#s-tgchats').value.split(',').map((x) => x.trim()).filter(Boolean),
@@ -1513,11 +2009,25 @@ async function refreshHealth() {
 
 async function boot() {
     wireChrome();
+    perunFx.init();
+    // The sigil is a little altar: click it to summon the storm.
+    const sigil = $('#perun-sigil');
+    if (sigil) sigil.addEventListener('click', () => {
+        perunFx.flash(sigil);
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => perunFx.strike(window.innerWidth * (0.2 + Math.random() * 0.6), -10,
+                { len: window.innerHeight * 0.5, branches: 3 }), i * 130);
+        }
+    });
     if (!location.hash) location.hash = '#/dashboard';
     loadModels().then(() => { const r = $('#model-root'); if (r) r.innerHTML = modelListHtml(); });
     await refreshHealth();
+    // Load projects first so presence knows which cards are awake, then presence.
+    await loadProjects().catch(() => {});
+    await refreshPresence();
     await router();
     setInterval(refreshHealth, 15000);
+    setInterval(refreshPresence, 4000);
     window.addEventListener('hashchange', router);
 }
 

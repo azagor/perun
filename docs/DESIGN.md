@@ -59,6 +59,7 @@ map, the memory, the orchestration, and a remote control.
 
         MEMORY  ── searchable across ALL projects at once
         ACTIVITY ── one live firehose of everything
+        ORCHESTRATOR ── talk to Perun itself (works with zero projects)
         TELEGRAM ── the same control room, from your phone
 ```
 
@@ -70,6 +71,7 @@ screen maps to one of them.
 | Route | Purpose | Primary question it answers |
 |---|---|---|
 | `#/dashboard` | Command overview | "What's the state of everything?" |
+| `#/orchestrator` | Orchestrator chat | "Talk to Perun itself, with nothing set up." |
 | `#/projects` | Registry | "What projects do I have?" |
 | `#/project/{slug}` | Project detail | "Everything about this one." |
 | `#/console[/{slug}]` | Agent launcher | "Run an agent and watch it work." |
@@ -93,8 +95,13 @@ family:
   the system UI sans for everything else, monospace for ids/paths/output.
 * **Surfaces:** one card component everywhere — border `rgba(gold,.15)`,
   14px radius, subtle lift on hover. Status is always a small pill badge.
-* **Motion:** minimal — hover lift, toast slide-in, spinner. Nothing that hides
-  state or delays reading.
+* **Motion — the storm layer.** Perun is a thunder god, so the interface has
+  weather. Three escalating states — **idle** (calm), **awake** (a project was
+  touched in the last 15 min), **storm** (an agent run is executing) — drive a
+  full-viewport `<canvas>` lightning engine, a brand sigil whose **eyes glow**, a
+  topbar storm meter, and a travelling energy rim + eye pips on working cards.
+  It is *ambient status*: it never hides state or delays reading a label, and it
+  switches entirely off under `prefers-reduced-motion`.
 
 ## 6. Key interaction flows
 
@@ -118,6 +125,18 @@ deliberate, visible action, never a silent side effect of first run.
 One bot. `/projects` lists, `/project <n>` switches (per chat, persisted in the
 DB), everything else is a prompt. `/recall` shares the same memory as the web UI.
 
+### Talk to the orchestrator
+`#/orchestrator` (or Telegram `/orchestrator`) chats with the control-plane agent
+— the one whose job is *managing projects*. It works on a machine with **zero**
+projects registered, and its model, agent, and custom instructions live in
+Settings (they belong to the singleton, not to any user project).
+
+### Start Perun (one click)
+On Windows, double-clicking **`Perun.cmd`** brings the whole thing up: it finds
+Python, resolves the port, starts the dashboard **idempotently** (a second click
+just opens the browser), and ensures the single Telegram bridge — the
+`PerunBridge` task — is running. It never starts a second poller.
+
 ## 7. Why these technical choices
 
 * **SQLite WAL, connection-per-op** — the API, orchestrator threads, bridge, and
@@ -138,12 +157,12 @@ DB), everything else is a prompt. `/recall` shares the same memory as the web UI
   existing per-project memory tooling, so imported vectors stay comparable and
   there's no new dependency to run.
 
-## 8. Deliberately out of scope (v0.1)
+## 8. Deliberately out of scope
 
 * Multi-user / auth — it binds to `127.0.0.1` only.
 * Scheduling / cron-style auto-runs.
 * A graph of inter-project dependencies.
 * Editing a project's files from the dashboard.
 
-These are natural v0.2 candidates and the data model already leaves room
+Still out of scope as of v0.3.0; the data model already leaves room
 (`projects.enabled`, `runs` history, `activity` meta).

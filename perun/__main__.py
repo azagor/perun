@@ -79,9 +79,32 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+# Process-lifetime references for the in-process Telegram bridge. The lock must
+# stay alive so its named-mutex handle is never released early (see
+# ``_start_bridge_thread``), and the thread reference lets a second call detect
+# that the bridge is already up in this process.
+_BRIDGE_LOCK = None
+_BRIDGE_THREAD = None
+
+
 def _start_bridge_thread() -> None:
+    """Start the Telegram bridge in-process, at most once per process.
+
+    The bridge is a **singleton**: ``getUpdates`` allows only one consumer per
+    bot token, so two pollers fight with HTTP 409s. Single-instance is enforced
+    machine-wide by a named mutex (:class:`perun.telegram.PidLock`), which also
+    protects against a separate ``perun bridge`` process or the ``PerunBridge``
+    logon task racing us. If the lock is already held we never start a second
+    bridge.
+    """
+    global _BRIDGE_LOCK, _BRIDGE_THREAD
+
     from .orchestrator import Orchestrator
     from .telegram import PerunTelegramBridge, _setup_logging, PidLock
+
+    if _BRIDGE_THREAD is not None and _BRIDGE_THREAD.is_alive():
+        print("[perun] telegram bridge already running in this process")
+        return
 
     settings = config.Settings.load()
     token, allowed = settings.telegram()
@@ -90,9 +113,14 @@ def _start_bridge_thread() -> None:
     if not lock.acquire():
         print("[perun] telegram bridge already running; not starting a second one")
         return
+    # Keep the lock referenced for the whole process lifetime. PidLock owns a
+    # Windows named-mutex handle; if the object were garbage-collected the
+    # handle could close and a later `perun bridge` could acquire the same name,
+    # producing a second poller.
+    _BRIDGE_LOCK = lock
     bridge = PerunTelegramBridge(Orchestrator(settings), token=token, allowed=allowed)
-    t = threading.Thread(target=bridge.run, daemon=True, name="perun-telegram")
-    t.start()
+    _BRIDGE_THREAD = threading.Thread(target=bridge.run, daemon=True, name="perun-telegram")
+    _BRIDGE_THREAD.start()
     print("[perun] telegram bridge started in-process")
 
 

@@ -9,6 +9,10 @@ Tools
 -----
 ``perun_list_projects``  List every registered project.
 ``perun_project_info``   Details + recent activity for one project.
+``perun_create_project`` Register/scaffold/clone a project.
+``perun_update_project`` Rename, retag, or set model/agent/instructions.
+``perun_delete_project`` Remove a project from the registry (files kept).
+``perun_discover``       Rescan the configured roots for projects.
 ``perun_memory_search``  Search facts + indexed docs (this or all projects).
 ``perun_memory_store``   Store a durable fact (global or project scope).
 ``perun_docs_index``     (Re)index a project's docs into the vector store.
@@ -37,11 +41,19 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastmcp import FastMCP  # noqa: E402
 
-from perun import config, db, memory, registry  # noqa: E402
+from perun import config, control, db, discovery, memory, projects, registry  # noqa: E402
 
 mcp = FastMCP("Perun")
 
 db.init_db()
+
+# The orchestrator (control plane) must exist for *every* tool call, so a brand
+# new machine with no projects can still be talked to. Registration is
+# idempotent and best-effort.
+try:
+    control.ensure()
+except Exception:  # pragma: no cover - never block the MCP server from starting
+    pass
 
 
 # --------------------------------------------------------------------------- #
@@ -76,8 +88,9 @@ def _resolve_project(project: str | None) -> dict | None:
 
 
 def _project_line(p: dict) -> str:
+    tag = "  [orchestrator]" if p.get("is_control") else ""
     return (f"{p['slug']}  —  {p['name']} ({p['kind']})"
-            f"  [{p['path']}]")
+            f"  [{p['path']}]{tag}")
 
 
 # --------------------------------------------------------------------------- #
@@ -137,6 +150,123 @@ def perun_project_info(project: str | None = None) -> str:
         for a in recent:
             lines.append(f"    - [{a['kind']}] {a['message']}")
     return "\n".join(lines)
+
+
+@mcp.tool
+def perun_create_project(name: str = "", path: str = "", method: str = "existing",
+                         clone_url: str = "", root: str = "", bootstrap: bool = True,
+                         description: str = "", tags: str = "", model: str = "",
+                         agent: str = "", instructions: str = "",
+                         git_init: bool = False, git_remote: str = "",
+                         git_branch: str = "", index_docs: bool = False) -> str:
+    """Create, scaffold, or clone a project and register it with Perun.
+
+    Args:
+        name: Project name (defaults to the folder/repo name).
+        path: Absolute target path. Required for ``new``; optional for ``clone``
+            when ``root`` is given (the folder is named after the project).
+        method: ``existing`` (register a folder that already exists — default),
+            ``new`` (create the folder, optionally bootstrap a starter project),
+            or ``clone`` (clone ``clone_url`` into ``path``).
+        clone_url: Git URL for ``method="clone"``.
+        root: Base directory to place the project under when ``path`` is empty.
+        bootstrap: For ``new``, scaffold AGENTS.md + docs + .opencode.
+        description/tags/model/agent/instructions: Optional project metadata.
+        git_init/git_remote/git_branch: Optional git configuration.
+        index_docs: Index the project's docs into Perun's memory immediately.
+    """
+    try:
+        result = projects.create(
+            method=method, name=name, path=path, clone_url=clone_url, root=root,
+            bootstrap=bootstrap, description=description, tags=tags, model=model,
+            agent=agent, instructions=instructions, git_init=git_init,
+            git_remote=git_remote, git_branch=git_branch, index_docs=index_docs,
+        )
+    except projects.ProjectError as exc:
+        return f"[perun] Could not create project: {exc}"
+    p = result["project"]
+    verb = "Created" if result.get("created") else "Updated"
+    return (f"[perun] {verb} project `{p['slug']}` ({p['name']}) at {p['path']}.\n"
+            f"  git: {'repo' if result.get('git', {}).get('is_repo') else 'no repo'}")
+
+
+@mcp.tool
+def perun_update_project(slug: str, name: str = "", description: str = "",
+                         tags: str = "", model: str = "", agent: str = "",
+                         color: str = "", instructions: str = "") -> str:
+    """Update a project's registry metadata (empty fields are left unchanged).
+
+    Args:
+        slug: The project slug to update.
+        name/description/tags/model/agent/color: New values (omit to keep).
+        instructions: New custom instructions for the project's sessions.
+    """
+    p = registry.get_project(slug)
+    if not p:
+        return f"[perun] No such project: {slug}"
+    fields: dict[str, str] = {}
+    for key, value in (("name", name), ("description", description),
+                       ("tags", tags), ("model", model), ("agent", agent),
+                       ("color", color), ("instructions", instructions)):
+        if value:
+            fields[key] = value
+    if not fields:
+        return f"[perun] Nothing to update for {slug}."
+    registry.update_project(slug, **fields)
+    registry.log_activity(p["id"], "config", "Project updated via MCP")
+    return f"[perun] Updated {slug}: {', '.join(sorted(fields))}."
+
+
+@mcp.tool
+def perun_delete_project(slug: str, confirm: bool = False) -> str:
+    """Remove a project from the Perun registry. **Files on disk are kept.**
+
+    Destructive: the registry entry, its sessions/runs, and its Perun memory are
+    removed. The directory itself is never touched. Requires ``confirm=True``.
+
+    Args:
+        slug: The project slug to remove.
+        confirm: Must be ``True`` — guards against accidental deletions.
+    """
+    p = registry.get_project(slug)
+    if not p:
+        return f"[perun] No such project: {slug}"
+    if control.is_control(p):
+        return "[perun] Refused: the Perun orchestrator project cannot be removed."
+    if not confirm:
+        return (f"[perun] Refused: pass confirm=True to delete `{slug}`. Files at "
+                f"{p['path']} are NOT deleted — only the registry entry and memory.")
+    registry.delete_project(slug)
+    return (f"[perun] Removed `{slug}` from the registry. Files at {p['path']} "
+            "were left untouched.")
+
+
+@mcp.tool
+def perun_discover(roots: str = "", max_depth: int = 1, index: bool = False) -> str:
+    """Rescan the configured project roots and register anything found.
+
+    Args:
+        roots: Comma-separated roots to scan. Omit for the configured roots.
+        max_depth: How deep to recurse (default 1).
+        index: Also index each discovered project's docs.
+    """
+    root_list = [r.strip() for r in roots.split(",") if r.strip()] or None
+    settings = config.Settings.load()
+    result = discovery.discover_and_sync(root_list or list(settings.roots),
+                                         max_depth=max_depth)
+    created = result.get("created", [])
+    updated = result.get("updated", [])
+    if index:
+        for slug in [*created, *updated]:
+            p = registry.get_project(slug)
+            if p:
+                try:
+                    memory.index_project_docs(p["id"])
+                except Exception:  # pragma: no cover - indexing is best-effort
+                    pass
+    return (f"[perun] Scanned {result.get('scanned', 0)} candidate(s): "
+            f"{len(created)} created ({', '.join(created) or 'none'}), "
+            f"{len(updated)} updated ({', '.join(updated) or 'none'}).")
 
 
 @mcp.tool

@@ -7,6 +7,7 @@ session started through the Perun orchestrator.
 Commands
 --------
 ``/start`` ``/help``     Help.
+``/orchestrator``        Talk to Perun itself (the machine-wide orchestrator).
 ``/projects``            List registered projects (numbered).
 ``/project <name|#>``    Select the project to talk to.
 ``/new`` ``/reset``      Start a fresh OpenCode session for this chat.
@@ -15,6 +16,10 @@ Commands
 ``/remember <fact>``     Store a fact (project scope).
 ``/recall <query>``      Search the unified memory store.
 ``/index``               Re-index the current project's docs.
+
+With no project selected, plain messages go to the **orchestrator**
+(:mod:`perun.control`) — the agent that manages every project — so the bridge is
+usable on a brand-new machine with nothing registered.
 
 Environment / settings
 ----------------------
@@ -38,7 +43,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from . import config, memory, registry
+from . import config, control, memory, registry
 from .orchestrator import Orchestrator
 
 LOG = logging.getLogger("perun-telegram")
@@ -292,11 +297,19 @@ class PerunTelegramBridge:
         proj = registry.get_project(pid) if pid else None
         if proj:
             return proj
-        projects = registry.list_projects()
-        if len(projects) == 1:
-            registry.set_bridge_link(chat_id, projects[0]["id"], link.get("session_pk"))
-            return projects[0]
-        return None
+        # No explicit selection (or it points at a deleted project). Preserve the
+        # long-standing convenience of auto-selecting a lone user project…
+        users = [p for p in registry.list_projects() if not control.is_control(p)]
+        if len(users) == 1:
+            registry.set_bridge_link(chat_id, users[0]["id"], link.get("session_pk"))
+            return users[0]
+        # …otherwise default to the orchestrator. It always exists, so "no
+        # project" is never a dead end — the user can still ask Perun to create
+        # or launch one.
+        try:
+            return control.ensure()
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     # ---- commands ---- #
     def handle_command(self, chat_id: str, text: str, message_id: int) -> bool:
@@ -307,8 +320,9 @@ class PerunTelegramBridge:
         if root in ("/start", "/help"):
             self.send(chat_id,
                       "🤖 *Perun bridge*\n\n"
-                      "Talk to any of your OpenCode projects from here.\n\n"
+                      "Talk to Perun itself or to any of your OpenCode projects.\n\n"
                       "*Commands*\n"
+                      "`/orchestrator` — talk to Perun (manages all projects)\n"
                       "`/projects` — list projects\n"
                       "`/project <name|#>` — switch project\n"
                       "`/status` — current project + session\n"
@@ -316,10 +330,22 @@ class PerunTelegramBridge:
                       "`/stop` — cancel the running reply\n"
                       "`/remember <fact>` — store to memory\n"
                       "`/recall <query>` — search memory\n"
-                      "`/index` — re-index project docs",
+                      "`/index` — re-index project docs\n\n"
+                      "With no project selected, messages go to the orchestrator.",
+                      reply_to=message_id)
+            return True
+        if root in ("/orchestrator", "/perun", "/overseer"):
+            proj = control.ensure()
+            registry.set_bridge_link(chat_id, proj["id"], None)
+            self.send(chat_id, "🛰 Now talking to *Perun* — the orchestrator. Ask about "
+                               "any project, or tell me to create, launch, or remove one.",
                       reply_to=message_id)
             return True
         if root == "/projects":
+            try:
+                control.ensure()  # the orchestrator always appears in the list
+            except Exception:  # pragma: no cover - defensive
+                pass
             projects = registry.list_projects()
             if not projects:
                 self.send(chat_id, "No projects registered yet.", reply_to=message_id)
@@ -327,7 +353,8 @@ class PerunTelegramBridge:
             lines = ["*Projects*"]
             for i, p in enumerate(projects, 1):
                 mark = "▸" if self._is_current(chat_id, p) else " "
-                lines.append(f"{mark} {i}. `{p['slug']}` — {p['name']} ({p['kind']})")
+                tag = "  🛰 orchestrator" if control.is_control(p) else ""
+                lines.append(f"{mark} {i}. `{p['slug']}` — {p['name']} ({p['kind']}){tag}")
             self.send(chat_id, "\n".join(lines), reply_to=message_id)
             return True
         if root == "/project":
@@ -425,11 +452,8 @@ class PerunTelegramBridge:
         return False
 
     def _is_current(self, chat_id: str, project: Dict[str, Any]) -> bool:
-        link = self._chat_state(chat_id)
-        if link.get("project_id") == project["id"]:
-            return True
-        projs = registry.list_projects()
-        return len(projs) == 1 and projs[0]["id"] == project["id"]
+        cur = self._current_project(chat_id)
+        return bool(cur and cur["id"] == project["id"])
 
     # ---- run a message ---- #
     def run_message(self, chat_id: str, text: str, message_id: int) -> None:
@@ -602,6 +626,11 @@ def run_bridge(orch: Orchestrator) -> int:
     if not lock.acquire():
         LOG.error("another Perun bridge instance is running")
         return 2
+    # Make sure the orchestrator exists so plain messages always have a target.
+    try:
+        control.ensure()
+    except Exception:  # pragma: no cover - best-effort
+        LOG.exception("could not ensure the orchestrator project")
     bridge = PerunTelegramBridge(orch, token=token, allowed=allowed)
 
     def _shutdown(signum, _frame):

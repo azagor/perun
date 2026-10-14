@@ -29,7 +29,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
-from . import __version__, config, db, discovery, git, manifest, memory, registry, scaffold
+from . import (__version__, config, control, db, discovery, git, manifest,
+               memory, projects, registry, scaffold)
 from .orchestrator import Orchestrator
 
 STARTED_AT = time.time()
@@ -44,14 +45,28 @@ SETTINGS = config.Settings.load()
 ORCH = Orchestrator(SETTINGS)
 
 
+def _control_project() -> dict[str, Any]:
+    """Return the control-plane project, ensuring it exists (idempotent).
+
+    The control plane is the self-registered Perun repo — the agent you talk to
+    when no project is selected (see :mod:`perun.control`). Creating it lazily
+    keeps the dashboard usable on a machine with zero user projects.
+    """
+    try:
+        return control.ensure()
+    except Exception:  # pragma: no cover - best-effort
+        return {}
+
+
+def _control_slug() -> str:
+    return _control_project().get("slug", "")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_db()
     config.ensure_dirs()
-    try:
-        discovery.register_self()
-    except Exception:  # pragma: no cover - self-registration is best-effort
-        pass
+    _control_project()
     if SETTINGS.auto_discover_on_start:
         try:
             discovery.discover_and_sync(SETTINGS.roots, max_depth=1)
@@ -168,6 +183,9 @@ def health() -> dict[str, Any]:
         "projects": len(registry.list_projects()),
         "active_runs": ORCH.active(),
         "home": str(config.HOME),
+        # Slug of the control-plane project, so the dashboard can open a chat
+        # with the orchestrator even when nothing else is registered.
+        "control": _control_slug(),
     }
 
 
@@ -177,8 +195,14 @@ _MODELS_TTL = 300.0
 
 @app.get("/api/models")
 def models(refresh: bool = False) -> dict[str, Any]:
-    """Best-effort list of models available to the OpenCode CLI (cached)."""
+    """Every model offered by the connected OpenCode providers (cached).
+
+    Returns structured entries ``{id, provider, name}`` ready for the
+    dashboard's searchable model picker, plus the raw CLI output for
+    diagnostics. The CLI is the source of truth for "connected providers".
+    """
     import subprocess
+
     from .orchestrator import resolve_opencode
 
     now = time.time()
@@ -191,10 +215,32 @@ def models(refresh: bool = False) -> dict[str, Any]:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=30,
                               encoding="utf-8", errors="replace")
     except Exception as exc:
-        return {"ok": False, "models": [], "error": str(exc)}
-    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-    data = {"ok": proc.returncode == 0, "models": lines,
-            "raw": (proc.stdout or "")[:4000]}
+        return {"ok": False, "models": [], "providers": [], "count": 0,
+                "error": str(exc)}
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in (proc.stdout or "").splitlines():
+        mid = raw.strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        provider, _, name = mid.partition("/")
+        if not name:
+            provider, name = "", mid
+        entries.append({"id": mid, "provider": provider or "other",
+                        "name": name, "label": mid})
+    entries.sort(key=lambda m: (m["provider"].lower(), m["name"].lower()))
+    providers = sorted({m["provider"] for m in entries}, key=str.lower)
+    ok = proc.returncode == 0
+    data = {
+        "ok": ok,
+        "models": entries,
+        "providers": providers,
+        "count": len(entries),
+        "error": None if ok else (proc.stderr or "").strip()[:500] or "opencode models failed",
+        "raw": (proc.stdout or "")[:4000],
+    }
     _MODELS_CACHE.update(ts=now, data=data)
     return data
 
@@ -207,124 +253,40 @@ def api_list_projects() -> dict[str, Any]:
     return {"ok": True, "projects": registry.list_projects()}
 
 
-def _name_from_repo(url: str) -> str:
-    tail = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
-    return tail[:-4] if tail.endswith(".git") else tail or "project"
-
-
-def _register_project(payload: dict[str, Any], name: str, path: str
-                      ) -> tuple[dict[str, Any], bool]:
-    existing = registry.get_project_by_path(path)
-    if existing:
-        project = registry.update_project(
-            existing["slug"],
-            name=name,
-            kind=payload.get("kind", existing.get("kind", "dir")),
-            description=payload.get("description", existing.get("description", "")),
-            model=payload.get("model", existing.get("model", "")),
-            agent=payload.get("agent", existing.get("agent", "")),
-            tags=payload.get("tags", existing.get("tags", "")),
-            color=payload.get("color", existing.get("color", "")),
-            instructions=payload.get("instructions", existing.get("instructions", "")),
-        )
-        return project or existing, False
-    project = registry.add_project(
-        name, path,
-        root=payload.get("root", ""),
-        kind=payload.get("kind", "dir"),
-        description=payload.get("description", ""),
-        tags=payload.get("tags", ""),
-        model=payload.get("model", ""),
-        agent=payload.get("agent", ""),
-        color=payload.get("color", ""),
-        instructions=payload.get("instructions", ""),
-    )
-    return project, True
-
-
 @app.post("/api/projects")
 def api_add_project(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Register a project.
+    """Register a project (shared by the dashboard wizard and the API).
 
-    ``method`` selects the wizard path: ``existing`` (default; may point at a
-    path that is not created yet), ``new`` (create + optional bootstrap), or
-    ``clone`` (clone a remote into the target path). Optional git fields
-    (``git_init``, ``git_remote``, ``git_branch``) configure the per-project
-    repository, and ``index_docs`` indexes it immediately.
+    ``method`` selects the path: ``existing`` (default; may point at a path that
+    is not created yet), ``new`` (create + optional bootstrap), or ``clone``
+    (clone a remote into the target path). Optional git fields (``git_init``,
+    ``git_remote``, ``git_branch``) configure the per-project repository, and
+    ``index_docs`` indexes it immediately. The work is delegated to
+    :mod:`perun.projects` so the MCP tools create identical projects.
     """
-    method = (payload.get("method") or "existing").strip().lower()
-    path = (payload.get("path") or "").strip()
-    name = (payload.get("name") or "").strip()
-
-    if method == "clone":
-        url = (payload.get("clone_url") or payload.get("git_remote") or "").strip()
-        if not url:
-            raise HTTPException(status_code=400, detail="clone_url is required")
-        if not name:
-            name = _name_from_repo(url)
-        if not path:
-            root = (payload.get("root") or "").strip()
-            if not root:
-                raise HTTPException(status_code=400,
-                                    detail="path is required (or set a root)")
-            path = str(Path(root) / (registry.slugify(name) or "project"))
-        try:
-            git.clone(url, path)
-        except git.GitError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif method == "new":
-        if not path:
-            raise HTTPException(status_code=400, detail="path is required")
-        try:
-            created_dir = scaffold.create_dir(path)[1]
-            if created_dir and payload.get("bootstrap", True):
-                scaffold.bootstrap(path, name or Path(path).name)
-        except scaffold.ScaffoldError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-    if not path:
-        raise HTTPException(status_code=400, detail="path is required")
-    if not name:
-        name = Path(path).name or "project"
-
-    project, created = _register_project(payload, name, path)
-
-    branch = (payload.get("git_branch") or "").strip()
-    remote = (payload.get("git_remote") or "").strip()
     try:
-        if payload.get("git_init") and not git.is_repo(path):
-            git.init(path, branch or "main")
-        if remote and not git.is_repo(path):
-            git.init(path, branch or "main")
-        if remote:
-            git.set_remote(path, remote, branch)
-        if remote or branch or payload.get("git_init"):
-            registry.update_project(project["slug"], git_remote=remote,
-                                    git_branch=branch)
-            project = registry.get_project(project["slug"]) or project
-    except git.GitError as exc:
+        result = projects.create(
+            method=payload.get("method") or "existing",
+            name=(payload.get("name") or "").strip(),
+            path=(payload.get("path") or "").strip(),
+            clone_url=(payload.get("clone_url") or "").strip(),
+            root=(payload.get("root") or "").strip(),
+            bootstrap=payload.get("bootstrap", True),
+            description=payload.get("description") or "",
+            kind=payload.get("kind") or "",
+            tags=payload.get("tags") or "",
+            model=payload.get("model") or "",
+            agent=payload.get("agent") or "",
+            color=payload.get("color") or "",
+            instructions=payload.get("instructions") or "",
+            git_init=bool(payload.get("git_init")),
+            git_remote=(payload.get("git_remote") or "").strip(),
+            git_branch=(payload.get("git_branch") or "").strip(),
+            index_docs=bool(payload.get("index_docs")),
+        )
+    except projects.ProjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    if payload.get("index_docs"):
-        try:
-            memory.index_project_docs(project["id"])
-        except Exception:  # pragma: no cover - indexing is best-effort
-            pass
-
-    # A bootstrap (or an existing repo) may carry a perun.md manifest; merge it
-    # into the registry now so the dashboard reflects it immediately.
-    try:
-        snap = _sync_manifest(project)
-        if snap["found"]:
-            project = registry.get_project(project["slug"]) or project
-    except Exception:  # pragma: no cover - manifest merge is best-effort
-        pass
-
-    registry.log_activity(project["id"], "discover",
-                          "Project created via wizard" if method in ("new", "clone")
-                          else "Project registered manually")
-    git_info = git.info(path)
-    return {"ok": True, "project": project, "created": created, "git": git_info}
+    return {"ok": True, **result}
 
 
 @app.get("/api/projects/{slug}")
@@ -354,6 +316,11 @@ def api_update_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[s
 
 @app.delete("/api/projects/{slug}")
 def api_delete_project(slug: str) -> dict[str, Any]:
+    project = _project_or_404(slug)
+    if control.is_control(project):
+        raise HTTPException(
+            status_code=400,
+            detail="the Perun orchestrator project cannot be removed")
     deleted = registry.delete_project(slug)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"no such project: {slug}")
@@ -364,7 +331,7 @@ def api_delete_project(slug: str) -> dict[str, Any]:
 def api_index_project(slug: str) -> dict[str, Any]:
     project = _project_or_404(slug)
     try:
-        _sync_manifest(project)
+        projects.sync_manifest(project)
     except Exception:  # pragma: no cover - best-effort
         pass
     return memory.index_project_docs(project["id"])
@@ -416,16 +383,9 @@ def api_set_instructions(slug: str, payload: dict[str, Any] = Body(...)) -> dict
 # --------------------------------------------------------------------------- #
 # Project manifest (perun.md / perun.json)
 # --------------------------------------------------------------------------- #
-def _sync_manifest(project: dict[str, Any]) -> dict[str, Any]:
-    """Re-read the manifest from disk and merge declared fields into the registry."""
-    snap = manifest.load(project["path"])
-    if snap["found"]:
-        declared = manifest.to_project_fields(snap["data"])
-        if declared:
-            registry.update_project(project["slug"], **declared)
-        registry.set_project_manifest(project["slug"], manifest.snapshot(snap),
-                                      snap["path"])
-    return snap
+# `projects.sync_manifest` is the single implementation shared with the MCP
+# tools; the routes below call it directly.
+_sync_manifest = projects.sync_manifest
 
 
 @app.get("/api/projects/{slug}/manifest")
@@ -672,9 +632,25 @@ def api_list_runs(project: str | None = None, limit: int = 50) -> dict[str, Any]
     return _ok(runs=registry.list_runs(pid, limit=limit))
 
 
+@app.get("/api/runs/active")
+def api_active_runs() -> dict[str, Any]:
+    """Every run that is queued or running, with its owning project.
+
+    Drives the dashboard's live "an agent is working" layer: each entry maps a
+    run to a project slug so the matching card can come alive. ``live`` lists the
+    run ids with a child process in this server right now, and ``projects`` is the
+    set of project slugs that are currently working (handy for the cards).
+    """
+    runs = registry.list_active_runs()
+    slugs = sorted({r["project_slug"] for r in runs if r.get("project_slug")})
+    return _ok(runs=runs, live=ORCH.active(), projects=slugs, count=len(runs))
+
+
 @app.post("/api/runs")
 def api_start_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    project_ref = payload.get("project") or payload.get("slug")
+    # No project → the control plane (the orchestrator), so a fresh machine with
+    # nothing registered can still be talked to.
+    project_ref = payload.get("project") or payload.get("slug") or _control_slug()
     prompt = (payload.get("prompt") or "").strip()
     if not project_ref:
         raise HTTPException(status_code=400, detail="project is required")

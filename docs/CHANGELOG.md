@@ -2,7 +2,88 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## v0.2.1 — 2026-10-14
+## v0.3.0 - 2026-10-14
+
+The orchestrator becomes a first-class, always-available agent, and the
+dashboard gains a living "storm" layer.
+
+### Added
+
+- **Control plane — the always-present orchestrator.** Perun now registers
+  *itself* as a protected project (`perun/control.py`, `config.is_control_path()`),
+  so a fresh machine with **zero** projects can still be talked to. The control
+  project:
+  * is created/kept by `control.ensure()` on server startup, on every Telegram
+    `/projects`, and at MCP-server import;
+  * can never be deleted (`DELETE /api/projects/{slug}` and `perun_delete_project`
+    refuse it) and is badged `orchestrator`;
+  * is the default target of `POST /api/runs` when no project is given.
+- **Orchestrator chat in the dashboard** (`#/orchestrator`): a streaming chat
+  with the top-level agent, reachable with nothing else registered, plus a
+  dedicated Settings card for its **model**, **agent**, and **custom
+  instructions**.
+- **Orchestrator custom instructions** (`Settings.orchestrator_instructions`) — a
+  machine-wide persona/rules block injected ahead of every orchestrator prompt
+  (they belong to the singleton, not to any user project).
+- **Searchable model picker** — a reusable combobox (`modelSelect`) that lists
+  every model from every connected provider with a live filter, used for the
+  orchestrator, the global default model, and the console.
+- **Project-management MCP tools** — `perun_create_project`,
+  `perun_update_project`, `perun_delete_project` (requires `confirm=True`, refuses
+  control), and `perun_discover`, so an agent can navigate and manage the machine
+  the same way the dashboard does.
+- **The storm layer** (`web/`): Perun's lightning and glowing eyes as live
+  feedback. Three escalating states — **idle**, **awake** (a project touched in
+  the last 15 min), and **storm** (an agent run is executing) — drive a canvas
+  lightning engine (`perunFx`), a glowing sigil with animated eyes, a topbar
+  storm meter, a travelling energy rim + eye pips on working project cards, and a
+  full-screen flash when a run starts. All motion respects
+  `prefers-reduced-motion`.
+- `GET /api/runs/active` — queued/running runs joined with their project
+  (`registry.list_active_runs()`), the data behind the live layer.
+- **One-click launcher** (`Perun.cmd`, Windows). Double-click to bring Perun up:
+  it finds a Python interpreter, resolves the port from `~/.perun/config.json`
+  (override `PERUN_PORT`), is **idempotent** (if the dashboard is already
+  listening it just opens the browser and exits), opens the dashboard, and runs
+  `python -m perun serve`. It **never** starts a Telegram bridge itself — it only
+  `schtasks /run`s the single-instance `PerunBridge` task. Overrides:
+  `PERUN_PYTHON`, `PERUN_PORT`, `PERUN_NO_BROWSER`.
+- **Application icon** — `web/assets/perun.ico` + `perun.png`, a gold lightning
+  bolt on the dark card (matching `--gold-light`/`--gold` on `--bg-secondary`),
+  generated deterministically by `tools/make_icon.py` (stdlib only). Served as
+  the dashboard favicon and used by the desktop shortcut.
+
+### Changed
+
+- `POST /api/runs` with no `project` now targets the orchestrator instead of
+  returning HTTP 400.
+- `/api/health` reports the control slug (`control`), and `/api/models` returns
+  structured `{id, provider, name, label}` entries (plus `providers`/`count`).
+- Telegram routing (`_current_project`) keeps the single-user-project
+  auto-select and otherwise falls back to the orchestrator; a new
+  `/orchestrator` (`/perun`, `/overseer`) command switches to it in place, and
+  `/projects` always shows the orchestrator first.
+- Project model/agent resolution gained a control-only tier: explicit arg →
+  project override → (`control`) `orchestrator_model`/`orchestrator_agent` →
+  global default.
+- Shared project creation moved to `perun/projects.py`, used by both the HTTP
+  wizard and the MCP tools.
+
+### Fixed
+
+- A working project's status pip in the dashboard no longer stays stuck on
+  "idle": the card class, pip class, and pip label are recomputed together from a
+  single `pipState()` source whenever presence changes (boot also loads projects
+  before computing presence, so "awake" pips are correct on first paint).
+- The **Telegram bridge can never multiply.** The in-process path
+  (`serve --bridge`) now keeps its single-instance lock explicitly
+  (`_BRIDGE_LOCK`/`_BRIDGE_THREAD` in `perun/__main__.py`) and refuses a second
+  start, instead of relying on an out-of-scope local. Combined with the
+  machine-global named mutex (`telegram.PidLock`) and the `PerunBridge` logon
+  task's `IgnoreNew` policy, at most one `getUpdates` poller ever runs (a second
+  would fight with HTTP 409s).
+
+## v0.2.1 - 2026-10-14
 
 Security hardening for the dashboard API (from a post-0.2.0 code/UI audit) plus a
 version-source cleanup.

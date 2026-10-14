@@ -40,5 +40,23 @@ def workdir():
     shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.fixture()
+def control_repo(monkeypatch, tmp_path):
+    """Point Perun's control plane (the orchestrator project) at a throwaway repo.
+
+    The control plane is identified by its path being ``config.REPO_ROOT``. Tests
+    that exercise orchestrator routing redirect it to an empty temp repo so the
+    real Perun checkout is never registered, indexed, or executed against.
+    """
+    from perun import config
+
+    repo = tmp_path / "perun-repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "AGENTS.md").write_text("# Perun control-plane test repo\n", encoding="utf-8")
+    (repo / "docs" / "CODEMAP.md").write_text("# test codemap\n", encoding="utf-8")
+    monkeypatch.setattr(config, "REPO_ROOT", repo)
+    return repo
+
+
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
     shutil.rmtree(_TEST_HOME, ignore_errors=True)

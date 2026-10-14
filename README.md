@@ -32,6 +32,9 @@ them all — no matter which folder you happened to open.
 * **Start any agent from anywhere.** Kick off a task in `trading_bot` while
   you're "in" `optimus`.
 * **Phone access.** A single Telegram bot with per-chat project switching.
+* **An always-available orchestrator.** Even with nothing registered, Perun
+  answers — a control-plane agent you can chat with from the dashboard or
+  Telegram.
 * **Zero per-project setup.** `python -m perun install` wires the `perun` MCP
   server and instructions into your user-level OpenCode config, so every future
   project inherits it automatically.
@@ -56,6 +59,10 @@ python -m perun install
 python -m perun serve            # http://127.0.0.1:8760
 ```
 
+On Windows you can skip step 5 and just **double-click `Perun.cmd`**: it starts
+the dashboard (idempotently — a second click just opens the browser), opens the
+page, and leaves Telegram to the single-instance `PerunBridge` task.
+
 Optionally run the Telegram bridge too:
 
 ```bash
@@ -64,6 +71,9 @@ python -m perun serve --bridge   # dashboard + bridge in one process
 python -m perun bridge
 ```
 
+The bridge is a **singleton** — `getUpdates` allows one consumer per bot token, so
+a second start is refused rather than fighting with HTTP 409s.
+
 ## What you get
 
 | Surface | Where | Notes |
@@ -71,9 +81,10 @@ python -m perun bridge
 | **Dashboard** | `http://127.0.0.1:8760` | Gold/dark SPA styled after peruninthemachine.com |
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{id}/stream`, `/api/stream` | Server-Sent Events |
-| **MCP server** | stdio, tool namespace `perun` | 9 tools, installed globally |
-| **Telegram bot** | long-polling | `/projects`, `/project`, `/recall`, … |
+| **MCP server** | stdio, tool namespace `perun` | 17 tools, installed globally |
+| **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
+| **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
 
 ## CLI
 
@@ -96,9 +107,11 @@ python -m perun mcp
 
 ```
 perun/                     the Python package
-  config.py                paths + persisted Settings
+  config.py                paths + persisted Settings (+ is_control_path)
   db.py                    SQLite schema (registry + memory + vectors)
   registry.py              projects / sessions / runs / activity / bridge links
+  control.py               the always-present orchestrator (control plane)
+  projects.py              shared project creation (wizard + MCP)
   memory.py                unified facts + doc-chunk store + search
   embeddings.py            Ollama transport + vector math
   discovery.py             find projects under configured roots
@@ -109,6 +122,8 @@ perun/                     the Python package
   integrations/            global install into ~/.config/opencode
 mcp/perun_mcp.py           the `perun` MCP server (stdio)
 web/                       the dashboard (index.html + css + js)
+Perun.cmd                  Windows one-click launcher
+tools/make_icon.py         regenerates the app icon
 docs/                      CODEMAP · TECHNICAL · CHANGELOG · DESIGN
 tests/                     pytest suite
 ```

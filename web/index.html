@@ -5,13 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Perun — Overseer</title>
     <meta name="color-scheme" content="dark">
+    <link rel="icon" type="image/x-icon" href="assets/perun.ico">
     <link rel="stylesheet" href="css/perun.css">
 </head>
 <body>
     <div class="app">
         <aside class="sidebar">
             <div class="brand">
-                <div class="brand-mark">ᛒ</div>
+                <div class="brand-mark" id="perun-sigil" title="Perun watches over every project" aria-hidden="true">
+                    <svg viewBox="0 0 48 48" focusable="false">
+                        <path class="sigil-brow" d="M7 10 Q24 3 41 10" />
+                        <ellipse class="sigil-eye" cx="15" cy="16" rx="3.7" ry="2.5" />
+                        <ellipse class="sigil-eye" cx="33" cy="16" rx="3.7" ry="2.5" />
+                        <path class="sigil-bolt" d="M27 21 L15 35 L21.5 35 L19 46 L34 29 L25.5 29 Z" />
+                    </svg>
+                </div>
                 <div class="brand-text">
                     <span class="brand-name">PERUN</span>
                     <span class="brand-sub">Overseer</span>
@@ -19,6 +27,7 @@
             </div>
             <nav class="nav" id="nav">
                 <div class="nav-item" data-route="#/dashboard"><span class="ico">◈</span><span class="lab">Dashboard</span></div>
+                <div class="nav-item" data-route="#/orchestrator"><span class="ico">❖</span><span class="lab">Orchestrator</span></div>
                 <div class="nav-item" data-route="#/projects"><span class="ico">▤</span><span class="lab">Projects</span></div>
                 <div class="nav-item" data-route="#/console"><span class="ico">▶</span><span class="lab">Agent Console</span></div>
                 <div class="nav-item" data-route="#/memory"><span class="ico">◉</span><span class="lab">Memory</span></div>
@@ -35,6 +44,10 @@
         <main class="main">
             <header class="topbar">
                 <h2 id="topbar-title">Dashboard</h2>
+                <div class="storm-meter" id="storm-meter" title="Live agent activity">
+                    <span class="sm-eyes"><i class="sm-eye"></i><i class="sm-eye"></i></span>
+                    <span class="sm-text" id="storm-text">calm</span>
+                </div>
                 <div class="spacer"></div>
                 <form class="global-search" id="global-search">
                     <span class="muted">⌕</span>
@@ -47,6 +60,7 @@
         </main>
     </div>
 
+    <canvas id="perun-fx" aria-hidden="true"></canvas>
     <div class="toasts" id="toasts"></div>
     <div id="modal-root"></div>
     <div id="model-root" aria-hidden="true"></div>

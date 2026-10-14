@@ -23,7 +23,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Callable, Iterator
 
-from . import config, registry
+from . import config, control, registry
 
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
@@ -32,21 +32,36 @@ INSTRUCTION_OPEN = "<perun:project_instructions>"
 INSTRUCTION_CLOSE = "</perun:project_instructions>"
 
 
-def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool) -> str:
-    """Prepend a project's custom instructions to a fresh session's prompt.
+def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
+                   settings: config.Settings | None = None) -> str:
+    """Prepend per-session instructions to a fresh session's prompt.
 
-    Instructions are deliberately scoped to a single project and injected only
-    when a **new** session starts; continuations inherit them from the session
-    history, so they are never repeated on every turn.
+    Three layers ride along, in order: the **orchestrator persona** (only for the
+    control-plane project — see :mod:`perun.control`), the user's **custom
+    orchestrator instructions** (again, control-plane only), and the project's
+    own custom instructions. All are injected only when a **new** session
+    starts; continuations inherit them from the session history, so they are
+    never repeated on every turn.
     """
+    if not new_session:
+        return prompt
+    blocks: list[str] = []
+    if control.is_control(project):
+        blocks.append(control.ORCHESTRATOR_INSTRUCTIONS.strip())
+        custom = (getattr(settings, "orchestrator_instructions", "") or "").strip()
+        if custom:
+            blocks.append(f"Additional standing instructions from the user:\n\n{custom}")
     instructions = (project.get("instructions") or "").strip()
-    if not instructions or not new_session:
+    if instructions:
+        blocks.append(instructions)
+    body = "\n\n".join(b for b in blocks if b)
+    if not body:
         return prompt
     return (
         f"{INSTRUCTION_OPEN}\n"
         "The following are project-level instructions. Follow them for every task "
         "in this session unless the user explicitly says otherwise.\n\n"
-        f"{instructions}\n"
+        f"{body}\n"
         f"{INSTRUCTION_CLOSE}\n\n{prompt}"
     )
 
@@ -208,8 +223,17 @@ class Orchestrator:
             raise ValueError("empty prompt")
 
         run_uid = uuid.uuid4().hex[:16]
-        model = model or project.get("model") or self.settings.default_model
-        agent = agent or project.get("agent") or self.settings.default_agent
+        # Model/agent precedence: explicit call argument → the project's own
+        # override → (control plane only) the dedicated orchestrator model →
+        # the global default.
+        model = model or project.get("model")
+        if not model and control.is_control(project):
+            model = self.settings.orchestrator_model
+        model = model or self.settings.default_model
+        agent = agent or project.get("agent")
+        if not agent and control.is_control(project):
+            agent = self.settings.orchestrator_agent
+        agent = agent or self.settings.default_agent
 
         run = registry.create_run(
             run_uid, project["id"], prompt,
@@ -273,7 +297,8 @@ class Orchestrator:
         cwd = project["path"]
         oc_sid = run.get("opencode_session_id") or ""
         # Project-scoped custom instructions ride along with a new session.
-        prompt = compose_prompt(project, prompt, new_session=not oc_sid)
+        prompt = compose_prompt(project, prompt, new_session=not oc_sid,
+                                settings=self.settings)
         argv = resolve_opencode("opencode") + ["run", "--format", "json", "--auto"]
         if run.get("model"):
             argv += ["--model", run["model"]]
