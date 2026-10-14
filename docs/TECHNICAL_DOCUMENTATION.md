@@ -1,8 +1,11 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.1.0 — initial release: machine-wide project registry +
-unified memory, agent orchestrator, web dashboard, shared Telegram bridge, and a
-globally-installed MCP server.
+**Latest release:** v0.2.1 — security hardening of the dashboard API
+(anti-CSRF / anti-DNS-rebinding guard on `/api/*`, plus stored-XSS fixes) on top
+of v0.2.0 (project management: creation wizard, per-project Git, custom project
+instructions, self-describing `perun.md` manifest, model picker) and the v0.1.0
+core (machine-wide registry + unified memory, agent orchestrator, web dashboard,
+shared Telegram bridge, and a globally-installed MCP server).
 
 ---
 
@@ -44,7 +47,7 @@ can all write concurrently.
 
 | Table | Purpose | Notes |
 |---|---|---|
-| `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent` |
+| `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `instructions`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch` |
 | `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `message_count`, `status` |
 | `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout}, `output`, `error` |
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
@@ -52,6 +55,10 @@ can all write concurrently.
 | `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)` |
 | `settings` | key/value scratch | |
 | `bridge_links` | Telegram routing | `chat_id` → `project_id` + `session_pk` |
+
+Column additions after v0.1.0 are applied idempotently by `db._ADDED_COLUMNS`
+(`instructions`, `manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`), so
+existing databases migrate in place.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
 `UNIQUE(scope, project_id, content_hash)` constraint would not dedupe global
@@ -99,11 +106,105 @@ reports `ollama_ok`.
 `scan()` walks at most `max_depth` under each root, skipping `SKIP_DIRS`
 (`node_modules`, `.venv`, `dist`, …) and dotted dirs. `discover_and_sync()`
 registers only `opencode`/`git` projects, updating existing ones by path
-(`register()`).
+(`register()`). `register_self()` always registers the Perun repository itself.
+
+`register()` also reads a project **manifest** (see §6). Fields a manifest
+*declares* (`name`, `kind`, `description`, `tags`, `model`, `agent`,
+`instructions`, `git`) override the heuristics; undeclared fields keep their
+discovered/registry value. The parsed manifest is snapshotted into the
+`projects.manifest` column.
 
 ---
 
-## 5. Orchestrator
+## 5. Project management
+
+**Creation wizard** (`POST /api/projects`, `web/js/perun.js: projectWizard`). A
+single endpoint handles three methods:
+
+* `existing` — register a path (may not exist yet; created lazily on first use);
+* `new` — create the directory and optionally **bootstrap** a starter project
+  (`scaffold.bootstrap`: `opencode.json`, `AGENTS.md`, `README.md`, `.gitignore`,
+  `perun.md`);
+* `clone` — `git.clone(url, path)` into the target.
+
+Optional steps: `git_init` (`scaffold`/`git.init`), `git_remote` + `git_branch`
+(`git.set_remote`), and `index_docs` (`memory.index_project_docs`). After
+registration the manifest is merged (`_sync_manifest`) so the dashboard reflects
+it immediately. A server-backed **folder browser** powers the path pickers:
+`GET /api/fs/list?path=&show_hidden=` returns `roots`, `home`, `parent`, `dirs`,
+`files`; `POST /api/fs/mkdir {path}` creates a directory.
+
+**Per-project Git** (`perun/git.py`). Wraps the `git` CLI with explicit,
+non-interactive arguments (`GIT_TERMINAL_PROMPT=0`), validated remote URLs, and a
+structured `info()` (`repo`, `branch`, `dirty`, `change_count`, `ahead`,
+`behind`, `remote_url`). It **never** rewrites a working tree implicitly —
+`init`/`remote`/`commit`/`push` are explicit user actions.
+
+**Custom project instructions** (`projects.instructions`). Project-scoped rules
+injected only when a **new** session starts: `orchestrator.compose_prompt()`
+prepends
+
+```
+<perun:project_instructions>
+…rules…
+</perun:project_instructions>
+
+<user prompt>
+```
+
+Continuations of an existing session inherit the rules from history, so they are
+not re-injected. The raw user prompt is what gets stored on the run row.
+
+---
+
+## 6. Manifest (`perun.md`)
+
+A project can describe itself with a **`perun.md`**: a Markdown file whose
+**YAML front-matter** (parsed by the already-required PyYAML) holds structured
+data, followed by a free-form Markdown body shown as the project overview.
+
+```markdown
+---
+version: 1
+name: Trading Bot
+kind: opencode
+description: Android crypto trading bot.
+tags: [python, kivy, trading]
+model: opencode/big-pickle
+docs: { readme: README.md, changelog: docs/CHANGELOG.md }
+commands: { test: "python -m pytest tests/ -q" }
+links: { repository: "https://github.com/you/repo" }
+anchors:
+  - { label: Entry point, kind: file, path: main.py }
+  - { label: Pipeline, kind: symbol, path: services.py, symbol: TradingEngine }
+  - { label: Site, kind: url, url: "https://example.com" }
+  - { label: Run tests, kind: command, command: test }
+---
+
+# Trading Bot
+
+Free-form notes rendered on the project page.
+```
+
+* **Anchor kinds:** `file`, `doc`, `symbol`, `url`, `command`. Each anchor needs
+  a `label` and one locator (`path` / `url` / `command`). Shorthand: a string
+  anchor becomes a `file` anchor; `kind` is inferred when omitted.
+* **JSON fallback:** a plain `perun.json` is accepted; if a project uses JSON,
+  `save()` writes JSON back (the Markdown body is stored under a `body` key) and
+  `perun.md` is never created alongside it. `perun.md` wins if both exist.
+* **Declarative input, explicit writes.** The server only *reads* the manifest
+  (on discovery, index, wizard, or refresh). Disk writes happen only through
+  explicit `POST …/manifest/export` (generate from registry; 409 if one already
+  exists) or `PUT …/manifest` (from the editor / MCP).
+* **Tolerant & forward-compatible.** `normalize()` validates and repairs, and
+  **preserves unknown keys**; malformed YAML/JSON degrades to defaults with
+  warnings instead of failing. Anchors missing a locator are dropped with a
+  warning. Paths are expected relative to the project root.
+* `dump()` omits empty defaults so generated files stay readable.
+
+---
+
+## 7. Orchestrator
 
 `Orchestrator.start_run(project, prompt, …)`:
 
@@ -145,7 +246,7 @@ explainable in the dashboard.
 
 ---
 
-## 6. HTTP API
+## 8. HTTP API
 
 All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 
@@ -154,15 +255,28 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/health` | version, uptime, project count, active runs |
 | GET | `/api/models` | `opencode models` listing |
 | GET | `/api/projects` | list projects |
-| POST | `/api/projects` | register/update a project `{name,path,…}` |
-| GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory |
+| POST | `/api/projects` | wizard: register / create / clone `{method,path,…}` |
+| GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
 | PATCH | `/api/projects/{slug}` | update fields |
 | DELETE | `/api/projects/{slug}` | unregister |
-| POST | `/api/projects/{slug}/index` | index docs |
+| POST | `/api/projects/{slug}/index` | sync manifest, then index docs |
 | GET | `/api/projects/{slug}/sessions` | sessions |
 | DELETE | `/api/sessions/{pk}` | delete a session |
 | GET | `/api/projects/{slug}/activity` | project activity |
 | GET | `/api/projects/{slug}/memory` | project facts + stats |
+| GET/PUT | `/api/projects/{slug}/instructions` | project-scoped instructions |
+| GET | `/api/projects/{slug}/manifest` | manifest (`?live=true` reads disk) |
+| POST | `/api/projects/{slug}/manifest/refresh` | re-read disk, merge to registry |
+| POST | `/api/projects/{slug}/manifest/export` | generate manifest from registry (409 if exists) |
+| PUT | `/api/projects/{slug}/manifest` | write manifest `{content}` or `{data,body}` |
+| GET | `/api/projects/{slug}/git` | git status `info()` |
+| GET | `/api/projects/{slug}/git/log` | recent commits |
+| POST | `/api/projects/{slug}/git/init` | initialise repository |
+| POST | `/api/projects/{slug}/git/remote` | set/validate remote |
+| POST | `/api/projects/{slug}/git/commit` | commit all changes |
+| POST | `/api/projects/{slug}/git/push` | push branch |
+| GET | `/api/fs/list` | folder browser listing |
+| POST | `/api/fs/mkdir` | create a directory |
 | POST | `/api/discover` | scan roots & register |
 | GET | `/api/discover/scan` | dry-run scan |
 | GET | `/api/runs` | recent runs (`?project=`) |
@@ -179,7 +293,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/memory/prune` | drop old non-global facts |
 | GET | `/api/activity` | global feed |
 | GET/PATCH | `/api/settings` | read/update `Settings` |
-| GET | `/api/telegram/status` | bot + allowed chats |
+| GET | `/api/telegram/status` | bot + allowed chats + `bridge_running` |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/` etc. | static dashboard from `web/` |
 
@@ -190,9 +304,20 @@ with `starlette.concurrency.iterate_in_threadpool`. The global stream merges run
 events with polled `activity` rows. `X-Accel-Buffering: no` disables proxy
 buffering.
 
+### Access control
+
+The API is **local and unauthenticated by design**. Because it can start agent
+runs (`POST /api/runs`, executed with `--auto`) and browse the filesystem, an
+`_origin_guard` middleware (added in v0.2.1) rejects any `/api/*` request whose
+`Host` header does not address this machine (loopback, or the configured bind
+address) — defeating DNS rebinding — and rejects a request whose browser-supplied
+`Origin` does not resolve to the same host. Static dashboard assets are not
+guarded. Binding to a non-loopback address still works but logs a warning; expose
+it only on a trusted network.
+
 ---
 
-## 7. Telegram bridge
+## 9. Telegram bridge
 
 `PerunTelegramBridge` long-polls `getUpdates`. Routing state lives in
 `bridge_links` (chat → project → session), not a side file. Chat→project
@@ -208,7 +333,7 @@ subset of Markdown into Telegram HTML; `chunk()` splits at 3900 chars.
 
 ---
 
-## 8. Global installation
+## 10. Global installation
 
 `python -m perun install` (`integrations/install_global.py`):
 
@@ -226,30 +351,37 @@ exactly the Perun keys/files; runtime data in `~/.perun` is kept.
 
 ---
 
-## 9. MCP server
+## 11. MCP server
 
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
-`db.init_db()`s, and exposes nine tools. `_resolve_project()` accepts a slug, a
-path, or `None` — for `None` it walks up from the current working directory to
+`db.init_db()`s, and exposes thirteen tools. `_resolve_project()` accepts a slug,
+a path, or `None` — for `None` it walks up from the current working directory to
 the nearest registered project. `perun_ask` is blocking; `perun_start_session`
-returns immediately with a run id.
+returns immediately with a run id. `perun_get_instructions` /
+`perun_set_instructions` read/write the project-scoped instructions;
+`perun_get_manifest` / `perun_set_manifest` read/write `perun.md`.
 
 ---
 
-## 10. Web dashboard
+## 12. Web dashboard
 
 `web/` is a dependency-free SPA (vanilla JS, hash routing).
 
 * **Views:** Dashboard, Projects (+ detail with tabs Overview/Console/Sessions/
-  Memory/Activity/Config), Agent Console (live SSE), Memory Explorer, Activity
-  (live `/api/stream`), Telegram, Settings.
+  Memory/Activity/Git/Manifest/Instructions/Config), Agent Console (live SSE),
+  Memory Explorer, Activity (live `/api/stream`), Telegram, Settings.
+* **Project wizard & folder browser** are modal flows over `/api/projects` and
+  `/api/fs/*`; **Git** and **Manifest** tabs load their own data lazily.
+* **Manifest body** is rendered by `renderMarkdown()` — a small, escaped-by-default
+  Markdown subset (headings, lists, emphasis, code, links); link targets are
+  restricted to `http(s)`, `mailto`, or relative URLs.
 * **Design tokens** mirror peruninthemachine.com: `#050505` background,
   `#c9a227` gold, `Cinzel` headings (font copied to `web/assets/Cinzel.ttf`).
 * **Live output** uses `EventSource`; streams are closed on navigation.
 
 ---
 
-## 11. Configuration reference (`Settings`)
+## 13. Configuration reference (`Settings`)
 
 | Field | Default | Meaning |
 |---|---|---|

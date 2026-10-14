@@ -85,3 +85,46 @@ def test_status_reports_installed(fake_xdg):
     assert install_global.status()["installed"] is False
     install_global.install(index=False)
     assert install_global.status()["installed"] is True
+    assert install_global.status()["agents_block"] is True
+
+
+def test_install_writes_global_agents_block(fake_xdg):
+    install_global.install(index=False)
+    agents = install_global.agents_target()
+    assert agents.is_file()
+    text = agents.read_text(encoding="utf-8")
+    assert install_global.AGENTS_BEGIN in text
+    assert install_global.AGENTS_END in text
+    assert "perun" in text.lower()
+
+
+def test_agents_block_preserves_user_content(fake_xdg):
+    agents = install_global.agents_target()
+    agents.parent.mkdir(parents=True, exist_ok=True)
+    agents.write_text("# My global rules\n\n- be nice\n", encoding="utf-8")
+
+    install_global.install(index=False)
+    text = agents.read_text(encoding="utf-8")
+    assert "be nice" in text
+    assert install_global.AGENTS_BEGIN in text
+
+    install_global.uninstall()
+    after = agents.read_text(encoding="utf-8")
+    assert "be nice" in after
+    assert install_global.AGENTS_BEGIN not in after
+
+
+def test_agents_block_is_idempotent(fake_xdg):
+    install_global.install(index=False)
+    first = install_global.agents_target().read_text(encoding="utf-8")
+    install_global.install(index=False)
+    second = install_global.agents_target().read_text(encoding="utf-8")
+    assert first == second
+    assert second.count(install_global.AGENTS_BEGIN) == 1
+
+
+def test_uninstall_deletes_agents_file_when_only_perun(fake_xdg):
+    install_global.install(index=False)
+    assert install_global.agents_target().is_file()
+    install_global.uninstall()
+    assert not install_global.agents_target().exists()

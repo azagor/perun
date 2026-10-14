@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.1.0"`).
+Package docstring + `__version__` (`"0.2.1"`).
 
 ### `perun/config.py`
 Filesystem layout + persisted settings.
@@ -26,13 +26,18 @@ Filesystem layout + persisted settings.
 ### `perun/db.py`
 SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 `activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`.
-* `SCHEMA`, `connect()`, `db()` (context manager), `init_db()`, `rows()`, `one()`.
+* `SCHEMA`, `_ADDED_COLUMNS` (idempotent column migrations:
+  `projects.instructions`, `projects.manifest`, `projects.manifest_path`,
+  `projects.manifest_loaded_at`, `projects.git_*`), `connect()`, `db()` (context
+  manager), `init_db()`, `rows()`, `one()`.
 
 ### `perun/registry.py`
 Registry CRUD (projects, sessions, runs, activity, bridge links).
-* Helpers: `now_iso()`, `slugify()`, `project_dict()`.
+* Helpers: `now_iso()`, `slugify()`, `project_dict()` (parses the stored
+  manifest snapshot, adds `has_manifest`).
 * Projects: `add_project()`, `update_project()`, `touch_project()`,
-  `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`.
+  `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`,
+  `set_project_manifest()`, `get_project_manifest()`.
 * Sessions: `create_session()`, `get_session()`, `find_session_by_opencode()`,
   `update_session()`, `list_sessions()`, `delete_session()`.
 * Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`.
@@ -61,16 +66,40 @@ Unified facts + document vector store + search.
 Find & register OpenCode projects under roots.
 * `SKIP_DIRS`, `OPENCODE_MARKERS`, `DOC_MARKERS`.
 * `capabilities()`, `classify()`, `detect()`, `_candidate_dirs()`, `scan()`,
-  `register()`, `discover_and_sync()`.
+  `register()` (merges any `perun.md`/`perun.json` manifest),
+  `discover_and_sync()`, `register_self()`.
+
+### `perun/scaffold.py`
+Starter-project skeleton + directory creation.
+* `ScaffoldError`, `create_dir()`, `bootstrap()` (writes `opencode.json`,
+  `AGENTS.md`, `README.md`, `.gitignore`, and a starter `perun.md`),
+  `_manifest_md()`, `summary()`.
+
+### `perun/git.py`
+Safe wrapper over the `git` CLI (per-project repositories).
+* `GitError`, `available()`, `is_repo()`, `status()`, `log()`, `info()`,
+  `init()`, `set_remote()`, `commit()`, `push()`, `clone()`.
+* All calls run non-interactively with explicit args; remote URLs are validated.
+
+### `perun/manifest.py`
+Self-describing project manifest — `perun.md` (YAML front matter + Markdown
+body) with a `perun.json` fallback.
+* Constants: `MANIFEST_MD`, `MANIFEST_JSON`, `MANIFEST_NAMES`, `SCHEMA_VERSION`,
+  `ANCHOR_KINDS`.
+* `ManifestError`, `find()`, `parse()`, `parse_json()`, `load()`, `normalize()`,
+  `dump()`, `save()`, `snapshot()`, `to_project_fields()`, `from_project()`,
+  `default_body()`.
 
 ### `perun/orchestrator.py`
 Start / stream / cancel `opencode run`.
 * `EventBus` (`subscribe`, `unsubscribe`, `publish`, `subscribe_all`,
   `unsubscribe_all`, `close`).
-* Process helpers: `resolve_opencode()`, `terminate_tree()`, `parse_event()`.
+* Process helpers: `resolve_opencode()`, `terminate_tree()`, `parse_event()`,
+  `compose_prompt()` (prepends project instructions to new sessions).
 * `Orchestrator`: `start_run()`, `run_and_wait()`, `cancel()`, `is_final()`,
   `active()`, `_worker()`, `_execute()`, `_finalize()`, `stream()`.
-* Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`.
+* Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `INSTRUCTION_OPEN`,
+  `INSTRUCTION_CLOSE`.
 
 ### `perun/telegram.py`
 Shared Telegram ⇄ Perun bridge.
@@ -84,14 +113,18 @@ Shared Telegram ⇄ Perun bridge.
 ### `perun/server.py`
 FastAPI app + SSE + static dashboard.
 * Globals: `SETTINGS`, `ORCH`, `app`, `STARTED_AT`, `_SSE_HEADERS`.
+* Guard: `_origin_guard` middleware + `_hostname()`, `_host_allowed()`,
+  `_origin_ok()` — anti-CSRF / anti-DNS-rebinding, applied to `/api/*` only.
 * Helpers: `_project_or_404()`, `_resolve_project()`, `_ok()`, `_sse()`,
   `_max_activity_id()`, `_new_activity()`.
 * Endpoint groups: health (`/api/health`, `/api/models`), projects
-  (`/api/projects…`), discovery (`/api/discover…`), runs (`/api/runs…`,
-  `/api/runs/{id}/stream`, `/api/stream`), memory (`/api/memory/*`), activity
-  (`/api/activity`), settings (`/api/settings`), telegram
-  (`/api/telegram/*`).
-* `serve()` (uvicorn launcher).
+  (`/api/projects…` incl. the creation wizard, `/api/projects/{slug}/instructions`,
+  `/api/projects/{slug}/manifest…`, `/api/projects/{slug}/git…`), filesystem
+  (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
+  (`/api/runs…`, `/api/runs/{id}/stream`, `/api/stream`), memory
+  (`/api/memory/*`), activity (`/api/activity`), settings (`/api/settings`),
+  telegram (`/api/telegram/*`).
+* `_register_project()`, `_sync_manifest()`, `serve()` (uvicorn launcher).
 
 ### `perun/__main__.py`
 CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
@@ -113,19 +146,25 @@ Idempotent global install into `~/.config/opencode`.
 ### `mcp/perun_mcp.py`
 stdio MCP server (`perun`). Tools: `perun_list_projects`, `perun_project_info`,
 `perun_memory_search`, `perun_memory_store`, `perun_docs_index`,
-`perun_start_session`, `perun_ask`, `perun_run_status`, `perun_telegram_send`.
+`perun_get_instructions`, `perun_set_instructions`, `perun_get_manifest`,
+`perun_set_manifest`, `perun_start_session`, `perun_ask`, `perun_run_status`,
+`perun_telegram_send`.
 * `_resolve_project()`, `_project_line()`, `main()`.
 
 ---
 
 ## Web dashboard `web/`
 
-* `web/index.html` — app shell (sidebar, topbar, view container, modal/toast roots).
-* `web/css/perun.css` — design tokens & components (gold/dark theme).
-* `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `router()`, and the
-  view renderers (`viewDashboard`, `viewProjects`, `viewProject`, `viewConsole`,
-  `viewMemory`, `viewActivity`, `viewTelegram`, `viewSettings`), `mountConsole()`,
-  `streamRun()`.
+* `web/index.html` — app shell (sidebar, topbar, view container, modal/toast
+  roots, hidden `#model-root` datalist host).
+* `web/css/perun.css` — design tokens & components (gold/dark theme), including
+  wizard, folder-browser, structured-editor, and manifest styles.
+* `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
+  `router()`, `renderMarkdown()`, and the view renderers (`viewDashboard`,
+  `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`, `mountGit`,
+  `mountManifest`, `manifestOverview`, `projectInstructionsForm`, `viewConsole`,
+  `viewMemory`, `viewActivity`, `viewTelegram`, `viewSettings`),
+  `mountConsole()`, `streamRun()`.
 * `web/assets/Cinzel.ttf` — heading font (shared with the company site).
 
 ---
@@ -142,12 +181,16 @@ stdio MCP server (`perun`). Tools: `perun_list_projects`, `perun_project_info`,
 ## Tests `tests/`
 
 * `test_db_registry.py` — schema, projects/sessions/runs/activity CRUD.
-* `test_discovery.py` — detection, classify, register, scan.
+* `test_discovery.py` — detection, classify, register, scan, manifest merge.
 * `test_memory.py` — remember/sensitive/dedupe, chunking, index, search,
   unified_search, stats (Ollama-independent).
 * `test_install_global.py` — merge/uninstall idempotency against a temp config.
-* `test_server.py` — FastAPI TestClient smoke of the main endpoints.
+* `test_server.py` — FastAPI TestClient smoke of the main endpoints (incl.
+  instructions, manifest, git, wizard, models).
+* `test_manifest.py` — parse/normalize/dump/save, JSON fallback, edge cases.
+* `test_scaffold.py` — directory creation, bootstrap, starter `perun.md`.
+* `test_git.py` — the `git` CLI wrapper against a temp repository.
 * `test_orchestrator.py` — `parse_event`, `resolve_opencode`, `EventBus`,
-  end-to-end stdout-error capture.
+  `compose_prompt` instructions injection, end-to-end stdout-error capture.
 * `test_telegram_lock.py` — mutex namespacing + side-effect-free `is_held()`.
 * `test_cli.py` — UTF-8 stdio hardening and non-ASCII recall output.

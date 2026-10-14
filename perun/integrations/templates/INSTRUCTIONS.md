@@ -7,7 +7,8 @@ regardless of which folder this repository lives in:
 * a **registry of all your projects** and their metadata,
 * a **unified, project-namespaced memory** (facts + semantic document search),
 * the ability to **start and inspect agent sessions in other projects**,
-* a **shared Telegram bridge** for reaching you from a phone.
+* a **shared Telegram bridge** for reaching you from a phone,
+* each project's **custom instructions** and self-describing **`perun.md` manifest**.
 
 ## MCP tools (server name `perun`)
 
@@ -18,6 +19,10 @@ regardless of which folder this repository lives in:
 | `perun_memory_search` | Semantic + keyword search across facts and indexed docs. |
 | `perun_memory_store` | Store a durable fact (global or project scope). |
 | `perun_docs_index` | (Re)index a project's `docs/*` into the vector store. |
+| `perun_get_instructions` | Read a project's custom instructions. |
+| `perun_set_instructions` | Write a project's custom instructions. |
+| `perun_get_manifest` | Read a project's `perun.md` manifest (front matter + body). |
+| `perun_set_manifest` | Write a project's `perun.md` manifest. |
 | `perun_start_session` | Start an agent run in a project; returns a run id. |
 | `perun_ask` | Run a prompt in a project and wait for the reply. |
 | `perun_run_status` | Status / output of a previously started run. |

@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS projects (
     favorite      INTEGER DEFAULT 0,
     enabled       INTEGER DEFAULT 1,
     color         TEXT DEFAULT '',
+    instructions  TEXT DEFAULT '',
+    manifest           TEXT DEFAULT '',
+    manifest_path      TEXT DEFAULT '',
+    manifest_loaded_at TEXT DEFAULT '',
+    git_remote    TEXT DEFAULT '',
+    git_branch    TEXT DEFAULT '',
+    git_provider  TEXT DEFAULT '',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     last_seen_at  TEXT
@@ -149,10 +156,34 @@ def db() -> Iterator[sqlite3.Connection]:
 _initialized = False
 
 
+# Columns added after the first release. ``CREATE TABLE IF NOT EXISTS`` never
+# alters an existing table, so older databases need an explicit ALTER.
+_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "projects": [
+        ("instructions", "TEXT DEFAULT ''"),
+        ("manifest", "TEXT DEFAULT ''"),
+        ("manifest_path", "TEXT DEFAULT ''"),
+        ("manifest_loaded_at", "TEXT DEFAULT ''"),
+        ("git_remote", "TEXT DEFAULT ''"),
+        ("git_branch", "TEXT DEFAULT ''"),
+        ("git_provider", "TEXT DEFAULT ''"),
+    ],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, ddl in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 def init_db() -> None:
     global _initialized
     with db() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
     _initialized = True
 
 

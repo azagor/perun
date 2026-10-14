@@ -34,6 +34,7 @@ def add_project(
     model: str = "",
     agent: str = "",
     color: str = "",
+    instructions: str = "",
 ) -> dict[str, Any]:
     slug = slugify(name)
     ts = now_iso()
@@ -46,10 +47,10 @@ def add_project(
         conn.execute(
             """INSERT INTO projects
                (slug,name,path,root,kind,description,tags,model,agent,color,
-                created_at,updated_at,last_seen_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                instructions,created_at,updated_at,last_seen_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (slug, name, path, root, kind, description, tags, model, agent,
-             color, ts, ts, ts),
+             color, instructions, ts, ts, ts),
         )
         row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
         return project_dict(conn, row)
@@ -58,7 +59,9 @@ def add_project(
 def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
     allowed = {
         "name", "path", "root", "kind", "description", "tags", "model",
-        "agent", "favorite", "enabled", "color",
+        "agent", "favorite", "enabled", "color", "instructions",
+        "manifest", "manifest_path", "manifest_loaded_at",
+        "git_remote", "git_branch", "git_provider",
     }
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
@@ -110,6 +113,18 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["favorite"] = bool(d.get("favorite"))
     d["enabled"] = bool(d.get("enabled"))
+    # Expose the parsed manifest (front-matter data only; the body is served by
+    # the dedicated /manifest endpoint to keep list payloads small).
+    raw_manifest = d.get("manifest") or ""
+    d["has_manifest"] = bool(raw_manifest)
+    if raw_manifest:
+        try:
+            snap = json.loads(raw_manifest)
+            d["manifest"] = snap.get("data") or {}
+        except Exception:
+            d["manifest"] = {}
+    else:
+        d["manifest"] = {}
     d["session_count"] = db.one(
         conn, "SELECT COUNT(*) c FROM sessions WHERE project_id=?", (pid,)
     )["c"]
@@ -137,6 +152,31 @@ def delete_project(slug: str) -> bool:
     with db.db() as conn:
         cur = conn.execute("DELETE FROM projects WHERE slug=?", (slug,))
         return cur.rowcount > 0
+
+
+def set_project_manifest(slug: str, snapshot: str, path: str = "") -> None:
+    """Store the parsed manifest snapshot read from disk."""
+    ts = now_iso()
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE projects SET manifest=?, manifest_path=?, manifest_loaded_at=?, "
+            "updated_at=? WHERE slug=?",
+            (snapshot, path, ts, ts, slug),
+        )
+
+
+def get_project_manifest(slug: str) -> dict[str, Any]:
+    """Return the stored manifest snapshot ``{data, body, source}`` (or empty)."""
+    with db.db() as conn:
+        row = db.one(conn, "SELECT manifest FROM projects WHERE slug=?", (slug,))
+    if not row or not row["manifest"]:
+        return {"data": {}, "body": "", "source": ""}
+    try:
+        snap = json.loads(row["manifest"])
+        return {"data": snap.get("data") or {}, "body": snap.get("body") or "",
+                "source": snap.get("source") or ""}
+    except Exception:
+        return {"data": {}, "body": "", "source": ""}
 
 
 # --------------------------------------------------------------------------- #

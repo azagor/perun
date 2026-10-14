@@ -12,6 +12,10 @@ Tools
 ``perun_memory_search``  Search facts + indexed docs (this or all projects).
 ``perun_memory_store``   Store a durable fact (global or project scope).
 ``perun_docs_index``     (Re)index a project's docs into the vector store.
+``perun_get_instructions`` Read a project's custom instructions.
+``perun_set_instructions`` Set a project's custom instructions.
+``perun_get_manifest``   Read a project's perun.md manifest (data + body).
+``perun_set_manifest``   Write a project's perun.md manifest.
 ``perun_start_session``  Start an agent run in a project (returns run id).
 ``perun_ask``            Run a prompt in a project and wait for the reply.
 ``perun_run_status``     Status / output of a run.
@@ -205,6 +209,100 @@ def perun_docs_index(project: str | None = None) -> str:
         return f"[perun] Index failed: {res.get('reason')}"
     return (f"[perun] Indexed {res.get('chunks', 0)} chunk(s) from "
             f"{len(res.get('files', []))} file(s): {', '.join(res.get('files', []))}")
+
+
+@mcp.tool
+def perun_get_instructions(project: str | None = None) -> str:
+    """Read the custom instructions stored for a project.
+
+    Instructions are scoped to a single project and are injected into every new
+    agent session started in that project.
+
+    Args:
+        project: Project slug/path. Omit for the current project.
+    """
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    detail = registry.get_project(p["slug"]) or p
+    text = (detail.get("instructions") or "").strip()
+    if not text:
+        return f"[perun] No custom instructions set for {p['slug']}."
+    return f"[perun] Instructions for {p['slug']}:\n{text}"
+
+
+@mcp.tool
+def perun_set_instructions(instructions: str, project: str | None = None) -> str:
+    """Set the custom instructions for a project (replaces the current text).
+
+    The text is scoped to this project only and is prepended to every new agent
+    session started in it.
+
+    Args:
+        instructions: The full instruction text. Pass an empty string to clear.
+        project: Project slug/path. Omit for the current project.
+    """
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    registry.update_project(p["slug"], instructions=instructions or "")
+    registry.log_activity(p["id"], "config", "Project instructions updated")
+    if not (instructions or "").strip():
+        return f"[perun] Cleared instructions for {p['slug']}."
+    return f"[perun] Updated instructions for {p['slug']} ({len(instructions)} chars)."
+
+
+@mcp.tool
+def perun_get_manifest(project: str | None = None) -> str:
+    """Read a project's Perun manifest (perun.md front matter + body).
+
+    Args:
+        project: Project slug/path. Omit for the current project.
+    """
+    import json as _json
+
+    from perun import manifest
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    snap = manifest.load(p["path"])
+    if not snap["found"]:
+        return (f"[perun] No manifest for {p['slug']}. Create one with "
+                "`perun_set_manifest`, or generate one from the dashboard.")
+    lines = [f"[perun] Manifest for {p['slug']} ({snap['path']}):"]
+    lines.append(_json.dumps(snap["data"], indent=2, ensure_ascii=False))
+    if snap["body"].strip():
+        lines.append("--- body ---")
+        lines.append(snap["body"].strip()[:4000])
+    if snap["warnings"]:
+        lines.append("warnings: " + "; ".join(snap["warnings"]))
+    return "\n".join(lines)
+
+
+@mcp.tool
+def perun_set_manifest(data: dict, body: str = "", project: str | None = None) -> str:
+    """Write a project's Perun manifest (perun.md).
+
+    Args:
+        data: The front-matter mapping (name, tags, docs, commands, anchors, …).
+        body: Optional Markdown body shown as the project overview.
+        project: Project slug/path. Omit for the current project.
+    """
+    from perun import manifest, registry
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    try:
+        target = manifest.save(p["path"], data or {}, body or "")
+    except manifest.ManifestError as exc:
+        return f"[perun] Could not write manifest: {exc}"
+    snap = manifest.load(p["path"])
+    declared = manifest.to_project_fields(snap["data"])
+    if declared:
+        registry.update_project(p["slug"], **declared)
+    registry.set_project_manifest(p["slug"], manifest.snapshot(snap), str(target))
+    registry.log_activity(p["id"], "config", "Manifest updated via MCP")
+    return f"[perun] Wrote manifest for {p['slug']} ({target})."
 
 
 @mcp.tool

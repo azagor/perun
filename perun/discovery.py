@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import registry
+from . import manifest, registry
 
 SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "__pycache__", ".buildozer",
@@ -54,6 +54,7 @@ def capabilities(path: Path) -> dict[str, Any]:
         "git": (path / ".git").exists(),
         "opencode": has(*OPENCODE_MARKERS),
         "agents_md": (path / "AGENTS.md").is_file(),
+        "manifest": has(*manifest.MANIFEST_NAMES),
         "docs": has(*DOC_MARKERS),
         "codemap": (path / "docs" / "CODEMAP.md").is_file(),
         "memory_scripts": (path / "scripts" / "memory.py").is_file(),
@@ -67,7 +68,7 @@ def capabilities(path: Path) -> dict[str, Any]:
 
 def classify(path: Path) -> str:
     caps = capabilities(path)
-    if caps["opencode"] or caps["agents_md"] or caps["codemap"]:
+    if caps["opencode"] or caps["agents_md"] or caps["codemap"] or caps["manifest"]:
         return "opencode"
     if caps["git"]:
         return "git"
@@ -129,32 +130,62 @@ def scan(roots: list[str], *, max_depth: int = 1) -> list[dict[str, Any]]:
 
 
 def register(info: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Insert or update a discovered project. Returns (project, created)."""
+    """Insert or update a discovered project. Returns (project, created).
+
+    A ``perun.md``/``perun.json`` manifest, when present, is authoritative for
+    the fields it declares (name, kind, description, tags, model, agent,
+    instructions, git) and its snapshot is stored for the dashboard.
+    """
     existing = registry.get_project_by_path(info["path"])
     caps = info.get("capabilities", {})
-    tags = ",".join(sorted(k for k, v in caps.items() if v))
+    cap_tags = ",".join(sorted(k for k, v in caps.items() if v))
+
+    man = manifest.load(info["path"])
+    declared = manifest.to_project_fields(man["data"]) if man["found"] else {}
+
+    name = declared.get("name") or info.get("name", Path(info["path"]).name)
+    kind = declared.get("kind") or info.get("kind", "dir")
+    description = declared.get("description") or info.get("description", "")
+    tags = declared.get("tags") or cap_tags
+
     if existing:
         updated = registry.update_project(
             existing["slug"],
-            name=info.get("name", existing["name"]),
+            name=name,
             root=info.get("root", existing.get("root", "")),
-            kind=info.get("kind", existing.get("kind", "dir")),
-            description=info.get("description") or existing.get("description", ""),
+            kind=kind,
+            description=description,
             tags=tags,
+            **{k: v for k, v in declared.items()
+               if k in ("model", "agent", "instructions", "git_remote", "git_branch")},
         )
+        if man["found"]:
+            registry.set_project_manifest(existing["slug"], manifest.snapshot(man),
+                                          man["path"])
         registry.touch_project(existing["id"], seen=True)
         return updated or existing, False
+
     created = registry.add_project(
-        info.get("name", Path(info["path"]).name),
+        name,
         info["path"],
         root=info.get("root", ""),
-        kind=info.get("kind", "dir"),
-        description=info.get("description", ""),
+        kind=kind,
+        description=description,
         tags=tags,
+        model=declared.get("model", ""),
+        agent=declared.get("agent", ""),
+        instructions=declared.get("instructions", ""),
     )
+    if declared.get("git_remote") or declared.get("git_branch"):
+        registry.update_project(created["slug"],
+                                git_remote=declared.get("git_remote", ""),
+                                git_branch=declared.get("git_branch", ""))
+    if man["found"]:
+        registry.set_project_manifest(created["slug"], manifest.snapshot(man),
+                                      man["path"])
     registry.log_activity(created["id"], "discover",
                           f"Registered project ({created['kind']})")
-    return created, True
+    return (registry.get_project(created["slug"]) or created), True
 
 
 def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]:
@@ -172,3 +203,26 @@ def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]
         "updated": updated,
         "found": found,
     }
+
+
+def register_self() -> tuple[dict[str, Any], bool]:
+    """Ensure the Perun repository itself is a registered project.
+
+    Perun is the natural "home" project — it should always be manageable from
+    the dashboard, even when it lives outside the configured scan roots.
+    """
+    from . import config
+
+    repo = config.REPO_ROOT
+    name = "Perun"
+    existing = registry.get_project_by_path(str(repo))
+    if existing:
+        return existing, False
+    return register({
+        "name": name,
+        "path": str(repo),
+        "root": str(repo.parent),
+        "kind": "opencode",
+        "description": "Perun — overseer and orchestrator for all OpenCode projects.",
+        "capabilities": capabilities(repo),
+    })

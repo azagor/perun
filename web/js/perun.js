@@ -17,12 +17,18 @@ const el = (tag, attrs = {}, html = '') => {
     return n;
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// Only allow href schemes we trust; anything else (e.g. javascript:) is dropped.
+const safeUrl = (u) => {
+    const s = String(u ?? '').trim();
+    return /^(https?:|mailto:|\/|#|\.)/i.test(s) ? s : '#';
+};
 
 const state = {
     projects: [],
     settings: null,
     health: null,
     activeRuns: [],
+    models: [],
     runSource: null,
     activitySource: null,
 };
@@ -92,6 +98,43 @@ function timeAgo(iso) {
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
 }
+/* Render a safe subset of Markdown (headings, lists, bold/italic, code,
+   links). All text is escaped first, so untrusted manifest bodies cannot
+   inject markup; only http(s)/mailto/relative link targets are honoured. */
+function renderMarkdown(md) {
+    if (!md) return '';
+    const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let inList = false, inCode = false;
+    let codeBuf = [];
+    const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+    const inline = (s) => esc(s)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+        .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+        .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, txt, url) =>
+            (/^(https?:|mailto:|\/|#|\.)/i.test(url)
+                ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${txt}</a>`
+                : `${txt} (${url})`));
+    for (const raw of lines) {
+        if (/^\s*```/.test(raw)) {
+            if (inCode) { out.push('<pre>' + esc(codeBuf.join('\n')) + '</pre>'); codeBuf = []; inCode = false; }
+            else { closeList(); inCode = true; }
+            continue;
+        }
+        if (inCode) { codeBuf.push(raw); continue; }
+        const h = raw.match(/^(#{1,6})\s+(.*)$/);
+        if (h) { closeList(); const lvl = Math.min(h[1].length, 3); out.push(`<h${lvl}>${inline(h[2])}</h${lvl}>`); continue; }
+        const li = raw.match(/^\s*[-*+]\s+(.*)$/);
+        if (li) { if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inline(li[1])}</li>`); continue; }
+        if (!raw.trim()) { closeList(); continue; }
+        closeList(); out.push(`<p>${inline(raw)}</p>`);
+    }
+    if (inCode) out.push('<pre>' + esc(codeBuf.join('\n')) + '</pre>');
+    closeList();
+    return out.join('\n');
+}
+
 const KIND_BADGE = { opencode: 'gold', git: 'blue', dir: 'muted' };
 const STATUS_BADGE = { done: 'green', queued: 'muted', running: 'amber', failed: 'red', cancelled: 'red', timeout: 'red' };
 
@@ -101,6 +144,13 @@ async function loadHealth() { state.health = await api('/api/health'); }
 async function loadSettings() { state.settings = (await api('/api/settings')).settings; }
 
 function projectBySlug(slug) { return state.projects.find((p) => p.slug === slug); }
+
+async function loadModels(force) {
+    if (state.models.length && !force) return;
+    try { state.models = (await api('/api/models')).models || []; } catch (_) { state.models = []; }
+}
+const modelListHtml = () => `<datalist id="model-list">${(state.models || []).map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>`;
+const nameFromPath = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'project';
 
 /* ============================================================ ROUTER ==== */
 const routes = {
@@ -230,13 +280,28 @@ function projectCard(p) {
             <button class="btn sm primary" data-open>Open</button>
             <button class="btn sm" data-ask>Ask</button>
             <button class="btn sm ghost" data-index>Index docs</button>
+            <button class="btn sm danger ghost" data-del title="Remove from Perun">✕</button>
          </div>`);
     card.addEventListener('click', (e) => {
+        if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-ask]')) { goto('#/console/' + p.slug); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
         goto('#/project/' + p.slug);
     });
     return card;
+}
+
+function deleteProject(p) {
+    confirmDialog('Remove project',
+        `Remove “${p.name}” from Perun? Its memory and indexed docs are deleted. Files on disk are untouched.`,
+        async () => {
+            try {
+                await api(`/api/projects/${p.slug}`, { method: 'DELETE' });
+                toast('Removed from Perun', 'ok');
+                await loadProjects();
+                if (location.hash.startsWith('#/project/')) goto('#/projects'); else router();
+            } catch (e) { toast(e.message, 'err'); }
+        }, 'Remove');
 }
 
 async function indexProject(p) {
@@ -288,7 +353,7 @@ async function viewProjects() {
     render();
 
     $('#proj-filter').addEventListener('input', (e) => render(e.target.value));
-    $('#btn-add').addEventListener('click', addProjectModal);
+    $('#btn-add').addEventListener('click', projectWizard);
     $('#btn-discover').addEventListener('click', async () => {
         try {
             const res = await api('/api/discover', { method: 'POST', body: {} });
@@ -299,23 +364,213 @@ async function viewProjects() {
     });
 }
 
-function addProjectModal() {
-    const body = el('div', {},
-        `<label class="field"><span class="lab">Name</span><input type="text" id="np-name" placeholder="My Project"></label>
-         <label class="field"><span class="lab">Path</span><input type="text" id="np-path" placeholder="C:\\my_apps\\my_project"></label>
-         <label class="field"><span class="lab">Description</span><input type="text" id="np-desc" placeholder="optional"></label>
-         <div class="form-row">
-            <label class="field"><span class="lab">Model (optional)</span><input type="text" id="np-model" placeholder="provider/model"></label>
-            <label class="field"><span class="lab">Agent (optional)</span><input type="text" id="np-agent" placeholder="build"></label>
-         </div>`);
-    modal('Add project', body, [
-        { label: 'Cancel', class: 'ghost', onClick: closeModal },
-        { label: 'Add', class: 'primary', onClick: async () => {
-            const payload = { name: $('#np-name').value, path: $('#np-path').value, description: $('#np-desc').value, model: $('#np-model').value, agent: $('#np-agent').value };
-            if (!payload.path) { toast('Path is required', 'err'); return; }
-            try { await api('/api/projects', { method: 'POST', body: payload }); closeModal(); toast('Project registered', 'ok'); await loadProjects(); router(); }
+/* ---------------------------------------------------- project wizard ---- */
+function projectWizard() {
+    loadModels();
+    const wiz = {
+        step: 0, method: '',
+        path: '', clone_url: '',
+        name: '', kind: 'opencode', description: '', tags: '',
+        model: '', agent: '', instructions: '',
+        bootstrap: true, git_init: false, git_remote: '', git_branch: 'main',
+        index_docs: false,
+    };
+    const STEPS = ['Method', 'Location', 'Details', 'Review'];
+
+    const bind = (pane) => {
+        const sync = (e) => {
+            const t = e.target;
+            const f = t && t.dataset ? t.dataset.field : null;
+            if (!f) return;
+            wiz[f] = t.type === 'checkbox' ? t.checked : t.value;
+        };
+        pane.addEventListener('input', sync);
+        pane.addEventListener('change', sync);
+    };
+
+    const methodStep = () => `
+        <p class="secondary">How would you like to add this project?</p>
+        <div class="method-cards">
+            <button type="button" class="method-card" data-method="existing">
+                <div class="mc-icon">◧</div><div class="mc-title">Existing folder</div>
+                <div class="mc-sub">Register a project that already lives on disk.</div></button>
+            <button type="button" class="method-card" data-method="new">
+                <div class="mc-icon">＋</div><div class="mc-title">Create new folder</div>
+                <div class="mc-sub">Make a directory and bootstrap a starter project.</div></button>
+            <button type="button" class="method-card" data-method="clone">
+                <div class="mc-icon">⧉</div><div class="mc-title">Clone repository</div>
+                <div class="mc-sub">Clone a remote Git repository into a new folder.</div></button>
+        </div>`;
+
+    const locationStep = () => {
+        let html = '';
+        if (wiz.method === 'clone') {
+            html += `<label class="field"><span class="lab">Repository URL</span>
+                <input type="text" data-field="clone_url" value="${esc(wiz.clone_url)}" placeholder="https://github.com/you/repo.git"></label>`;
+        }
+        html += `<label class="field"><span class="lab">${wiz.method === 'new' ? 'New folder path' : 'Folder path'}</span>
+            <div class="row" style="gap:8px"><input type="text" data-field="path" value="${esc(wiz.path)}" style="flex:1"
+                placeholder="${wiz.method === 'new' ? 'C:\\my_apps\\new_project' : 'C:\\my_apps\\existing'}">
+                <button class="btn ghost" type="button" data-browse>Browse…</button></div></label>`;
+        if (wiz.method === 'new') {
+            html += `<div class="row" style="gap:14px;align-items:center">
+                <button class="btn sm ghost" type="button" data-mkdir>＋ Create folder now</button>
+                <span class="muted">or Perun creates it when you finish</span></div>`;
+        } else if (wiz.method === 'existing') {
+            html += `<p class="muted mt">Perun can register a path that does not exist yet — it is created lazily on first use.</p>`;
+        }
+        return html;
+    };
+
+    const detailsStep = () => `
+        <div class="form-row">
+            <label class="field"><span class="lab">Name</span><input type="text" data-field="name" value="${esc(wiz.name)}" placeholder="My Project"></label>
+            <label class="field"><span class="lab">Kind</span><select data-field="kind">
+                <option value="opencode" ${wiz.kind === 'opencode' ? 'selected' : ''}>OpenCode project</option>
+                <option value="git" ${wiz.kind === 'git' ? 'selected' : ''}>Git repository</option>
+                <option value="dir" ${wiz.kind === 'dir' ? 'selected' : ''}>Plain directory</option>
+            </select></label>
+        </div>
+        <label class="field"><span class="lab">Description</span><input type="text" data-field="description" value="${esc(wiz.description)}" placeholder="optional"></label>
+        <div class="form-row">
+            <label class="field"><span class="lab">Default model</span><input type="text" list="model-list" data-field="model" value="${esc(wiz.model)}" placeholder="provider/model (optional)"></label>
+            <label class="field"><span class="lab">Agent</span><input type="text" data-field="agent" value="${esc(wiz.agent)}" placeholder="build (optional)"></label>
+        </div>
+        <label class="field"><span class="lab">Tags</span><input type="text" data-field="tags" value="${esc(wiz.tags)}" placeholder="python, trading (optional)"></label>
+        <label class="field"><span class="lab">Custom instructions (optional)</span>
+            <textarea data-field="instructions" rows="3" placeholder="Project-specific rules the agent should always follow…">${esc(wiz.instructions)}</textarea></label>
+        <div class="wiz-options">
+            ${wiz.method === 'new' ? `<label class="opt"><input type="checkbox" data-field="bootstrap" ${wiz.bootstrap ? 'checked' : ''}> Bootstrap starter files (README, AGENTS.md, opencode.json)</label>` : ''}
+            ${wiz.method !== 'clone' ? `<label class="opt"><input type="checkbox" data-field="git_init" ${wiz.git_init ? 'checked' : ''}> Initialise a Git repository</label>` : ''}
+            <label class="opt"><input type="checkbox" data-field="index_docs" ${wiz.index_docs ? 'checked' : ''}> Index documentation now</label>
+        </div>
+        ${wiz.method !== 'clone' ? `
+        <div class="form-row">
+            <label class="field"><span class="lab">Git remote (optional)</span><input type="text" data-field="git_remote" value="${esc(wiz.git_remote)}" placeholder="https://github.com/you/repo.git"></label>
+            <label class="field"><span class="lab">Branch</span><input type="text" data-field="git_branch" value="${esc(wiz.git_branch)}" placeholder="main"></label>
+        </div>` : ''}`;
+
+    const reviewStep = () => {
+        const rows = [
+            ['Method', { existing: 'Existing folder', new: 'New folder', clone: 'Clone repository' }[wiz.method] || wiz.method],
+            ['Path', wiz.path || '—'],
+            wiz.method === 'clone' ? ['Repository', wiz.clone_url || '—'] : null,
+            ['Name', wiz.name || nameFromPath(wiz.path)],
+            ['Kind', wiz.kind],
+            ['Model', wiz.model || '(inherit default)'],
+            ['Git', wiz.method === 'clone' ? 'cloned from remote'
+                : (wiz.git_init ? `init on ${wiz.git_branch || 'main'}` : (wiz.git_remote ? 'remote configured' : 'none'))],
+            ['Index docs', wiz.index_docs ? 'yes' : 'no'],
+        ].filter(Boolean);
+        return `<p class="secondary">Review and create.</p>
+            <div class="kv">${rows.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('')}</div>`;
+    };
+
+    const validate = () => {
+        if (wiz.step === 0) return wiz.method ? null : 'Choose how to add the project';
+        if (wiz.step === 1) {
+            if (wiz.method === 'clone') {
+                if (!wiz.clone_url) return 'Repository URL is required';
+                if (!wiz.path) return 'Choose a target folder';
+            } else if (!wiz.path) return 'Folder path is required';
+        }
+        return null;
+    };
+
+    const render = () => {
+        const body = el('div', { class: 'wizard' });
+        body.appendChild(el('div', { class: 'wiz-steps' }, STEPS.map((s, i) =>
+            `<span class="wiz-step ${i === wiz.step ? 'active' : ''} ${i < wiz.step ? 'done' : ''}"><b>${i + 1}</b> ${esc(s)}</span>`).join('')));
+        const pane = el('div', { class: 'wiz-pane' });
+        pane.innerHTML = [methodStep, locationStep, detailsStep, reviewStep][wiz.step]();
+        body.appendChild(pane);
+
+        pane.querySelectorAll('[data-method]').forEach((c) => c.addEventListener('click', () => {
+            wiz.method = c.dataset.method; wiz.step = 1; render();
+        }));
+        pane.querySelectorAll('[data-browse]').forEach((b) => b.addEventListener('click', () => {
+            browseFolder(wiz.method === 'clone' ? '' : (wiz.path || ''), (picked) => {
+                wiz.path = picked;
+                if (!wiz.name) wiz.name = nameFromPath(picked);
+                render();
+            }, render);
+        }));
+        const mk = pane.querySelector('[data-mkdir]');
+        if (mk) mk.addEventListener('click', async () => {
+            if (!wiz.path) { toast('Enter a folder path first', 'err'); return; }
+            try { const r = await api('/api/fs/mkdir', { method: 'POST', body: { path: wiz.path } });
+                toast(r.created ? 'Folder created' : 'Folder already exists', 'ok'); }
             catch (e) { toast(e.message, 'err'); }
-        } },
+        });
+        bind(pane);
+
+        const actions = [];
+        if (wiz.step > 0) actions.push({ label: '◀ Back', class: 'ghost', onClick: () => { wiz.step--; render(); } });
+        actions.push({ label: 'Cancel', class: 'ghost', onClick: closeModal });
+        if (wiz.step < STEPS.length - 1) {
+            actions.push({ label: 'Next ▶', class: 'primary', onClick: () => {
+                const err = validate();
+                if (err) { toast(err, 'err'); return; }
+                wiz.step++; render();
+            } });
+        } else {
+            actions.push({ label: 'Create project', class: 'primary', onClick: () => submitWizard(wiz) });
+        }
+        modal('New project', body, actions);
+    };
+    render();
+}
+
+async function submitWizard(wiz) {
+    const payload = {
+        method: wiz.method, path: wiz.path, name: wiz.name || nameFromPath(wiz.path),
+        kind: wiz.kind, description: wiz.description, tags: wiz.tags,
+        model: wiz.model, agent: wiz.agent,
+        bootstrap: wiz.bootstrap, git_init: wiz.git_init,
+        git_remote: wiz.git_remote, git_branch: wiz.git_branch,
+        index_docs: wiz.index_docs, clone_url: wiz.clone_url,
+    };
+    if (!payload.path) { toast('Folder path is required', 'err'); return; }
+    try {
+        const res = await api('/api/projects', { method: 'POST', body: payload });
+        closeModal();
+        toast(res.created ? 'Project created' : 'Project registered', 'ok');
+        await loadProjects();
+        goto('#/project/' + res.project.slug);
+    } catch (e) { toast(e.message, 'err'); }
+}
+
+async function browseFolder(startPath, onPick, onCancel) {
+    const hidden = browseFolder._hidden || false;
+    let data;
+    try {
+        data = await api(`/api/fs/list?path=${encodeURIComponent(startPath || '')}&show_hidden=${hidden}`);
+    } catch (e) { toast(e.message, 'err'); if (onCancel) onCancel(); return; }
+    const body = el('div', { class: 'fs-browser' });
+    body.appendChild(el('div', { class: 'fs-path mono' }, esc(data.path)));
+
+    const rootsRow = el('div', { class: 'fs-roots' });
+    for (const r of (data.roots || [])) rootsRow.appendChild(el('button', { class: 'btn sm ghost', type: 'button', onclick: () => browseFolder(r, onPick, onCancel) }, esc(r)));
+    if (data.home) rootsRow.appendChild(el('button', { class: 'btn sm ghost', type: 'button', onclick: () => browseFolder(data.home, onPick, onCancel) }, '⌂ Home'));
+    body.appendChild(rootsRow);
+
+    const list = el('div', { class: 'fs-list' });
+    if (data.parent) list.appendChild(el('div', { class: 'fs-item dir', onclick: () => browseFolder(data.parent, onPick, onCancel) }, '↰ ..'));
+    for (const d of (data.dirs || [])) list.appendChild(el('div', { class: 'fs-item dir', onclick: () => browseFolder(`${String(data.path).replace(/[\\/]+$/, '')}/${d}`, onPick, onCancel) }, `▸ ${esc(d)}`));
+    for (const f of (data.files || []).slice(0, 80)) list.appendChild(el('div', { class: 'fs-item file' }, `· ${esc(f)}`));
+    if (!(data.dirs || []).length && !(data.files || []).length) list.appendChild(el('div', { class: 'empty' }, 'Empty folder'));
+    body.appendChild(list);
+
+    const toggle = el('label', { class: 'fs-toggle' });
+    const cb = el('input', { type: 'checkbox' });
+    if (hidden) cb.checked = true;
+    cb.addEventListener('change', () => { browseFolder._hidden = cb.checked; browseFolder(data.path, onPick, onCancel); });
+    toggle.appendChild(cb); toggle.appendChild(document.createTextNode(' show hidden folders'));
+    body.appendChild(toggle);
+
+    modal('Choose a folder', body, [
+        { label: 'Cancel', class: 'ghost', onClick: () => { if (onCancel) onCancel(); else closeModal(); } },
+        { label: 'Use this folder', class: 'primary', onClick: () => onPick(data.path) },
     ]);
 }
 
@@ -343,7 +598,8 @@ async function viewProject(slug) {
 
     const tabDefs = [
         ['overview', 'Overview'], ['console', 'Console'], ['sessions', 'Sessions'],
-        ['memory', 'Memory'], ['activity', 'Activity'], ['config', 'Config'],
+        ['memory', 'Memory'], ['activity', 'Activity'], ['git', 'Git'],
+        ['manifest', 'Manifest'], ['instructions', 'Instructions'], ['config', 'Config'],
     ];
     const tabs = el('div', { class: 'tabs' });
     const pane = el('div');
@@ -354,6 +610,8 @@ async function viewProject(slug) {
         pane.innerHTML = '';
         pane.appendChild(renderProjectTab(name, detail));
         if (name === 'console') mountConsole(pane, p);
+        if (name === 'git') mountGit(pane, p);
+        if (name === 'manifest') mountManifest(pane, p);
     };
     for (const [name, label] of tabDefs) tabs.appendChild(el('div', { class: 'tab', dataset: { tab: name }, onclick: () => setTab(name) }, label));
     v.appendChild(tabs);
@@ -387,6 +645,9 @@ function renderProjectTab(name, detail) {
                 <span class="k">Last seen</span><span class="v">${esc(timeAgo(p.last_seen_at))}</span>
              </div>`);
         wrap.appendChild(kv);
+        if (p.has_manifest) {
+            wrap.appendChild(manifestOverview(p));
+        }
         wrap.appendChild(sectionTitle('Recent runs'));
         const box = el('div', { class: 'card' });
         const list = el('div', { class: 'list' });
@@ -416,6 +677,12 @@ function renderProjectTab(name, detail) {
         wrap.appendChild(memoryForm(p.slug));
     } else if (name === 'activity') {
         wrap.appendChild(activityCard(detail.activity || []));
+    } else if (name === 'git') {
+        // mounted separately
+    } else if (name === 'manifest') {
+        // mounted separately
+    } else if (name === 'instructions') {
+        wrap.appendChild(projectInstructionsForm(p));
     } else if (name === 'console') {
         // mounted separately
     } else if (name === 'config') {
@@ -424,12 +691,45 @@ function renderProjectTab(name, detail) {
     return wrap;
 }
 
+function projectInstructionsForm(p) {
+    const card = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Custom instructions</h4><span class="badge gold">project scoped</span></div>
+         <p class="secondary">These apply only to <b>${esc(p.name)}</b>. Perun prepends them to every <b>new</b> agent session started in this project — from the Agent Console, Telegram, or MCP — so the agent always follows your project-specific rules. Continuations of an existing session inherit them from the session history.</p>
+         <label class="field"><span class="lab">Instructions</span>
+            <textarea id="pi-text" rows="12" placeholder="e.g. Always run the test suite before committing.&#10;Use British spelling in docs.&#10;Never modify the legacy/ folder.">${esc(p.instructions || '')}</textarea></label>
+         <div class="form-actions">
+            <button class="btn primary" id="pi-save">Save instructions</button>
+            <button class="btn ghost" id="pi-clear">Clear</button>
+            <span class="muted" id="pi-count"></span>
+         </div>`);
+    const ta = card.querySelector('#pi-text');
+    const count = card.querySelector('#pi-count');
+    const upd = () => { count.textContent = `${ta.value.length} chars`; };
+    ta.addEventListener('input', upd); upd();
+    card.querySelector('#pi-save').addEventListener('click', async () => {
+        try {
+            await api(`/api/projects/${p.slug}/instructions`, { method: 'PUT', body: { instructions: ta.value } });
+            toast('Instructions saved', 'ok');
+            await loadProjects();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    card.querySelector('#pi-clear').addEventListener('click', () => {
+        confirmDialog('Clear instructions', `Remove the custom instructions for “${p.name}”?`, async () => {
+            try {
+                await api(`/api/projects/${p.slug}/instructions`, { method: 'PUT', body: { instructions: '' } });
+                ta.value = ''; upd(); toast('Cleared', 'ok'); await loadProjects();
+            } catch (e) { toast(e.message, 'err'); }
+        }, 'Clear');
+    });
+    return card;
+}
+
 function projectConfigForm(p) {
     const body = el('div', { class: 'card' },
         `<label class="field"><span class="lab">Name</span><input type="text" id="pc-name" value="${esc(p.name)}"></label>
          <label class="field"><span class="lab">Description</span><input type="text" id="pc-desc" value="${esc(p.description || '')}"></label>
          <div class="form-row">
-            <label class="field"><span class="lab">Model override</span><input type="text" id="pc-model" value="${esc(p.model || '')}" placeholder="provider/model"></label>
+            <label class="field"><span class="lab">Model override</span><input type="text" list="model-list" id="pc-model" value="${esc(p.model || '')}" placeholder="provider/model"></label>
             <label class="field"><span class="lab">Agent override</span><input type="text" id="pc-agent" value="${esc(p.agent || '')}" placeholder="build"></label>
          </div>
          <div class="form-actions">
@@ -449,6 +749,355 @@ function projectConfigForm(p) {
         }, 'Delete');
     });
     return body;
+}
+
+/* ============================================================= GIT ====== */
+async function mountGit(container, p) {
+    container.innerHTML = '<div class="empty"><span class="spinner"></span> loading git…</div>';
+    let info;
+    try { info = (await api(`/api/projects/${p.slug}/git`)).git; }
+    catch (e) { container.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    renderGit(container, p, info);
+}
+
+function renderGit(container, p, git) {
+    container.innerHTML = '';
+    if (!git.available) {
+        container.appendChild(el('div', { class: 'card' },
+            `<p class="secondary">Git is not installed or not on PATH. Install Git to enable version control for this project.</p>`));
+        return;
+    }
+    const branch = git.branch || p.git_branch || '—';
+    const status = el('div', { class: 'card mb' },
+        `<div class="row wrap" style="gap:14px;align-items:center">
+            <span class="badge ${git.repo ? 'green' : 'muted'}">${git.repo ? 'repository' : 'not initialised'}</span>
+            ${git.repo ? `<span class="secondary">branch <b class="mono">${esc(branch)}</b></span>` : ''}
+            ${git.repo ? `<span class="secondary">${git.change_count || 0} change(s)</span>` : ''}
+            ${git.repo && git.ahead ? `<span class="secondary">↑${git.ahead}</span>` : ''}
+            ${git.repo && git.behind ? `<span class="secondary">↓${git.behind}</span>` : ''}
+            ${git.remote_url ? `<span class="secondary mono truncate" style="max-width:300px">${esc(git.remote_url)}</span>` : ''}
+            <span class="grow"></span>
+            <button class="btn sm ghost" id="git-refresh">⟳ Refresh</button>
+         </div>`);
+    container.appendChild(status);
+
+    if (!git.repo) {
+        const init = el('div', { class: 'card' },
+            `<h4>Initialise repository</h4>
+             <p class="secondary">Create a new Git repository in this folder. Files on disk are never touched beyond a new <span class="mono">.git</span> directory.</p>
+             <div class="form-row">
+                <label class="field"><span class="lab">Branch</span><input type="text" id="git-branch" value="${esc(p.git_branch || 'main')}"></label>
+                <label class="field"><span class="lab">Remote (optional)</span><input type="text" id="git-remote" value="${esc(p.git_remote || '')}" placeholder="https://github.com/you/repo.git"></label>
+             </div>
+             <div class="form-actions"><button class="btn primary" id="git-init">Initialise</button></div>`);
+        container.appendChild(init);
+    } else {
+        container.appendChild(el('div', { class: 'card mb' },
+            `<h4>Remote</h4>
+             <div class="form-row">
+                <label class="field"><span class="lab">Remote URL</span><input type="text" id="git-remote" value="${esc(git.remote_url || p.git_remote || '')}" placeholder="https://github.com/you/repo.git"></label>
+                <label class="field"><span class="lab">Branch</span><input type="text" id="git-branch" value="${esc(p.git_branch || git.branch || 'main')}"></label>
+             </div>
+             <div class="form-actions">
+                <button class="btn primary" id="git-remote-save">Save remote</button>
+                <button class="btn ghost" id="git-push">↑ Push</button>
+             </div>`));
+        container.appendChild(el('div', { class: 'card mb' },
+            `<h4>Commit</h4>
+             <label class="field"><span class="lab">Message</span><input type="text" id="git-message" placeholder="Describe your changes"></label>
+             <div class="form-actions"><button class="btn primary" id="git-commit">Commit all changes</button></div>`));
+        container.appendChild(el('div', { class: 'card' },
+            `<h4>Recent commits</h4><div id="git-log"><div class="empty"><span class="spinner"></span></div></div>`));
+        loadGitLog(container.querySelector('#git-log'), p.slug);
+    }
+
+    container.querySelector('#git-refresh').addEventListener('click', () => mountGit(container, p));
+    const initBtn = container.querySelector('#git-init');
+    if (initBtn) initBtn.addEventListener('click', async () => {
+        const b = $('#git-branch').value.trim() || 'main';
+        try {
+            await api(`/api/projects/${p.slug}/git/init`, { method: 'POST', body: { branch: b } });
+            const remote = $('#git-remote').value.trim();
+            if (remote) await api(`/api/projects/${p.slug}/git/remote`, { method: 'POST', body: { url: remote, branch: b } });
+            toast('Repository initialised', 'ok');
+            await loadProjects(); mountGit(container, p);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    const remoteSave = container.querySelector('#git-remote-save');
+    if (remoteSave) remoteSave.addEventListener('click', async () => {
+        const url = $('#git-remote').value.trim();
+        if (!url) { toast('Enter a remote URL', 'err'); return; }
+        try {
+            await api(`/api/projects/${p.slug}/git/remote`, { method: 'POST', body: { url, branch: $('#git-branch').value.trim() } });
+            toast('Remote saved', 'ok'); await loadProjects(); mountGit(container, p);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    const commitBtn = container.querySelector('#git-commit');
+    if (commitBtn) commitBtn.addEventListener('click', async () => {
+        const message = $('#git-message').value.trim();
+        if (!message) { toast('Enter a commit message', 'err'); return; }
+        try {
+            const res = await api(`/api/projects/${p.slug}/git/commit`, { method: 'POST', body: { message } });
+            toast(res.committed ? `Committed ${res.sha}` : 'Nothing to commit', res.committed ? 'ok' : '');
+            mountGit(container, p);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    const pushBtn = container.querySelector('#git-push');
+    if (pushBtn) pushBtn.addEventListener('click', async () => {
+        try {
+            const res = await api(`/api/projects/${p.slug}/git/push`, { method: 'POST', body: { branch: $('#git-branch').value.trim() } });
+            toast(`Pushed ${res.branch || ''}`, 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+    });
+}
+
+async function loadGitLog(container, slug) {
+    if (!container) return;
+    try {
+        const commits = (await api(`/api/projects/${slug}/git/log?limit=30`)).commits || [];
+        if (!commits.length) { container.innerHTML = '<div class="empty">No commits yet.</div>'; return; }
+        container.innerHTML = commits.map((c) =>
+            `<div class="list-row">
+                <span class="badge muted mono">${esc((c.sha || '').slice(0, 7))}</span>
+                <span class="grow msg truncate">${esc(c.subject)}</span>
+                <span class="muted">${esc(c.author || '')}</span>
+                <span class="ts">${esc(c.when || '')}</span>
+             </div>`).join('');
+    } catch (e) { container.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ======================================================== MANIFEST ====== */
+function manifestOverview(p) {
+    const data = p.manifest || {};
+    const body = p.manifest_body || '';
+    const box = el('div', { class: 'card mb' });
+    box.appendChild(el('div', { class: 'card-head' },
+        `<h4>Manifest</h4>
+         <span class="row wrap" style="gap:8px">
+            <span class="badge gold">perun.md</span>
+            ${p.manifest_source ? `<span class="mono muted truncate" style="max-width:260px;font-size:.72rem">${esc(p.manifest_source)}</span>` : ''}
+         </span>`));
+
+    const anchors = data.anchors || [];
+    if (anchors.length) {
+        box.appendChild(el('div', { class: 'subhead' }, 'Anchors'));
+        const list = el('div', { class: 'anchor-list' });
+        for (const a of anchors) {
+            const target = a.path || a.url || a.command || '';
+            list.appendChild(el('div', { class: 'anchor-item' },
+                `<span class="ai-kind">${esc(a.kind || '')}</span>
+                 <span class="ai-label">${esc(a.label || '')}</span>
+                 <span class="ai-target">${esc(target)}</span>`));
+        }
+        box.appendChild(list);
+    }
+
+    const cmds = Object.entries(data.commands || {});
+    if (cmds.length) {
+        box.appendChild(el('div', { class: 'subhead' }, 'Commands (copyable — never auto-run)'));
+        const row = el('div', { class: 'row wrap' });
+        for (const [k, v] of cmds) row.appendChild(el('span', { class: 'chip', title: v }, `<b>${esc(k)}</b>`));
+        box.appendChild(row);
+    }
+
+    const links = Object.entries(data.links || {});
+    const docs = Object.entries(data.docs || {});
+    if (docs.length || links.length) {
+        box.appendChild(el('div', { class: 'subhead' }, 'Links & docs'));
+        const row = el('div', { class: 'row wrap' });
+        for (const [k, v] of links) row.appendChild(el('a', { class: 'chip', href: safeUrl(v), target: '_blank', rel: 'noopener noreferrer' }, `<b>${esc(k)}</b>`));
+        for (const [k, v] of docs) row.appendChild(el('span', { class: 'chip', title: v }, `<b>${esc(k)}</b> ${esc(v)}`));
+        box.appendChild(row);
+    }
+
+    if (body && body.trim()) {
+        box.appendChild(el('div', { class: 'subhead' }, 'Overview'));
+        box.appendChild(el('div', { class: 'md-body', html: renderMarkdown(body) }));
+    }
+    return box;
+}
+
+async function mountManifest(container, p) {
+    container.innerHTML = '<div class="empty"><span class="spinner"></span> loading manifest…</div>';
+    let snap;
+    try { snap = (await api(`/api/projects/${p.slug}/manifest`)).manifest; }
+    catch (e) { container.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    renderManifestEditor(container, p, snap);
+}
+
+function renderManifestEditor(container, p, snap) {
+    container.innerHTML = '';
+    const found = !!snap.found;
+    const data = snap.data || {};
+    const body = snap.body || '';
+    const warnings = snap.warnings || [];
+
+    const status = el('div', { class: 'card mb' });
+    status.appendChild(el('div', { class: 'card-head' },
+        `<h4>Manifest</h4>
+         <span class="row wrap" style="gap:8px">
+            <span class="badge ${found ? 'green' : 'muted'}">${found ? 'on disk' : 'not found'}</span>
+            ${snap.path ? `<span class="mono muted truncate" style="max-width:280px;font-size:.74rem">${esc(snap.path)}</span>` : ''}
+         </span>`));
+    status.appendChild(el('p', { class: 'secondary' },
+        `A <span class="mono">perun.md</span> manifest lets a project describe itself: links, docs, commands, and <b>anchors</b> into its own content. Perun reads it automatically; edits here write back to disk explicitly.`));
+    if (warnings.length) {
+        status.appendChild(el('div', { class: 'mono-box', style: 'border-color:rgba(224,168,60,.4);color:var(--amber);margin-bottom:12px' },
+            warnings.map((w) => '⚠ ' + esc(w)).join('\n')));
+    }
+    const actions = el('div', { class: 'form-actions' });
+    if (found) {
+        const reload = el('button', { class: 'btn ghost' }, '⟳ Reload from disk');
+        reload.addEventListener('click', async () => {
+            try {
+                const r = await api(`/api/projects/${p.slug}/manifest/refresh`, { method: 'POST' });
+                toast('Reloaded from disk', 'ok');
+                await loadProjects();
+                renderManifestEditor(container, p, r.manifest);
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        actions.appendChild(reload);
+    } else {
+        const gen = el('button', { class: 'btn primary' }, '＋ Generate from registry');
+        gen.addEventListener('click', async () => {
+            try {
+                const r = await api(`/api/projects/${p.slug}/manifest/export`, { method: 'POST' });
+                toast('Manifest generated', 'ok');
+                await loadProjects();
+                renderManifestEditor(container, p, r.manifest);
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        actions.appendChild(gen);
+    }
+    status.appendChild(actions);
+    container.appendChild(status);
+
+    // ---- editor ----
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' }, '<h4>Edit manifest</h4>'));
+    card.innerHTML += `
+        <div class="form-row">
+            <label class="field"><span class="lab">Name</span><input type="text" id="mf-name" value="${esc(data.name || p.name)}"></label>
+            <label class="field"><span class="lab">Kind</span><input type="text" id="mf-kind" value="${esc(data.kind || p.kind)}"></label>
+        </div>
+        <label class="field"><span class="lab">Description</span><input type="text" id="mf-desc" value="${esc(data.description || '')}"></label>
+        <div class="form-row">
+            <label class="field"><span class="lab">Model</span><input type="text" list="model-list" id="mf-model" value="${esc(data.model || '')}" placeholder="provider/model"></label>
+            <label class="field"><span class="lab">Agent</span><input type="text" id="mf-agent" value="${esc(data.agent || '')}" placeholder="build"></label>
+        </div>
+        <label class="field"><span class="lab">Tags (comma separated)</span><input type="text" id="mf-tags" value="${esc((data.tags || []).join(', '))}"></label>`;
+
+    const mkKvSection = (title, group, pairs, placeholder) => {
+        card.appendChild(el('div', { class: 'subhead' }, title));
+        const host = el('div', { class: 'kv-editor' });
+        card.appendChild(host);
+        for (const [k, v] of Object.entries(pairs || {})) addKvRow(host, group, k, v, placeholder);
+        const add = el('button', { class: 'btn sm ghost' }, '＋ Add');
+        add.addEventListener('click', () => addKvRow(host, group, '', '', placeholder));
+        card.appendChild(add);
+        return host;
+    };
+    mkKvSection('Documentation (key → relative path)', 'docs', data.docs, 'relative/path.md');
+    mkKvSection('Commands (copyable — never auto-run)', 'commands', data.commands, 'python -m pytest');
+    mkKvSection('Links', 'links', data.links, 'https://…');
+
+    card.appendChild(el('div', { class: 'subhead' }, 'Anchors'));
+    const anchorHost = el('div', { class: 'anchor-editor' });
+    card.appendChild(anchorHost);
+    for (const a of (data.anchors || [])) addAnchorRow(anchorHost, a);
+    const anchorAdd = el('button', { class: 'btn sm ghost' }, '＋ Add anchor');
+    anchorAdd.addEventListener('click', () => addAnchorRow(anchorHost, { kind: 'file' }));
+    card.appendChild(anchorAdd);
+
+    card.appendChild(el('div', { class: 'subhead' }, 'Overview body (Markdown)'));
+    const ta = el('textarea', { id: 'mf-body', rows: '10', placeholder: '# Project overview\n\nFree-form Markdown shown on the project page.' });
+    ta.value = body;
+    card.appendChild(ta);
+
+    const saveRow = el('div', { class: 'form-actions' });
+    const save = el('button', { class: 'btn primary' }, '💾 Save manifest to disk');
+    save.addEventListener('click', async () => {
+        const payload = gatherManifest(card);
+        try {
+            const r = await api(`/api/projects/${p.slug}/manifest`, { method: 'PUT', body: payload });
+            toast('Manifest saved', 'ok');
+            await loadProjects();
+            renderManifestEditor(container, p, r.manifest);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    saveRow.appendChild(save);
+    card.appendChild(saveRow);
+    container.appendChild(card);
+}
+
+function addKvRow(host, group, key, value, placeholder) {
+    const row = el('div', { class: 'kv-edit-row', dataset: { group } });
+    const k = el('input', { type: 'text', value: key || '', placeholder: 'key', dataset: { role: 'key' } });
+    const v = el('input', { type: 'text', value: value || '', placeholder: placeholder || 'value', dataset: { role: 'value' } });
+    const del = el('button', { class: 'icon-btn', title: 'Remove', type: 'button' }, '✕');
+    del.addEventListener('click', () => row.remove());
+    row.appendChild(k); row.appendChild(v); row.appendChild(del);
+    host.appendChild(row);
+    return row;
+}
+
+function gatherKv(host, group) {
+    const out = {};
+    host.querySelectorAll(`.kv-edit-row[data-group="${group}"]`).forEach((row) => {
+        const k = row.querySelector('[data-role=key]');
+        const v = row.querySelector('[data-role=value]');
+        if (!k || !v) return;
+        const key = k.value.trim();
+        const val = v.value.trim();
+        if (key && val) out[key] = val;
+    });
+    return out;
+}
+
+function addAnchorRow(host, a) {
+    a = a || {};
+    const row = el('div', { class: 'anchor-row' });
+    const label = el('input', { type: 'text', value: a.label || '', placeholder: 'Label', dataset: { role: 'label' } });
+    const kind = el('select', { dataset: { role: 'kind' } });
+    for (const k of ['file', 'doc', 'symbol', 'url', 'command']) {
+        const o = el('option', { value: k }, k);
+        if (k === (a.kind || 'file')) o.selected = true;
+        kind.appendChild(o);
+    }
+    const target = el('input', { type: 'text', value: a.path || a.url || a.command || '', placeholder: 'path / url / command', dataset: { role: 'target' } });
+    const del = el('button', { class: 'icon-btn', title: 'Remove', type: 'button' }, '✕');
+    del.addEventListener('click', () => row.remove());
+    row.appendChild(label); row.appendChild(kind); row.appendChild(target); row.appendChild(del);
+    host.appendChild(row);
+    return row;
+}
+
+function gatherManifest(card) {
+    const data = {
+        version: 1,
+        name: card.querySelector('#mf-name').value.trim(),
+        kind: card.querySelector('#mf-kind').value.trim(),
+        description: card.querySelector('#mf-desc').value.trim(),
+        model: card.querySelector('#mf-model').value.trim(),
+        agent: card.querySelector('#mf-agent').value.trim(),
+        tags: card.querySelector('#mf-tags').value.split(',').map((s) => s.trim()).filter(Boolean),
+        docs: gatherKv(card, 'docs'),
+        commands: gatherKv(card, 'commands'),
+        links: gatherKv(card, 'links'),
+        anchors: [],
+    };
+    card.querySelectorAll('.anchor-row').forEach((row) => {
+        const label = row.querySelector('[data-role=label]').value.trim();
+        const kind = row.querySelector('[data-role=kind]').value;
+        const target = row.querySelector('[data-role=target]').value.trim();
+        if (!label || !target) return;
+        const a = { label, kind };
+        if (kind === 'url') a.url = target;
+        else if (kind === 'command') a.command = target;
+        else a.path = target;
+        data.anchors.push(a);
+    });
+    return { data, body: card.querySelector('#mf-body').value };
 }
 
 /* ========================================================= CONSOLE ====== */
@@ -475,7 +1124,7 @@ function mountConsole(host, initial) {
         `<label class="field"><span class="lab">Project</span><select id="c-project">${options}</select></label>
          <label class="field"><span class="lab">Session</span><select id="c-session"><option value="">＋ New session</option></select></label>
          <div class="form-row">
-            <label class="field"><span class="lab">Model</span><input type="text" id="c-model" placeholder="(project default)"></label>
+            <label class="field"><span class="lab">Model</span><input type="text" list="model-list" id="c-model" placeholder="(project default)"></label>
             <label class="field"><span class="lab">Agent</span><input type="text" id="c-agent" placeholder="(project default)"></label>
          </div>
          <label class="field"><span class="lab">Prompt</span><textarea id="c-prompt" placeholder="What should the agent do?"></textarea></label>
@@ -506,7 +1155,7 @@ function mountConsole(host, initial) {
         try {
             const detail = await api(`/api/projects/${slug}/sessions`);
             for (const s of detail.sessions || []) {
-                const o = el('option', { value: s.id }, `${(s.title || '(untitled)').slice(0, 40)} · ${timeAgo(s.updated_at)}`);
+                const o = el('option', { value: s.id }, esc(`${(s.title || '(untitled)').slice(0, 40)} · ${timeAgo(s.updated_at)}`));
                 o.dataset.oc = s.opencode_session_id || '';
                 sel.appendChild(o);
             }
@@ -721,16 +1370,22 @@ async function viewTelegram() {
     v.innerHTML = '';
     v.appendChild(el('div', { class: 'view-head' },
         `<div><div class="eyebrow">Bridge</div><h1>Telegram Bridge</h1>
-          <div class="sub">One shared bridge — talk to any project from your phone.</div></div>`));
+          <div class="sub">One shared Perun bot for <b>every</b> project — message it from your phone and steer any project's agent.</div></div>`));
     let status;
     try { status = await api('/api/telegram/status'); } catch (e) { status = { ok: false }; }
     const bot = status.bot || {};
+    const running = status.bridge_running;
+    const runBadge = running === true
+        ? '<span class="badge green">bridge running</span>'
+        : (running === false ? '<span class="badge amber">bridge stopped</span>' : '');
     v.appendChild(el('div', { class: 'card mb' },
         `<div class="row wrap" style="gap:16px">
             <span class="badge ${status.configured ? 'green' : 'red'}">${status.configured ? 'configured' : 'not configured'}</span>
+            ${runBadge}
             <span class="secondary">${bot.username ? '@' + esc(bot.username) : 'no bot'}</span>
-            <span class="secondary">chats: ${(status.allowed_chats || []).join(', ') || 'pair-on-first-message'}</span>
-         </div>`));
+            <span class="secondary">chats: ${(status.allowed_chats || []).map(esc).join(', ') || 'pair-on-first-message'}</span>
+         </div>
+         <p class="muted mt">The bot is project-agnostic. Use <span class="mono">/projects</span> to list them, <span class="mono">/project &lt;slug&gt;</span> to pick one, then just chat — Perun routes each message to the selected project's agent session and remembers the routing per chat.</p>`));
     v.appendChild(el('div', { class: 'card' },
         `<label class="field"><span class="lab">Chat id (optional)</span><input type="text" id="tg-chat" placeholder="defaults to configured chat"></label>
          <label class="field"><span class="lab">Message</span><textarea id="tg-msg" placeholder="Send a Markdown message via the Perun bot…"></textarea></label>
@@ -763,7 +1418,7 @@ async function viewSettings() {
             <label class="field"><span class="lab">Port</span><input type="number" id="s-port" value="${esc(s.port)}"></label>
          </div>
          <div class="form-row">
-            <label class="field"><span class="lab">Default model</span><input type="text" id="s-model" value="${esc(s.default_model || '')}"></label>
+            <label class="field"><span class="lab">Default model</span><input type="text" list="model-list" id="s-model" value="${esc(s.default_model || '')}"></label>
             <label class="field"><span class="lab">Default agent</span><input type="text" id="s-agent" value="${esc(s.default_agent || '')}"></label>
          </div>
          <div class="form-row">
@@ -859,6 +1514,7 @@ async function refreshHealth() {
 async function boot() {
     wireChrome();
     if (!location.hash) location.hash = '#/dashboard';
+    loadModels().then(() => { const r = $('#model-root'); if (r) r.innerHTML = modelListHtml(); });
     await refreshHealth();
     await router();
     setInterval(refreshHealth, 15000);

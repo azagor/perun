@@ -8,14 +8,19 @@
 
 A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
 
-1. **Registers** every OpenCode project it can find (`discovery.py`).
+1. **Registers** every OpenCode project it can find (`discovery.py`), including
+   itself (`register_self()`).
 2. Stores **unified, project-namespaced memory** — facts + indexed docs with
    Ollama embeddings (`memory.py`, `embeddings.py`).
-3. **Orchestrates** `opencode run` sessions in any project (`orchestrator.py`).
-4. Serves a **web dashboard** and a **REST/SSE API** (`server.py`, `web/`).
+3. **Orchestrates** `opencode run` sessions in any project (`orchestrator.py`),
+   injecting per-project **custom instructions** on new sessions.
+4. Serves a **web dashboard** and a **REST/SSE API** (`server.py`, `web/`) with a
+   **project creation wizard**, a **folder browser**, and **per-project Git**.
 5. Runs **one shared Telegram bridge** with per-chat project routing
    (`telegram.py`).
-6. Ships a global **MCP server** (`mcp/perun_mcp.py`) so every project inherits
+6. Reads a self-describing **project manifest** — `perun.md` (YAML front matter +
+   Markdown body) with a `perun.json` fallback (`manifest.py`).
+7. Ships a global **MCP server** (`mcp/perun_mcp.py`) so every project inherits
    Perun's tools.
 
 ## Core rules for working here

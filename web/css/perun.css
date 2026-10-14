@@ -261,10 +261,82 @@ select { cursor: pointer; }
 .modal h3 { margin-bottom: 16px; font-size: 1.15rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
+/* ---------- card header ---------- */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.card-head h4 { font-size: 1.02rem; }
+
+/* ---------- project wizard ---------- */
+.wizard { min-width: 0; }
+.wiz-steps { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+.wiz-step { display: inline-flex; align-items: center; gap: 7px; font-size: .78rem; color: var(--text-muted); padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; }
+.wiz-step b { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--bg-inset); color: var(--text-secondary); font-size: .7rem; }
+.wiz-step.active { color: var(--gold-light); border-color: var(--border-strong); background: rgba(201,162,39,.08); }
+.wiz-step.active b { background: var(--gold); color: #14100a; }
+.wiz-step.done { color: var(--green); border-color: rgba(78,201,160,.3); }
+.wiz-step.done b { background: var(--green); color: #06140f; }
+.wiz-pane { min-height: 130px; }
+
+.method-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+.method-card { text-align: left; cursor: pointer; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px 14px; color: var(--text-primary); font-family: inherit; transition: all .16s ease; }
+.method-card:hover { border-color: var(--gold); background: var(--bg-card-hover); transform: translateY(-2px); }
+.method-card .mc-icon { font-size: 1.4rem; color: var(--gold); }
+.method-card .mc-title { font-family: 'Cinzel', serif; font-size: .95rem; margin-top: 8px; }
+.method-card .mc-sub { font-size: .76rem; color: var(--text-muted); margin-top: 5px; line-height: 1.45; }
+
+.wiz-options { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
+.opt { display: flex; align-items: center; gap: 9px; font-size: .85rem; color: var(--text-secondary); cursor: pointer; }
+.opt input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--gold); }
+
+/* ---------- folder browser ---------- */
+.fs-browser { min-width: 0; }
+.fs-path { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-size: .8rem; word-break: break-all; }
+.fs-roots { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.fs-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); }
+.fs-item { padding: 8px 12px; font-size: .84rem; cursor: pointer; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.fs-item:last-child { border-bottom: none; }
+.fs-item.dir { color: var(--gold-light); }
+.fs-item.dir:hover { background: var(--bg-card-hover); }
+.fs-item.file { cursor: default; color: var(--text-muted); }
+.fs-toggle { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: .82rem; color: var(--text-secondary); cursor: pointer; }
+.fs-toggle input { width: 16px; height: 16px; accent-color: var(--gold); }
+
+/* ---------- structured editors (manifest / links / anchors) ---------- */
+.kv-editor { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+.kv-edit-row { display: grid; grid-template-columns: 1fr 1.5fr auto; gap: 8px; align-items: center; }
+.kv-edit-row input { font-size: .82rem; }
+.anchor-editor { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+.anchor-row { display: grid; grid-template-columns: 1.1fr .85fr 1.6fr auto; gap: 8px; align-items: center; }
+.anchor-row input, .anchor-row select { font-size: .82rem; }
+.icon-btn { border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-muted); border-radius: var(--radius-sm); width: 34px; height: 34px; cursor: pointer; font-size: .9rem; line-height: 1; }
+.icon-btn:hover { color: var(--red); border-color: rgba(224,90,90,.4); }
+.subhead { font-size: .72rem; text-transform: uppercase; letter-spacing: 1.6px; color: var(--text-muted); margin: 14px 0 8px; }
+
+/* ---------- manifest display ---------- */
+.anchor-list { display: flex; flex-direction: column; gap: 7px; }
+.anchor-item { display: flex; align-items: baseline; gap: 10px; font-size: .85rem; flex-wrap: wrap; }
+.anchor-item .ai-kind { font-size: .66rem; text-transform: uppercase; letter-spacing: .6px; color: var(--gold); min-width: 58px; }
+.anchor-item .ai-label { color: var(--text-primary); }
+.anchor-item .ai-target { color: var(--text-muted); font-family: 'Cascadia Code', 'Consolas', monospace; font-size: .78rem; word-break: break-all; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: .72rem; border: 1px solid var(--border); color: var(--text-secondary); background: var(--bg-inset); }
+.chip b { color: var(--gold-light); font-weight: 600; }
+.mono-box { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: .8rem; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); }
+.md-body { color: var(--text-secondary); font-size: .88rem; line-height: 1.62; }
+.md-body h1, .md-body h2, .md-body h3 { color: var(--text-primary); margin: 14px 0 6px; }
+.md-body h1 { font-size: 1.25rem; }
+.md-body h2 { font-size: 1.1rem; }
+.md-body h3 { font-size: .98rem; }
+.md-body p { margin: 8px 0; }
+.md-body ul { padding-left: 20px; margin: 8px 0; }
+.md-body code { background: var(--bg-inset); padding: 1px 5px; border-radius: 4px; font-family: 'Consolas', monospace; font-size: .82rem; }
+.md-body pre { background: var(--bg-inset); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+.md-body a { color: var(--gold-light); }
+
 @media (max-width: 900px) {
     .app { grid-template-columns: 64px 1fr; }
     .brand-text, .nav-item .lab, .sidebar-foot { display: none; }
     .nav-item { justify-content: center; }
     .console-grid { grid-template-columns: 1fr; }
     .form-row { grid-template-columns: 1fr; }
+    .anchor-row { grid-template-columns: 1fr 1fr; }
+    .kv-edit-row { grid-template-columns: 1fr 1fr; }
 }

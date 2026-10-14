@@ -82,3 +82,33 @@ def test_register_updates_by_path(workdir):
     proj2, created2 = discovery.register(info2)
     assert created2 is False and proj2["slug"] == proj["slug"]
     assert proj2["description"] == "changed"
+
+
+def test_classify_via_manifest(workdir):
+    p = _mk(workdir / "man")
+    (p / "perun.md").write_text("---\nname: Man\n---\n", encoding="utf-8")
+    assert discovery.classify(p) == "opencode"
+    assert discovery.capabilities(p)["manifest"] is True
+
+
+def test_register_merges_manifest(workdir):
+    p = _mk(workdir / "manifested", "opencode.json")
+    (p / "perun.md").write_text(
+        "---\nversion: 1\nname: Fancy Name\nkind: git\n"
+        "description: Declared by manifest\ntags: [x, y]\n"
+        "model: prov/model\n---\n\n# body\n",
+        encoding="utf-8",
+    )
+    proj, created = discovery.register(discovery.detect(p))
+    assert created is True
+    assert proj["name"] == "Fancy Name"
+    assert proj["kind"] == "git"
+    assert proj["description"] == "Declared by manifest"
+    assert proj["tags"] == "x,y"
+    assert proj["model"] == "prov/model"
+    assert proj["has_manifest"] is True
+    assert proj["manifest"]["name"] == "Fancy Name"
+
+    stored = registry.get_project_manifest(proj["slug"])
+    assert stored["data"]["name"] == "Fancy Name"
+    assert "body" in stored["body"]

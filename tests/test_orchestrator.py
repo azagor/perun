@@ -121,3 +121,43 @@ def test_execute_persists_stdout_error_event(monkeypatch, tmp_path):
     assert run["status"] == "failed"
     assert "provider boom" in (run.get("error") or "")
     assert run["project_id"] == project["id"]
+
+
+def test_compose_prompt_injects_instructions_on_new_session():
+    project = {"instructions": "Always use tabs."}
+    out = orch.compose_prompt(project, "Do it", new_session=True)
+    assert orch.INSTRUCTION_OPEN in out and orch.INSTRUCTION_CLOSE in out
+    assert "Always use tabs." in out
+    assert out.endswith("Do it")
+
+
+def test_compose_prompt_skips_when_continuing_or_empty():
+    project = {"instructions": "Rules."}
+    assert orch.compose_prompt(project, "hi", new_session=False) == "hi"
+    assert orch.compose_prompt({"instructions": "  "}, "hi", new_session=True) == "hi"
+    assert orch.compose_prompt({}, "hi", new_session=True) == "hi"
+
+
+def test_execute_injects_project_instructions(monkeypatch, tmp_path):
+    """A new session's prompt carries the project instructions (raw prompt is stored)."""
+    import sys
+
+    from perun import orchestrator, registry
+
+    registry.add_project("Instr", str(tmp_path), instructions="PROJECT RULE 42")
+    # The fake "opencode" echoes its final argv element (the composed prompt).
+    script = (
+        "import json,sys;"
+        "print(json.dumps({'type':'text','sessionID':'ses_x',"
+        "'part':{'type':'text','text':sys.argv[-1]}}))"
+    )
+    monkeypatch.setattr(orchestrator, "resolve_opencode",
+                        lambda name: [sys.executable, "-c", script])
+
+    o = orchestrator.Orchestrator()
+    res = o.run_and_wait("instr", "the task", timeout=60)
+    # Storage keeps the user's raw prompt…
+    assert res["run"]["prompt"] == "the task"
+    # …but the agent received the project-scoped instructions.
+    assert "PROJECT RULE 42" in (res["reply"] or "")
+    assert orchestrator.INSTRUCTION_OPEN in (res["reply"] or "")

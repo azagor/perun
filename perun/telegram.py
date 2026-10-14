@@ -248,7 +248,7 @@ class PerunTelegramBridge:
                 if data.get("ok"):
                     return data
                 if data.get("error_code") == 409:
-                    LOG.error("telegram 409 conflict: %s", data.get("description"))
+                    # Handled (and de-spammed) by the polling loop.
                     return data
                 LOG.warning("telegram %s error (%d/%d): %s", method, attempt, retries,
                             data.get("description"))
@@ -529,13 +529,24 @@ class PerunTelegramBridge:
     def run(self) -> None:
         threading.Thread(target=self.worker, daemon=True).start()
         boot = self.api("getUpdates", timeout=0, offset=-1)
+        if boot.get("error_code") == 409:
+            self._log_conflict(first=True)
         results = boot.get("result") or []
         self.offset = (results[-1]["update_id"] + 1) if results else 0
         LOG.info("perun telegram bridge online (allow=%s)",
                  self.allowed or "<pair-on-first-message>")
+        conflict_logged = 0.0
         while not self.stop_event.is_set():
             data = self.api("getUpdates", timeout=30, offset=self.offset)
             if not data.get("ok"):
+                if data.get("error_code") == 409:
+                    now = time.time()
+                    if now - conflict_logged > 60.0:
+                        conflict_logged = now
+                        self._log_conflict()
+                    if self.stop_event.wait(30.0):
+                        break
+                    continue
                 if self.stop_event.wait(3.0):
                     break
                 continue
@@ -545,6 +556,17 @@ class PerunTelegramBridge:
                     self._handle_update(update)
                 except Exception:
                     LOG.exception("failed to handle update %s", update.get("update_id"))
+
+    def _log_conflict(self, *, first: bool = False) -> None:
+        """Emit one actionable 409 message (then at most once per minute)."""
+        LOG.error(
+            "Telegram 409 Conflict: another process is polling this bot. Only ONE "
+            "getUpdates consumer is allowed per bot token. Stop the other poller "
+            "(e.g. trading_bot/scripts/telegram_bridge.py or the 'PerunTelegramBridge' "
+            "scheduled task), or run the dashboard without --bridge. "
+            "Backing off 30s.%s",
+            " (occurred at startup)" if first else "",
+        )
 
 
 # --------------------------------------------------------------------------- #

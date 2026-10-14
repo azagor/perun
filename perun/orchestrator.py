@@ -28,6 +28,28 @@ from . import config, registry
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
 
+INSTRUCTION_OPEN = "<perun:project_instructions>"
+INSTRUCTION_CLOSE = "</perun:project_instructions>"
+
+
+def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool) -> str:
+    """Prepend a project's custom instructions to a fresh session's prompt.
+
+    Instructions are deliberately scoped to a single project and injected only
+    when a **new** session starts; continuations inherit them from the session
+    history, so they are never repeated on every turn.
+    """
+    instructions = (project.get("instructions") or "").strip()
+    if not instructions or not new_session:
+        return prompt
+    return (
+        f"{INSTRUCTION_OPEN}\n"
+        "The following are project-level instructions. Follow them for every task "
+        "in this session unless the user explicitly says otherwise.\n\n"
+        f"{instructions}\n"
+        f"{INSTRUCTION_CLOSE}\n\n{prompt}"
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Event bus (in-memory pub/sub for run streams)
@@ -249,12 +271,14 @@ class Orchestrator:
     def _execute(self, run_uid: str, project: dict[str, Any], prompt: str,
                  run: dict[str, Any]) -> None:
         cwd = project["path"]
+        oc_sid = run.get("opencode_session_id") or ""
+        # Project-scoped custom instructions ride along with a new session.
+        prompt = compose_prompt(project, prompt, new_session=not oc_sid)
         argv = resolve_opencode("opencode") + ["run", "--format", "json", "--auto"]
         if run.get("model"):
             argv += ["--model", run["model"]]
         if run.get("agent"):
             argv += ["--agent", run["agent"]]
-        oc_sid = run.get("opencode_session_id") or ""
         if oc_sid:
             argv += ["--session", oc_sid]
         if run_uid:
