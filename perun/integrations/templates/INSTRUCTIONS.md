@@ -61,3 +61,11 @@ If the per-project question is really about orchestration, the user can open
 Perun's dashboard at <http://127.0.0.1:8760> (`python -m perun serve`, or
 double-click `Perun.cmd` on Windows). Its **storm layer** shows which projects are
 awake or working, and `#/orchestrator` is a chat with Perun itself.
+
+## New machine
+
+On a fresh Windows machine, run `bootstrap.ps1` in the Perun checkout (or
+`python -m perun install --machine`): it checks prerequisites, installs
+dependencies, wires this global OpenCode integration, and registers the single
+`PerunBridge` Telegram task. Re-run it any time to repair; add `--uninstall` to
+reverse it.

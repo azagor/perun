@@ -41,7 +41,10 @@ remote that makes the code reachable in the first place.
   guarantees, escaping, UTF-16 output), the `schtasks` invocation, prerequisite
   gating, `pip`, orchestration, the CLI flags, and the bootstrap delegation
   contract. `test_installer.py` uses a patchable `installer.is_windows()` so the
-  Windows-only paths run on any platform without faking `os.name`.
+  Windows-only paths can run on any platform without faking `os.name`.
+- A short **New machine** section in the global instructions template
+  (`perun/integrations/templates/INSTRUCTIONS.md`), so an agent working in *any*
+  project can point the user at `bootstrap.ps1` / `install --machine`.
 
 ### Fixed
 
