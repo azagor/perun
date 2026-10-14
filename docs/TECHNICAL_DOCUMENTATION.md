@@ -1,11 +1,17 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.4.0 — Perun is now **installable from one command**.
-`bootstrap.ps1` (or `python -m perun install --machine`) checks prerequisites,
-installs dependencies, wires the global OpenCode integration, and registers the
-single-instance **`PerunBridge`** logon task — so a fresh machine can be brought
-up without hand-editing Task Scheduler, which until now was the only way the task
-ever came into existence. It builds on v0.3.0 (the **control plane** — an
+**Latest release:** v0.5.0 — a **UI-consistency pass** on the dashboard plus the
+ability to point Perun at a **different Telegram bot** from the Telegram page.
+Project cards are now uniform (`Open` / `Run`, with `Run` replacing the
+ambiguous `Ask`), the orchestrator chat is reachable only from the left toolbar,
+and the new "Bot settings" card edits the bot name, API key (masked, never
+echoed, verified with `getMe` before it is saved) and chat ids, with a one-click
+**bridge restart** so the new bot actually takes effect. It builds on v0.4.0
+(Perun is **installable from one command** — `bootstrap.ps1` /
+`python -m perun install --machine` checks prerequisites, installs dependencies,
+wires the global OpenCode integration, and registers the single-instance
+**`PerunBridge`** logon task, so a fresh machine can be brought up without
+hand-editing Task Scheduler), v0.3.0 (the **control plane** — an
 always-present orchestrator reachable with zero projects registered, a
 **dashboard chat for the orchestrator** with its own custom instructions and a
 searchable model picker, project-management MCP tools, the **storm layer** (Perun's
@@ -357,8 +363,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/memory/import-legacy` | migrate legacy facts |
 | POST | `/api/memory/prune` | drop old non-global facts |
 | GET | `/api/activity` | global feed |
-| GET/PATCH | `/api/settings` | read/update `Settings` |
-| GET | `/api/telegram/status` | bot + allowed chats + `bridge_running` |
+| GET/PATCH | `/api/settings` | read/update `Settings` (GET returns `telegram_token: ""` — never the value — plus `telegram_token_set`) |
+| GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` |
+| POST | `/api/telegram/bot` | `{name?,token?,chats?}` — verifies a new token with `getMe` **before** saving; `token: ""` clears; `{restart_required}` |
+| POST | `/api/telegram/bridge/restart` | `schtasks /End` + `/Run` so the bridge re-reads the bot |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/` etc. | static dashboard from `web/` |
 
@@ -410,6 +418,19 @@ pid-file) and honoured by both `run_bridge()` (the `bridge` CLI, and the
 keeps the lock referenced for the process lifetime). A second attempt refuses
 instead of poller-fighting, and the `PerunBridge` task is registered with
 `IgnoreNew`.
+
+### Switching to a different bot
+
+The bridge resolves its token **once, at startup** (`run_bridge()` →
+`Settings.telegram()`), so a token change only takes effect on a restart.
+
+| Concern | How it is handled |
+|---------|-------------------|
+| **Edit name / API key / chat ids** | `POST /api/telegram/bot` — the Telegram page's "Bot settings" card. The name is a **local label** (`Settings.telegram_bot_name`) used to tell bots apart; it is not pushed to Telegram. |
+| **Verify before trusting** | A non-empty token is checked with Telegram's `getMe` **before** `Settings.save()`, so a typo can never silently replace a working bot. `token: ""` clears it (Disconnect). |
+| **Token never leaks** | `GET /api/settings` returns `telegram_token: ""` plus `telegram_token_set`; the UI's password field is only ever a placeholder. The bridge side keeps the token out of logs. |
+| **Env fallback** | `Settings.telegram()` prefers `config.json`, then `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN` (chats: `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`). Because of that, `Settings.telegram_sources()` reports which source is in force, and the dashboard warns + disables **Disconnect** when an env token would silently reappear. |
+| **Apply the change** | `POST /api/telegram/bridge/restart` → `installer.restart_bridge_task()` = `schtasks /End` then `schtasks /Run`. `/End` terminates *only* the process the task started — never the dashboard — and if the dashboard itself owns the lock, the new instance exits on `PidLock`, so a second poller still never appears. |
 
 ---
 
@@ -507,9 +528,21 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   with tabs Overview/Console/Sessions/Memory/Activity/Git/Manifest/Instructions/
   Config), Agent Console (live SSE), Memory Explorer, Activity (live
   `/api/stream`), Telegram, Settings.
+* **Uniform project cards.** `projectCard()` renders the *same* action set for
+  every project, including the orchestrator control-plane card: `Open` (project
+  page) and `Run` (Agent Console with that project preselected). The old
+  card-level special case that routed all control-card clicks to
+  `#/orchestrator` — which made its `Ask` button do something different from
+  every other card's — is gone. The orchestrator **chat** is reachable only from
+  the left toolbar (nav item `Orchestrator Chat`); the topbar's quick action is
+  `✦ Run`.
 * **Orchestrator chat** targets the control plane; it streams in place and works
   with zero other projects registered. Its Settings card edits the orchestrator's
   **model**, **agent**, and **custom instructions**.
+* **Telegram page** (`viewTelegram`/`mountTelegram`) owns the bot configuration:
+  a "Bot settings" card (name / API key / chat ids), a bridge-process card with
+  **⟳ Restart bridge**, and the send-a-message form. Settings keeps only a
+  pointer to it, so there is one source of truth.
 * **Searchable model picker** (`modelSelect`): a reusable combobox that filters
   the structured `/api/models` catalogue with a live search bar; the native
   `<datalist>` is kept for wizard/manifest inputs.
@@ -544,10 +577,13 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `run_timeout` | `1800` | seconds per run |
 | `ollama_host` | `http://127.0.0.1:11434` | embeddings provider |
 | `embed_model` | `nomic-embed-text` | 768-dim |
-| `telegram_token` | `""` | falls back to `TELEGRAM_BOT_TOKEN` |
+| `telegram_token` | `""` | never echoed by the API; falls back to `TELEGRAM_BOT_TOKEN` |
+| `telegram_bot_name` | `""` | local label to tell bots apart (dashboard only; not pushed to Telegram) |
 | `telegram_allowed_chats` | `[]` | falls back to `TELEGRAM_CHAT_ID`; empty = pair-on-first-message |
 | `auto_discover_on_start` | `true` | discovery on service startup |
 | `index_docs_on_discover` | `false` | index new projects' docs on discover |
 
 Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_CHAT_ID`.
+`TELEGRAM_CHAT_ID`. A config.json value wins over the environment;
+`Settings.telegram_sources()` reports which is actually in force (surfaced as
+`token_source` / `chats_source` so the dashboard can explain it).

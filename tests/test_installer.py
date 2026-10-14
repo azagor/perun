@@ -255,6 +255,49 @@ def test_remove_bridge_task_deletes_when_present(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Task restart (how a *new* Telegram bot takes effect)
+# --------------------------------------------------------------------------- #
+def test_restart_bridge_task_skips_on_non_windows(monkeypatch):
+    monkeypatch.setattr(installer, "is_windows", lambda: False)
+    res = installer.restart_bridge_task()
+    assert res["ok"] is False and res["skipped"] is True
+
+
+def test_restart_bridge_task_needs_the_task(monkeypatch):
+    monkeypatch.setattr(installer, "is_windows", lambda: True)
+    monkeypatch.setattr(installer, "bridge_task_exists", lambda: False)
+    res = installer.restart_bridge_task()
+    assert res["ok"] is False
+    assert "not registered" in res["reason"]
+
+
+def test_restart_bridge_task_ends_then_runs(monkeypatch):
+    monkeypatch.setattr(installer, "is_windows", lambda: True)
+    monkeypatch.setattr(installer, "bridge_task_exists", lambda: True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(installer, "_run_schtasks",
+                        lambda a, timeout=60: (calls.append(list(a)), _completed(0))[1])
+    res = installer.restart_bridge_task()
+    assert res["ok"] is True and res["started"] is True
+    # /End first (stop the poller), then /Run — order matters.
+    assert calls[0][:2] == ["/End", "/TN"]
+    assert calls[1][:2] == ["/Run", "/TN"]
+    assert installer.TASK_NAME in calls[1]
+
+
+def test_restart_bridge_task_survives_an_end_failure(monkeypatch):
+    """A stale/not-running task must not block the re-start."""
+    monkeypatch.setattr(installer, "is_windows", lambda: True)
+    monkeypatch.setattr(installer, "bridge_task_exists", lambda: True)
+    codes = iter([1, 0])  # /End "fails" (not running), /Run succeeds
+    monkeypatch.setattr(installer, "_run_schtasks",
+                        lambda a, timeout=60: _completed(next(codes)))
+    res = installer.restart_bridge_task()
+    assert res["ok"] is True
+    assert res["ended"] is False and res["started"] is True
+
+
+# --------------------------------------------------------------------------- #
 # Task status
 # --------------------------------------------------------------------------- #
 def test_bridge_task_status_parses_xml(monkeypatch):

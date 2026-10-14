@@ -578,16 +578,15 @@ function projectCard(p) {
             <span>▤ ${p.chunk_count || 0} chunks</span>
          </div>
          <div class="pc-actions">
-            <button class="btn sm primary" data-open>${isControl ? 'Open chat' : 'Open'}</button>
-            <button class="btn sm" data-ask>Ask</button>
+            <button class="btn sm primary" data-open>Open</button>
+            <button class="btn sm" data-run title="Open the Agent Console with this project selected">Run</button>
             <button class="btn sm ghost" data-index>Index docs</button>
             ${delBtn}
          </div>`);
     card.addEventListener('click', (e) => {
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
-        if (isControl) { goto('#/orchestrator'); return; }
-        if (e.target.closest('[data-ask]')) { goto('#/console/' + p.slug); return; }
+        if (e.target.closest('[data-run]')) { goto('#/console/' + p.slug); return; }
         goto('#/project/' + p.slug);
     });
     return card;
@@ -1563,7 +1562,7 @@ async function viewConsole(slug) {
     const v = $('#view');
     v.innerHTML = '';
     v.appendChild(el('div', { class: 'view-head' },
-        `<div><div class="eyebrow">Orchestrator</div><h1>Agent Console</h1>
+        `<div><div class="eyebrow">Agent</div><h1>Agent Console</h1>
           <div class="sub">Start an OpenCode agent in any project and watch it work live.</div></div>`));
     const host = el('div');
     v.appendChild(host);
@@ -1831,31 +1830,129 @@ async function viewTelegram() {
     v.appendChild(el('div', { class: 'view-head' },
         `<div><div class="eyebrow">Bridge</div><h1>Telegram Bridge</h1>
           <div class="sub">One shared Perun bot for <b>every</b> project — message it from your phone and steer any project's agent.</div></div>`));
-    let status;
-    try { status = await api('/api/telegram/status'); } catch (e) { status = { ok: false }; }
+    const host = el('div');
+    v.appendChild(host);
+
+    const reload = async () => {
+        let status;
+        try { status = await api('/api/telegram/status'); } catch (e) { status = { ok: false }; }
+        mountTelegram(host, status, reload);
+    };
+    await reload();
+}
+
+function mountTelegram(host, status, reload) {
+    host.innerHTML = '';
     const bot = status.bot || {};
+    const task = status.bridge_task || {};
     const running = status.bridge_running;
     const runBadge = running === true
         ? '<span class="badge green">bridge running</span>'
         : (running === false ? '<span class="badge amber">bridge stopped</span>' : '');
-    v.appendChild(el('div', { class: 'card mb' },
+    const botLabel = status.bot_name || bot.first_name || (bot.username ? '@' + bot.username : '') || 'Perun bot';
+
+    host.appendChild(el('div', { class: 'card mb' },
         `<div class="row wrap" style="gap:16px">
             <span class="badge ${status.configured ? 'green' : 'red'}">${status.configured ? 'configured' : 'not configured'}</span>
             ${runBadge}
+            ${task.exists ? '<span class="badge muted">logon task registered</span>' : ''}
+            <span class="secondary">${esc(botLabel)}</span>
             <span class="secondary">${bot.username ? '@' + esc(bot.username) : 'no bot'}</span>
             <span class="secondary">chats: ${(status.allowed_chats || []).map(esc).join(', ') || 'pair-on-first-message'}</span>
          </div>
          <p class="muted mt">The bot is project-agnostic. Use <span class="mono">/projects</span> to list them, <span class="mono">/project &lt;slug&gt;</span> to pick one, then just chat — Perun routes each message to the selected project's agent session and remembers the routing per chat.</p>`));
-    v.appendChild(el('div', { class: 'card' },
-        `<label class="field"><span class="lab">Chat id (optional)</span><input type="text" id="tg-chat" placeholder="defaults to configured chat"></label>
+
+    // ---- Bot settings (single source of truth for the Telegram bot) --------
+    const srcNote = status.token_source === 'env'
+        ? `<p class="muted mt">⚠ The token currently in use comes from the
+             <span class="mono">TELEGRAM_BOT_TOKEN</span> environment variable, not from Perun.
+             Saving a token here stores it in <span class="mono">config.json</span>, which takes
+             precedence over the environment.</p>`
+        : '';
+    const sCard = el('div', { class: 'card mb' },
+        `<div class="card-head"><h4>Bot settings</h4><span class="badge gold">machine-wide</span></div>
+         <p class="secondary">Switch Perun to a <b>different</b> bot, or edit the one in use. Ask
+            <span class="mono">@BotFather</span> for a token, paste it below, and it is verified before anything is saved.</p>
+         ${srcNote}
+         <label class="field"><span class="lab">Name <span class="muted">— a label to tell bots apart</span></span>
+            <input type="text" id="tg-name" value="${esc(status.bot_name || '')}" placeholder="${esc(bot.first_name || 'Perun bot')}"></label>
+         <label class="field"><span class="lab">API key (bot token) ${status.configured ? '<span class="badge green">set</span>' : ''}</span>
+            <input type="password" id="tg-token" autocomplete="off"
+                   placeholder="${status.configured ? '••••••••  (hidden — leave blank to keep the current token)' : '123456789:ABC-DEF…'}"></label>
+         <label class="field"><span class="lab">Allowed chat ids <span class="muted">(comma separated${status.chats_source === 'env' ? ' — currently from the environment' : ''})</span></span>
+            <input type="text" id="tg-chats" value="${esc((status.allowed_chats || []).join(', '))}"
+                   placeholder="blank = pair on the first incoming message"></label>
+         <div class="form-actions">
+            <button class="btn primary" id="tg-save">Save bot settings</button>
+            ${status.configured ? `<button class="btn danger ghost" id="tg-disconnect"${status.token_source === 'env' ? ' disabled title="The active token comes from the environment"' : ''}>Disconnect</button>` : ''}
+         </div>`);
+    host.appendChild(sCard);
+
+    sCard.querySelector('#tg-save').addEventListener('click', async () => {
+        const payload = { name: $('#tg-name').value.trim(), chats: $('#tg-chats').value };
+        const tok = $('#tg-token').value.trim();
+        if (tok) payload.token = tok;
+        const btn = sCard.querySelector('#tg-save');
+        btn.disabled = true;
+        try {
+            const r = await api('/api/telegram/bot', { method: 'POST', body: payload });
+            const uname = r.bot && r.bot.username ? '@' + r.bot.username : 'the bot';
+            toast(`Saved — connected to ${uname}`, 'ok');
+            if (r.restart_required && task.exists) toast('Restart the bridge to switch the running poller to this bot', 'ok');
+            await reload();
+        } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+    });
+
+    const dbtn = sCard.querySelector('#tg-disconnect');
+    if (dbtn) dbtn.addEventListener('click', () => confirmDialog('Disconnect the bot',
+        'Clear the stored Telegram bot token? The bridge stops polling until a new token is saved.',
+        async () => {
+            try { await api('/api/telegram/bot', { method: 'POST', body: { token: '' } }); toast('Bot disconnected', 'ok'); await reload(); }
+            catch (e) { toast(e.message, 'err'); }
+        }, 'Disconnect'));
+
+    // ---- Bridge process -----------------------------------------------------
+    host.appendChild(el('div', { class: 'card mb' },
+        `<div class="card-head"><h4>Bridge process</h4></div>
+         <p class="secondary">The bridge resolves the bot token <b>once, at startup</b>, so a new token only takes
+            effect after a restart. Restarting only ends the process the logon task started — never the dashboard.</p>
+         <div class="form-actions">
+            <button class="btn" id="tg-restart" ${task.exists ? '' : 'disabled'}>⟳ Restart bridge</button>
+         </div>
+         ${task.exists
+            ? `<p class="muted mt">Runs as <span class="mono">python -m perun bridge</span> under the
+                 <span class="mono">PerunBridge</span> logon task.
+                 ${task.command ? `Command: <span class="mono">${esc(task.command)} ${esc(task.arguments || '')}</span>` : ''}</p>`
+            : `<p class="muted mt">No <span class="mono">PerunBridge</span> logon task found — run
+                 <span class="mono">python -m perun install --machine</span> to register it, or start the bridge by hand:
+                 <span class="mono">python -m perun bridge</span>.</p>`}
+         <p class="muted mt">Commands: <span class="mono">/projects</span>, <span class="mono">/project</span>,
+            <span class="mono">/recall</span>, <span class="mono">/orchestrator</span>.</p>`));
+
+    const rbtn = host.querySelector('#tg-restart');
+    if (rbtn && task.exists) rbtn.addEventListener('click', async () => {
+        rbtn.disabled = true;
+        try {
+            const r = await api('/api/telegram/bridge/restart', { method: 'POST' });
+            const ok = r.restart && r.restart.ok;
+            toast(ok ? 'Bridge restarted' : ((r.restart && r.restart.reason) || 'Restart failed'), ok ? 'ok' : 'err');
+            setTimeout(reload, 1500);
+        } catch (e) { toast(e.message, 'err'); rbtn.disabled = false; }
+    });
+
+    // ---- Send a test message -----------------------------------------------
+    host.appendChild(el('div', { class: 'card' },
+        `<label class="field"><span class="lab">Chat id <span class="muted">(optional — defaults to the first allowed chat)</span></span>
+            <input type="text" id="tg-send-chat" placeholder="leave blank to use the configured chat"></label>
          <label class="field"><span class="lab">Message</span><textarea id="tg-msg" placeholder="Send a Markdown message via the Perun bot…"></textarea></label>
-         <div class="form-actions"><button class="btn primary" id="tg-send">✈ Send via bot</button></div>
-         <p class="muted mt">The full two-way bridge (commands like <span class="mono">/projects</span>, <span class="mono">/project</span>, <span class="mono">/recall</span>) runs as <span class="mono">python -m perun bridge</span> or with <span class="mono">python -m perun serve --bridge</span>.</p>`));
+         <div class="form-actions"><button class="btn primary" id="tg-send">✈ Send via bot</button></div>`));
     $('#tg-send').addEventListener('click', async () => {
         const text = $('#tg-msg').value.trim();
         if (!text) { toast('Enter a message', 'err'); return; }
-        try { const r = await api('/api/telegram/send', { method: 'POST', body: { text, chat_id: $('#tg-chat').value } }); toast(r.sent ? 'Sent ✈' : 'Send failed', r.sent ? 'ok' : 'err'); }
-        catch (e) { toast(e.message, 'err'); }
+        try {
+            const r = await api('/api/telegram/send', { method: 'POST', body: { text, chat_id: $('#tg-send-chat').value } });
+            toast(r.sent ? 'Sent ✈' : 'Send failed', r.sent ? 'ok' : 'err');
+        } catch (e) { toast(e.message, 'err'); }
     });
 }
 
@@ -1889,9 +1986,6 @@ async function viewSettings() {
             <label class="field"><span class="lab">Ollama host</span><input type="text" id="s-ollama" value="${esc(s.ollama_host)}"></label>
             <label class="field"><span class="lab">Embed model</span><input type="text" id="s-embed" value="${esc(s.embed_model)}"></label>
          </div>
-         <label class="field"><span class="lab">Telegram token ${s.telegram_token_set ? '<span class="badge green">set</span>' : ''}</span>
-            <input type="password" id="s-tgtoken" placeholder="${s.telegram_token_set ? '•••••• (leave blank to keep)' : 'bot token'}"></label>
-         <label class="field"><span class="lab">Telegram allowed chats (comma separated)</span><input type="text" id="s-tgchats" value="${esc((s.telegram_allowed_chats || []).join(', '))}"></label>
          <div class="row wrap" style="gap:18px;margin:6px 0 4px">
             <label class="row" style="gap:6px"><input type="checkbox" id="s-autodisc" ${s.auto_discover_on_start ? 'checked' : ''}> auto-discover on start</label>
             <label class="row" style="gap:6px"><input type="checkbox" id="s-indexdisc" ${s.index_docs_on_discover ? 'checked' : ''}> index docs on discover</label>
@@ -1939,6 +2033,13 @@ async function viewSettings() {
     });
     orchCard.querySelector('#s-orch-open').addEventListener('click', () => goto('#/orchestrator'));
 
+    v.appendChild(sectionTitle('Telegram'));
+    v.appendChild(el('div', { class: 'card mb' },
+        `<p class="secondary">The Telegram bot — its name, API key and chat ids — is configured on the
+            <a href="#/telegram">Telegram</a> page, so the bot settings never drift between screens.</p>
+         <div class="form-actions"><button class="btn ghost" id="s-telegram">✈ Open Telegram settings</button></div>`));
+    $('#s-telegram').addEventListener('click', () => goto('#/telegram'));
+
     v.appendChild(sectionTitle('Global integration'));
     v.appendChild(el('div', { class: 'card' },
         `<p class="secondary">Install Perun into your user-level OpenCode config so <b>every</b> project inherits the MCP tools, memory, and commands.</p>
@@ -1953,11 +2054,8 @@ async function viewSettings() {
             default_model: msDefault.getValue(), default_agent: $('#s-agent').value,
             max_concurrent_runs: Number($('#s-max').value), run_timeout: Number($('#s-timeout').value),
             ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value,
-            telegram_allowed_chats: $('#s-tgchats').value.split(',').map((x) => x.trim()).filter(Boolean),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
         };
-        const tok = $('#s-tgtoken').value.trim();
-        if (tok) payload.telegram_token = tok;
         try { await api('/api/settings', { method: 'PATCH', body: payload }); toast('Settings saved', 'ok'); }
         catch (e) { toast(e.message, 'err'); }
     });
@@ -1984,7 +2082,7 @@ async function viewSettings() {
 function wireChrome() {
     document.querySelectorAll('.nav-item').forEach((n) => n.addEventListener('click', () => goto(n.dataset.route)));
     $('#btn-refresh').addEventListener('click', router);
-    $('#btn-quick-ask').addEventListener('click', () => goto('#/console'));
+    $('#btn-quick-run').addEventListener('click', () => goto('#/console'));
     $('#global-search').addEventListener('submit', (e) => {
         e.preventDefault();
         const q = $('#global-q').value.trim();

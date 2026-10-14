@@ -2,6 +2,80 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.5.0 - 2026-10-14
+
+A **UI-consistency pass** over the dashboard, plus the ability to point Perun at
+a **different Telegram bot** without hand-editing `config.json`.
+
+### Fixed
+
+- **Project cards are now consistent.** The orchestrator (control-plane) card
+  used to be special-cased in two ways: its whole card (including its action
+  button) hijacked clicks to the orchestrator chat, and its primary button read
+  `Open chat` while every other card read `Open`. Clicking "Ask" on the control
+  card therefore opened the chat instead of the Agent Console. The hijack is
+  gone: `projectCard()` now behaves identically for **every** project — `Open`
+  opens the project page, and the action button always opens the Agent Console
+  with that project preselected.
+- Renamed the project-card / topbar action from **"Ask" to "Run"**. "Ask" did
+  not describe what the button does (it opens the Agent Console, not a chat) and
+  was easily confused with the orchestrator chat. The topbar quick action is now
+  `✦ Run`.
+- The Agent Console's eyebrow read **"Orchestrator"**; it is an *agent* view, so
+  it now reads `Agent`.
+- The **orchestrator chat is only reachable from the left toolbar** (its nav
+  item is now labelled `Orchestrator Chat`), not from a project card.
+
+### Added
+
+- **Telegram bot settings on the Telegram page** (`POST /api/telegram/bot`). A
+  single "Bot settings" card edits the bot **name** (a local label to tell bots
+  apart), the **API key / bot token** (a password field that is *never* echoed
+  back — the UI shows a `set` badge and the placeholder stays masked; blank keeps
+  the current token), and the **allowed chat ids**. A new token is verified with
+  Telegram's `getMe` **before** it is persisted, so a typo can never silently
+  replace a working bot; sending `token: ""` disconnects.
+- **`POST /api/telegram/bridge/restart`** + `installer.restart_bridge_task()`.
+  The bridge resolves its token once at startup, so switching bots needs a
+  restart. This runs `schtasks /End` (which terminates *only* the process the
+  task started — never the dashboard) followed by `schtasks /Run`. If the
+  dashboard itself owns the bridge lock, the new instance simply exits on
+  `PidLock`, so a second poller still never appears.
+- **`Settings.telegram_sources()`** and the `token_source` / `chats_source`
+  fields on `/api/telegram/status`. `Settings.telegram()` prefers `config.json`
+  and falls back to `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`, so the dashboard
+  now says *which* one is in force. When the token comes from the environment,
+  the page shows a warning, and "Disconnect" is disabled with an explanatory
+  tooltip — otherwise it would look broken (the env token would silently take
+  over).
+
+### Changed
+
+- `GET /api/settings` no longer echoes `telegram_token` at all (it returned the
+  placeholder `***`), and the Telegram token/chat fields were **removed from the
+  Settings page** in favour of a pointer to the Telegram page — one source of
+  truth for the bot.
+- `Settings` gains `telegram_bot_name`.
+
+### Tests
+
+- `tests/test_telegram_bot_api.py` (10 tests): settings never echo the token;
+  the bot endpoint saves a label/chats, rejects an invalid token (verified with a
+  mocked `getMe`), persists a verified one, clears on `token: ""`, and reports
+  the env-vs-config source with config taking precedence.
+- `tests/test_installer.py` (+4): `restart_bridge_task()` is a no-op off
+  Windows, requires the task, runs `/End` then `/Run`, and survives an `/End`
+  failure (a stale/not-running task must not block the re-start).
+- Full suite: **189 passed**.
+
+### Verified
+
+- Rendered DOM (headless Chrome) of `#/dashboard`, `#/projects`, `#/telegram`,
+  `#/settings`: 22/22 checks — consistent card actions, the `Run` rename, the
+  `Orchestrator Chat` nav item, the Telegram bot-settings card, and the masked
+  token field. Live `/api/telegram/status` reported `token_source=env`,
+  `bot.username=PerunTheCoderBot`, `bridge_task.exists=true`.
+
 ## v0.4.0 - 2026-10-14
 
 Perun becomes **installable on a fresh machine** — one command, plus the private

@@ -425,6 +425,36 @@ def remove_bridge_task() -> dict[str, Any]:
     }
 
 
+def restart_bridge_task() -> dict[str, Any]:
+    """Stop and re-start the ``PerunBridge`` task so it re-reads ``config.json``.
+
+    This is how a **new Telegram bot** takes effect: the bridge resolves its
+    token once at startup (:func:`perun.telegram.run_bridge`), so a changed token
+    only applies after a restart.
+
+    Safe by construction: ``schtasks /End`` terminates only the process *the task*
+    started, never the dashboard. If the task is not the current lock holder (for
+    example the dashboard itself runs the bridge via ``serve --bridge``), ``/End``
+    is a no-op and the new instance exits on :class:`perun.telegram.PidLock` —
+    so a second poller still never appears. Never raises.
+    """
+    if not is_windows():
+        return {"ok": False, "skipped": True, "reason": "the bridge task is Windows-only"}
+    if not bridge_task_exists():
+        return {"ok": False, "reason": "the PerunBridge task is not registered"}
+
+    end = _run_schtasks(["/End", "/TN", TASK_NAME])
+    run = _run_schtasks(["/Run", "/TN", TASK_NAME])
+    # /End reports "not running" as a soft failure; only /Run must succeed.
+    return {
+        "ok": run.returncode == 0,
+        "ended": end.returncode == 0,
+        "started": run.returncode == 0,
+        "reason": "" if run.returncode == 0
+        else _decode_console(run.stderr or run.stdout or b"").strip(),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #

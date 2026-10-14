@@ -31,7 +31,10 @@ them all — no matter which folder you happened to open.
   searchable from any project — "which project handled the OAuth callback?".
 * **Start any agent from anywhere.** Kick off a task in `trading_bot` while
   you're "in" `optimus`.
-* **Phone access.** A single Telegram bot with per-chat project switching.
+* **Phone access.** A single Telegram bot with per-chat project switching. Swap
+  the bot for a different one from the dashboard (name, API key, chat ids) — the
+  key is verified before it is saved, stays masked, and the bridge restarts in
+  one click.
 * **An always-available orchestrator.** Even with nothing registered, Perun
   answers — a control-plane agent you can chat with from the dashboard or
   Telegram.

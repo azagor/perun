@@ -88,6 +88,7 @@ class Settings:
     embed_model: str = "nomic-embed-text"
     embed_dim: int = 768
     telegram_token: str = ""
+    telegram_bot_name: str = ""
     telegram_allowed_chats: list[str] = field(default_factory=list)
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
@@ -121,6 +122,29 @@ class Settings:
             env_chats = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TG_CHAT_ID") or ""
             chats = [c.strip() for c in env_chats.split(",") if c.strip()]
         return token, chats
+
+    def telegram_sources(self) -> dict[str, str]:
+        """Where the *effective* token/chats come from: ``settings`` | ``env`` | ``""``.
+
+        ``Settings.telegram()`` prefers ``config.json`` and falls back to
+        environment variables, so the dashboard has to be able to say which one
+        is actually in force — otherwise "Disconnect" looks broken when a token
+        is shadowing it from the environment.
+        """
+        if (self.telegram_token or "").strip():
+            token_src = "settings"
+        elif (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TG_BOT_TOKEN") or "").strip():
+            token_src = "env"
+        else:
+            token_src = ""
+
+        if self.telegram_allowed_chats:
+            chat_src = "settings"
+        elif (os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TG_CHAT_ID") or "").strip():
+            chat_src = "env"
+        else:
+            chat_src = ""
+        return {"token": token_src, "chats": chat_src}
 
 
 def ensure_dirs() -> None:

@@ -810,7 +810,8 @@ def api_get_settings() -> dict[str, Any]:
     data = SETTINGS.to_dict()
     token, chats = SETTINGS.telegram()
     data["telegram_token_set"] = bool(token)
-    data["telegram_token"] = "***" if token else ""
+    # Never echo the token — the dashboard shows a "set" badge instead.
+    data["telegram_token"] = ""
     data["telegram_chat_count"] = len(chats)
     return _ok(settings=data)
 
@@ -841,6 +842,16 @@ def _telegram_api(method: str, **params: Any) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+def _telegram_getme(token: str) -> dict[str, Any]:
+    """Call ``getMe`` with an *explicit* token (before it is persisted)."""
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            return client.post(url, json={}).json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @app.get("/api/telegram/status")
 def api_telegram_status() -> dict[str, Any]:
     token, chats = SETTINGS.telegram()
@@ -851,12 +862,91 @@ def api_telegram_status() -> dict[str, Any]:
         bridge_running = PidLock.is_held(config.HOME / "telegram.pid")
     except Exception:  # pragma: no cover - defensive
         bridge_running = None
+    try:
+        from . import installer
+        task: dict[str, Any] | None = installer.bridge_task_status()
+    except Exception:  # pragma: no cover - defensive
+        task = None
     return _ok(
         configured=bool(token),
+        bot_name=SETTINGS.telegram_bot_name,
         allowed_chats=chats,
+        token_source=SETTINGS.telegram_sources()["token"],
+        chats_source=SETTINGS.telegram_sources()["chats"],
         bridge_running=bridge_running,
+        bridge_task=task,
         bot=data.get("result") if data.get("ok") else None,
     )
+
+
+@app.post("/api/telegram/bot")
+def api_telegram_bot(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Configure the Telegram bot: label, token (api key) and chat id(s).
+
+    A new token is verified with ``getMe`` **before** it is persisted, so a typo
+    can never silently replace a working bot. Sending ``token: ""`` disconnects
+    the bot; omitting ``token`` keeps the current one.
+    """
+    global SETTINGS
+    changed: list[str] = []
+
+    if "name" in payload:
+        SETTINGS.telegram_bot_name = str(payload.get("name") or "").strip()
+        changed.append("name")
+
+    if "chats" in payload:
+        raw = payload.get("chats") or []
+        if isinstance(raw, str):
+            raw = [c.strip() for c in raw.split(",")]
+        SETTINGS.telegram_allowed_chats = [str(c).strip() for c in raw if str(c).strip()]
+        changed.append("chats")
+
+    if "token" in payload:
+        token = str(payload.get("token") or "").strip()
+        if token:
+            me = _telegram_getme(token)
+            if not me.get("ok"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=me.get("description") or "Telegram rejected that token",
+                )
+            SETTINGS.telegram_token = token
+            changed.append("token")
+        else:
+            SETTINGS.telegram_token = ""
+            changed.append("token(cleared)")
+
+    SETTINGS.save()
+
+    # Re-read through the resolver so an env-var fallback is reflected too.
+    token_now, chats_now = SETTINGS.telegram()
+    bot = None
+    if token_now:
+        try:
+            me = _telegram_api("getMe")
+            bot = me.get("result") if me.get("ok") else None
+        except HTTPException:
+            bot = None
+    return _ok(
+        changed=changed,
+        configured=bool(token_now),
+        bot_name=SETTINGS.telegram_bot_name,
+        allowed_chats=chats_now,
+        token_source=SETTINGS.telegram_sources()["token"],
+        chats_source=SETTINGS.telegram_sources()["chats"],
+        bot=bot,
+        restart_required=("token" in payload),
+    )
+
+
+@app.post("/api/telegram/bridge/restart")
+def api_telegram_bridge_restart() -> dict[str, Any]:
+    """Restart the ``PerunBridge`` task so it re-reads the configured bot."""
+    try:
+        from . import installer
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail=str(exc))
+    return _ok(restart=installer.restart_bridge_task())
 
 
 @app.post("/api/telegram/send")

@@ -92,6 +92,10 @@ python -m pytest tests/ -q
 # boot the dashboard (temp state dir)
 $env:PERUN_HOME="$env:TEMP\perun_dev"; python -m perun serve
 
+# verify the rendered UI (models can't read screenshots — dump the DOM instead)
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new `
+  --virtual-time-budget=8000 --dump-dom "http://127.0.0.1:8760/#/telegram"
+
 # one-click launcher (Windows; idempotent, opens the browser)
 .\Perun.cmd
 
