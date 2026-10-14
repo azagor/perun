@@ -12,7 +12,7 @@ Usage::
     python -m perun recall <query> [--project SLUG] [--k N] [--all]
     python -m perun index <slug> [--all]
     python -m perun import-legacy-memory [--path P]
-    python -m perun install [--uninstall]
+    python -m perun install [--uninstall] [--machine]
     python -m perun mcp
 """
 
@@ -180,6 +180,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         bridge_running = PidLock.is_held(config.HOME / "telegram.pid")
     except Exception:
         bridge_running = None
+    try:
+        from . import installer
+        bridge_task = installer.bridge_task_status()
+    except Exception:
+        bridge_task = None
     _print({
         "home": str(config.HOME),
         "db": str(config.DB_PATH),
@@ -187,6 +192,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "projects": len(projects),
         "memory": stats,
         "bridge_running": bridge_running,
+        "bridge_task": bridge_task,
     })
     return 0
 
@@ -247,10 +253,21 @@ def cmd_import_legacy(args: argparse.Namespace) -> int:
 
 def cmd_install(args: argparse.Namespace) -> int:
     _ensure()
+    from . import installer
     from .integrations import install_global
 
     if args.uninstall:
+        if args.machine:
+            installer.uninstall_machine()
         return install_global.uninstall()
+    if args.machine:
+        return installer.machine_install(
+            skip_deps=args.skip_deps,
+            skip_global=args.skip_global,
+            skip_task=args.skip_task,
+            skip_index=args.no_index,
+            force=args.force,
+        )
     return install_global.install(force=args.force, index=not args.no_index)
 
 
@@ -329,6 +346,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--uninstall", action="store_true")
     p.add_argument("--force", action="store_true")
     p.add_argument("--no-index", action="store_true")
+    p.add_argument("--machine", action="store_true",
+                   help="full machine setup: prerequisites, dependencies, the global "
+                        "OpenCode install, and the PerunBridge logon task")
+    p.add_argument("--skip-deps", action="store_true",
+                   help="with --machine: do not pip install requirements.txt")
+    p.add_argument("--skip-global", action="store_true",
+                   help="with --machine: do not touch the global OpenCode config")
+    p.add_argument("--skip-task", action="store_true",
+                   help="with --machine: do not register the PerunBridge task")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")

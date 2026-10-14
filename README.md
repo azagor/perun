@@ -74,6 +74,29 @@ python -m perun bridge
 The bridge is a **singleton** — `getUpdates` allows one consumer per bot token, so
 a second start is refused rather than fighting with HTTP 409s.
 
+## Install on a new machine
+
+```powershell
+# One command (Windows): finds Python, installs dependencies, wires the global
+# OpenCode integration, registers the PerunBridge Telegram task, and creates a
+# desktop shortcut to Perun.cmd.
+.\bootstrap.ps1
+
+# Equivalent, from a checkout whose Python can already import `perun`:
+python -m perun install --machine
+```
+
+`install --machine` is **idempotent** — re-run it any time to repair. Narrow the
+scope with `--skip-deps`, `--skip-global`, `--skip-task`, or `--no-index`;
+`python -m perun install --machine --uninstall` reverses it (and removes the
+`PerunBridge` task).
+
+A new machine needs **Python 3.10+**, **git**, and the **opencode** CLI on `PATH`
+(Ollama is optional). The `PerunBridge` task is registered with `IgnoreNew`, an
+unlimited execution limit, and restart-on-failure, so the Telegram poller stays
+singular; it is only *started* once a Telegram token is configured in
+`~/.perun/config.json`.
+
 ## What you get
 
 | Surface | Where | Notes |
@@ -85,6 +108,7 @@ a second start is refused rather than fighting with HTTP 409s.
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
+| **Installer** | `bootstrap.ps1` / `perun install --machine` | Prereqs + deps + global install + the `PerunBridge` task |
 
 ## CLI
 
@@ -99,7 +123,7 @@ python -m perun remember <text> [--project SLUG] [--global] [--topic T]
 python -m perun recall <query> [--project SLUG] [--k N] [--all]
 python -m perun index <slug> | --all
 python -m perun import-legacy-memory [--path P]
-python -m perun install [--uninstall]
+python -m perun install [--uninstall] [--machine]
 python -m perun mcp
 ```
 
@@ -120,8 +144,10 @@ perun/                     the Python package
   server.py                FastAPI + SSE + static dashboard
   __main__.py              CLI
   integrations/            global install into ~/.config/opencode
+  installer.py             machine install: prerequisites, deps, PerunBridge task
 mcp/perun_mcp.py           the `perun` MCP server (stdio)
 web/                       the dashboard (index.html + css + js)
+bootstrap.ps1              Windows cold-start installer (delegates to install --machine)
 Perun.cmd                  Windows one-click launcher
 tools/make_icon.py         regenerates the app icon
 docs/                      CODEMAP · TECHNICAL · CHANGELOG · DESIGN

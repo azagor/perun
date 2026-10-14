@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.3.0"`).
+Package docstring + `__version__` (`"0.4.0"`).
 
 ### `perun/config.py`
 Filesystem layout + persisted settings.
@@ -157,8 +157,11 @@ FastAPI app + SSE + static dashboard.
 
 ### `perun/__main__.py`
 CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
-`cmd_status`, `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_import_legacy`,
-`cmd_install`, `cmd_mcp`, `build_parser()`, `main()`.
+`cmd_status` (also reports `bridge_task` via `installer.bridge_task_status()`),
+`cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_import_legacy`, `cmd_install`
+(`--machine` / `--skip-deps` / `--skip-global` / `--skip-task` delegate to
+`installer.machine_install()`, `--machine --uninstall` to `installer`),
+`cmd_mcp`, `build_parser()`, `main()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
   — the `serve --bridge` path starts the bridge at most once per process and keeps
   the single-instance mutex alive for the whole process.
@@ -170,6 +173,20 @@ Idempotent global install into `~/.config/opencode`.
   `_relative_to_config()`.
 * `install()`, `uninstall()`, `status()`.
 * Templates under `perun/integrations/templates/`.
+
+### `perun/installer.py`
+Machine-level installation (`python -m perun install --machine`) — the part of
+setup that belongs to the *machine* rather than to a user's OpenCode config.
+* Constants: `TASK_NAME` (`"PerunBridge"`), `MIN_PYTHON`, `TASK_DESCRIPTION`,
+  `is_windows()` (patchable, so the Windows-only paths stay testable anywhere).
+* Prerequisites: `python_version_ok()`, `pip_available()`, `which_version()`,
+  `ollama_status()`, `check_prerequisites()`.
+* Dependencies: `requirements_file()`, `pip_install()`.
+* Bridge task: `_python_exe()` (honours `PERUN_PYTHON`), `_task_user()`,
+  `bridge_task_xml()`, `_run_schtasks()`, `_decode_console()`,
+  `bridge_task_exists()`, `bridge_task_status()`, `register_bridge_task()`,
+  `remove_bridge_task()`.
+* Orchestration: `machine_install()`, `uninstall_machine()`.
 
 ---
 
@@ -213,6 +230,9 @@ stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
 
 ## Root files
 
+* `bootstrap.ps1` — Windows cold-start installer for a new machine: locates
+  Python 3.10+ (honours `PERUN_PYTHON`) and delegates to
+  `python -m perun install --machine`; optionally creates the desktop shortcut.
 * `Perun.cmd` — Windows one-click launcher (idempotent dashboard start; never
   starts a second Telegram bridge).
 * `run.py` — launcher (`python run.py serve`).
@@ -230,6 +250,9 @@ stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
 * `test_memory.py` — remember/sensitive/dedupe, chunking, index, search,
   unified_search, stats (Ollama-independent).
 * `test_install_global.py` — merge/uninstall idempotency against a temp config.
+* `test_installer.py` — prerequisites, `pip`, the `PerunBridge` task XML and the
+  `schtasks` invocation (faked), `machine_install` orchestration, the CLI flags,
+  and the `bootstrap.ps1` delegation contract.
 * `test_server.py` — FastAPI TestClient smoke of the main endpoints (incl.
   instructions, manifest, git, wizard, models).
 * `test_manifest.py` — parse/normalize/dump/save, JSON fallback, edge cases.

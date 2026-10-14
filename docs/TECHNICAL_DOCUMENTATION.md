@@ -1,11 +1,16 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.3.0 — the **control plane** (an always-present
-orchestrator reachable with zero projects registered), a **dashboard chat for the
-orchestrator** with its own custom instructions and a searchable model picker,
-project-management MCP tools, the **storm layer** (Perun's lightning + glowing
-eyes as live idle/awake/working feedback), and a **one-click Windows launcher**
-(`Perun.cmd`). It builds on v0.2.1 (security
+**Latest release:** v0.4.0 — Perun is now **installable from one command**.
+`bootstrap.ps1` (or `python -m perun install --machine`) checks prerequisites,
+installs dependencies, wires the global OpenCode integration, and registers the
+single-instance **`PerunBridge`** logon task — so a fresh machine can be brought
+up without hand-editing Task Scheduler, which until now was the only way the task
+ever came into existence. It builds on v0.3.0 (the **control plane** — an
+always-present orchestrator reachable with zero projects registered, a
+**dashboard chat for the orchestrator** with its own custom instructions and a
+searchable model picker, project-management MCP tools, the **storm layer** (Perun's
+lightning + glowing eyes as live idle/awake/working feedback), and the
+**one-click Windows launcher** `Perun.cmd`), v0.2.1 (security
 hardening: anti-CSRF / anti-DNS-rebinding guard on `/api/*`, plus stored-XSS
 fixes), v0.2.0 (project management: creation wizard, per-project Git, custom
 project instructions, self-describing `perun.md` manifest, model picker), and the
@@ -32,6 +37,7 @@ Ollama instance for embeddings.
 | Telegram | a long-polling thread (`PerunTelegramBridge`) |
 | Global integration | stdio MCP server `mcp/perun_mcp.py` + `~/.config/opencode` merge |
 | One-click startup (Windows) | `Perun.cmd` — idempotent dashboard launcher; never starts a second Telegram bridge |
+| Machine install (Windows) | `bootstrap.ps1` → `python -m perun install --machine` (`perun/installer.py`): prerequisites, deps, global install, and the `PerunBridge` task |
 
 ### Runtime layout (`~/.perun`, override with `PERUN_HOME`)
 
@@ -60,6 +66,10 @@ the `PerunBridge` logon task, which the launcher only `schtasks /run`s; together
 with the named-mutex singleton (§9) that guarantees exactly one `getUpdates`
 poller. The desktop shortcut's `.ico` is generated deterministically by
 `tools/make_icon.py`.
+
+The task itself is **created and repaired by the installer** (§10), not by the
+launcher — `Perun.cmd` only triggers it. On a brand-new machine, run
+`.\bootstrap.ps1` once to register it.
 
 ---
 
@@ -418,6 +428,52 @@ instead of poller-fighting, and the `PerunBridge` task is registered with
 
 Unrelated keys are preserved (JSON load → edit → dump). `uninstall()` removes
 exactly the Perun keys/files; runtime data in `~/.perun` is kept.
+
+### Machine install (`perun install --machine`, `perun/installer.py`)
+
+`install_global.py` covers the *user-level OpenCode* integration. Everything that
+is specific to a **machine** lives in `perun/installer.py`, driven from the CLI
+and from `bootstrap.ps1`:
+
+1. **Prerequisites** — `check_prerequisites()` returns
+   `{name, ok, required, detail}` rows. Python ≥ 3.10 (`MIN_PYTHON`) and `pip` are
+   required and abort the install on failure; `git`, the `opencode` CLI, and a
+   reachable Ollama (`ollama_status()`) are advisory warnings.
+2. **Dependencies** — `pip_install()` runs
+   `<python> -m pip install -r requirements.txt` (falling back to installing the
+   project itself when there is no requirements file) and returns
+   `{ok, command, summary, output_tail}`. This is safe to run before any
+   dependency exists, because nothing imports `yaml`/`fastapi`/`httpx` at module
+   load.
+3. **Global install** — delegates to `install_global.install()` above.
+4. **`PerunBridge` task** — `register_bridge_task()`.
+
+#### The `PerunBridge` task contract
+
+`bridge_task_xml()` builds the task from a template (UTF-16, as
+`schtasks /Create /XML` expects) and `register_bridge_task()` writes it to a temp
+file and runs `schtasks /Create /TN PerunBridge /XML <file> /F`. The `/F` makes it
+idempotent — re-running **repairs** rather than duplicates.
+
+| XML node | Value | Why |
+|---|---|---|
+| `Settings/MultipleInstancesPolicy` | `IgnoreNew` | a second trigger is refused, so the poller stays singular |
+| `Settings/ExecutionTimeLimit` | `PT0S` | unlimited; the bridge is meant to run forever |
+| `Settings/RestartOnFailure` | `999` × `PT1M` | survive crashes and network loss |
+| `Settings/StartWhenAvailable` | `true` | catch up if the logon trigger was missed |
+| `Triggers/LogonTrigger/UserId` | `DOMAIN\user` | start at logon for the installing user |
+| `Actions/Exec` | `<python> -m perun bridge`, workdir = repo root | the single-instance IPC path (§9) |
+
+The interpreter comes from `_python_exe()`, which honours `PERUN_PYTHON` — the
+same override `Perun.cmd` uses — so the launcher and the task can never disagree.
+The task is only **started** (`schtasks /Run`) when a Telegram token is
+configured; otherwise it is registered and idles harmlessly until a token exists.
+`bridge_task_status()` reads the task back with `schtasks /Query /XML` and parses
+it (never locale-dependent `/V` text); `perun status` surfaces it as
+`bridge_task`.
+
+`uninstall_machine()` removes the task, so `python -m perun install --machine
+--uninstall` reverses the whole machine-level setup.
 
 ---
 

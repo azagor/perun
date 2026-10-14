@@ -2,6 +2,59 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.4.0 - 2026-10-14
+
+Perun becomes **installable on a fresh machine** — one command, plus the private
+remote that makes the code reachable in the first place.
+
+### Added
+
+- **Machine installer** (`perun/installer.py`, `python -m perun install --machine`).
+  One command takes a bare machine to a working install: prerequisite checks
+  (Python ≥ 3.10 and `pip` are required; `git`, the `opencode` CLI, and a
+  reachable Ollama are advisory), `pip install -r requirements.txt`, the global
+  OpenCode install, and registration of the `PerunBridge` logon task. Flags:
+  `--skip-deps`, `--skip-global`, `--skip-task`, `--no-index`; combined with
+  `--uninstall` it also removes the task. Because Perun's import graph is
+  stdlib-only at module load (`yaml`/`fastapi`/`httpx` are imported lazily), the
+  command can bootstrap a machine that has **no** dependencies yet.
+- **`PerunBridge` task registration.** The bridge's scheduled task used to be
+  created by hand and existed only on the original machine — nothing in the repo
+  could reproduce it, so a new machine silently had no Telegram. Now
+  `installer.bridge_task_xml()` generates the task deterministically (UTF-16 XML →
+  `schtasks /Create /XML /F`) with the settings that keep the poller singular and
+  long-lived: `MultipleInstancesPolicy=IgnoreNew`, `ExecutionTimeLimit=PT0S`,
+  restart-on-failure (999 × 1 min), a logon trigger for the current user, and an
+  `Exec` of `<python> -m perun bridge` in the repo root. Registration is
+  idempotent (re-run to repair) and only **starts** the bridge if a Telegram token
+  is configured.
+- **`bootstrap.ps1`** — the cold-start entry point for a new Windows machine. It
+  locates a Python 3.10+ interpreter (honouring `PERUN_PYTHON`) and delegates
+  everything else to `python -m perun install --machine`, then creates the
+  desktop shortcut to `Perun.cmd`. Switches: `-NoShortcut`, `-SkipDeps`,
+  `-SkipGlobal`, `-SkipTask`, `-NoIndex`. It never touches the scheduled task
+  itself, so the task contract keeps exactly one implementation.
+- `perun status` reports **`bridge_task`** (`windows`, `exists`, `command`,
+  `arguments`, `workdir`), parsed from the task's XML rather than from
+  locale-dependent `schtasks /V` text.
+- `tests/test_installer.py` — 30 tests for the task XML (single-instance
+  guarantees, escaping, UTF-16 output), the `schtasks` invocation, prerequisite
+  gating, `pip`, orchestration, the CLI flags, and the bootstrap delegation
+  contract. `test_installer.py` uses a patchable `installer.is_windows()` so the
+  Windows-only paths run on any platform without faking `os.name`.
+
+### Fixed
+
+- `installer.pip_install()` tolerates both `str` and `bytes` subprocess output
+  when summarising pip's result.
+
+### Notes
+
+- Private remote: **`https://github.com/azagor/perun`**. The repo was previously
+  local-only, so "install on a new machine" had no distribution path at all.
+- `Perun.cmd` is unchanged: it still only `schtasks /run`s an existing
+  `PerunBridge` task. Bootstrapping the task is the installer's job.
+
 ## v0.3.0 - 2026-10-14
 
 The orchestrator becomes a first-class, always-available agent, and the
