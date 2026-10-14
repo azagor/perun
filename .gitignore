@@ -1,0 +1,14 @@
+# Perun runtime state — never commit (lives in ~/.perun by default)
+.perun/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local overrides
+config.local.json
+*.log

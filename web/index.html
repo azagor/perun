@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perun — Overseer</title>
+    <meta name="color-scheme" content="dark">
+    <link rel="stylesheet" href="css/perun.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-mark">ᛒ</div>
+                <div class="brand-text">
+                    <span class="brand-name">PERUN</span>
+                    <span class="brand-sub">Overseer</span>
+                </div>
+            </div>
+            <nav class="nav" id="nav">
+                <div class="nav-item" data-route="#/dashboard"><span class="ico">◈</span><span class="lab">Dashboard</span></div>
+                <div class="nav-item" data-route="#/projects"><span class="ico">▤</span><span class="lab">Projects</span></div>
+                <div class="nav-item" data-route="#/console"><span class="ico">▶</span><span class="lab">Agent Console</span></div>
+                <div class="nav-item" data-route="#/memory"><span class="ico">◉</span><span class="lab">Memory</span></div>
+                <div class="nav-item" data-route="#/activity"><span class="ico">≋</span><span class="lab">Activity</span></div>
+                <div class="nav-item" data-route="#/telegram"><span class="ico">✈</span><span class="lab">Telegram</span></div>
+                <div class="nav-item" data-route="#/settings"><span class="ico">⚙</span><span class="lab">Settings</span></div>
+            </nav>
+            <div class="sidebar-foot">
+                <div class="health"><span class="dot" id="health-dot"></span><span id="health-text">connecting…</span></div>
+                <div class="home" id="home-path"></div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <h2 id="topbar-title">Dashboard</h2>
+                <div class="spacer"></div>
+                <form class="global-search" id="global-search">
+                    <span class="muted">⌕</span>
+                    <input type="text" id="global-q" placeholder="Search memory across all projects…" autocomplete="off">
+                </form>
+                <button class="btn ghost sm" id="btn-refresh" title="Reload data">⟳ Refresh</button>
+                <button class="btn primary sm" id="btn-quick-ask">✦ Ask</button>
+            </header>
+            <section class="view" id="view"></section>
+        </main>
+    </div>
+
+    <div class="toasts" id="toasts"></div>
+    <div id="modal-root"></div>
+
+    <script src="js/perun.js"></script>
+</body>
+</html>

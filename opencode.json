@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "perun": {
+      "type": "local",
+      "command": ["python", "mcp/perun_mcp.py"],
+      "enabled": true
+    }
+  },
+  "instructions": [
+    "AGENTS.md"
+  ]
+}

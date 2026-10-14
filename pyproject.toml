@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perun"
+version = "0.1.0"
+description = "Perun — a local overseer & orchestrator for all your OpenCode projects."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "starlette>=0.37",
+    "httpx>=0.27",
+    "fastmcp>=2.0",
+    "numpy>=1.26",
+    "pydantic>=2.5",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+perun = "perun.__main__:main"
+
+[tool.setuptools]
+packages = ["perun", "perun.integrations"]
+
+[tool.setuptools.package-data]
+"perun.integrations" = ["templates/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
