@@ -60,3 +60,8 @@ OpenCode projects.
   finished run showed an empty error. `Orchestrator._execute` now collects error
   events and stores the joined text when there is no reply, so the dashboard can
   explain a past failure. Regression test in `tests/test_orchestrator.py`.
+- **CLI output is UTF-8 safe on legacy Windows consoles.** `perun recall` (and
+  any command that prints retrieved text) crashed with `UnicodeEncodeError` when
+  an excerpt contained a character the console code page could not encode — e.g.
+  the `→` arrow in Perun's own docs. `main()` now reconfigures stdout/stderr to
+  UTF-8 (`errors="replace"`). Regression tests in `tests/test_cli.py`.

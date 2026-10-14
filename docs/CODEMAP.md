@@ -150,3 +150,4 @@ stdio MCP server (`perun`). Tools: `perun_list_projects`, `perun_project_info`,
 * `test_orchestrator.py` — `parse_event`, `resolve_opencode`, `EventBus`,
   end-to-end stdout-error capture.
 * `test_telegram_lock.py` — mutex namespacing + side-effect-free `is_held()`.
+* `test_cli.py` — UTF-8 stdio hardening and non-ASCII recall output.

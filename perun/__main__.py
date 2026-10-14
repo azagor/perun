@@ -41,6 +41,23 @@ def _ensure() -> None:
     config.ensure_dirs()
 
 
+def _force_utf8_stdio() -> None:
+    """Make stdout/stderr tolerate non-ASCII text on legacy Windows consoles.
+
+    The default console encoding on Windows is often ``cp1252``; printing a
+    retrieved memory excerpt that contains a character such as ``→`` would then
+    raise ``UnicodeEncodeError``. Reconfiguring to UTF-8 (replacing what the
+    console cannot render) keeps the CLI's output robust. Best-effort: some
+    streams (pytest capture, redirected handles) do not support reconfiguring.
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _roots(arg: str | None) -> list[str]:
     if not arg:
         return config.Settings.load().roots
@@ -293,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "version", False):
