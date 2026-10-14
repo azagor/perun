@@ -38,12 +38,22 @@ version-source cleanup.
   endpoint and the FastAPI app metadata) instead of two hardcoded strings;
   `pyproject.toml` was corrected from a stale `0.1.0` to `0.2.1`.
 
+### Fixed
+
+- The Telegram bridge mis-reported **zero** registered projects as "Multiple
+  projects registered" when a plain message arrived with no current project, so a
+  fresh install gave confusing advice. It now distinguishes the two cases
+  (`perun/telegram.py: run_message`).
+
 ### Tests
 
 - `tests/test_server_security.py` (10 tests): loopback/`localhost` hosts allowed;
   foreign `Host` and DNS-rebinding `POST` blocked; cross-origin and `null`
   `Origin` blocked; same-origin `POST` allowed; static routes unguarded; wildcard
-  bind allows a LAN host but still blocks cross-origin. Suite: **118 passed**.
+  bind allows a LAN host but still blocks cross-origin.
+- `tests/test_telegram_routing.py` (14 tests): zero-project behaviour, single
+  project auto-selection, multi-project selection, `/project`, `/new`, and the
+  deterministic command guards. Suite: **132 passed**.
 
 ## v0.2.0 — 2026-10-14
 

@@ -435,9 +435,15 @@ class PerunTelegramBridge:
     def run_message(self, chat_id: str, text: str, message_id: int) -> None:
         proj = self._current_project(chat_id)
         if not proj:
-            self.send(chat_id, "Multiple projects registered — pick one with "
-                               "`/project <name>` (`/projects` to list).",
-                      reply_to=message_id)
+            if not registry.list_projects():
+                self.send(chat_id, "No projects registered yet. Run "
+                                   "`python -m perun discover` (or open the "
+                                   "dashboard) to add one, then try again.",
+                          reply_to=message_id)
+            else:
+                self.send(chat_id, "Multiple projects registered — pick one with "
+                                   "`/project <name>` (`/projects` to list).",
+                          reply_to=message_id)
             return
         link = self._chat_state(chat_id)
         session_pk = link.get("session_pk")
