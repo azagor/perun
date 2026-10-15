@@ -243,13 +243,16 @@ def delete_session(pk: int) -> None:
 # --------------------------------------------------------------------------- #
 def create_run(run_uid: str, project_id: int, prompt: str, *,
                session_pk: int | None = None, opencode_session_id: str = "",
-               model: str = "", agent: str = "") -> dict[str, Any]:
+               model: str = "", model_explicit: bool = False,
+               agent: str = "") -> dict[str, Any]:
     with db.db() as conn:
         conn.execute(
             """INSERT INTO runs
-               (run_uid,project_id,session_pk,opencode_session_id,prompt,model,agent,status)
-               VALUES (?,?,?,?,?,?,?, 'queued')""",
-            (run_uid, project_id, session_pk, opencode_session_id, prompt, model, agent),
+               (run_uid,project_id,session_pk,opencode_session_id,prompt,
+                model,model_explicit,agent,status)
+               VALUES (?,?,?,?,?,?,?,?, 'queued')""",
+            (run_uid, project_id, session_pk, opencode_session_id, prompt,
+             model, int(bool(model_explicit)), agent),
         )
         row = db.one(conn, "SELECT * FROM runs WHERE run_uid=?", (run_uid,))
         return dict(row)
@@ -296,7 +299,8 @@ def list_active_runs() -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(
             conn,
-            """SELECT r.run_uid, r.status, r.prompt, r.model, r.agent,
+            """SELECT r.run_uid, r.status, r.prompt, r.model, r.model_explicit,
+                      r.agent,
                       r.session_pk, r.opencode_session_id,
                       r.started_at,
                       p.slug AS project_slug, p.name AS project_name,
@@ -306,6 +310,85 @@ def list_active_runs() -> list[dict[str, Any]]:
                ORDER BY r.id DESC""",
         )
         return [dict(r) for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Tasks (reusable project actions)
+# --------------------------------------------------------------------------- #
+def _task_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    try:
+        d["tools"] = json.loads(d.get("tools") or "[]")
+    except Exception:
+        d["tools"] = []
+    try:
+        d["skills"] = json.loads(d.get("skills") or "[]")
+    except Exception:
+        d["skills"] = []
+    return d
+
+
+def create_task(project_id: int, *, name: str, kind: str = "prompt",
+                prompt: str = "", tools: list[str] | None = None,
+                skills: list[str] | None = None, enabled: bool = True,
+                sort_order: int = 0) -> dict[str, Any]:
+    ts = now_iso()
+    with db.db() as conn:
+        conn.execute(
+            """INSERT INTO tasks
+               (project_id, name, kind, prompt, tools, skills, enabled,
+                sort_order, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (project_id, name, kind, prompt,
+             json.dumps(tools or []), json.dumps(skills or []),
+             int(bool(enabled)), sort_order, ts, ts),
+        )
+        row = db.one(conn, "SELECT * FROM tasks WHERE id=last_insert_rowid()")
+        return _task_dict(row)
+
+
+def update_task(task_id: int, **fields: Any) -> dict[str, Any] | None:
+    allowed = {"name", "kind", "prompt", "tools", "skills", "enabled", "sort_order"}
+    sets: dict[str, Any] = {}
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k in ("tools", "skills"):
+            sets[k] = json.dumps(v if isinstance(v, list) else [])
+        elif k == "enabled":
+            sets[k] = int(bool(v))
+        else:
+            sets[k] = v
+    if not sets:
+        return get_task(task_id)
+    sets["updated_at"] = now_iso()
+    cols = ", ".join(f"{k}=?" for k in sets)
+    with db.db() as conn:
+        conn.execute(f"UPDATE tasks SET {cols} WHERE id=?", (*sets.values(), task_id))
+        row = db.one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
+        return _task_dict(row) if row else None
+
+
+def get_task(task_id: int) -> dict[str, Any] | None:
+    with db.db() as conn:
+        row = db.one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
+        return _task_dict(row) if row else None
+
+
+def delete_task(task_id: int) -> None:
+    with db.db() as conn:
+        conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+
+
+def list_tasks(project_id: int, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+    with db.db() as conn:
+        sql = "SELECT * FROM tasks WHERE project_id=?"
+        params: list[Any] = [project_id]
+        if enabled_only:
+            sql += " AND enabled=1"
+        sql += " ORDER BY sort_order, id"
+        rows = db.rows(conn, sql, params)
+        return [_task_dict(r) for r in rows]
 
 
 # --------------------------------------------------------------------------- #

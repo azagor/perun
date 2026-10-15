@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS runs (
     opencode_session_id  TEXT,
     prompt               TEXT NOT NULL,
     model                TEXT DEFAULT '',
+    model_explicit       INTEGER DEFAULT 0,
     agent                TEXT DEFAULT '',
     status               TEXT DEFAULT 'queued',
     exit_code            INTEGER,
@@ -76,6 +77,21 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    kind          TEXT DEFAULT 'prompt',
+    prompt        TEXT DEFAULT '',
+    tools         TEXT DEFAULT '[]',
+    skills        TEXT DEFAULT '[]',
+    enabled       INTEGER DEFAULT 1,
+    sort_order    INTEGER DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 
 CREATE TABLE IF NOT EXISTS activity (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +183,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("git_remote", "TEXT DEFAULT ''"),
         ("git_branch", "TEXT DEFAULT ''"),
         ("git_provider", "TEXT DEFAULT ''"),
+    ],
+    "runs": [
+        ("model_explicit", "INTEGER DEFAULT 0"),
     ],
 }
 

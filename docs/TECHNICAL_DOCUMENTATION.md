@@ -1,27 +1,19 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.5.0 — a **UI-consistency pass** on the dashboard plus the
-ability to point Perun at a **different Telegram bot** from the Telegram page.
-Project cards are now uniform (`Open` / `Run`, with `Run` replacing the
-ambiguous `Ask`), the orchestrator chat is reachable only from the left toolbar,
-and the new "Bot settings" card edits the bot name, API key (masked, never
-echoed, verified with `getMe` before it is saved) and chat ids, with a one-click
-**bridge restart** so the new bot actually takes effect. It builds on v0.4.0
-(Perun is **installable from one command** — `bootstrap.ps1` /
-`python -m perun install --machine` checks prerequisites, installs dependencies,
-wires the global OpenCode integration, and registers the single-instance
-**`PerunBridge`** logon task, so a fresh machine can be brought up without
-hand-editing Task Scheduler), v0.3.0 (the **control plane** — an
-always-present orchestrator reachable with zero projects registered, a
-**dashboard chat for the orchestrator** with its own custom instructions and a
-searchable model picker, project-management MCP tools, the **storm layer** (Perun's
-lightning + glowing eyes as live idle/awake/working feedback), and the
-**one-click Windows launcher** `Perun.cmd`), v0.2.1 (security
-hardening: anti-CSRF / anti-DNS-rebinding guard on `/api/*`, plus stored-XSS
-fixes), v0.2.0 (project management: creation wizard, per-project Git, custom
-project instructions, self-describing `perun.md` manifest, model picker), and the
-v0.1.0 core (machine-wide registry + unified memory, agent orchestrator, web
-dashboard, shared Telegram bridge, and a globally-installed MCP server).
+**Latest release:** v0.6.0 — a **TUI-first workflow**. The Agent Console and
+project cards now launch the OpenCode TUI with a composed prompt and queued tasks;
+Perun tracks the external terminal process so runs auto-finalize when the user
+closes the window, and the Stop button kills the tracked process tree. The
+previous headless streaming path for `opencode-go/*` models was removed because
+those models can only run inside the OpenCode TUI. Added `perun/process_tracker.py`
+for external-process lifecycle tracking, `POST /api/runs/tui`,
+`POST /api/runs/{uid}/finish`, and `POST /api/runs/{uid}/kill`. Also includes
+reusable project tasks (`tasks` table + CRUD + UI tab). Builds on v0.5.0
+(UI-consistency pass + Telegram bot switching + Agent Console dropdown fixes +
+`Settings.terminal`), v0.4.0 (one-command machine install), v0.3.0 (control plane
++ orchestrator chat + storm layer + `Perun.cmd`), v0.2.1 (security hardening),
+v0.2.0 (project management + Git + manifest), and v0.1.0 (registry + memory +
+orchestrator + dashboard + Telegram bridge + MCP server).
 
 ---
 
@@ -89,7 +81,7 @@ can all write concurrently.
 |---|---|---|
 | `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `instructions`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch` |
 | `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `message_count`, `status` |
-| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout}, `output`, `error` |
+| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 when `--model` was explicitly requested), `agent`, `output`, `error` |
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
 | `memory` | facts | `scope` ∈ {global,project}; **`scope='global'` rows use `project_id=0`**; `UNIQUE(scope,project_id,content_hash)` |
 | `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)` |
@@ -97,8 +89,8 @@ can all write concurrently.
 | `bridge_links` | Telegram routing | `chat_id` → `project_id` + `session_pk` |
 
 Column additions after v0.1.0 are applied idempotently by `db._ADDED_COLUMNS`
-(`instructions`, `manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`), so
-existing databases migrate in place.
+(`instructions`, `manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
+`runs.model_explicit`), so existing databases migrate in place.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
 `UNIQUE(scope, project_id, content_hash)` constraint would not dedupe global
@@ -186,15 +178,26 @@ injected only when a **new** session starts: `orchestrator.compose_prompt()`
 prepends
 
 ```
-<perun:project_instructions>
+[PERUN PROJECT INSTRUCTIONS]
 …rules…
-</perun:project_instructions>
+[END PERUN PROJECT INSTRUCTIONS]
 
 <user prompt>
 ```
 
+(The previous XML-style delimiters were dropped because models interpreted them
+as markup and sometimes discarded the prompt that followed.)
+
 Continuations of an existing session inherit the rules from history, so they are
 not re-injected. The raw user prompt is what gets stored on the run row.
+
+**Model/agent overrides are explicit only.** Perun resolves model/agent as
+`explicit call/project field → control-plane settings`, but the **global**
+`default_model` / `default_agent` are no longer forced onto ordinary project runs.
+That lets OpenCode use its own project defaults when the Model/Agent fields are
+left empty, avoiding surprising provider errors from a machine-wide default. The
+run row records whether the model was explicit (`model_explicit=1`) so `_execute`
+knows whether to pass `--model` to `opencode run`.
 
 ### The control plane (always-available orchestrator)
 
@@ -276,9 +279,12 @@ Free-form notes rendered on the project page.
 
 `Orchestrator.start_run(project, prompt, …)`:
 
-1. resolves model/agent with a control-only tier: explicit call arg → project
-   override → (when the target `is_control`) `Settings.orchestrator_model` /
-   `orchestrator_agent` → global `default_model` / `default_agent`,
+1. resolves model/agent: explicit call arg → project override → (when the target
+   `is_control`) `Settings.orchestrator_model` / `orchestrator_agent`. The global
+   `default_model` / `default_agent` are used **only for the control plane**, not
+   for ordinary projects, so an empty Model/Agent field lets OpenCode use its own
+   project defaults. The run records `model_explicit=1` when a model was
+   explicitly chosen.
 2. writes a `runs` row (`status=queued`) and an activity entry,
 3. spawns a daemon thread running `_execute`, guarded by
    `threading.Semaphore(max_concurrent_runs)`.
@@ -286,13 +292,15 @@ Free-form notes rendered on the project page.
 `_execute` runs (Windows-aware via `resolve_opencode`):
 
 ```
-opencode run --format json --auto [--model M] [--agent A]
+opencode run --format json --auto [--model M only if model_explicit] [--agent A only if explicit]
              [--session <oc_id>] --title "Perun · …" -- <prompt>
 ```
 
-with `cwd` set to the **target project path** — no positional directory
-argument. stdout is streamed line-by-line to `~/.perun/runs/<uid>.log`, parsed
-by `parse_event()`, and fanned out through `EventBus` as normalized events:
+`--model` is passed only when `model_explicit=1`; `--agent` is passed only when
+an agent value is set. With `cwd` set to the **target project path** — no
+positional directory argument. stdout is streamed line-by-line to
+`~/.perun/runs/<uid>.log`, parsed by `parse_event()`, and fanned out through
+`EventBus` as normalized events:
 
 | event | meaning |
 |---|---|
@@ -300,12 +308,15 @@ by `parse_event()`, and fanned out through `EventBus` as normalized events:
 | `session` | learned the OpenCode session id |
 | `text` | assistant text delta |
 | `tool` | tool invocation + status |
-| `error` | error frame |
+| `error` / `provider.*` | error frame; `provider.*` events are treated as provider-side errors |
 | `end` | terminal: `status`, `exit_code`, `reply`, `error` |
 
 Error frames observed on stdout are also collected and, when a run ends with no
 reply, joined into the run's persisted `error` field so a finished failure stays
-explainable in the dashboard.
+explainable in the dashboard. Provider-side errors that occur **after** a session
+id has been learned (`provider.quota`, `provider.invalid-request`, etc.) set the
+run status to `provider_error` rather than `failed`, and the `sessions` row stays
+`active` so the user can continue the session once the provider issue is resolved.
 
 `_finalize()` writes the terminal status, keeps the `sessions` row in sync
 (creating one on first sight of a new OpenCode session id), and publishes `end`.
@@ -324,6 +335,9 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
+| GET | `/api/agents` | OpenCode agents: built-ins (`build`,`plan`,`general`,`explore`) + user-defined agents on disk (+ `count`) |
+| GET | `/api/skills` | OpenCode skills: global `~/.config/opencode/skills/` + project-local `.opencode/skills/` + runtime built-ins (`code-audit`, `android-design-guidelines`, `find-skills`) (+ `count`) |
+| GET | `/api/tools` | OpenCode tools: built-ins + custom `.ts/.js/.mjs` under `~/.config/opencode/tools/` and project-local `.opencode/tools/` (+ `count`) |
 | GET | `/api/projects` | list projects |
 | POST | `/api/projects` | wizard: register / create / clone `{method,path,…}` |
 | GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
@@ -331,6 +345,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | DELETE | `/api/projects/{slug}` | unregister (refuses the control project) |
 | POST | `/api/projects/{slug}/index` | sync manifest, then index docs |
 | GET | `/api/projects/{slug}/sessions` | sessions |
+| POST | `/api/projects/{slug}/session` | start an OpenCode session for this project; `prompt` is optional |
 | DELETE | `/api/sessions/{pk}` | delete a session |
 | GET | `/api/projects/{slug}/activity` | project activity |
 | GET | `/api/projects/{slug}/memory` | project facts + stats |
@@ -347,13 +362,21 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/projects/{slug}/git/push` | push branch |
 | GET | `/api/fs/list` | folder browser listing |
 | POST | `/api/fs/mkdir` | create a directory |
+| POST | `/api/run-in-terminal` | open the configured terminal/shell with a command `{cwd,command,shell?,run_uid?}`; `run_uid` links the terminal to a TUI run record for lifecycle tracking |
+| GET | `/api/projects/{slug}/tasks` | list reusable project tasks |
+| POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}` (`sort_order` is legacy/ignored by UI) |
+| PATCH | `/api/projects/{slug}/tasks/{task_id}` | update a task |
+| DELETE | `/api/projects/{slug}/tasks/{task_id}` | delete a task |
 | POST | `/api/discover` | scan roots & register |
 | GET | `/api/discover/scan` | dry-run scan |
 | GET | `/api/runs` | recent runs (`?project=`) |
 | GET | `/api/runs/active` | queued/running runs joined with their project (the live storm layer) |
-| POST | `/api/runs` | start a run `{project,prompt,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator |
+| POST | `/api/runs` | start a headless run `{project,prompt?,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator; an omitted `prompt` uses a default starter prompt |
+| POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?}` |
 | GET | `/api/runs/{run_uid}` | run status/output |
-| POST | `/api/runs/{run_uid}/cancel` | cancel |
+| POST | `/api/runs/{run_uid}/cancel` | cancel a headless run **and** terminate a tracked TUI/terminal session |
+| POST | `/api/runs/{run_uid}/finish` | finalize a TUI run record (e.g. user closed the window manually) |
+| POST | `/api/runs/{run_uid}/kill` | terminate the tracked terminal/TUI process for a run and finalize it |
 | GET | `/api/runs/{run_uid}/stream` | **SSE** run events |
 | GET | `/api/stream` | **SSE** global run events + activity |
 | POST | `/api/memory/remember` | store a fact |
@@ -544,8 +567,15 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   **⟳ Restart bridge**, and the send-a-message form. Settings keeps only a
   pointer to it, so there is one source of truth.
 * **Searchable model picker** (`modelSelect`): a reusable combobox that filters
-  the structured `/api/models` catalogue with a live search bar; the native
-  `<datalist>` is kept for wizard/manifest inputs.
+  the structured `/api/models` catalogue with a live search bar.
+* **Searchable agent picker** (`agentSelect`): a similar combobox populated from
+  `GET /api/agents`, which returns OpenCode's built-in agents (`build`, `plan`,
+  `general`, `explore`) plus any user-defined agents found under
+  `~/.config/opencode/agents/` or `.opencode/agents/` in the project. If the
+  endpoint is empty or unavailable the UI falls back to the built-in list so the
+  dropdown is never empty.
+* The native `<datalist>` (`model-root`) was removed; the custom `mselect`
+  components provide their own search panels.
 * **Storm layer** (`perunFx`): a full-viewport `<canvas>` lightning engine plus an
   animated brand sigil whose **eyes glow**. Three escalating states — **idle**,
   **awake** (a project touched in the last 15 min), **storm** (≥1 run running) —
@@ -570,7 +600,7 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 |---|---|---|
 | `roots` | `C:/my_apps` + `~/projects`/`~/src`/`~/code` that exist | discovery roots |
 | `host` / `port` | `127.0.0.1` / `8760` | dashboard bind |
-| `default_model` / `default_agent` | `""` | fallbacks when a project has none |
+| `default_model` / `default_agent` | `""` | fallbacks **only for the control plane**; ordinary projects fall back to OpenCode's own defaults when these are empty |
 | `orchestrator_model` / `orchestrator_agent` | `""` | control-plane (orchestrator) model/agent, outranking the global default |
 | `orchestrator_instructions` | `""` | machine-wide persona/rules injected into every orchestrator prompt |
 | `max_concurrent_runs` | `3` | orchestrator semaphore |
@@ -587,3 +617,53 @@ Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
 `TELEGRAM_CHAT_ID`. A config.json value wins over the environment;
 `Settings.telegram_sources()` reports which is actually in force (surfaced as
 `token_source` / `chats_source` so the dashboard can explain it).
+
+---
+
+## 14. Revision history
+
+### 2026-10-14 — Agent Console & session-start improvements
+
+* **Empty-prompt session start.** The Agent Console `Run` button and
+  `POST /api/runs` no longer require a prompt; an omitted prompt uses the default
+  starter prompt `"Start a working session for this project."`.
+* **New CLI command:** `python -m perun run <slug> [prompt] [--model M]
+  [--agent A] [--title T] [--wait]`.
+* **New endpoint:** `POST /api/projects/{slug}/session` starts a session for a
+  specific project with an optional prompt.
+* **Agent dropdown.** The Agent Console's free-text Agent input is now a
+  searchable `agentSelect` populated from `GET /api/agents` (built-ins + agents on
+  disk); a built-in fallback prevents an empty list.
+* **Model/agent overrides are explicit only.** The global `default_model` /
+  `default_agent` are no longer forced onto ordinary project runs; Perun only
+  passes `--model` / `--agent` to OpenCode when explicitly requested. Added
+  `runs.model_explicit` column to track this.
+* **Provider errors keep sessions active.** If a session id is learned but the
+  provider returns an error (`provider.quota`, `provider.invalid-request`, …), the
+  run status is `provider_error` (not `failed`) and the session row stays active.
+* **Instruction delimiter fix.** Project instructions now use plain-text
+  `[PERUN PROJECT INSTRUCTIONS]` / `[END PERUN PROJECT INSTRUCTIONS]` instead of
+  XML-style tags that models were interpreting as markup.
+* **UI cleanup.** Removed the native `<datalist>` / `#model-root` machinery and
+  tightened `.mselect` styling so dropdowns fit the Agent Console layout.
+* **Tests:** full suite updated to **195 passed**.
+
+### 2026-10-14 — v0.5.0 UI-consistency + Telegram bot switch
+
+* Uniform project cards (`Open` / `Run`), `Run` replaces ambiguous `Ask`.
+* Orchestrator chat reachable only from the left toolbar.
+* Telegram page "Bot settings" card with masked, `getMe`-verified API key and
+  one-click bridge restart.
+
+### Earlier releases
+
+* v0.4.0 — Machine install (`bootstrap.ps1` / `python -m perun install --machine`)
+  with prerequisites, deps, global OpenCode integration, and the `PerunBridge`
+  logon task.
+* v0.3.0 — Control plane (always-available orchestrator), orchestrator chat,
+  project-management MCP tools, storm layer, `Perun.cmd` launcher.
+* v0.2.1 — Anti-CSRF / anti-DNS-rebinding guard on `/api/*`, stored-XSS fixes.
+* v0.2.0 — Project creation wizard, per-project Git, custom instructions,
+  `perun.md` manifest, model picker.
+* v0.1.0 — Machine-wide registry + unified memory, agent orchestrator, web
+  dashboard, shared Telegram bridge, globally-installed MCP server.

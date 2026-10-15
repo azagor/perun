@@ -11,6 +11,7 @@ Usage::
     python -m perun remember <text> [--project SLUG] [--global] [--topic T]
     python -m perun recall <query> [--project SLUG] [--k N] [--all]
     python -m perun index <slug> [--all]
+    python -m perun run <slug> [prompt] [--model M] [--agent A] [--title T] [--wait]
     python -m perun import-legacy-memory [--path P]
     python -m perun install [--uninstall] [--machine]
     python -m perun mcp
@@ -245,6 +246,36 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Start an OpenCode session for a project.
+
+    If no prompt is supplied, Perun sends a default starter prompt so the session
+    is opened in the project's scope immediately.
+    """
+    _ensure()
+    from .orchestrator import Orchestrator
+
+    project = registry.get_project(args.slug)
+    if not project:
+        print(f"no such project: {args.slug}")
+        return 1
+    orch = Orchestrator()
+    prompt = (args.prompt or "").strip()
+    kwargs = {"model": args.model or "", "agent": args.agent or "",
+              "title": args.title or ""}
+    if args.wait:
+        final = orch.run_and_wait(args.slug, prompt, **kwargs)
+        run = final["run"]
+        print(f"[perun] run {run['run_uid']} finished for {args.slug} [{run.get('status')}]")
+        if final["reply"]:
+            print(final["reply"])
+        return 0 if run.get("status") == "done" else 1
+    run = orch.start_run(args.slug, prompt, **kwargs)
+    print(f"[perun] run {run['run_uid']} started for {args.slug}")
+    _print({"ok": True, "run": run})
+    return 0
+
+
 def cmd_import_legacy(args: argparse.Namespace) -> int:
     _ensure()
     _print(memory.import_legacy_memory(args.path))
@@ -336,6 +367,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("slug", nargs="?", default=None)
     p.add_argument("--all", action="store_true")
     p.set_defaults(func=cmd_index)
+
+    p = sub.add_parser("run", help="start an OpenCode session for a project")
+    p.add_argument("slug", help="project slug")
+    p.add_argument("prompt", nargs="?", default="",
+                   help="initial prompt (optional; a starter prompt is used if omitted)")
+    p.add_argument("--model", default="")
+    p.add_argument("--agent", default="")
+    p.add_argument("--title", default="",
+                   help="session title (default: Perun · project · run id)")
+    p.add_argument("--wait", action="store_true",
+                   help="wait for the run to finish and print the reply")
+    p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("import-legacy-memory",
                        help="migrate ~/.config/opencode/memory.db into Perun")

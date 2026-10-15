@@ -42,3 +42,28 @@ def test_recall_with_non_ascii_memory_does_not_crash(monkeypatch):
     rc = cli.main(["recall", "telegram bridge route", "--all", "--k", "3"])
     wrapper.flush()
     assert rc == 0
+
+
+def test_run_command_starts_session_for_project(monkeypatch, capsys):
+    from perun import orchestrator, registry
+
+    db.init_db()
+    registry.add_project("P", r"C:\p")
+    calls: list = []
+
+    def fake_start(self, ref, prompt, **kw):  # noqa: ANN001, ANN003
+        calls.append((ref, prompt))
+        return {"run_uid": "runCLI", "status": "queued"}
+
+    monkeypatch.setattr(orchestrator.Orchestrator, "start_run", fake_start)
+    rc = cli.main(["run", "p"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out
+    # No prompt supplied: cmd_run passes an empty prompt to start_run, which
+    # substitutes the default starter prompt internally.
+    assert calls == [("p", "")]
+    # Explicit prompt is passed through.
+    rc = cli.main(["run", "p", "hello"])
+    assert rc == 0
+    assert calls[-1] == ("p", "hello")

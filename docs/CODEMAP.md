@@ -8,12 +8,13 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.4.0"`).
+Package docstring + `__version__` (`"0.6.0"`).
 
 ### `perun/config.py`
 Filesystem layout + persisted settings.
 * Constants: `PACKAGE_DIR`, `REPO_ROOT`, `HOME`, `DB_PATH`, `CONFIG_PATH`,
-  `LOGS_DIR`, `RUNS_DIR`, `WEB_DIR`, `MCP_SERVER`, `TEMPLATES_DIR`.
+  `LOGS_DIR`, `RUNS_DIR`, `WEB_DIR`, `MCP_SERVER`, `TEMPLATES_DIR`,
+  `OPENCODE_CONFIG_DIR`.
 * `_resolve_home()`, `_default_roots()`, `is_control_path()` (True when a path is
   the Perun repo root — identifies the control-plane project, so it can never be
   confused with a user project).
@@ -21,23 +22,27 @@ Filesystem layout + persisted settings.
   orchestrator_model orchestrator_agent orchestrator_instructions
   max_concurrent_runs run_timeout ollama_host embed_model embed_dim
   telegram_token telegram_bot_name telegram_allowed_chats auto_discover_on_start
-  index_docs_on_discover`.
+  index_docs_on_discover terminal`.
   * `Settings.load()`, `Settings.save()`, `Settings.to_dict()`,
     `Settings.telegram()` (config first, then `TELEGRAM_BOT_TOKEN` /
     `TELEGRAM_CHAT_ID`), `Settings.telegram_sources()` (which of the two is in
     force: `settings` | `env` | `""`, surfaced by the dashboard).
+  * `Settings.terminal_cmd(shell_hint=…)` returns the argv to launch the
+    configured/default terminal emulator.
+  * `Settings.terminal_sources()` reports where the effective terminal comes from
+    (`settings` | `os` | `""`).
 * `ensure_dirs()`, `settings()`.
 
 ### `perun/db.py`
 SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
-`activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`.
+`activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`, `tasks`.
 * `SCHEMA`, `_ADDED_COLUMNS` (idempotent column migrations:
   `projects.instructions`, `projects.manifest`, `projects.manifest_path`,
   `projects.manifest_loaded_at`, `projects.git_*`), `connect()`, `db()` (context
   manager), `init_db()`, `rows()`, `one()`.
 
 ### `perun/registry.py`
-Registry CRUD (projects, sessions, runs, activity, bridge links).
+Registry CRUD (projects, sessions, runs, tasks, activity, bridge links).
 * Helpers: `now_iso()`, `slugify()`, `project_dict()` (parses the stored
   manifest snapshot, adds `has_manifest` and `is_control` — set from
   `config.is_control_path()`).
@@ -49,6 +54,8 @@ Registry CRUD (projects, sessions, runs, activity, bridge links).
 * Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`,
   `list_active_runs()` (queued/running runs joined with their project — the data
   behind the dashboard storm layer).
+* Tasks: `create_task()`, `update_task()`, `get_task()`, `list_tasks()`,
+  `delete_task()` (reusable project tasks queued into the TUI prompt chain).
 * Activity: `log_activity()`, `list_activity()`.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 
@@ -90,6 +97,12 @@ Find & register OpenCode projects under roots.
   `register()` (merges any `perun.md`/`perun.json` manifest),
   `discover_and_sync()`, `register_self()`.
 
+### `perun/agents.py`
+Discover OpenCode agents available to a project.
+* `BUILTIN_AGENTS` (`build`, `plan`, `general`, `explore`)
+* `_scan_agent_dir()`, `_parse_frontmatter()`, `_agent_id_from_path()`.
+* `list_agents(project_path)` — built-ins + global + project-local agents.
+
 ### `perun/scaffold.py`
 Starter-project skeleton + directory creation.
 * `ScaffoldError`, `create_dir()`, `bootstrap()` (writes `opencode.json`,
@@ -112,7 +125,7 @@ body) with a `perun.json` fallback.
   `default_body()`.
 
 ### `perun/orchestrator.py`
-Start / stream / cancel `opencode run`.
+Start / stream / cancel headless `opencode run`.
 * `EventBus` (`subscribe`, `unsubscribe`, `publish`, `subscribe_all`,
   `unsubscribe_all`, `close`).
 * Process helpers: `resolve_opencode()`, `terminate_tree()`, `parse_event()`,
@@ -125,6 +138,30 @@ Start / stream / cancel `opencode run`.
   `orchestrator_model`/`orchestrator_agent` → global `default_model`/`default_agent`.
 * Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `INSTRUCTION_OPEN`,
   `INSTRUCTION_CLOSE`.
+
+### `perun/skills.py`
+Discovery of OpenCode agent skills and tools available to a project.
+* `BUILTIN_SKILLS` — runtime-provided OpenCode skills (`code-audit`,
+  `android-design-guidelines`, `find-skills`) always surfaced by `discover_skills()`.
+* `BUILTIN_TOOLS` — documented built-in OpenCode tools.
+* `_read_skill_manifest()`, `discover_skills()` — scan global
+  ``~/.config/opencode/skills/`` and project-local ``.opencode/skills/`` for
+  ``SKILL.md`` files with YAML front matter.
+* `_export_names()`, `discover_tools()` — scan ``~/.config/opencode/tools/`` and
+  project-local ``.opencode/tools/`` for custom TypeScript/JavaScript tool
+  definitions, merging them with the built-in tool set.
+* Used by `/api/skills` and `/api/tools`.
+
+### `perun/process_tracker.py`
+Lifecycle tracking for externally-launched TUI/terminal sessions.
+* `ProcessTracker`: `register()`, `get()`, `is_alive()`, `terminate()`,
+  `finalize()`, `_resolve_child_pid()`, `_kill_tree()`, `_watch_loop()`.
+* Uses `psutil` to walk process trees and resolve Windows Terminal child
+  processes. The frontend injects a `PERUN_RUN_UID` environment marker into the
+  shell command so the tracker can find the TUI process even when the launcher has
+  already exited.
+* `TRACKER` — module-level singleton used by `/api/run-in-terminal`,
+  `/api/runs/{uid}/cancel`, and `/api/runs/{uid}/kill`.
 
 ### `perun/telegram.py`
 Shared Telegram ⇄ Perun bridge.
@@ -147,17 +184,19 @@ FastAPI app + SSE + static dashboard.
 * Helpers: `_project_or_404()`, `_resolve_project()`, `_control_project()`,
   `_control_slug()`, `_ok()`, `_sse()`, `_max_activity_id()`, `_new_activity()`.
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
-  structured `/api/models`), projects (`/api/projects…` incl. the creation wizard,
-  `/api/projects/{slug}/instructions`, `/api/projects/{slug}/manifest…`,
-  `/api/projects/{slug}/git…`; `DELETE` refuses the control project), filesystem
-  (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
-  (`/api/runs…`, `/api/runs/active` — declared before `/api/runs/{id}` —
-  `/api/runs/{id}/stream`, `/api/stream`; `POST /api/runs` defaults to the
-  orchestrator), memory (`/api/memory/*`), activity (`/api/activity`), settings
-  (`/api/settings` — GET never echoes `telegram_token`), telegram
-  (`/api/telegram/*`: `status` reports `token_source`/`chats_source`/`bridge_task`,
-  `bot` verifies a new token with `getMe` before saving, `bridge/restart`
-  restarts the logon task, `send`).
+  structured `/api/models`), terminals (`/api/terminals`), projects
+  (`/api/projects…` incl. the creation wizard, `/api/projects/{slug}/instructions`,
+  `/api/projects/{slug}/manifest…`, `/api/projects/{slug}/git…`,
+  `/api/projects/{slug}/tasks…`; `DELETE` refuses the control project),
+  filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
+  (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
+  `/api/runs/{uid}/kill` — declared before `/api/runs/{uid}` —
+  `/api/runs/{uid}/stream`, `/api/stream`; `POST /api/runs` defaults to the
+  orchestrator), run-in-terminal (`/api/run-in-terminal`), memory
+  (`/api/memory/*`), activity (`/api/activity`), settings (`/api/settings` — GET
+  never echoes `telegram_token`), telegram (`/api/telegram/*`: `status` reports
+  `token_source`/`chats_source`/`bridge_task`, `bot` verifies a new token with
+  `getMe` before saving, `bridge/restart` restarts the logon task, `send`).
 * `_register_project()`, `_sync_manifest()`, `serve()` (uvicorn launcher).
 
 ### `perun/__main__.py`
@@ -220,17 +259,17 @@ stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
   the storm/FX styles (sigil eyes, storm meter, `.is-awake` / `.is-working`,
   `.card-pip`, `.perun-flash`), with a `prefers-reduced-motion` guard.
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
-  `router()`, `renderMarkdown()`, `modelSelect()`, the `perunFx` canvas engine
-  (`flash()`), presence (`presence`, `computePresence()`, `pipState()`,
-  `applyCardStates()`, `refreshPresence()`, `updateStormMeter()`), and the view
-  renderers (`viewDashboard`, `viewOrchestrator`, `viewProjects`, `projectWizard`,
-  `browseFolder`, `viewProject`, `mountGit`, `mountManifest`, `manifestOverview`,
-  `projectInstructionsForm`, `viewConsole`, `viewMemory`, `viewActivity`,
-  `viewTelegram`, `mountTelegram`, `viewSettings`), `mountConsole()`,
-  `streamRun()`, `streamOrchestrator()`. Project cards are uniform: `projectCard()`
-  renders the same `Open` / `Run` (Agent Console) / `Index docs` actions for
-  **every** project including the orchestrator; the orchestrator chat lives only
-  in the sidebar (`Orchestrator Chat`).
+  `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `terminalId()`,
+  `buildCommand()`, `launchInTerminal()`, the `perunFx` canvas engine (`flash()`),
+  presence (`presence`, `computePresence()`, `pipState()`, `applyCardStates()`,
+  `refreshPresence()`, `updateStormMeter()`), and the view renderers (`viewDashboard`,
+  `viewOrchestrator`, `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`,
+  `mountGit`, `mountManifest`, `manifestOverview`, `projectInstructionsForm`,
+  `viewConsole`, `viewMemory`, `viewActivity`, `viewTelegram`, `mountTelegram`,
+  `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`.
+  Project cards (`projectCard()`) render `🖵 OpenCode` (primary TUI launch),
+  `■ Stop`, `Open`, `Index docs`, and delete actions for every project; the
+  orchestrator chat lives only in the sidebar (`Orchestrator Chat`).
 * `web/assets/Cinzel.ttf` — heading font (shared with the company site).
 * `web/assets/perun.ico` / `perun.png` — gold-bolt app icon (favicon + Windows
   shortcut), generated by `tools/make_icon.py`.
@@ -273,6 +312,10 @@ stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
 * `test_git.py` — the `git` CLI wrapper against a temp repository.
 * `test_orchestrator.py` — `parse_event`, `resolve_opencode`, `EventBus`,
   `compose_prompt` instructions injection, end-to-end stdout-error capture.
+* `test_process_tracker.py` — `ProcessTracker` registration, lifecycle, marker
+  resolution, watcher auto-finalization, and run-record cleanup.
+* `test_agents.py` — OpenCode agent discovery (`perun/agents.py`).
+* `test_skills.py` — OpenCode skill/tool discovery (`perun/skills.py`).
 * `test_telegram_lock.py` — mutex namespacing, side-effect-free `is_held()`, and
   the second-acquire-is-refused guarantee (the bridge can never multiply).
 * `test_telegram_routing.py` — `_current_project` routing (single-project

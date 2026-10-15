@@ -2,6 +2,90 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.6.0 - 2026-10-15
+
+A **TUI-first workflow** for Perun. The dashboard no longer tries to stream
+`opencode-go/*` models headlessly; instead, the Agent Console and every project
+card launch the OpenCode TUI with the composed prompt and queued tasks, and
+Perun tracks the external terminal process so runs auto-finalize when the user
+closes the window.
+
+### Changed
+
+- **Agent Console is now a TUI launcher.** The chat-style streaming output was
+  removed because `opencode-go/*` models can only run inside the OpenCode TUI.
+  The console is now a prompt composer + task queue + launch log. The primary
+  button is **🖵 OpenCode** and always opens the selected project's TUI with the
+  prompt chain.
+- **Project card primary action is 🖵 OpenCode.** The previous headless `Run`
+  flow is gone; the card opens the TUI directly and the project lights up as
+  active.
+- **Stop button kills the TUI window.** For tracked TUI sessions, Stop now calls
+  `/api/runs/{uid}/kill`, which terminates the terminal process tree and
+  finalizes the run record.
+
+### Added
+
+- **`perun/process_tracker.py`** — lifecycle tracking for externally-launched
+  terminal/TUI processes. Uses `psutil` to walk process trees, resolves Windows
+  Terminal child processes via an injected `PERUN_RUN_UID` environment marker,
+  kills the tree on request, and auto-finalizes the matching run record when the
+  window closes.
+- **`POST /api/runs/tui`** — create a lightweight `running` run record for an
+  externally-launched TUI session.
+- **`POST /api/runs/{uid}/finish`** — manually finalize a TUI run record.
+- **`POST /api/runs/{uid}/kill`** — terminate the tracked terminal/TUI process
+  for a run and finalize it.
+- **`POST /api/run-in-terminal`** now accepts `run_uid` to link the opened
+  terminal to a TUI run record.
+- **`/api/runs/{uid}/cancel`** now cancels headless runs through the orchestrator
+  *and* terminates tracked TUI sessions, so the Stop button works everywhere.
+- Reusable **project tasks** (`tasks` table + CRUD API + UI tab) that can be
+  queued into the prompt chain before launching the TUI.
+- **Created `perun.md` manifests** for Perun, `trading-bot`, and
+  `parental-control` and loaded them into the registry so the dashboard shows
+  descriptions, tags, docs links, and anchors for every project.
+- **`perun/skills.py`** — discovery of OpenCode skills and tools available to a
+  project. Surfaced via `GET /api/skills` and `GET /api/tools`, and used to
+  populate searchable multi-select dropdowns in the Tasks tab.
+- **`GET /api/skills`** and **`GET /api/tools`** — list skills/tools for a
+  project, combining global OpenCode config with project-local `.opencode/`
+  directories.
+- **Tasks tab UX:** Skills and Tools are now searchable multi-select dropdowns
+  with checkboxes, fed by `/api/skills` and `/api/tools`. The **Order** field
+  was removed from the UI (the DB column is kept for backwards compatibility);
+  queued tasks are ordered in the Agent Console by their queue position.
+- **Draggable Agent Console queue.** Queued task chips can be dragged to reorder
+  them; the prompt chain is built in the visible queue order.
+- **Deep-linkable project tabs.** URLs like `#/project/<slug>/tasks` or
+  `#/project/<slug>/console` now open directly on the requested tab, so the
+  Tasks/Console tabs are bookmarkable and testable in headless mode.
+- **Skill audit and migration.** Scanned all skill directories on the machine,
+  archived broken/abandoned skills, migrated useful OpenCode-compatible skills
+  into `~/.config/opencode/skills/`, made `kivy-layout-patterns` project-local
+  for `trading_bot`, and created a new project-local `trading-bot-build` skill.
+  Runtime-reserved skill IDs (`android-design-guidelines`, `find-skills`) were
+  removed from the user skills directory so they do not conflict with built-in
+  skills.
+
+### Fixed
+
+- **Production-readiness audit fixes.**
+  - Added server endpoint tests for task CRUD, TUI run lifecycle,
+    `run-in-terminal`, `/api/skills`, and `/api/tools`.
+  - `POST /api/runs/{uid}/cancel` now checks `TRACKER.get(run_uid)` before
+    calling `terminate()`, avoiding unnecessary process-tracking work for
+    headless runs.
+  - `POST /api/runs/tui` now returns the updated run record so its status is
+    `running` in the response.
+  - Multi-select dropdowns no longer let an open panel intercept clicks on a
+    sibling toggle; the toggle has a higher stacking index and opening one
+    dropdown closes any other open dropdown.
+  - Runtime-built-in OpenCode skills (`code-audit`, `android-design-guidelines`,
+    `find-skills`) are now surfaced by `/api/skills` so they appear in the
+    Tasks dropdown, while still preventing user SKILL.md files from shadowing
+    them.
+
 ## v0.5.0 - 2026-10-14
 
 A **UI-consistency pass** over the dashboard, plus the ability to point Perun at
@@ -9,6 +93,16 @@ a **different Telegram bot** without hand-editing `config.json`.
 
 ### Fixed
 
+- **CODEMAP accuracy pass.** Corrected stale/incomplete entries after the v0.6.0
+  refactor: added the `tasks` table and `terminal` setting, documented
+  `ProcessTracker`/`PERUN_RUN_UID` marker behavior, fixed the project-card action
+  description, added the new endpoints (`/api/run-in-terminal`,
+  `/api/projects/{slug}/tasks`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
+  `/api/runs/{uid}/kill`), and added the new test files
+  (`test_process_tracker.py`, `test_agents.py`).
+- **Removed stale `opencode-go/*` model override** from the bundled
+  `trading_bot/opencode.json` so headless runs and TUI launches do not hit the
+  "free tier can only be used from within OpenCode" error.
 - **Project cards are now consistent.** The orchestrator (control-plane) card
   used to be special-cased in two ways: its whole card (including its action
   button) hijacked clicks to the orchestrator chat, and its primary button read
@@ -25,6 +119,22 @@ a **different Telegram bot** without hand-editing `config.json`.
   it now reads `Agent`.
 - The **orchestrator chat is only reachable from the left toolbar** (its nav
   item is now labelled `Orchestrator Chat`), not from a project card.
+- **Agent Console model/agent dropdowns were clipped.** The searchable pickers
+  are built from an absolutely-positioned panel inside `.mselect`, but the
+  wrapper had `overflow: hidden`, which hid the panel below the input. The
+  overflow rule is removed so clicking/tapping Model or Agent opens the full
+  filtered list.
+- **Dedicated terminal/shell chooser.** A new `Settings.terminal` field and a
+  `GET /api/terminals` endpoint let the user pick the preferred command
+  interpreter from the shells detected on the machine (PowerShell 7+ / Windows
+  PowerShell / Command Prompt / Windows Terminal on Windows; current shell /
+  bash / zsh / fish / sh elsewhere). The Agent Console now shows the selected
+  shell in the `📋 Command` and `▶ Terminal` buttons, and `POST
+  /api/run-in-terminal` opens that terminal with the equivalent `opencode run`
+  command.
+- **Settings page dropdowns.** `Default agent` and `Orchestrator agent` are
+  now searchable agent pickers, and `Embed model` is a dropdown of common
+  Ollama embedding models with a custom-value fallback.
 
 ### Added
 
@@ -48,6 +158,44 @@ a **different Telegram bot** without hand-editing `config.json`.
   the page shows a warning, and "Disconnect" is disabled with an explanatory
   tooltip — otherwise it would look broken (the env token would silently take
   over).
+- **Start an OpenCode session for a project without typing a prompt first.**
+  The Agent Console's **Run** button no longer blocks on an empty prompt; when
+  none is supplied Perun uses a default starter prompt (`"Start a working
+  session for this project."`) so the session is created in the selected
+  project's scope. A matching CLI command `python -m perun run <slug> [prompt]`
+  does the same thing from the terminal, and a new REST endpoint
+  `POST /api/projects/{slug}/session` exposes it for integrations.
+- **Agent dropdown in the Agent Console.** The free-text Agent field is now a
+  searchable picker populated with OpenCode's built-in agents (`build`, `plan`,
+  `general`, `explore`) plus any user-defined agents found on disk under
+  `~/.config/opencode/agents/` or `.opencode/agents/` in the project. A new
+  `GET /api/agents` endpoint powers it; if the endpoint is unavailable the UI
+  falls back to the built-in list so the dropdown is never empty.
+- **Model and Agent overrides are now explicit only.** Perun used to fall back
+  to the global `default_model` / `default_agent` settings for every project
+  run, which caused surprising provider errors when those defaults pointed to
+  region-locked or unavailable models. Now an empty Model/Agent field lets
+  OpenCode use its own project defaults; Perun only passes `--model` / `--agent`
+  when the user (or the project's own settings) explicitly supplies one.
+- **Fixed project-instruction injection format.** The previous XML-style tags
+  (`<perun:project_instructions>`) were being interpreted by the model as
+  markup, causing the actual prompt to appear empty. Instructions are now
+  wrapped in plain-text delimiters (`[PERUN PROJECT INSTRUCTIONS]` /
+  `[END PERUN PROJECT INSTRUCTIONS]`) so the starter prompt reaches the agent.
+- **Provider-side failures now keep the session active.** If OpenCode creates a
+  session but the provider returns an error (quota, region, invalid model, …),
+  the run is marked `provider_error` instead of `failed`, and the session row
+  stays `active` so you can continue it from the Session dropdown after fixing
+  the provider issue.
+- **Lightning flourish when Perun replies in the orchestrator chat.** The send
+  already flashed the sigil; now the first streamed text of Perun's reply also
+  triggers `perunFx.flash`, so every assistant turn is preceded by a visible
+  lightning strike.
+- **Copy the equivalent command for PowerShell/Terminal from the Agent
+  Console.** A `📋 Command` button builds the matching `opencode run` invocation
+  for the currently selected project, model, agent, session, and prompt, then
+  copies it to the clipboard so you can paste it into PowerShell Preview and run
+  the same session there.
 
 ### Changed
 
@@ -66,7 +214,17 @@ a **different Telegram bot** without hand-editing `config.json`.
 - `tests/test_installer.py` (+4): `restart_bridge_task()` is a no-op off
   Windows, requires the task, runs `/End` then `/Run`, and survives an `/End`
   failure (a stale/not-running task must not block the re-start).
-- Full suite: **189 passed**.
+- `tests/test_server.py` (+1): `POST /api/projects/{slug}/session` starts a
+  project-scoped session with an optional prompt; `POST /api/runs` no longer
+  rejects an empty prompt.
+- `tests/test_orchestrator.py`: empty prompt now uses the default starter prompt.
+- `tests/test_cli.py` (+1): `python -m perun run <slug> [prompt]` dispatches to
+  the orchestrator.
+- `tests/test_agents.py` (3 tests): built-ins, global custom agents, and
+  project-local agents are discovered from disk.
+- `tests/test_orchestrator.py` (+1): provider errors after session creation keep
+  the session active.
+- Full suite: **195 passed**.
 
 ### Verified
 

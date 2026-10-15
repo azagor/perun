@@ -199,6 +199,25 @@ select { cursor: pointer; }
 
 /* ---------- console ---------- */
 .console-grid { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 18px; align-items: start; }
+/* modern chat-based agent console */
+.console-wrap { display: flex; flex-direction: column; gap: 14px; height: calc(100vh - 180px); min-height: 520px; }
+.console-header { flex: 0 0 auto; }
+.console-header .form-row { gap: 12px; }
+.console-chat { flex: 1 1 auto; overflow-y: auto; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.console-composer { flex: 0 0 auto; }
+.console-composer textarea { min-height: 64px; }
+.chat-msg { display: flex; }
+.chat-msg.user { justify-content: flex-end; }
+.chat-bubble { max-width: 82%; padding: 10px 13px; border-radius: 12px; font-size: .88rem; line-height: 1.55; word-break: break-word; }
+.chat-msg.user .chat-bubble { background: rgba(201, 162, 39, .18); border: 1px solid var(--border-strong); color: var(--text-primary); border-bottom-right-radius: 4px; }
+.chat-msg.assistant { justify-content: flex-start; }
+.chat-msg.assistant .chat-bubble { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary); border-bottom-left-radius: 4px; }
+.chat-sys { font-size: .78rem; color: var(--text-muted); padding: 2px 0; }
+.task-queue { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; min-height: 22px; align-items: center; }
+.task-queue .chip { background: rgba(201, 162, 39, .12); border: 1px solid var(--border-strong); color: var(--gold-light); padding: 3px 9px; border-radius: 999px; font-size: .76rem; cursor: default; }
+.task-queue .chip b { margin-left: 6px; cursor: pointer; color: var(--text-secondary); }
+.task-queue .chip b:hover { color: var(--red); }
+
 .terminal {
     background: #060607; border: 1px solid var(--border); border-radius: var(--radius);
     padding: 16px; font-family: 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
@@ -209,6 +228,7 @@ select { cursor: pointer; }
 .term-line.tool { color: var(--blue); }
 .term-line.err { color: var(--red); }
 .term-line.ok { color: var(--green); }
+.term-line.warn { color: var(--amber); }
 .term-line.sys { color: var(--text-muted); font-style: italic; }
 .term-line.you { color: var(--gold-light); font-weight: 600; }
 
@@ -335,16 +355,46 @@ select { cursor: pointer; }
 
 /* ---------- searchable model picker ---------- */
 .mselect-label { font-size: .72rem; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-muted); }
-.mselect { position: relative; display: inline-flex; align-items: center; min-width: 240px; width: 100%; }
-.mselect-input { width: 100%; padding-right: 34px; }
-.mselect-toggle { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 32px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: .9rem; border-radius: 0 7px 7px 0; }
+.mselect { position: relative; display: inline-flex; align-items: center; min-width: 0; width: 100%; background: var(--bg-inset); border: 1px solid var(--border); border-radius: 7px; padding: 0; }
+.mselect-input { width: 100%; padding-right: 34px; padding-left: 10px; padding-top: 8px; padding-bottom: 8px; background: transparent !important; border: none !important; box-shadow: none !important; outline: none !important; color: var(--text-primary); font-size: .88rem; }
+.mselect-toggle { position: absolute; right: 0; top: 0; bottom: 0; width: 32px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: .9rem; border-radius: 0 7px 7px 0; z-index: 70; }
 .mselect-toggle:hover { color: var(--gold-light); }
-.mselect-panel { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60; max-height: 300px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); padding: 4px; }
+.mselect-panel { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60; max-height: 260px; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); padding: 4px; min-width: max-content; display: none; }
+.mselect-panel[style*="display: block"] { display: block; }
+.mselect-panel .mselect-group { font-size: .66rem; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); padding: 8px 10px 4px; position: sticky; top: 0; background: var(--bg-card); }
+.mselect-panel .mselect-item { padding: 7px 10px; font-size: .8rem; font-family: 'Cascadia Code', 'Consolas', monospace; color: var(--text-secondary); border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
+.mselect-panel .mselect-item:hover, .mselect-panel .mselect-item.selected { background: var(--bg-card-hover); color: var(--text-primary); }
+.mselect-panel .mselect-item.selected { color: var(--gold-light); }
+.mselect-panel .mselect-empty { padding: 10px; color: var(--text-muted); font-size: .82rem; }
 .mselect-group { font-size: .66rem; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); padding: 8px 10px 4px; position: sticky; top: 0; background: var(--bg-card); }
 .mselect-item { padding: 7px 10px; font-size: .8rem; font-family: 'Cascadia Code', 'Consolas', monospace; color: var(--text-secondary); border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mselect-empty { padding: 10px; color: var(--text-muted); font-size: .82rem; }
 .mselect-item:hover, .mselect-item.selected { background: var(--bg-card-hover); color: var(--text-primary); }
 .mselect-item.selected { color: var(--gold-light); }
 .mselect-empty { padding: 10px; color: var(--text-muted); font-size: .82rem; }
+
+/* Agent dropdown is inside a narrow .form-row cell; keep it compact. */
+.mselect-agent .mselect-input { min-width: 0; }
+.mselect-agent .mselect-panel { right: auto; min-width: 220px; }
+
+/* Multi-select with checkboxes */
+.mselect-multi .mselect-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 34px 6px 8px; min-height: 34px; cursor: text; }
+.mselect-multi .mselect-tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 6px; background: rgba(201, 162, 39, .14); border: 1px solid var(--border-strong); font-size: .78rem; color: var(--text-primary); }
+.mselect-multi .mselect-tag .rm { cursor: pointer; color: var(--gold-light); font-weight: bold; }
+.mselect-multi .mselect-tag .rm:hover { color: var(--red); }
+.mselect-multi .mselect-toggle { width: 32px; }
+.mselect-multi .mselect-panel .mselect-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+.mselect-multi .mselect-item input[type="checkbox"] { accent-color: var(--gold); }
+.mselect-multi .mselect-empty { padding: 10px; }
+
+/* Draggable task chips in the Agent Console queue */
+.task-queue { display: flex; flex-wrap: wrap; gap: 8px; min-height: 28px; }
+.task-queue .chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 8px; background: rgba(201, 162, 39, .12); border: 1px solid var(--border-strong); font-size: .82rem; color: var(--text-primary); cursor: grab; user-select: none; }
+.task-queue .chip.dragging { opacity: .5; cursor: grabbing; }
+.task-queue .chip .grip { color: var(--gold-light); cursor: grab; }
+.task-queue .chip .rm { cursor: pointer; color: var(--gold-light); font-weight: bold; }
+.task-queue .chip .rm:hover { color: var(--red); }
+.task-queue .drop-marker { width: 2px; background: var(--gold); border-radius: 2px; margin: 0 2px; }
 
 /* ---------- orchestrator chat ---------- */
 .orch-head-tools { align-items: center; }
@@ -425,22 +475,27 @@ body[data-storm="storm"] .topbar::after { opacity: .9; animation: bar-sweep 2.2s
 
 /* ---------- project cards: awake & working ---------- */
 .proj-card.is-awake { border-color: rgba(201, 162, 39, .42); }
-.proj-card.is-working { border-color: var(--gold); animation: card-breathe 2.6s ease-in-out infinite; }
+.proj-card.is-working {
+    border-color: var(--gold);
+    animation: card-breathe 2.6s ease-in-out infinite;
+    /* a soft, non-rotating left-edge glow bar that is always aligned with the card */
+    background: linear-gradient(90deg, rgba(228, 196, 106, .18) 0, transparent 6px) var(--bg-card);
+}
 @keyframes card-breathe {
     0%, 100% { box-shadow: 0 0 0 0 rgba(201, 162, 39, 0), var(--shadow); }
-    50% { box-shadow: 0 0 24px rgba(201, 162, 39, .3), var(--shadow); }
+    50% { box-shadow: 0 0 24px rgba(201, 162, 39, .28), var(--shadow); }
 }
-/* a travelling energy rim around a working card */
-.proj-card.is-working::before {
-    content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
-    background: conic-gradient(from 0deg, transparent 0 60%, rgba(228, 196, 106, .9) 76%, #fff3c4 83%, transparent 92% 100%);
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    mask-composite: exclude;
-    animation: rim-spin 2.6s linear infinite;
+/* aligned pulsing border overlay — exact card shape, no rotation */
+.proj-card.is-working::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    border: 2px solid rgba(228, 196, 106, .55);
+    animation: working-border 2.2s ease-in-out infinite;
 }
-@keyframes rim-spin { to { transform: rotate(360deg); } }
+@keyframes working-border {
+    0%, 100% { border-color: rgba(228, 196, 106, .35); }
+    50% { border-color: rgba(228, 196, 106, .85); }
+}
+.proj-card { position: relative; z-index: 0; }
 .proj-card.is-working .pc-name { text-shadow: 0 0 12px rgba(228, 196, 106, .5); }
 
 /* per-card status pip (a pair of eyes) */
@@ -481,6 +536,7 @@ body[data-storm="storm"] .topbar::after { opacity: .9; animation: bar-sweep 2.2s
     .brand-text, .nav-item .lab, .sidebar-foot { display: none; }
     .nav-item { justify-content: center; }
     .console-grid { grid-template-columns: 1fr; }
+    .console-wrap { height: auto; }
     .form-row { grid-template-columns: 1fr; }
     .anchor-row { grid-template-columns: 1fr 1fr; }
     .kv-edit-row { grid-template-columns: 1fr 1fr; }

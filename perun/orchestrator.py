@@ -28,8 +28,7 @@ from . import config, control, registry
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
 
-INSTRUCTION_OPEN = "<perun:project_instructions>"
-INSTRUCTION_CLOSE = "</perun:project_instructions>"
+DEFAULT_SESSION_PROMPT = "Working session in progress."
 
 
 def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
@@ -58,11 +57,12 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
     if not body:
         return prompt
     return (
-        f"{INSTRUCTION_OPEN}\n"
+        "[PERUN PROJECT INSTRUCTIONS]\n"
         "The following are project-level instructions. Follow them for every task "
         "in this session unless the user explicitly says otherwise.\n\n"
         f"{body}\n"
-        f"{INSTRUCTION_CLOSE}\n\n{prompt}"
+        "[END PERUN PROJECT INSTRUCTIONS]\n\n"
+        f"{prompt}"
     )
 
 
@@ -186,9 +186,11 @@ def parse_event(line: str) -> dict[str, Any] | None:
                 out["text"] = json.dumps(state["input"])[:400]
             except Exception:
                 pass
-    elif etype in ("error", "session.error"):
+    elif etype in ("error", "session.error") or (isinstance(etype, str) and etype.startswith("provider.")):
         out["kind"] = "error"
-        out["text"] = json.dumps(evt.get("error") or evt)[:1000]
+        out["text"] = json.dumps(evt.get("error") or evt.get("message") or evt)[:1000]
+        if isinstance(etype, str) and etype.startswith("provider."):
+            out["provider_error"] = True
     else:
         out["kind"] = etype or "event"
     return out
@@ -218,19 +220,24 @@ class Orchestrator:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
-        prompt = (prompt or "").strip()
-        if not prompt:
-            raise ValueError("empty prompt")
+        prompt = (prompt or "").strip() or DEFAULT_SESSION_PROMPT
 
         run_uid = uuid.uuid4().hex[:16]
         # Model/agent precedence: explicit call argument → the project's own
         # override → (control plane only) the dedicated orchestrator model →
         # the global default.
-        model = model or project.get("model")
+        requested_model = (model or "").strip()
+        model_explicit = bool(requested_model)
+        model = requested_model or project.get("model")
         if not model and control.is_control(project):
             model = self.settings.orchestrator_model
-        model = model or self.settings.default_model
-        agent = agent or project.get("agent")
+        # The global default_model is intentionally NOT forced onto project runs;
+        # it is only used for the control plane (orchestrator). This lets regular
+        # projects fall back to OpenCode's own default model instead of being
+        # overridden by a possibly incompatible Perun setting.
+        if not model and control.is_control(project):
+            model = self.settings.default_model
+        agent = (agent or "").strip() or project.get("agent")
         if not agent and control.is_control(project):
             agent = self.settings.orchestrator_agent
         agent = agent or self.settings.default_agent
@@ -238,7 +245,7 @@ class Orchestrator:
         run = registry.create_run(
             run_uid, project["id"], prompt,
             session_pk=session_pk, opencode_session_id=opencode_session_id,
-            model=model, agent=agent,
+            model=model, model_explicit=model_explicit, agent=agent,
         )
         registry.log_activity(project["id"], "run",
                               f"Started agent run ({run_uid})",
@@ -266,12 +273,15 @@ class Orchestrator:
             self._cancelled.add(run_uid)
         if proc and proc.poll() is None:
             terminate_tree(proc)
-            return True
-        return False
+        # Even if the process already exited, force the run to a final state so
+        # the dashboard never shows a zombie run.
+        registry.update_run(run_uid, status="cancelled", ended_at=registry.now_iso(), error="cancelled by user")
+        self.bus.publish(run_uid, {"type": "end", "run": run_uid, "status": "cancelled"})
+        return True
 
     def is_final(self, run_uid: str) -> bool:
         run = registry.get_run(run_uid)
-        return bool(run and run["status"] in ("done", "failed", "cancelled", "timeout"))
+        return bool(run and run["status"] in ("done", "failed", "cancelled", "timeout", "provider_error"))
 
     def active(self) -> list[str]:
         with self._lock:
@@ -300,7 +310,10 @@ class Orchestrator:
         prompt = compose_prompt(project, prompt, new_session=not oc_sid,
                                 settings=self.settings)
         argv = resolve_opencode("opencode") + ["run", "--format", "json", "--auto"]
-        if run.get("model"):
+        # Only pass --model when the caller (or the project) explicitly set one.
+        # An empty/missing model lets OpenCode use its own default, which avoids
+        # surprising region/model errors from Perun's global fallback.
+        if run.get("model") and run.get("model_explicit"):
             argv += ["--model", run["model"]]
         if run.get("agent"):
             argv += ["--agent", run["agent"]]
@@ -347,6 +360,7 @@ class Orchestrator:
 
         reply_parts: list[str] = []
         error_parts: list[str] = []
+        provider_error_seen = False
         learned_sid = oc_sid
         timed_out = False
         start = time.time()
@@ -358,6 +372,9 @@ class Orchestrator:
                     logf.write(line)
                     if time.time() - start > self.settings.run_timeout:
                         timed_out = True
+                        terminate_tree(proc)
+                        break
+                    if run_uid in self._cancelled:
                         terminate_tree(proc)
                         break
                     evt = parse_event(line)
@@ -380,10 +397,12 @@ class Orchestrator:
                         self.bus.publish(run_uid, {"type": "tool", "run": run_uid,
                                                    "tool": evt.get("tool", ""),
                                                    "status": evt.get("status", "")})
-                    elif kind == "error":
+                    elif kind == "error" or (isinstance(kind, str) and kind.startswith("provider.")):
                         err_text = evt.get("text", "")
                         if err_text:
                             error_parts.append(err_text)
+                        if evt.get("provider_error"):
+                            provider_error_seen = True
                         self.bus.publish(run_uid, {"type": "error", "run": run_uid,
                                                    "text": err_text})
             proc.wait(timeout=30)
@@ -404,17 +423,24 @@ class Orchestrator:
         self._replies[run_uid] = reply
         stderr_tail = "".join(stderr_chunks).strip()[-4000:]
 
+        # Provider-side errors (quota, region, invalid model, …) are different
+        # from agent crashes: a session may have been created successfully and
+        # the user can continue it after fixing the provider issue.
+        provider_error = bool(learned_sid) and provider_error_seen
+
         if was_cancelled:
             status = "cancelled"
         elif timed_out:
             status = "timeout"
+        elif provider_error:
+            status = "provider_error"
         elif proc.returncode != 0 and not reply:
             status = "failed"
         else:
             status = "done"
 
         error = ""
-        if status in ("failed", "timeout") and stderr_tail:
+        if status in ("failed", "timeout", "provider_error") and stderr_tail:
             error = stderr_tail
         # A provider/agent error can arrive only as a stdout JSON event (e.g. a
         # rejected model). Persist it so the dashboard can explain a failed run.
@@ -422,7 +448,7 @@ class Orchestrator:
             error = "\n".join(error_parts)[-4000:]
         self._finalize(run_uid, status, proc.returncode, error, cancelled=was_cancelled,
                        reply=reply, opencode_session_id=learned_sid)
-        if status == "failed" and not reply:
+        if status in ("failed", "provider_error") and not reply:
             self.bus.publish(run_uid, {"type": "error", "run": run_uid,
                                        "text": stderr_tail or error or "agent exited non-zero"})
 
@@ -434,7 +460,7 @@ class Orchestrator:
                   error: str, *, cancelled: bool, reply: str = "",
                   opencode_session_id: str = "") -> None:
         run = registry.get_run(run_uid)
-        fatal = status in ("failed", "cancelled", "timeout")
+        fatal = status in ("failed", "cancelled", "timeout", "provider_error")
         registry.update_run(
             run_uid, status=status, exit_code=exit_code,
             ended_at=registry.now_iso(),

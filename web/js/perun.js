@@ -29,6 +29,9 @@ const state = {
     health: null,
     activeRuns: [],
     models: [],
+    agents: [],
+    skills: [],
+    tools: [],
     runSource: null,
     activitySource: null,
     // Orchestrator chat continuity (session per dashboard visit).
@@ -155,10 +158,154 @@ async function loadModels(force) {
     if (state.models.length && !force) return;
     try { state.models = (await api('/api/models')).models || []; } catch (_) { state.models = []; }
 }
+async function loadAgents(force) {
+    if (state.agents.length && !force) return;
+    try {
+        const res = await api('/api/agents');
+        state.agents = res.agents || [];
+        if (!state.agents.length) state.agents = [
+            { id: 'build', name: 'Build', mode: 'primary', description: 'Default coding agent' },
+            { id: 'plan', name: 'Plan', mode: 'primary', description: 'Planning agent' },
+            { id: 'general', name: 'General', mode: 'subagent', description: 'General-purpose research' },
+            { id: 'explore', name: 'Explore', mode: 'subagent', description: 'Read-only exploration' },
+        ];
+    } catch (e) {
+        console.error('loadAgents failed', e);
+        state.agents = [
+            { id: 'build', name: 'Build', mode: 'primary', description: 'Default coding agent' },
+            { id: 'plan', name: 'Plan', mode: 'primary', description: 'Planning agent' },
+            { id: 'general', name: 'General', mode: 'subagent', description: 'General-purpose research' },
+            { id: 'explore', name: 'Explore', mode: 'subagent', description: 'Read-only exploration' },
+        ];
+    }
+}
 // Model entries are structured ({id, provider, name}); tolerate plain strings.
 const modelId = (m) => (typeof m === 'string' ? m : (m && (m.id || m.label)) || '');
-const modelListHtml = () => `<datalist id="model-list">${(state.models || []).map((m) => `<option value="${esc(modelId(m))}"></option>`).join('')}</datalist>`;
 const nameFromPath = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'project';
+
+let _cachedTerminals = null;
+async function loadTerminals(force) {
+    if (_cachedTerminals && !force) return _cachedTerminals;
+    try {
+        const res = await api('/api/terminals');
+        state.terminals = res || { terminals: [], configured: '', configured_source: 'os', effective_path: '' };
+        _cachedTerminals = state.terminals;
+    } catch (e) {
+        console.error('loadTerminals failed', e);
+        _cachedTerminals = { terminals: [], configured: '', configured_source: 'os', effective_path: '' };
+        state.terminals = _cachedTerminals;
+    }
+    return _cachedTerminals;
+}
+async function loadSkills(project) {
+    const slug = project || (state.projects[0] && state.projects[0].slug) || '';
+    try { state.skills = (await api(`/api/skills?project=${encodeURIComponent(slug)}`)).skills || []; }
+    catch (e) { console.error('loadSkills failed', e); state.skills = []; }
+}
+async function loadTools(project) {
+    const slug = project || (state.projects[0] && state.projects[0].slug) || '';
+    try { state.tools = (await api(`/api/tools?project=${encodeURIComponent(slug)}`)).tools || []; }
+    catch (e) { console.error('loadTools failed', e); state.tools = []; }
+}
+const terminalId = () => {
+    // Console-level override takes precedence.
+    const consoleSel = document.getElementById('c-terminal');
+    if (consoleSel && consoleSel.value) return consoleSel.value;
+    if (state.settings && state.settings.terminal) return state.settings.terminal;
+    const t = state.terminals || _cachedTerminals || {};
+    if (t.configured) return t.configured;
+    const first = (t.terminals || [])[0];
+    return first ? first.id : (navigator.platform.toLowerCase().startsWith('win') ? 'cmd' : 'sh');
+};
+const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => {
+    const tid = terminalId();
+    const escPs = (s) => String(s || '').replace(/"/g, '`"');
+    const escBash = (s) => String(s || '').replace(/'/g, "'\\''");
+    const marker = runUid ? `PERUN_RUN_UID=${runUid}` : '';
+    const psTuiCmd = () => {
+        let cmd = marker ? `$env:${escPs(marker)}; ` : '';
+        cmd += `cd "${escPs(cwd)}"; opencode --prompt "${escPs(prompt || 'Working session in progress.')}"`;
+        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
+        return cmd;
+    };
+    const bashTuiCmd = () => {
+        let cmd = marker ? `${escBash(marker)} ` : '';
+        cmd += `cd '${escBash(cwd)}' && opencode --prompt '${escBash(prompt || 'Working session in progress.')}'`;
+        if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
+        return cmd;
+    };
+    const cmdTuiCmd = () => {
+        let cmd = marker ? `set "${escPs(marker)}" && ` : '';
+        cmd += `cd /d "${escPs(cwd)}" && opencode --prompt "${escPs(prompt || 'Working session in progress.')}"`;
+        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
+        return cmd;
+    };
+    const psRunCmd = () => {
+        let cmd = marker ? `$env:${escPs(marker)}; ` : '';
+        cmd += `cd "${escPs(cwd)}"; opencode run`;
+        if (model) cmd += ` --model "${escPs(model)}"`;
+        if (agent) cmd += ` --agent "${escPs(agent)}"`;
+        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
+        cmd += ` -- "${escPs(prompt || 'Working session in progress.')}"`;
+        return cmd;
+    };
+    const bashRunCmd = () => {
+        let cmd = marker ? `${escBash(marker)} ` : '';
+        cmd += `cd '${escBash(cwd)}' && opencode run`;
+        if (model) cmd += ` --model '${escBash(model)}'`;
+        if (agent) cmd += ` --agent '${escBash(agent)}'`;
+        if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
+        cmd += ` -- '${escBash(prompt || 'Working session in progress.')}'`;
+        return cmd;
+    };
+    const cmdRunCmd = () => {
+        let cmd = marker ? `set "${escPs(marker)}" && ` : '';
+        cmd += `cd /d "${escPs(cwd)}" && opencode run`;
+        if (model) cmd += ` --model "${escPs(model)}"`;
+        if (agent) cmd += ` --agent "${escPs(agent)}"`;
+        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
+        cmd += ` -- "${escPs(prompt || 'Working session in progress.')}"`;
+        return cmd;
+    };
+    if (tid === 'cmd') {
+        return { text: tui ? cmdTuiCmd() : cmdRunCmd(), shell: tid, tui };
+    }
+    if (tid === 'powershell' || tid === 'pwsh' || tid.toLowerCase().includes('powershell')) {
+        return { text: tui ? psTuiCmd() : psRunCmd(), shell: tid, tui };
+    }
+    return { text: tui ? bashTuiCmd() : bashRunCmd(), shell: tid, tui };
+};
+const launchInTerminal = async ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => {
+    const cmd = buildCommand({ cwd, model, agent, sessionId, prompt, tui });
+    try {
+        await api('/api/run-in-terminal', {
+            method: 'POST',
+            body: { cwd, command: cmd.text, shell: cmd.shell, run_uid: runUid },
+        });
+        toast(tui ? `Opened ${cmd.shell} (TUI)` : `Opened ${cmd.shell}`, 'ok');
+    } catch (e) {
+        toast('Could not open terminal — command copied instead', 'ok');
+        copyCommandToClipboard(cmd.text);
+    }
+    return cmd;
+};
+const copyCommandToClipboard = (cmd) => {
+    const showModal = () => {
+        const body = el('div', {}, `
+            <p class="secondary">Paste this into your terminal to run the same session:</p>
+            <textarea id="copied-cmd" readonly rows="3" style="margin-top:10px;background:var(--bg-inset);font-family:monospace">${esc(cmd)}</textarea>`);
+        modal('Terminal command', body, [{ label: 'Close', class: 'ghost', onClick: closeModal }]);
+        const ta = body.querySelector('#copied-cmd');
+        ta.focus(); ta.select();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cmd)
+            .then(() => toast('Command copied — paste it into your terminal', 'ok'))
+            .catch(showModal);
+    } else {
+        showModal();
+    }
+};
 
 /* ============================================================= PERUN FX ==
    The storm layer. A lightweight canvas draws Perun's lightning and the
@@ -372,7 +519,7 @@ document.addEventListener('mousedown', (e) => {
 function modelSelect(opts = {}) {
     const wrap = el('div', { class: 'mselect', id: opts.id || null });
     const input = el('input', {
-        type: 'text', class: 'mselect-input', autocomplete: 'off', spellcheck: 'false',
+        type: 'text', class: 'mselect-input', autocomplete: 'new-password', spellcheck: 'false',
         placeholder: opts.placeholder || 'provider/model',
     });
     input.value = opts.value || '';
@@ -414,6 +561,7 @@ function modelSelect(opts = {}) {
     const open = () => { if (isOpen) return; isOpen = true; refresh(); panel.style.display = 'block'; _openSelects.add(wrap); };
     const close = () => { isOpen = false; panel.style.display = 'none'; _openSelects.delete(wrap); };
     wrap._close = close;
+    wrap.refresh = refresh;
 
     input.addEventListener('focus', open);
     input.addEventListener('input', () => { open(); refresh(); if (opts.onInput) opts.onInput(input.value.trim()); });
@@ -423,6 +571,151 @@ function modelSelect(opts = {}) {
     wrap.getValue = () => input.value.trim();
     wrap.setValue = (v) => { input.value = v || ''; close(); };
     wrap.input = input;
+    return wrap;
+}
+
+function agentSelect(opts = {}) {
+    const wrap = el('div', { class: 'mselect mselect-agent', id: opts.id || null });
+    const input = el('input', {
+        type: 'text', class: 'mselect-input', autocomplete: 'new-password', spellcheck: 'false',
+        placeholder: opts.placeholder || 'agent',
+    });
+    input.value = opts.value || '';
+    const toggle = el('button', { type: 'button', class: 'mselect-toggle', tabindex: '-1', title: 'Choose an agent' }, '▾');
+    const panel = el('div', { class: 'mselect-panel' });
+    wrap.appendChild(input); wrap.appendChild(toggle); wrap.appendChild(panel);
+
+    let isOpen = false;
+    const refresh = () => {
+        const q = input.value.trim().toLowerCase();
+        const entries = [];
+        for (const a of (state.agents || [])) {
+            const id = a.id || '';
+            if (!id || (q && !id.toLowerCase().includes(q) && !(a.name || '').toLowerCase().includes(q))) continue;
+            entries.push(a);
+        }
+        panel.innerHTML = '';
+        if (!entries.length) {
+            panel.appendChild(el('div', { class: 'mselect-empty' }, (state.agents || []).length ? 'No matching agent' : 'No agents detected'));
+            return;
+        }
+        const current = input.value.trim();
+        for (const a of entries) {
+            const label = `${a.name || a.id}${a.mode ? ' · ' + a.mode : ''}`;
+            const item = el('div', { class: 'mselect-item' + (a.id === current ? ' selected' : '') }, esc(label));
+            item.title = a.description || '';
+            item.addEventListener('mousedown', (ev) => {
+                ev.preventDefault();
+                input.value = a.id;
+                close();
+                if (opts.onSelect) opts.onSelect(a.id);
+            });
+            panel.appendChild(item);
+        }
+    };
+    const open = () => { if (isOpen) return; isOpen = true; refresh(); panel.style.display = 'block'; _openSelects.add(wrap); };
+    const close = () => { isOpen = false; panel.style.display = 'none'; _openSelects.delete(wrap); };
+    wrap._close = close;
+    wrap.refresh = refresh;
+
+    input.addEventListener('focus', open);
+    input.addEventListener('input', () => { open(); refresh(); if (opts.onInput) opts.onInput(input.value.trim()); });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    toggle.addEventListener('click', () => { if (isOpen) close(); else { input.focus(); open(); } });
+
+    wrap.getValue = () => input.value.trim();
+    wrap.setValue = (v) => { input.value = v || ''; close(); };
+    wrap.input = input;
+    return wrap;
+}
+
+function multiSelect(opts = {}) {
+    // opts.items: array of {value, label, description?}
+    // opts.value: array of selected values
+    const wrap = el('div', { class: 'mselect mselect-multi', id: opts.id || null });
+    const tags = el('div', { class: 'mselect-tags' });
+    const toggle = el('button', { type: 'button', class: 'mselect-toggle', tabindex: '-1', title: 'Choose options' }, '▾');
+    const panel = el('div', { class: 'mselect-panel' });
+    wrap.appendChild(tags); wrap.appendChild(toggle); wrap.appendChild(panel);
+
+    let isOpen = false;
+    let selected = new Set((opts.value || []).map(String));
+    const _items = () => opts.items || [];
+
+    const renderTags = () => {
+        tags.innerHTML = '';
+        for (const v of selected) {
+            const it = _items().find((x) => String(x.value) === v);
+            const label = it ? (it.label || it.value) : v;
+            const tag = el('span', { class: 'mselect-tag' }, `${esc(label)} <span class="rm">×</span>`);
+            tag.querySelector('.rm').addEventListener('click', (e) => {
+                e.stopPropagation();
+                selected.delete(v);
+                renderTags(); refresh();
+                if (opts.onChange) opts.onChange(Array.from(selected));
+            });
+            tags.appendChild(tag);
+        }
+        if (!selected.size) {
+            tags.appendChild(el('span', { class: 'muted', style: 'font-size:.82rem;padding:3px 0' }, opts.placeholder || 'Select…'));
+        }
+    };
+
+    let filterText = '';
+    const searchInput = el('input', { type: 'text', class: 'mselect-input', placeholder: 'Search…', style: 'margin:4px;width:calc(100% - 16px)' });
+    searchInput.addEventListener('input', () => { filterText = searchInput.value; refresh(); });
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    panel.appendChild(searchInput);
+
+    const refresh = () => {
+        const q = filterText.trim().toLowerCase();
+        const children = Array.from(panel.children).filter((c) => c !== searchInput);
+        children.forEach((c) => c.remove());
+        const items = _items().filter((it) => !q || (it.label || it.value).toLowerCase().includes(q) || (it.description || '').toLowerCase().includes(q));
+        if (!items.length) {
+            panel.appendChild(el('div', { class: 'mselect-empty' }, _items().length ? 'No matching options' : 'No options'));
+            return;
+        }
+        for (const it of items) {
+            const val = String(it.value);
+            const checked = selected.has(val);
+            const row = el('label', { class: 'mselect-item' },
+                `<input type="checkbox" ${checked ? 'checked' : ''}> <span>${esc(it.label || it.value)}${it.description ? ' · ' + esc(it.description) : ''}</span>`);
+            const cb = row.querySelector('input');
+            cb.addEventListener('change', () => {
+                if (cb.checked) selected.add(val); else selected.delete(val);
+                renderTags();
+                if (opts.onChange) opts.onChange(Array.from(selected));
+            });
+            panel.appendChild(row);
+        }
+    };
+
+    const open = () => {
+        if (isOpen) return;
+        // Close any other open multi-selects so their panels don't intercept clicks.
+        for (const other of Array.from(_openSelects)) {
+            if (other !== wrap && other._close) other._close();
+        }
+        isOpen = true;
+        refresh();
+        panel.style.display = 'block';
+        _openSelects.add(wrap);
+    };
+    const close = () => { isOpen = false; panel.style.display = 'none'; _openSelects.delete(wrap); };
+    wrap._close = close;
+    wrap.refresh = () => { refresh(); renderTags(); };
+
+    tags.addEventListener('click', (e) => { e.stopPropagation(); if (!isOpen) { filterText = ''; searchInput.value = ''; open(); } });
+    toggle.addEventListener('click', (e) => { e.stopPropagation(); if (isOpen) close(); else { filterText = ''; searchInput.value = ''; open(); } });
+
+    // Escape closes.
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } });
+
+    wrap.getValue = () => Array.from(selected);
+    wrap.setValue = (arr) => { selected = new Set((arr || []).map(String)); renderTags(); refresh(); };
+    wrap.setItems = (items) => { opts.items = items; renderTags(); if (isOpen) refresh(); };
+    renderTags();
     return wrap;
 }
 
@@ -455,7 +748,7 @@ async function router() {
     closeStreams();
     let fn = routes[base];
     let args = [];
-    if (base === '#/project') { fn = viewProject; args = [sub]; }
+    if (base === '#/project') { fn = viewProject; args = [sub, rest]; }
     else if (base === '#/console' && sub) { args = [sub]; }
     if (!fn) { location.hash = '#/dashboard'; return; }
     currentRoute = location.hash;
@@ -564,6 +857,7 @@ function projectCard(p) {
          </span>`;
     const run = ps.working ? (state.activeRuns || []).find((r) => r.project_slug === p.slug) : null;
     const running = run ? `<div class="pc-running">⚡ <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span></div>` : '';
+    const stopBtn = ps.working && run ? `<button class="btn sm danger" data-stop data-run-uid="${esc(run.run_uid)}" title="Cancel this run">■ Stop</button>` : '';
     const card = el('div', { class: 'card clickable proj-card' + stateCls, dataset: { slug: p.slug } },
         `<div class="pc-top">
             <div><div class="pc-name">${fav}${esc(p.name)}</div><div class="pc-path">${esc(p.path)}</div></div>
@@ -578,18 +872,72 @@ function projectCard(p) {
             <span>▤ ${p.chunk_count || 0} chunks</span>
          </div>
          <div class="pc-actions">
-            <button class="btn sm primary" data-open>Open</button>
-            <button class="btn sm" data-run title="Open the Agent Console with this project selected">Run</button>
+            <button class="btn sm primary" data-tui title="Open OpenCode TUI in this project's directory">🖵 OpenCode</button>
+            ${stopBtn}
+            <button class="btn sm" data-open>Open</button>
             <button class="btn sm ghost" data-index>Index docs</button>
             ${delBtn}
          </div>`);
     card.addEventListener('click', (e) => {
+        const stop = e.target.closest('[data-stop]');
+        if (stop) { e.stopPropagation(); cancelProjectRun(stop.dataset.runUid); return; }
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
-        if (e.target.closest('[data-run]')) { goto('#/console/' + p.slug); return; }
+        if (e.target.closest('[data-tui]')) {
+            e.stopPropagation();
+            openProjectTui(p);
+            return;
+        }
         goto('#/project/' + p.slug);
     });
     return card;
+}
+
+async function openProjectTui(p) {
+    try {
+        const res = await api('/api/runs/tui', {
+            method: 'POST',
+            body: { project: p.slug, prompt: 'Working session in progress.' },
+        });
+        const runUid = res.run && res.run.run_uid;
+        await launchInTerminal({ cwd: p.path, tui: true, runUid });
+        await refreshPresence();
+        if (runUid) {
+            // Optimistically show working state so the card lights up immediately.
+            const card = document.querySelector(`.proj-card[data-slug="${CSS.escape(p.slug)}"]`);
+            if (card) {
+                card.classList.add('is-working');
+                card.classList.remove('is-awake');
+                const pip = card.querySelector('.card-pip');
+                if (pip) { pip.classList.add('working'); pip.classList.remove('awake'); }
+                const lbl = pip && pip.querySelector('[data-pip-label]');
+                if (lbl) lbl.textContent = 'working';
+            }
+        }
+    } catch (e) { toast(e.message, 'err'); }
+}
+
+async function cancelProjectRun(runUid) {
+    if (!runUid) return;
+    // Optimistically remove the working state from the affected card so the UI
+    // feels instant, then let the next poll confirm it.
+    const card = document.querySelector('.proj-card.is-working');
+    if (card) {
+        card.classList.remove('is-working');
+        const pip = card.querySelector('.card-pip');
+        if (pip) { pip.classList.remove('working'); pip.classList.add('awake'); }
+        const banner = card.querySelector('.pc-running');
+        if (banner) banner.remove();
+        const stopBtn = card.querySelector('[data-stop]');
+        if (stopBtn) stopBtn.remove();
+    }
+    try {
+        await api(`/api/runs/${runUid}/cancel`, { method: 'POST' });
+        toast('Stop requested', 'ok');
+        await new Promise((r) => setTimeout(r, 500));
+        await refreshPresence();
+        await loadProjects();
+    } catch (e) { toast(e.message, 'err'); }
 }
 
 function deleteProject(p) {
@@ -734,7 +1082,7 @@ function projectWizard() {
         </div>
         <label class="field"><span class="lab">Description</span><input type="text" data-field="description" value="${esc(wiz.description)}" placeholder="optional"></label>
         <div class="form-row">
-            <label class="field"><span class="lab">Default model</span><input type="text" list="model-list" data-field="model" value="${esc(wiz.model)}" placeholder="provider/model (optional)"></label>
+            <label class="field"><span class="lab">Default model</span><input type="text" data-field="model" value="${esc(wiz.model)}" placeholder="provider/model (optional)"></label>
             <label class="field"><span class="lab">Agent</span><input type="text" data-field="agent" value="${esc(wiz.agent)}" placeholder="build (optional)"></label>
         </div>
         <label class="field"><span class="lab">Tags</span><input type="text" data-field="tags" value="${esc(wiz.tags)}" placeholder="python, trading (optional)"></label>
@@ -876,7 +1224,7 @@ async function browseFolder(startPath, onPick, onCancel) {
 }
 
 /* ===================================================== PROJECT DETAIL === */
-async function viewProject(slug) {
+async function viewProject(slug, tab) {
     if (!slug) { goto('#/projects'); return; }
     $('#topbar-title').textContent = slug;
     const detail = await api(`/api/projects/${slug}`);
@@ -898,13 +1246,14 @@ async function viewProject(slug) {
          </div>`));
 
     const tabDefs = [
-        ['overview', 'Overview'], ['console', 'Console'], ['sessions', 'Sessions'],
+        ['overview', 'Overview'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
         ['memory', 'Memory'], ['activity', 'Activity'], ['git', 'Git'],
         ['manifest', 'Manifest'], ['instructions', 'Instructions'], ['config', 'Config'],
     ];
     const tabs = el('div', { class: 'tabs' });
     const pane = el('div');
-    let active = 'overview';
+    const knownTabs = new Set(tabDefs.map((d) => d[0]));
+    let active = (tab && knownTabs.has(tab)) ? tab : 'overview';
     const setTab = (name) => {
         active = name;
         tabs.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
@@ -913,11 +1262,17 @@ async function viewProject(slug) {
         if (name === 'console') mountConsole(pane, p);
         if (name === 'git') mountGit(pane, p);
         if (name === 'manifest') mountManifest(pane, p);
+        if (name === 'tasks') mountTasks(pane, p);
+        const expected = `#/project/${slug}/${name}`;
+        if (location.hash !== expected) {
+            history.replaceState(null, '', expected);
+            currentRoute = expected;
+        }
     };
     for (const [name, label] of tabDefs) tabs.appendChild(el('div', { class: 'tab', dataset: { tab: name }, onclick: () => setTab(name) }, label));
     v.appendChild(tabs);
     v.appendChild(pane);
-    setTab('overview');
+    setTab(active);
 
     $('#pj-fav').addEventListener('click', async () => {
         await api(`/api/projects/${slug}`, { method: 'PATCH', body: { favorite: p.favorite ? 0 : 1 } });
@@ -984,6 +1339,8 @@ function renderProjectTab(name, detail) {
         // mounted separately
     } else if (name === 'instructions') {
         wrap.appendChild(projectInstructionsForm(p));
+    } else if (name === 'tasks') {
+        // mounted separately
     } else if (name === 'console') {
         // mounted separately
     } else if (name === 'config') {
@@ -1031,33 +1388,158 @@ function projectConfigForm(p) {
     const note = isControl
         ? '<p class="muted mt">This is the Perun orchestrator (control plane). It cannot be removed.</p>'
         : '';
-    const body = el('div', { class: 'card' },
+    const card = el('div', { class: 'card' },
         `${isControl ? '<div class="card-head"><h4>Orchestrator</h4><span class="badge gold">control plane</span></div>' : ''}
          <label class="field"><span class="lab">Name</span><input type="text" id="pc-name" value="${esc(p.name)}"></label>
          <label class="field"><span class="lab">Description</span><input type="text" id="pc-desc" value="${esc(p.description || '')}"></label>
          <div class="form-row">
-            <label class="field"><span class="lab">Model override</span><input type="text" list="model-list" id="pc-model" value="${esc(p.model || '')}" placeholder="provider/model"></label>
-            <label class="field"><span class="lab">Agent override</span><input type="text" id="pc-agent" value="${esc(p.agent || '')}" placeholder="build"></label>
+            <label class="field"><span class="lab">Model override</span><span id="pc-model-host"></span></label>
+            <label class="field"><span class="lab">Agent override</span><span id="pc-agent-host"></span></label>
          </div>
          ${note}
          <div class="form-actions">
             <button class="btn primary" id="pc-save">Save</button>
             ${delBtn}
          </div>`);
-    body.querySelector('#pc-save').addEventListener('click', async () => {
+    const mModel = modelSelect({ placeholder: '(use default)', initial: p.model || '' });
+    card.querySelector('#pc-model-host').appendChild(mModel);
+    const mAgent = agentSelect({ placeholder: '(use default)', initial: p.agent || '' });
+    card.querySelector('#pc-agent-host').appendChild(mAgent);
+    if (!state.agents.length) loadAgents().then(() => mAgent.refresh?.()).catch(() => {});
+    card.querySelector('#pc-save').addEventListener('click', async () => {
         await api(`/api/projects/${p.slug}`, { method: 'PATCH', body: {
             name: $('#pc-name').value, description: $('#pc-desc').value,
-            model: $('#pc-model').value, agent: $('#pc-agent').value } });
+            model: mModel.getValue(), agent: mAgent.getValue() } });
         toast('Saved', 'ok'); await loadProjects(); viewProject(p.slug);
     });
-    const del = body.querySelector('#pc-delete');
+    const del = card.querySelector('#pc-delete');
     if (del) del.addEventListener('click', () => {
         confirmDialog('Delete project', `Remove "${p.name}" from Perun? Memory and indexed docs for it are deleted. The files on disk are untouched.`, async () => {
             await api(`/api/projects/${p.slug}`, { method: 'DELETE' });
             toast('Deleted', 'ok'); await loadProjects(); goto('#/projects');
         }, 'Delete');
     });
-    return body;
+    return card;
+}
+
+/* ========================================================= TASKS ====== */
+async function mountTasks(container, p) {
+    container.innerHTML = '<div class="empty"><span class="spinner"></span> loading tasks…</div>';
+    let tasks = [];
+    try {
+        await Promise.all([loadSkills(p.slug), loadTools(p.slug)]);
+        tasks = (await api(`/api/projects/${p.slug}/tasks`)).tasks || [];
+    }
+    catch (e) { container.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    renderTasks(container, p, tasks);
+}
+
+function renderTasks(container, p, tasks) {
+    container.innerHTML = '';
+    const head = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Project tasks</h4><span class="badge gold">reusable prompts, skills & tool calls</span></div>
+         <p class="secondary">Tasks can be selected from the Agent Console and queued to run after a prompt. They are saved per project.</p>`);
+    container.appendChild(head);
+    const list = el('div', { class: 'card list' });
+    const refresh = async () => {
+        try {
+            const res = await api(`/api/projects/${p.slug}/tasks`);
+            renderTasks(container, p, res.tasks || []);
+        } catch (e) { toast(e.message, 'err'); }
+    };
+    const editForm = (task) => {
+        const isNew = !task;
+        const id = task ? task.id : 'new';
+        const body = el('div', { class: 'card mt' },
+            `<h5>${isNew ? 'New task' : 'Edit task'}</h5>
+             <label class="field"><span class="lab">Name</span><input type="text" id="pt-name-${id}" value="${esc(task ? task.name : '')}" placeholder="e.g. run tests"></label>
+             <label class="field"><span class="lab">Kind</span><select id="pt-kind-${id}">
+                <option value="prompt" ${(!task || task.kind === 'prompt') ? 'selected' : ''}>Prompt</option>
+                <option value="skill" ${task && task.kind === 'skill' ? 'selected' : ''}>Skill</option>
+                <option value="tool" ${task && task.kind === 'tool' ? 'selected' : ''}>Tool call</option>
+                <option value="combo" ${task && task.kind === 'combo' ? 'selected' : ''}>Combination</option>
+             </select></label>
+             <label class="field"><span class="lab">Prompt / instruction</span><textarea id="pt-prompt-${id}" rows="4" placeholder="What should the agent do? For skills/tools, describe the inputs and expected output.">${esc(task ? task.prompt : '')}</textarea></label>
+             <label class="field"><span class="lab">Tools</span><span id="pt-tools-host-${id}"></span></label>
+             <label class="field"><span class="lab">Skills</span><span id="pt-skills-host-${id}"></span></label>
+             <label class="field"><span class="lab">Enabled</span><input type="checkbox" id="pt-enabled-${id}" ${!task || task.enabled ? 'checked' : ''}></label>
+             <div class="form-actions">
+                <button class="btn primary" id="pt-save-${id}">${isNew ? 'Add' : 'Save'}</button>
+                <button class="btn ghost" id="pt-cancel-${id}">Cancel</button>
+             </div>`);
+
+        const toolsSel = multiSelect({
+            id: `pt-tools-${id}`,
+            placeholder: 'Select tools…',
+            value: task ? task.tools : [],
+            items: (state.tools || []).map((t) => ({ value: t.name, label: t.name, description: t.description })),
+        });
+        body.querySelector(`#pt-tools-host-${id}`).appendChild(toolsSel);
+
+        const skillsSel = multiSelect({
+            id: `pt-skills-${id}`,
+            placeholder: 'Select skills…',
+            value: task ? task.skills : [],
+            items: (state.skills || []).map((s) => ({ value: s.name, label: s.name, description: s.description })),
+        });
+        body.querySelector(`#pt-skills-host-${id}`).appendChild(skillsSel);
+
+        body.querySelector(`#pt-save-${id}`).addEventListener('click', async () => {
+            const payload = {
+                name: $(`#pt-name-${id}`).value.trim(),
+                kind: $(`#pt-kind-${id}`).value,
+                prompt: $(`#pt-prompt-${id}`).value.trim(),
+                tools: toolsSel.getValue(),
+                skills: skillsSel.getValue(),
+                enabled: $(`#pt-enabled-${id}`).checked ? 1 : 0,
+            };
+            if (!payload.name) { toast('Name is required', 'err'); return; }
+            try {
+                if (isNew) {
+                    await api(`/api/projects/${p.slug}/tasks`, { method: 'POST', body: payload });
+                } else {
+                    await api(`/api/projects/${p.slug}/tasks/${task.id}`, { method: 'PATCH', body: payload });
+                }
+                toast('Saved', 'ok');
+                body.remove();
+                refresh();
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        body.querySelector(`#pt-cancel-${id}`).addEventListener('click', () => body.remove());
+        return body;
+    };
+    for (const t of tasks) {
+        const row = el('div', { class: 'list-row' },
+            `<span class="badge ${t.enabled ? 'green' : 'muted'}">${esc(t.kind)}</span>
+             <span class="grow">
+                <div class="truncate"><b>${esc(t.name)}</b> · ${esc(t.prompt.slice(0, 80))}</b></div>
+                <div class="muted" style="font-size:.72rem">${t.tools.length ? 'tools: ' + esc(t.tools.join(', ')) : ''} ${t.skills.length ? 'skills: ' + esc(t.skills.join(', ')) : ''}</div>
+             </span>
+             <button class="btn sm ghost" data-edit="${t.id}">Edit</button>
+             <button class="btn sm danger ghost" data-del="${t.id}">✕</button>`);
+        row.querySelector('[data-edit]').addEventListener('click', () => {
+            // remove any existing edit form
+            container.querySelectorAll('.card.mt').forEach((c) => c.remove());
+            container.appendChild(editForm(t));
+        });
+        row.querySelector('[data-del]').addEventListener('click', async () => {
+            confirmDialog('Delete task', `Remove "${t.name}"?`, async () => {
+                try {
+                    await api(`/api/projects/${p.slug}/tasks/${t.id}`, { method: 'DELETE' });
+                    toast('Deleted', 'ok'); refresh();
+                } catch (e) { toast(e.message, 'err'); }
+            }, 'Delete');
+        });
+        list.appendChild(row);
+    }
+    if (!tasks.length) list.appendChild(el('div', { class: 'empty' }, 'No tasks yet. Add one to use it in the Agent Console.'));
+    container.appendChild(list);
+    const addBtn = el('button', { class: 'btn primary' }, '+ Add task');
+    addBtn.addEventListener('click', () => {
+        container.querySelectorAll('.card.mt').forEach((c) => c.remove());
+        container.appendChild(editForm(null));
+    });
+    container.appendChild(addBtn);
 }
 
 /* ============================================================= GIT ====== */
@@ -1291,7 +1773,7 @@ function renderManifestEditor(container, p, snap) {
         </div>
         <label class="field"><span class="lab">Description</span><input type="text" id="mf-desc" value="${esc(data.description || '')}"></label>
         <div class="form-row">
-            <label class="field"><span class="lab">Model</span><input type="text" list="model-list" id="mf-model" value="${esc(data.model || '')}" placeholder="provider/model"></label>
+            <label class="field"><span class="lab">Model</span><input type="text" id="mf-model" value="${esc(data.model || '')}" placeholder="provider/model"></label>
             <label class="field"><span class="lab">Agent</span><input type="text" id="mf-agent" value="${esc(data.agent || '')}" placeholder="build"></label>
         </div>
         <label class="field"><span class="lab">Tags (comma separated)</span><input type="text" id="mf-tags" value="${esc((data.tags || []).join(', '))}"></label>`;
@@ -1412,7 +1894,7 @@ function gatherManifest(card) {
 /* ===================================================== ORCHESTRATOR ===== */
 async function viewOrchestrator() {
     $('#topbar-title').textContent = 'Orchestrator';
-    await Promise.all([loadHealth(), loadSettings(), loadProjects(), loadModels()]);
+    await Promise.all([loadHealth(), loadSettings(), loadProjects(), loadModels(), loadAgents()]);
     const controlSlug = (state.health && state.health.control) || '';
     const s = state.settings || {};
     const v = $('#view');
@@ -1496,8 +1978,13 @@ async function viewOrchestrator() {
             const uid = res.run.run_uid;
             refreshPresence();
             perunFx.flash($('#perun-sigil'));
+            let replyFlashed = false;
             streamOrchestrator(uid, (ev) => {
                 if (ev.type === 'text') {
+                    if (!replyFlashed) {
+                        replyFlashed = true;
+                        perunFx.flash($('#perun-sigil'));
+                    }
                     acc += ev.text || '';
                     asst.innerHTML = renderMarkdown(acc) || '<span class="spinner"></span>';
                     log.scrollTop = log.scrollHeight;
@@ -1558,7 +2045,7 @@ function streamOrchestrator(uid, onEvent, onEnd) {
 /* ========================================================= CONSOLE ====== */
 async function viewConsole(slug) {
     $('#topbar-title').textContent = 'Agent Console';
-    await loadProjects();
+    await Promise.all([loadProjects(), loadTerminals()]);
     const v = $('#view');
     v.innerHTML = '';
     v.appendChild(el('div', { class: 'view-head' },
@@ -1574,34 +2061,116 @@ function mountConsole(host, initial) {
     host.innerHTML = '';
     const options = state.projects.map((p) =>
         `<option value="${esc(p.slug)}" ${initial && p.slug === initial.slug ? 'selected' : ''}>${esc(p.name)} (${esc(p.slug)})</option>`).join('');
-    const grid = el('div', { class: 'console-grid' });
-    const left = el('div', { class: 'card' },
-        `<label class="field"><span class="lab">Project</span><select id="c-project">${options}</select></label>
-         <label class="field"><span class="lab">Session</span><select id="c-session"><option value="">＋ New session</option></select></label>
-         <div class="form-row">
-            <label class="field"><span class="lab">Model</span><span id="c-model-host"></span></label>
-            <label class="field"><span class="lab">Agent</span><input type="text" id="c-agent" placeholder="(project default)"></label>
+
+    const wrap = el('div', { class: 'console-wrap' });
+    const header = el('div', { class: 'console-header card' },
+        `<div class="form-row">
+            <label class="field"><span class="lab">Project</span><select id="c-project">${options}</select></label>
+            <label class="field"><span class="lab">Session</span><select id="c-session"><option value="">＋ New session</option></select></label>
          </div>
-         <label class="field"><span class="lab">Prompt</span><textarea id="c-prompt" placeholder="What should the agent do?"></textarea></label>
-         <div class="form-actions">
-            <button class="btn primary" id="c-run">▶ Run</button>
-            <button class="btn danger" id="c-stop" disabled>■ Stop</button>
-            <button class="btn ghost" id="c-clear">Clear output</button>
+         <div class="form-row">
+            <label class="field"><span class="lab">Terminal</span><select id="c-terminal"><option value="">${esc(state.terminals && state.terminals.configured_source === 'os' ? 'System default' : 'Custom...')}</option>${(state.terminals && state.terminals.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === (state.settings && state.settings.terminal || state.terminals && state.terminals.configured) ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
          </div>`);
-    const cModel = modelSelect({ placeholder: '(project default)' });
-    left.querySelector('#c-model-host').appendChild(cModel);
-    const term = el('div', { class: 'terminal', id: 'c-term' }, `<div class="term-line sys">Ready. Select a project and send a prompt.</div>`);
-    grid.appendChild(left);
-    grid.appendChild(term);
-    host.appendChild(grid);
+
+    const log = el('div', { class: 'console-chat', id: 'c-chat' });
+    const composer = el('div', { class: 'console-composer card' },
+        `<div id="c-task-queue" class="task-queue"></div>
+         <label class="field"><span class="lab">Prompt</span><textarea id="c-prompt" rows="3" placeholder="What should the agent do? If empty, only queued tasks will run."></textarea></label>
+         <div class="form-actions">
+            <button class="btn primary" id="c-run">🖵 OpenCode</button>
+            <button class="btn danger" id="c-stop" disabled>■ Stop</button>
+            <button class="btn ghost" id="c-add-task" title="Add a project task to the queue">＋ Task</button>
+            <button class="btn ghost" id="c-clear">Clear</button>
+         </div>`);
+    wrap.appendChild(header);
+    wrap.appendChild(log);
+    wrap.appendChild(composer);
+    host.appendChild(wrap);
 
     let currentRun = null;
+    let taskQueue = [];
+    let projectTasks = [];
 
-    const termEl = () => $('#c-term');
-    const line = (text, cls = '') => {
-        const d = el('div', { class: 'term-line ' + cls }, esc(text));
-        const t = termEl(); t.appendChild(d); t.scrollTop = t.scrollHeight;
-        return d;
+    const logEl = () => $('#c-chat');
+    const promptEl = () => $('#c-prompt');
+    const queueEl = () => $('#c-task-queue');
+    const runBtn = $('#c-run');
+    const stopBtn = $('#c-stop');
+
+    const logLine = (text) => {
+        const d = el('div', { class: 'chat-sys' }, esc(text));
+        logEl().appendChild(d);
+        logEl().scrollTop = logEl().scrollHeight;
+    };
+
+    let dragIdx = null;
+    const updateQueue = () => {
+        const el = queueEl();
+        el.innerHTML = taskQueue.length
+            ? taskQueue.map((t, i) => `<span class="chip" draggable="true" data-idx="${i}"><span class="grip">≡</span> ${esc(t.name)} <b data-rm="${i}">×</b></span>`).join('')
+            : '<span class="muted">No tasks queued</span>';
+        el.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            taskQueue.splice(Number(b.dataset.rm), 1);
+            updateQueue();
+        }));
+        el.querySelectorAll('.chip').forEach((chip) => {
+            chip.addEventListener('dragstart', (e) => {
+                dragIdx = Number(chip.dataset.idx);
+                chip.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            chip.addEventListener('dragend', () => {
+                chip.classList.remove('dragging');
+                dragIdx = null;
+                el.querySelectorAll('.drop-marker').forEach((m) => m.remove());
+            });
+            chip.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (dragIdx === null) return;
+                const targetIdx = Number(chip.dataset.idx);
+                if (targetIdx === dragIdx) return;
+                const rect = chip.getBoundingClientRect();
+                const before = e.clientX < rect.left + rect.width / 2;
+                // Move in array and re-render.
+                const moved = taskQueue.splice(dragIdx, 1)[0];
+                const newIdx = before ? targetIdx : targetIdx + 1;
+                taskQueue.splice(newIdx, 0, moved);
+                dragIdx = newIdx;
+                updateQueue();
+            });
+        });
+    };
+
+    const renderTaskPicker = () => {
+        const filtered = projectTasks.filter((t) => t.enabled && !taskQueue.some((q) => q.id === t.id));
+        if (!filtered.length) { toast('No enabled tasks available', 'ok'); return; }
+        const list = el('div', {},
+            `<input type="text" id="task-search" class="field" placeholder="Search tasks…" style="width:100%;margin-bottom:8px">` +
+            filtered.map((t) => `<div class="mselect-item" data-task="${t.id}"><b>${esc(t.name)}</b> <span class="muted">${esc(t.kind)} · ${esc(t.prompt.slice(0, 50))}</span></div>`).join('')
+        );
+        const update = () => {
+            const q = $('#task-search').value.toLowerCase();
+            list.querySelectorAll('[data-task]').forEach((it) => {
+                const t = projectTasks.find((x) => x.id === Number(it.dataset.task));
+                it.style.display = t && (t.name.toLowerCase().includes(q) || t.prompt.toLowerCase().includes(q)) ? '' : 'none';
+            });
+        };
+        list.querySelector('#task-search').addEventListener('input', update);
+        list.addEventListener('click', (e) => {
+            const it = e.target.closest('[data-task]');
+            if (!it) return;
+            const t = projectTasks.find((x) => x.id === Number(it.dataset.task));
+            if (t) { taskQueue.push(t); updateQueue(); closeModal(); }
+        });
+        modal('Add project task', list, [{ label: 'Close', class: 'ghost', onClick: closeModal }]);
+    };
+
+    const loadProjectTasks = async () => {
+        const slug = $('#c-project').value;
+        if (!slug) { projectTasks = []; return; }
+        try { projectTasks = (await api(`/api/projects/${slug}/tasks`)).tasks || []; }
+        catch (_) { projectTasks = []; }
     };
 
     async function loadSessions() {
@@ -1617,68 +2186,62 @@ function mountConsole(host, initial) {
                 sel.appendChild(o);
             }
         } catch (_) { /* ignore */ }
+        await loadProjectTasks();
     }
 
     $('#c-project').addEventListener('change', loadSessions);
-    loadSessions();
+    $('#c-add-task').addEventListener('click', renderTaskPicker);
+    $('#c-clear').addEventListener('click', () => { logEl().innerHTML = ''; promptEl().value = ''; taskQueue = []; updateQueue(); });
 
-    const stopBtn = $('#c-stop');
-    const runBtn = $('#c-run');
+    const buildPromptChain = () => {
+        const prompt = promptEl().value.trim();
+        const parts = [];
+        if (prompt) parts.push(prompt);
+        for (const t of taskQueue) {
+            let p = `[Task: ${t.name}]\n${t.prompt}`;
+            if (t.tools.length) p += `\n\nAllowed tools: ${t.tools.join(', ')}`;
+            if (t.skills.length) p += `\n\nSkills to use: ${t.skills.join(', ')}`;
+            parts.push(p);
+        }
+        return parts.join('\n\n---\n\n');
+    };
 
     runBtn.addEventListener('click', async () => {
         const slug = $('#c-project').value;
-        const prompt = $('#c-prompt').value.trim();
         if (!slug) { toast('Pick a project', 'err'); return; }
-        if (!prompt) { toast('Enter a prompt', 'err'); return; }
-        const sessionOpt = $('#c-session').selectedOptions[0];
-        const body = {
-            project: slug, prompt,
-            model: cModel.getValue(),
-            agent: $('#c-agent').value.trim(),
-            session_pk: $('#c-session').value ? Number($('#c-session').value) : null,
-            opencode_session_id: sessionOpt ? (sessionOpt.dataset.oc || '') : '',
-        };
-        termEl().innerHTML = '';
-        line('› ' + prompt, 'you');
+        const p = projectBySlug(slug);
+        if (!p) { toast('Unknown project', 'err'); return; }
+        const prompt = buildPromptChain();
+        if (!prompt) { toast('Enter a prompt or queue a task', 'err'); return; }
+        logLine('› ' + (promptEl().value.trim() || 'Queued tasks only'));
         try {
-            const res = await api('/api/runs', { method: 'POST', body });
+            const res = await api('/api/runs/tui', { method: 'POST', body: { project: slug, prompt } });
             currentRun = res.run.run_uid;
             runBtn.disabled = true; stopBtn.disabled = false;
             refreshPresence();
             perunFx.flash($('#perun-sigil'));
-            line(`[run ${currentRun}] starting in ${slug}…`, 'sys');
-            streamRun(currentRun);
-        } catch (e) { line('error: ' + e.message, 'err'); toast(e.message, 'err'); }
+            const sessionOpt = $('#c-session').selectedOptions[0];
+            const sessionId = sessionOpt ? (sessionOpt.dataset.oc || '') : '';
+            await launchInTerminal({ cwd: p.path, prompt, tui: true, runUid: currentRun, sessionId });
+            logLine(`[TUI session ${currentRun}] opened in ${slug}`);
+            promptEl().value = '';
+            taskQueue = [];
+            updateQueue();
+        } catch (e) { logLine('error: ' + e.message); toast(e.message, 'err'); }
     });
 
     stopBtn.addEventListener('click', async () => {
         if (!currentRun) return;
-        await api(`/api/runs/${currentRun}/cancel`, { method: 'POST' });
-        line('[cancel requested]', 'sys');
+        try {
+            await api(`/api/runs/${currentRun}/kill`, { method: 'POST' });
+            logLine('[TUI session closed]');
+        } catch (e) { logLine('kill warning: ' + e.message); }
+        runBtn.disabled = false; stopBtn.disabled = true; currentRun = null;
+        await refreshPresence(); await loadProjects();
     });
-    $('#c-clear').addEventListener('click', () => { termEl().innerHTML = ''; });
 
-    function streamRun(uid) {
-        if (state.runSource) state.runSource.close();
-        const src = new EventSource(`/api/runs/${uid}/stream`);
-        state.runSource = src;
-        let toolLine = null;
-        src.onmessage = (ev) => {
-            let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
-            if (d.type === 'text') { if (d.text) line(d.text); }
-            else if (d.type === 'tool') { line(`⚙ ${d.tool || 'tool'}${d.status ? ' · ' + d.status : ''}`, 'tool'); }
-            else if (d.type === 'session') { line(`[session ${d.session_id}]`, 'sys'); }
-            else if (d.type === 'error') { line('⚠ ' + (d.text || 'error'), 'err'); }
-            else if (d.type === 'start') { line(`[cwd ${d.cwd}]`, 'sys'); }
-            else if (d.type === 'end') {
-                line(`[${d.status}]`, d.status === 'done' ? 'ok' : 'err');
-                runBtn.disabled = false; stopBtn.disabled = true; currentRun = null;
-                src.close(); state.runSource = null;
-                loadSessions(); loadProjects(); refreshPresence();
-            }
-        };
-        src.onerror = () => { /* keep open; server pings */ };
-    }
+    loadSessions();
+    updateQueue();
 }
 
 /* ========================================================== MEMORY ====== */
@@ -1959,7 +2522,7 @@ function mountTelegram(host, status, reload) {
 /* ========================================================= SETTINGS ===== */
 async function viewSettings() {
     $('#topbar-title').textContent = 'Settings';
-    await loadSettings();
+    await Promise.all([loadSettings(), loadTerminals()]);
     const s = state.settings;
     const v = $('#view');
     v.innerHTML = '';
@@ -1976,7 +2539,13 @@ async function viewSettings() {
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">Default model</span><span id="s-model-host"></span></label>
-            <label class="field"><span class="lab">Default agent</span><input type="text" id="s-agent" value="${esc(s.default_agent || '')}"></label>
+            <label class="field"><span class="lab">Default agent</span><span id="s-agent-host"></span></label>
+         </div>
+         <div class="form-row">
+            <label class="field"><span class="lab">Embed model</span><select id="s-embed"><option value="nomic-embed-text" ${s.embed_model === 'nomic-embed-text' ? 'selected' : ''}>nomic-embed-text</option><option value="mxbai-embed-large" ${s.embed_model === 'mxbai-embed-large' ? 'selected' : ''}>mxbai-embed-large</option><option value="all-minilm" ${s.embed_model === 'all-minilm' ? 'selected' : ''}>all-minilm</option><option value="" ${!s.embed_model ? 'selected' : ''}>Custom…</option></select>
+                <input type="text" id="s-embed-custom" value="${esc((s.embed_model && !['nomic-embed-text','mxbai-embed-large','all-minilm'].includes(s.embed_model)) ? s.embed_model : '')}" placeholder="custom embed model" style="margin-top:8px"></label>
+            <label class="field"><span class="lab">Terminal / shell</span><select id="s-terminal"><option value="">${esc(state.terminals && state.terminals.configured_source === 'os' ? 'System default' : 'Custom path...')}</option>${(state.terminals && state.terminals.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === (s.terminal || state.terminals.configured) ? 'selected' : ''}>${esc(t.name)} — ${esc(t.path)}</option>`).join('')}</select>
+                <input type="text" id="s-terminal-custom" value="${esc((s.terminal && !(state.terminals && state.terminals.terminals || []).some((tt) => tt.id === s.terminal)) ? s.terminal : '')}" placeholder="custom terminal path" style="margin-top:8px"></label>
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">Max concurrent runs</span><input type="number" id="s-max" value="${esc(s.max_concurrent_runs)}"></label>
@@ -1984,7 +2553,6 @@ async function viewSettings() {
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">Ollama host</span><input type="text" id="s-ollama" value="${esc(s.ollama_host)}"></label>
-            <label class="field"><span class="lab">Embed model</span><input type="text" id="s-embed" value="${esc(s.embed_model)}"></label>
          </div>
          <div class="row wrap" style="gap:18px;margin:6px 0 4px">
             <label class="row" style="gap:6px"><input type="checkbox" id="s-autodisc" ${s.auto_discover_on_start ? 'checked' : ''}> auto-discover on start</label>
@@ -1998,8 +2566,12 @@ async function viewSettings() {
     v.appendChild(card);
 
     await loadModels();
+    await loadAgents();
     const msDefault = modelSelect({ value: s.default_model || '', placeholder: 'provider/model' });
     card.querySelector('#s-model-host').appendChild(msDefault);
+    const sAgent = agentSelect({ value: s.default_agent || '', placeholder: '(none)' });
+    card.querySelector('#s-agent-host').appendChild(sAgent);
+    const sOrchAgent = agentSelect({ value: s.orchestrator_agent || '', placeholder: '(none)' });
 
     // ---- orchestrator (control plane) ----
     v.appendChild(sectionTitle('Orchestrator'));
@@ -2008,7 +2580,7 @@ async function viewSettings() {
          <p class="secondary">The orchestrator is the agent you talk to when <b>no project is selected</b> — from the <a href="#/orchestrator">Orchestrator chat</a> or Telegram. Its model, agent, and custom instructions apply machine-wide.</p>
          <div class="form-row">
             <label class="field"><span class="lab">Orchestrator model</span><span id="s-orch-model-host"></span></label>
-            <label class="field"><span class="lab">Orchestrator agent</span><input type="text" id="s-orch-agent" value="${esc(s.orchestrator_agent || '')}" placeholder="(default)"></label>
+            <label class="field"><span class="lab">Orchestrator agent</span><span id="s-orch-agent-host"></span></label>
          </div>
          <label class="field"><span class="lab">Custom instructions</span>
             <textarea id="s-orch-instr" rows="6" placeholder="Standing instructions the orchestrator should always follow…">${esc(s.orchestrator_instructions || '')}</textarea></label>
@@ -2019,12 +2591,13 @@ async function viewSettings() {
     v.appendChild(orchCard);
     const msOrch = modelSelect({ value: s.orchestrator_model || '', placeholder: 'inherit default model' });
     orchCard.querySelector('#s-orch-model-host').appendChild(msOrch);
+    orchCard.querySelector('#s-orch-agent-host').appendChild(sOrchAgent);
 
     orchCard.querySelector('#s-orch-save').addEventListener('click', async () => {
         try {
             await api('/api/settings', { method: 'PATCH', body: {
                 orchestrator_model: msOrch.getValue(),
-                orchestrator_agent: $('#s-orch-agent').value.trim(),
+                orchestrator_agent: sOrchAgent.getValue(),
                 orchestrator_instructions: $('#s-orch-instr').value,
             } });
             toast('Orchestrator saved', 'ok');
@@ -2051,9 +2624,10 @@ async function viewSettings() {
         const payload = {
             roots: $('#s-roots').value.split('\n').map((x) => x.trim()).filter(Boolean),
             host: $('#s-host').value, port: Number($('#s-port').value),
-            default_model: msDefault.getValue(), default_agent: $('#s-agent').value,
+            default_model: msDefault.getValue(), default_agent: sAgent.getValue(),
+            terminal: $('#s-terminal').value || $('#s-terminal-custom').value.trim(),
             max_concurrent_runs: Number($('#s-max').value), run_timeout: Number($('#s-timeout').value),
-            ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value,
+            ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value || $('#s-embed-custom').value.trim(),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
         };
         try { await api('/api/settings', { method: 'PATCH', body: payload }); toast('Settings saved', 'ok'); }
@@ -2118,7 +2692,8 @@ async function boot() {
         }
     });
     if (!location.hash) location.hash = '#/dashboard';
-    loadModels().then(() => { const r = $('#model-root'); if (r) r.innerHTML = modelListHtml(); });
+    // modelListHtml / model-root were removed; the custom mselect covers model choice.
+    loadModels();
     await refreshHealth();
     // Load projects first so presence knows which cards are awake, then presence.
     await loadProjects().catch(() => {});

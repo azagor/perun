@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
+import subprocess
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
@@ -67,6 +70,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_db()
     config.ensure_dirs()
     _control_project()
+    # After a restart we lose all in-memory process tracking; any run still marked
+    # running is effectively stale. Finalize them so cards don't stay lit forever.
+    for run in registry.list_active_runs():
+        registry.update_run(run["run_uid"], status="done", ended_at=registry.now_iso())
     if SETTINGS.auto_discover_on_start:
         try:
             discovery.discover_and_sync(SETTINGS.roots, max_depth=1)
@@ -191,6 +198,8 @@ def health() -> dict[str, Any]:
 
 _MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 _MODELS_TTL = 300.0
+_AGENTS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+_AGENTS_TTL = 60.0
 
 
 @app.get("/api/models")
@@ -243,6 +252,177 @@ def models(refresh: bool = False) -> dict[str, Any]:
     }
     _MODELS_CACHE.update(ts=now, data=data)
     return data
+
+
+@app.get("/api/agents")
+def api_list_agents(refresh: bool = False) -> dict[str, Any]:
+    """OpenCode agents available to the current installation / project.
+
+    Combines documented built-ins with user-defined agents found on disk under
+    ``~/.config/opencode/agents/`` and, when a project path is provided, the
+    project-local ``.opencode/agents/`` directory.
+    """
+    from . import agents
+
+    now = time.time()
+    if (not refresh and _AGENTS_CACHE["data"] is not None
+            and now - _AGENTS_CACHE["ts"] < _AGENTS_TTL):
+        return _AGENTS_CACHE["data"]
+    entries = agents.list_agents()
+    # Alphabetical, but keep primary agents before subagents for readability.
+    def sort_key(a: dict[str, Any]) -> tuple[str, str]:
+        mode = {"primary": "0", "all": "1"}.get(a.get("mode", ""), "2")
+        return (mode, (a.get("name") or a.get("id") or "").lower())
+
+    entries.sort(key=sort_key)
+    data = {"ok": True, "agents": entries, "count": len(entries)}
+    _AGENTS_CACHE.update(ts=now, data=data)
+    return data
+
+
+@app.get("/api/skills")
+def api_list_skills(project: str = "") -> dict[str, Any]:
+    """OpenCode agent skills available globally and (optionally) for a project."""
+    from . import skills
+
+    path = None
+    if project:
+        p = registry.get_project(project)
+        if p:
+            path = p["path"]
+    skills_list = skills.discover_skills(path)
+    return _ok(skills=skills_list, count=len(skills_list))
+
+
+@app.get("/api/tools")
+def api_list_tools(project: str = "") -> dict[str, Any]:
+    """Tools available to OpenCode: built-ins plus custom project/global tools."""
+    from . import skills
+
+    path = None
+    if project:
+        p = registry.get_project(project)
+        if p:
+            path = p["path"]
+    tools_list = skills.discover_tools(path)
+    return _ok(tools=tools_list, count=len(tools_list))
+
+
+@app.get("/api/terminals")
+def api_terminals() -> dict[str, Any]:
+    """Terminals/shells available on this machine.
+
+    The dashboard uses this to let the user pick which command interpreter to
+    open when copying or launching a command. The configured preference is
+    returned alongside the detected list.
+    """
+    import shutil
+
+    candidates = []
+    if os.name == "nt":
+        roots = os.environ.get("PATH", "").split(os.pathsep)
+        for name, label in [
+            ("pwsh.exe", "PowerShell 7+"),
+            ("pwsh", "PowerShell 7+"),
+            ("powershell.exe", "Windows PowerShell"),
+            ("powershell", "Windows PowerShell"),
+            ("cmd.exe", "Command Prompt"),
+            ("cmd", "Command Prompt"),
+            ("wt.exe", "Windows Terminal"),
+            ("wt", "Windows Terminal"),
+        ]:
+            path = shutil.which(name)
+            if path and not any(c["id"].lower() == name.lower().replace(".exe", "") for c in candidates):
+                candidates.append({"id": name.lower().replace(".exe", ""), "name": label, "path": path})
+    else:
+        for name, label in [
+            (os.environ.get("SHELL", "").split("/")[-1], "Current shell"),
+            ("bash", "Bash"),
+            ("zsh", "Zsh"),
+            ("fish", "Fish"),
+            ("sh", "sh"),
+        ]:
+            if not name:
+                continue
+            path = shutil.which(name)
+            if path and not any(c["id"] == name for c in candidates):
+                candidates.append({"id": name, "name": label, "path": path})
+    source = SETTINGS.terminal_sources()
+    return _ok(
+        terminals=candidates,
+        configured=SETTINGS.terminal.strip(),
+        configured_source=source["source"],
+        effective_path=source["path"],
+    )
+
+
+@app.post("/api/run-in-terminal")
+def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Open the user's preferred terminal with the equivalent opencode command.
+
+    The frontend computes the command text; Perun only starts the configured
+    shell/terminal with that command. This keeps shell-quoting decisions next to
+    the UI that produced them.
+    """
+    project_ref = payload.get("project") or ""
+    cwd = (payload.get("cwd") or "").strip()
+    cmd_text = (payload.get("command") or "").strip()
+    if not cmd_text:
+        raise HTTPException(status_code=400, detail="command is required")
+    if project_ref and not cwd:
+        project = registry.get_project(project_ref)
+        if project:
+            cwd = project["path"]
+    if cwd and not Path(cwd).is_dir():
+        raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
+
+    shell = payload.get("shell") or SETTINGS.terminal.strip() or ""
+    argv = SETTINGS.terminal_cmd(shell_hint=shell)
+    # Derive the shell class from the resolved executable so an empty/default
+    # shell still gets the right command-line syntax.
+    exe = os.path.basename(argv[0]).lower().replace(".exe", "")
+    shell_cls = shell.lower().replace(".exe", "") or exe
+    # Windows Terminal needs the starting directory; then it should run the
+    # provided command. PowerShell/cmd are launched with a single command line.
+    if shell_cls in ("wt",):
+        wt_argv = list(argv)
+        if cwd:
+            try:
+                d_idx = wt_argv.index("-d")
+                wt_argv[d_idx + 1] = cwd
+            except (ValueError, IndexError):
+                wt_argv.extend(["-d", cwd])
+        # Keep the tab open after opencode exits so the user can see results.
+        wt_argv.extend(["cmd", "/k", cmd_text])
+        argv = wt_argv
+    elif shell_cls in ("cmd",):
+        # /k keeps the console window alive after opencode exits.
+        argv = [argv[0], "/k", cmd_text]
+    elif shell_cls in ("powershell", "pwsh"):
+        # Launch PowerShell directly with a new console. Using subprocess with
+        # CREATE_NEW_CONSOLE avoids the fragile cmd.exe "start" quoting dance.
+        argv = [argv[0], "-NoExit", "-Command", cmd_text]
+    else:
+        # Generic fallback: pass the command through the shell.
+        argv = argv + ["-c", cmd_text]
+
+    try:
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        else:
+            creationflags = 0
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd or None,
+            creationflags=creationflags,
+        )
+        run_uid = (payload.get("run_uid") or "").strip()
+        if run_uid:
+            from . import process_tracker
+            process_tracker.TRACKER.register(run_uid, proc, shell=shell)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"could not open terminal: {exc}")
+    return _ok(launched=True, shell=shell, command=cmd_text, pid=proc.pid if 'proc' in locals() else None)
 
 
 # --------------------------------------------------------------------------- #
@@ -341,6 +521,29 @@ def api_index_project(slug: str) -> dict[str, Any]:
 def api_project_sessions(slug: str) -> dict[str, Any]:
     project = _project_or_404(slug)
     return _ok(sessions=registry.list_sessions(project["id"]))
+
+
+@app.post("/api/projects/{slug}/session")
+def api_start_project_session(slug: str, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Start an OpenCode session for a specific project.
+
+    The prompt is optional; when omitted Perun uses a default starter prompt so
+    the session is created in the project's scope without requiring the user to
+    type one first.
+    """
+    project = _project_or_404(slug)
+    try:
+        run = ORCH.start_run(
+            slug, payload.get("prompt", ""),
+            session_pk=payload.get("session_pk"),
+            opencode_session_id=payload.get("opencode_session_id", ""),
+            model=payload.get("model", ""),
+            agent=payload.get("agent", ""),
+            title=payload.get("title", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(run=run)
 
 
 @app.delete("/api/sessions/{pk}")
@@ -654,8 +857,6 @@ def api_start_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     prompt = (payload.get("prompt") or "").strip()
     if not project_ref:
         raise HTTPException(status_code=400, detail="project is required")
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
     try:
         run = ORCH.start_run(
             project_ref, prompt,
@@ -680,7 +881,145 @@ def api_get_run(run_uid: str) -> dict[str, Any]:
 
 @app.post("/api/runs/{run_uid}/cancel")
 def api_cancel_run(run_uid: str) -> dict[str, Any]:
-    return _ok(cancelled=ORCH.cancel(run_uid))
+    # Headless orchestrator runs are cancelled through ORCH; TUI/terminal sessions
+    # launched by the dashboard are tracked separately. Cancel both so the Stop
+    # button always ends whatever is active.
+    from . import process_tracker
+
+    orch_cancelled = ORCH.cancel(run_uid)
+    tracker_killed = False
+    if process_tracker.TRACKER.get(run_uid):
+        tracker_killed = process_tracker.TRACKER.terminate(run_uid)
+    # If this was a TUI-only run, ORCH won't have a record; finalize explicitly.
+    if tracker_killed and not orch_cancelled:
+        process_tracker.TRACKER.finalize(run_uid)
+    return _ok(cancelled=orch_cancelled or tracker_killed)
+
+
+# --------------------------------------------------------------------------- #
+# Tasks
+# --------------------------------------------------------------------------- #
+@app.get("/api/projects/{slug}/tasks")
+def api_list_tasks(slug: str) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    return _ok(tasks=registry.list_tasks(project["id"]))
+
+
+@app.post("/api/projects/{slug}/tasks")
+def api_create_task(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    task = registry.create_task(
+        project["id"],
+        name=name,
+        kind=str(payload.get("kind") or "prompt").strip(),
+        prompt=str(payload.get("prompt") or "").strip(),
+        tools=payload.get("tools") or [],
+        skills=payload.get("skills") or [],
+        enabled=bool(payload.get("enabled", True)),
+        sort_order=int(payload.get("sort_order") or 0),
+    )
+    return _ok(task=task)
+
+
+@app.patch("/api/projects/{slug}/tasks/{task_id}")
+def api_update_task(slug: str, task_id: int, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    task = registry.get_task(task_id)
+    if not task or task["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="no such task")
+    updates: dict[str, Any] = {}
+    if "name" in payload:
+        updates["name"] = str(payload["name"]).strip()
+    if "kind" in payload:
+        updates["kind"] = str(payload["kind"]).strip()
+    if "prompt" in payload:
+        updates["prompt"] = str(payload["prompt"]).strip()
+    if "tools" in payload:
+        updates["tools"] = payload["tools"]
+    if "skills" in payload:
+        updates["skills"] = payload["skills"]
+    if "enabled" in payload:
+        updates["enabled"] = bool(payload["enabled"])
+    if "sort_order" in payload:
+        updates["sort_order"] = int(payload["sort_order"])
+    if "name" in updates and not updates["name"]:
+        raise HTTPException(status_code=400, detail="name is required")
+    updated = registry.update_task(task_id, **updates)
+    return _ok(task=updated)
+
+
+@app.delete("/api/projects/{slug}/tasks/{task_id}")
+def api_delete_task(slug: str, task_id: int) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    task = registry.get_task(task_id)
+    if not task or task["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="no such task")
+    registry.delete_task(task_id)
+    return _ok(deleted=True)
+
+
+@app.post("/api/runs/tui")
+def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create a lightweight run record for an externally-managed TUI session.
+
+    The dashboard uses this so that opening OpenCode in a project directory
+    lights up the project card and can later be explicitly finished.
+    """
+    from . import registry as _registry  # local import to avoid cycle concerns
+
+    project_ref = payload.get("project") or payload.get("slug") or _control_slug()
+    if not project_ref:
+        raise HTTPException(status_code=400, detail="project is required")
+    project = _registry.get_project(project_ref)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    run_uid = uuid.uuid4().hex[:16]
+    prompt = (payload.get("prompt") or "").strip() or "Working session in progress."
+    _registry.create_run(
+        run_uid, project["id"], prompt,
+        model=project.get("model", ""), model_explicit=bool(project.get("model")),
+        agent=project.get("agent", ""),
+    )
+    _registry.update_run(run_uid, status="running", started_at=_registry.now_iso())
+    _registry.log_activity(project["id"], "run",
+                           f"Started TUI session ({run_uid})",
+                           {"prompt": prompt[:200]})
+    run = _registry.get_run(run_uid)
+    return _ok(run=run)
+
+
+@app.post("/api/runs/{run_uid}/finish")
+def api_finish_tui_run(run_uid: str) -> dict[str, Any]:
+    """Finalize a TUI session run record."""
+    from . import process_tracker, registry as _registry
+
+    run = _registry.get_run(run_uid)
+    if not run:
+        raise HTTPException(status_code=404, detail="no such run")
+    _registry.update_run(run_uid, status="done", ended_at=_registry.now_iso())
+    # Also stop tracking the external process; caller should use /kill to close the window.
+    process_tracker.TRACKER.finalize(run_uid)
+    return _ok(finished=True)
+
+
+@app.post("/api/runs/{run_uid}/kill")
+def api_kill_tui_run(run_uid: str) -> dict[str, Any]:
+    """Terminate the tracked TUI/terminal process for a run and finalize it."""
+    from . import process_tracker
+
+    killed = process_tracker.TRACKER.terminate(run_uid)
+    return _ok(killed=killed)
 
 
 @app.get("/api/runs/{run_uid}/stream")

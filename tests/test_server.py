@@ -92,15 +92,71 @@ def test_settings_get_patch(client):
     assert client.get("/api/settings").json()["settings"]["max_concurrent_runs"] == 5
 
 
-def test_start_run_validation(client):
-    # A missing prompt is an error.
-    r = client.post("/api/runs", json={"project": "ghost"})
-    assert r.status_code == 400
+def test_start_run_validation(client, monkeypatch):
+    fake_runs: dict = {}
+
+    def fake_start(ref, prompt, **kw):  # noqa: ANN001, ANN003
+        if ref == "ghost":
+            raise ValueError(f"no such project: {ref}")
+        fake_runs["ref"] = ref
+        fake_runs["prompt"] = prompt
+        return {"run_uid": "runX", "status": "queued"}
+
+    from perun import server
+
+    monkeypatch.setattr(server.ORCH, "start_run", fake_start)
+    # A missing project targets the control plane.
+    r = client.post("/api/runs", json={"prompt": "hi"})
+    assert r.status_code == 200
+    assert fake_runs["ref"] == "perun"
     # An unknown project is an error.
     r = client.post("/api/runs", json={"project": "ghost", "prompt": "hi"})
     assert r.status_code == 400
-    # (A *missing* project is no longer an error — it targets the orchestrator;
-    #  that path is covered with a stubbed orchestrator in test_control.py.)
+    # A missing prompt is no longer an error — the orchestrator supplies a
+    # default starter prompt so the session is opened in the project's scope.
+    r = client.post("/api/runs", json={"project": "perun"})
+    assert r.status_code == 200
+    assert fake_runs["ref"] == "perun"
+
+
+def test_start_project_session_endpoint(client, monkeypatch):
+    captured: dict = {}
+
+    def fake_start(ref, prompt, **kw):  # noqa: ANN001, ANN003
+        if ref == "ghost":
+            raise ValueError(f"no such project: {ref}")
+        captured["ref"] = ref
+        captured["prompt"] = prompt
+        return {"run_uid": "runS", "status": "queued"}
+
+    from perun import server
+
+    monkeypatch.setattr(server.ORCH, "start_run", fake_start)
+    r = client.post("/api/projects/perun/session", json={})
+    assert r.status_code == 200
+    assert r.json()["run"]["run_uid"] == "runS"
+    assert captured["ref"] == "perun"
+    # Custom prompt still works.
+    r = client.post("/api/projects/perun/session", json={"prompt": "custom"})
+    assert r.status_code == 200
+    assert captured["prompt"] == "custom"
+    # Unknown project returns 404 from the route guard before start_run.
+    assert client.post("/api/projects/ghost/session", json={}).status_code == 404
+
+
+def test_agents_endpoint(client, monkeypatch):
+    from perun import agents, server
+
+    monkeypatch.setattr(agents, "list_agents", lambda: [
+        {"id": "build", "name": "Build", "mode": "primary", "description": "x"},
+    ])
+    # Reset the endpoint's cache so the stub is used.
+    server._AGENTS_CACHE["data"] = None
+    r = client.get("/api/agents")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert any(a["id"] == "build" for a in body["agents"])
 
 
 def test_activity_endpoint(client):
@@ -304,3 +360,179 @@ def test_manifest_missing_returns_not_found_on_refresh(client, tmp_path):
     r = client.get(f"/api/projects/{slug}/manifest")
     assert r.status_code == 200
     assert r.json()["manifest"]["found"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Tasks, skills, tools, TUI runs, run-in-terminal
+# --------------------------------------------------------------------------- #
+def test_project_tasks_crud(client, tmp_path):
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "TaskProj", "path": str(tmp_path / "tp"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    # list empty
+    r = client.get(f"/api/projects/{slug}/tasks")
+    assert r.status_code == 200
+    assert r.json()["tasks"] == []
+
+    # create
+    r = client.post(f"/api/projects/{slug}/tasks", json={
+        "name": "audit", "kind": "combo", "prompt": "audit recent changes",
+        "tools": ["read", "grep"], "skills": ["code-audit"], "enabled": True,
+    })
+    assert r.status_code == 200
+    task = r.json()["task"]
+    assert task["name"] == "audit"
+    assert task["tools"] == ["read", "grep"]
+    assert task["skills"] == ["code-audit"]
+    assert task["enabled"] == 1
+    task_id = task["id"]
+
+    # list
+    r = client.get(f"/api/projects/{slug}/tasks")
+    assert len(r.json()["tasks"]) == 1
+
+    # update
+    r = client.patch(f"/api/projects/{slug}/tasks/{task_id}", json={
+        "name": "audit v2", "enabled": False,
+    })
+    assert r.status_code == 200
+    assert r.json()["task"]["name"] == "audit v2"
+    assert r.json()["task"]["enabled"] == 0
+
+    # delete
+    r = client.delete(f"/api/projects/{slug}/tasks/{task_id}")
+    assert r.status_code == 200
+    assert client.get(f"/api/projects/{slug}/tasks").json()["tasks"] == []
+
+    # unknown project
+    assert client.get("/api/projects/ghost/tasks").status_code == 404
+    assert client.post("/api/projects/ghost/tasks", json={"name": "x"}).status_code == 404
+    assert client.delete(f"/api/projects/{slug}/tasks/99999").status_code == 404
+
+    # missing name rejected
+    assert client.post(f"/api/projects/{slug}/tasks", json={"kind": "prompt"}).status_code == 400
+
+
+def test_tui_run_lifecycle(client, tmp_path, monkeypatch):
+    from perun import process_tracker
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "TUIProj", "path": str(tmp_path / "tui"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    r = client.post("/api/runs/tui", json={"project": slug, "prompt": "hello tui"})
+    assert r.status_code == 200
+    run_uid = r.json()["run"]["run_uid"]
+    assert r.json()["run"]["status"] == "running"
+
+    # finish
+    r = client.post(f"/api/runs/{run_uid}/finish")
+    assert r.status_code == 200
+    run = client.get(f"/api/runs/{run_uid}").json()["run"]
+    assert run["status"] == "done"
+
+    # kill on unknown run
+    r = client.post("/api/runs/unknown/kill")
+    assert r.status_code == 200
+    assert r.json()["killed"] is False
+
+
+def test_cancel_short_circuits_untracked_run(client, monkeypatch):
+    """Canceling a headless run should not call process_tracker when the run is not tracked."""
+    from perun import process_tracker, server
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    called: dict = {}
+
+    def fake_cancel(run_uid):
+        called["cancel"] = run_uid
+        return True
+
+    monkeypatch.setattr(server.ORCH, "cancel", fake_cancel)
+
+    r = client.post("/api/runs/headless-only/cancel")
+    assert r.status_code == 200
+    assert r.json()["cancelled"] is True
+    assert called.get("cancel") == "headless-only"
+    assert fresh.get("headless-only") is None
+
+
+def test_run_in_terminal_starts_tracked_process(client, tmp_path, monkeypatch):
+    from perun import process_tracker
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "TermProj", "path": str(tmp_path / "term"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+    run_uid = "term-run-123"
+
+    # We cannot reliably open a real terminal in unit tests, so stub subprocess.Popen
+    # and verify the tracker receives the run_uid.
+    class FakeProc:
+        pid = 12345
+        def poll(self): return None
+
+    orig_popen = __import__("subprocess").Popen
+    def fake_popen(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    r = client.post("/api/run-in-terminal", json={
+        "project": slug, "command": "opencode", "run_uid": run_uid,
+        "shell": "cmd",
+    })
+    assert r.status_code == 200
+    assert r.json()["launched"] is True
+    assert fresh.get(run_uid) is not None
+    assert fresh.get(run_uid)["pid"] == 12345
+
+    # missing command rejected
+    assert client.post("/api/run-in-terminal", json={"project": slug}).status_code == 400
+
+
+def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):
+    from perun import skills
+
+    # Stub global skills/tools so the test doesn't depend on the user's home dir.
+    def fake_discover_skills(project_path=None):
+        return [{"name": "audit", "description": "x", "project_local": False}]
+
+    def fake_discover_tools(project_path=None):
+        return [
+            {"name": "bash", "description": "shell", "project_local": False, "builtin": True},
+            {"name": "custom", "description": "c", "project_local": True, "builtin": False},
+        ]
+
+    monkeypatch.setattr(skills, "discover_skills", fake_discover_skills)
+    monkeypatch.setattr(skills, "discover_tools", fake_discover_tools)
+
+    r = client.get("/api/skills")
+    assert r.status_code == 200
+    assert r.json()["count"] == 1
+    assert r.json()["skills"][0]["name"] == "audit"
+
+    r = client.get("/api/tools")
+    assert r.status_code == 200
+    assert r.json()["count"] == 2
+    names = {t["name"] for t in r.json()["tools"]}
+    assert names == {"bash", "custom"}
+
+    # project scoping still resolves the project
+    assert client.get("/api/skills?project=perun").status_code == 200
+    assert client.get("/api/tools?project=perun").status_code == 200
+    assert client.get("/api/skills?project=ghost").status_code == 200

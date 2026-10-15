@@ -81,16 +81,42 @@ def test_orchestrator_start_run_rejects_unknown_project():
         pass
 
 
-def test_orchestrator_start_run_rejects_empty_prompt():
+def test_orchestrator_start_run_uses_default_prompt_when_empty(monkeypatch):
     from perun import orchestrator, registry
 
-    registry.add_project("P", r"C:\p")
+    project = registry.add_project("P", r"C:\p")
     o = orchestrator.Orchestrator()
-    try:
-        o.start_run("p", "   ")
-        assert False, "expected ValueError"
-    except ValueError:
-        pass
+    # Do not actually spawn an opencode process.
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("p", "   ")
+    assert run["project_id"] == project["id"]
+    assert run["prompt"] == orch.DEFAULT_SESSION_PROMPT
+    assert run["model"] == ""  # no explicit/project/global model was forced
+    assert run["model_explicit"] == 0
+
+
+def test_orchestrator_global_model_not_forced_on_projects(monkeypatch):
+    from perun import orchestrator, registry, config
+
+    project = registry.add_project("P2", r"C:\p2")
+    settings = config.Settings.load()
+    settings.default_model = "provider/global-model"
+    o = orchestrator.Orchestrator(settings)
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("p2", "hi")
+    assert run["model"] == ""  # OpenCode's own default should be used
+    assert run["model_explicit"] == 0
+
+
+def test_orchestrator_explicit_model_is_passed(monkeypatch):
+    from perun import orchestrator, registry
+
+    registry.add_project("P3", r"C:\p3")
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("p3", "hi", model="provider/explicit")
+    assert run["model"] == "provider/explicit"
+    assert run["model_explicit"] == 1
 
 
 def test_execute_persists_stdout_error_event(monkeypatch, tmp_path):
@@ -118,15 +144,47 @@ def test_execute_persists_stdout_error_event(monkeypatch, tmp_path):
     o = orchestrator.Orchestrator()
     res = o.run_and_wait("fakeproj", "hi", timeout=60)
     run = res["run"]
+    # Without a session id this is a genuine failed run.
     assert run["status"] == "failed"
     assert "provider boom" in (run.get("error") or "")
     assert run["project_id"] == project["id"]
 
 
+def test_provider_error_keeps_session_active(monkeypatch, tmp_path):
+    """A provider error after session creation marks provider_error, not failed."""
+    import sys
+
+    from perun import orchestrator, registry
+
+    project = registry.add_project("ProvErr", str(tmp_path))
+    script = (
+        "import json,sys;"
+        "print(json.dumps({'type':'session','session':{'id':'ses_123'}}));"
+        "print(json.dumps({'type':'provider.quota','error':{'message':'provider quota'},'sessionID':'ses_123'}));"
+        "sys.exit(1)"
+    )
+    monkeypatch.setattr(
+        orchestrator, "resolve_opencode",
+        lambda name: [sys.executable, "-c", script],
+    )
+
+    o = orchestrator.Orchestrator()
+    res = o.run_and_wait("proverr", "hi", timeout=60)
+    run = res["run"]
+    assert run["status"] == "provider_error"
+    assert run["opencode_session_id"] == "ses_123"
+    assert "provider quota" in (run.get("error") or "")
+    # The session row should be active so the user can continue it.
+    session = registry.get_session(run["session_pk"])
+    assert session is not None
+    assert session["status"] == "active"
+
+
 def test_compose_prompt_injects_instructions_on_new_session():
     project = {"instructions": "Always use tabs."}
     out = orch.compose_prompt(project, "Do it", new_session=True)
-    assert orch.INSTRUCTION_OPEN in out and orch.INSTRUCTION_CLOSE in out
+    assert "[PERUN PROJECT INSTRUCTIONS]" in out
+    assert "[END PERUN PROJECT INSTRUCTIONS]" in out
     assert "Always use tabs." in out
     assert out.endswith("Do it")
 
@@ -160,4 +218,4 @@ def test_execute_injects_project_instructions(monkeypatch, tmp_path):
     assert res["run"]["prompt"] == "the task"
     # …but the agent received the project-scoped instructions.
     assert "PROJECT RULE 42" in (res["reply"] or "")
-    assert orchestrator.INSTRUCTION_OPEN in (res["reply"] or "")
+    assert "[PERUN PROJECT INSTRUCTIONS]" in (res["reply"] or "")

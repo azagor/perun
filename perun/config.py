@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,9 @@ RUNS_DIR: Path = HOME / "runs"
 WEB_DIR: Path = REPO_ROOT / "web"
 MCP_SERVER: Path = REPO_ROOT / "mcp" / "perun_mcp.py"
 TEMPLATES_DIR: Path = PACKAGE_DIR / "integrations" / "templates"
+OPENCODE_CONFIG_DIR: Path = Path.home() / ".config" / "opencode"
+GLOBAL_SKILLS_DIR: Path = OPENCODE_CONFIG_DIR / "skills"
+PROJECT_SKILLS_DIR: Path = Path(".opencode") / "skills"
 
 
 def is_control_path(path: "str | Path | None") -> bool:
@@ -92,6 +96,11 @@ class Settings:
     telegram_allowed_chats: list[str] = field(default_factory=list)
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
+    # Dedicated terminal / command shell. On Windows the value can be a path to
+    # powershell.exe, pwsh.exe, wt.exe, cmd.exe, or any other terminal; on other
+    # platforms it can be a shell binary. A blank value lets Perun use the OS
+    # default (cmd.exe / powershell on Windows, the user's $SHELL elsewhere).
+    terminal: str = ""
 
     @classmethod
     def load(cls) -> "Settings":
@@ -122,6 +131,64 @@ class Settings:
             env_chats = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TG_CHAT_ID") or ""
             chats = [c.strip() for c in env_chats.split(",") if c.strip()]
         return token, chats
+
+    def terminal_cmd(self, shell_hint: str = "") -> list[str]:
+        """Return the argv to start the user's preferred terminal emulator.
+
+        The setting is a path or alias. On Windows, common choices are
+        ``pwsh.exe``, ``powershell.exe``, ``wt.exe``, ``cmd.exe``. We try the
+        configured value first, then fall back to a sensible default. The result
+        is an argv list ready for ``subprocess.Popen``.
+
+        ``shell_hint`` lets callers request a specific shell class; otherwise
+        the configured/default shell is used.
+        """
+        configured = (self.terminal or "").strip()
+        hint = (shell_hint or configured).lower()
+        if configured and not shell_hint:
+            low = configured.lower()
+            base = os.path.basename(configured).lower()
+            if low.endswith("wt.exe") or base == "wt.exe":
+                return [configured, "-d", "."]
+            if base in ("cmd", "cmd.exe"):
+                return [configured]
+            if base in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+                return [configured, "-NoExit", "-Command"]
+            return [configured]
+        if os.name == "nt":
+            if hint in ("cmd", "cmd.exe"):
+                path = shutil.which("cmd") or shutil.which("cmd.exe")
+                return [path] if path else ["cmd.exe"]
+            if hint in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+                for candidate in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+                    path = shutil.which(candidate)
+                    if path:
+                        return [path, "-NoExit", "-Command"]
+            if hint in ("wt", "wt.exe"):
+                path = shutil.which("wt") or shutil.which("wt.exe")
+                if path:
+                    return [path, "-d", "."]
+            # Default: PowerShell Preview first, then Windows PowerShell.
+            for candidate in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+                path = shutil.which(candidate)
+                if path:
+                    return [path, "-NoExit", "-Command"]
+            path = shutil.which("cmd") or shutil.which("cmd.exe")
+            if path:
+                return [path]
+            return ["cmd.exe"]
+        for candidate in (os.environ.get("SHELL", ""), "bash", "zsh", "sh"):
+            if candidate and shutil.which(candidate):
+                return [candidate]
+        return ["sh"]
+
+    def terminal_sources(self) -> dict[str, str]:
+        """Where the effective terminal comes from: ``settings`` | ``os`` | ``""``."""
+        if (self.terminal or "").strip():
+            return {"source": "settings", "path": self.terminal.strip()}
+        if os.name == "nt":
+            return {"source": "os", "path": shutil.which("pwsh") or shutil.which("pwsh.exe") or shutil.which("powershell") or shutil.which("powershell.exe") or shutil.which("cmd") or shutil.which("cmd.exe") or ""}
+        return {"source": "os", "path": os.environ.get("SHELL", shutil.which("bash") or shutil.which("sh") or "")}
 
     def telegram_sources(self) -> dict[str, str]:
         """Where the *effective* token/chats come from: ``settings`` | ``env`` | ``""``.
