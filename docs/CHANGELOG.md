@@ -85,6 +85,10 @@ closes the window.
     `find-skills`) are now surfaced by `/api/skills` so they appear in the
     Tasks dropdown, while still preventing user SKILL.md files from shadowing
     them.
+  - Fixed `POST /api/run-in-terminal` for PowerShell: it no longer duplicates
+    `-NoExit`/`-Command` flags from `Settings.terminal_cmd()`, which caused the
+    "filename, directory name, or volume label syntax is incorrect" error
+    when launching the OpenCode TUI on Windows.
 
 ## v0.5.0 - 2026-10-14
 

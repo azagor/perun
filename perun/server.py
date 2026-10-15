@@ -401,7 +401,12 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     elif shell_cls in ("powershell", "pwsh"):
         # Launch PowerShell directly with a new console. Using subprocess with
         # CREATE_NEW_CONSOLE avoids the fragile cmd.exe "start" quoting dance.
-        argv = [argv[0], "-NoExit", "-Command", cmd_text]
+        # terminal_cmd() already returns [pwsh, -NoExit, -Command]; if it does,
+        # just append the command text, otherwise build the argv from scratch.
+        if len(argv) >= 3 and argv[-2] == "-NoExit" and argv[-1] == "-Command":
+            argv = list(argv) + [cmd_text]
+        else:
+            argv = [argv[0], "-NoExit", "-Command", cmd_text]
     else:
         # Generic fallback: pass the command through the shell.
         argv = argv + ["-c", cmd_text]

@@ -505,6 +505,44 @@ def test_run_in_terminal_starts_tracked_process(client, tmp_path, monkeypatch):
     assert client.post("/api/run-in-terminal", json={"project": slug}).status_code == 400
 
 
+def test_run_in_terminal_powershell_no_duplicate_flags(client, tmp_path, monkeypatch):
+    from perun import process_tracker, config
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "PwshProj", "path": str(tmp_path / "pwsh"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    captured: list[list[str]] = []
+
+    class FakeProc:
+        pid = 99999
+        def poll(self): return None
+
+    def fake_popen(*args, **kwargs):
+        captured.append(list(args[0]))
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    # Force terminal_cmd to return the standard PowerShell argv prefix.
+    monkeypatch.setattr(config.Settings, "terminal_cmd",
+                        lambda self, shell_hint="": ["pwsh", "-NoExit", "-Command"])
+
+    r = client.post("/api/run-in-terminal", json={
+        "project": slug, "command": "cd \"C:\\\\x\"; opencode", "shell": "pwsh",
+    })
+    assert r.status_code == 200
+    argv = captured[-1]
+    # Must not duplicate -NoExit/-Command flags.
+    assert argv.count("-NoExit") == 1
+    assert argv.count("-Command") == 1
+    assert argv[-1] == "cd \"C:\\\\x\"; opencode"
+
+
 def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):
     from perun import skills
 
