@@ -42,7 +42,7 @@ Ollama instance for embeddings.
 ```
 ~/.perun/
   perun.db        registry + facts + doc_chunks + vectors
-  config.json     Settings
+  config.json     Settings (Telegram token may be stored as `enc:<base64>`)
   logs/           telegram.log, service logs
   runs/           <run_uid>.log — raw opencode stdout per run
 ```
@@ -59,15 +59,15 @@ resolves the port from `~/.perun/config.json` (`PERUN_PORT` overrides it), then:
   `python -m perun serve --port <N>` in the foreground (close the window or
   Ctrl+C to stop).
 
-It **never** runs `perun bridge` or `serve --bridge`. Telegram is owned solely by
-the `PerunBridge` logon task, which the launcher only `schtasks /run`s; together
-with the named-mutex singleton (§9) that guarantees exactly one `getUpdates`
-poller. The desktop shortcut's `.ico` is generated deterministically by
-`tools/make_icon.py`.
+`Perun.cmd` starts the dashboard and the Telegram bridge **in-process**
+(`python -m perun serve --bridge`). It first checks `perun status --json` to see
+whether the bridge mutex is already held by a live process; only then does it
+skip the in-process bridge. This makes the launcher resilient to a crashed or
+stale `PerunBridge` scheduled task. The separate `PerunBridge` logon task still
+exists for auto-start-at-logon (§10), but the dashboard no longer depends on it.
 
-The task itself is **created and repaired by the installer** (§10), not by the
-launcher — `Perun.cmd` only triggers it. On a brand-new machine, run
-`.\bootstrap.ps1` once to register it.
+The desktop shortcut's `.ico` is generated deterministically by
+`tools/make_icon.py`.
 
 ---
 
@@ -362,7 +362,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/projects/{slug}/git/push` | push branch |
 | GET | `/api/fs/list` | folder browser listing |
 | POST | `/api/fs/mkdir` | create a directory |
-| POST | `/api/run-in-terminal` | open the configured terminal/shell with a command `{cwd,command,shell?,run_uid?}`; `run_uid` links the terminal to a TUI run record for lifecycle tracking |
+| POST | `/api/run-in-terminal` | open the configured terminal/shell with a command `{cwd,command,shell?,run_uid?}` (or pass `project` instead of `cwd`); `run_uid` links the terminal to a TUI run record for lifecycle tracking |
 | GET | `/api/projects/{slug}/tasks` | list reusable project tasks |
 | POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}` (`sort_order` is legacy/ignored by UI) |
 | PATCH | `/api/projects/{slug}/tasks/{task_id}` | update a task |
@@ -372,7 +372,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/runs` | recent runs (`?project=`) |
 | GET | `/api/runs/active` | queued/running runs joined with their project (the live storm layer) |
 | POST | `/api/runs` | start a headless run `{project,prompt?,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator; an omitted `prompt` uses a default starter prompt |
-| POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?}` |
+| POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?,model?,agent?}` |
 | GET | `/api/runs/{run_uid}` | run status/output |
 | POST | `/api/runs/{run_uid}/cancel` | cancel a headless run **and** terminate a tracked TUI/terminal session |
 | POST | `/api/runs/{run_uid}/finish` | finalize a TUI run record (e.g. user closed the window manually) |
@@ -388,8 +388,9 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/activity` | global feed |
 | GET/PATCH | `/api/settings` | read/update `Settings` (GET returns `telegram_token: ""` — never the value — plus `telegram_token_set`) |
 | GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` |
-| POST | `/api/telegram/bot` | `{name?,token?,chats?}` — verifies a new token with `getMe` **before** saving; `token: ""` clears; `{restart_required}` |
-| POST | `/api/telegram/bridge/restart` | `schtasks /End` + `/Run` so the bridge re-reads the bot |
+| POST | `/api/telegram/bot` | `{name?,token?,chats?,password?}` — verifies a new token with `getMe` **before** saving; `password` encrypts the token; `token: ""` clears; `{restart_required}` |
+| POST | `/api/telegram/bot/change-password` | `{old_password,new_password}` — decrypt and re-encrypt the stored token with a new password; you still need to restart the bridge so it loads the re-encrypted token |
+| POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the standalone `PerunBridge` task re-reads the bot |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/` etc. | static dashboard from `web/` |
 
@@ -453,7 +454,7 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 | **Verify before trusting** | A non-empty token is checked with Telegram's `getMe` **before** `Settings.save()`, so a typo can never silently replace a working bot. `token: ""` clears it (Disconnect). |
 | **Token never leaks** | `GET /api/settings` returns `telegram_token: ""` plus `telegram_token_set`; the UI's password field is only ever a placeholder. The bridge side keeps the token out of logs. |
 | **Env fallback** | `Settings.telegram()` prefers `config.json`, then `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN` (chats: `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`). Because of that, `Settings.telegram_sources()` reports which source is in force, and the dashboard warns + disables **Disconnect** when an env token would silently reappear. |
-| **Apply the change** | `POST /api/telegram/bridge/restart` → `installer.restart_bridge_task()` = `schtasks /End` then `schtasks /Run`. `/End` terminates *only* the process the task started — never the dashboard — and if the dashboard itself owns the lock, the new instance exits on `PidLock`, so a second poller still never appears. |
+| **Apply the change** | `POST /api/telegram/bridge/restart` reloads the in-process bridge token (no window close needed). If the standalone `PerunBridge` task owns the lock instead, the same endpoint falls back to `schtasks /End` + `/Run`. |
 
 ---
 

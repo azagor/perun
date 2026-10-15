@@ -7,7 +7,8 @@ Usage::
     python -m perun discover [--roots a;b] [--index]
     python -m perun projects
     python -m perun add <name> <path> [--model M] [--agent A]
-    python -m perun status
+    python -m perun status [--json]
+    python -m perun encrypt-config [--password PWD]
     python -m perun remember <text> [--project SLUG] [--global] [--topic T]
     python -m perun recall <query> [--project SLUG] [--k N] [--all]
     python -m perun index <slug> [--all]
@@ -72,7 +73,7 @@ def _roots(arg: str | None) -> list[str]:
 def cmd_serve(args: argparse.Namespace) -> int:
     _ensure()
     settings = config.Settings.load()
-    if args.bridge and settings.telegram()[0]:
+    if args.bridge:
         _start_bridge_thread()
     from .server import serve
 
@@ -86,19 +87,27 @@ def cmd_serve(args: argparse.Namespace) -> int:
 # that the bridge is already up in this process.
 _BRIDGE_LOCK = None
 _BRIDGE_THREAD = None
+_IN_PROCESS_BRIDGE = None
 
 
 def _start_bridge_thread() -> None:
-    """Start the Telegram bridge in-process, at most once per process.
+    """Start the Telegram bridge in-process, at most once per *machine*.
 
     The bridge is a **singleton**: ``getUpdates`` allows only one consumer per
-    bot token, so two pollers fight with HTTP 409s. Single-instance is enforced
-    machine-wide by a named mutex (:class:`perun.telegram.PidLock`), which also
-    protects against a separate ``perun bridge`` process or the ``PerunBridge``
-    logon task racing us. If the lock is already held we never start a second
-    bridge.
+    bot token, so two pollers fight with HTTP 409s. We guard against duplicates
+    in three layers:
+
+    1. Process-level: do not start a second thread in the same dashboard process.
+    2. Machine-level: :class:`perun.telegram.PidLock` (named mutex on Windows)
+       prevents another ``perun bridge``/``PerunBridge`` task from racing us.
+    3. Network-level: Telegram returns HTTP 409 if another poller is active; the
+       bridge loop backs off rather than fighting.
+
+    If no Telegram token is configured, the bridge is silently skipped. If the
+    lock is already held, we log that the bridge is already running elsewhere
+    and do not start a second poller.
     """
-    global _BRIDGE_LOCK, _BRIDGE_THREAD
+    global _BRIDGE_LOCK, _BRIDGE_THREAD, _IN_PROCESS_BRIDGE
 
     from .orchestrator import Orchestrator
     from .telegram import PerunTelegramBridge, _setup_logging, PidLock
@@ -109,6 +118,10 @@ def _start_bridge_thread() -> None:
 
     settings = config.Settings.load()
     token, allowed = settings.telegram()
+    if not token:
+        print("[perun] no telegram token configured; bridge not started")
+        return
+
     _setup_logging(config.LOGS_DIR / "telegram.log")
     lock = PidLock(config.HOME / "telegram.pid")
     if not lock.acquire():
@@ -120,9 +133,31 @@ def _start_bridge_thread() -> None:
     # producing a second poller.
     _BRIDGE_LOCK = lock
     bridge = PerunTelegramBridge(Orchestrator(settings), token=token, allowed=allowed)
+    _IN_PROCESS_BRIDGE = bridge
     _BRIDGE_THREAD = threading.Thread(target=bridge.run, daemon=True, name="perun-telegram")
     _BRIDGE_THREAD.start()
     print("[perun] telegram bridge started in-process")
+
+
+def reload_in_process_bridge() -> dict[str, Any]:
+    """Reload the in-process bridge with the current settings token.
+
+    Returns ``{reloaded: true}`` when the bridge was updated, otherwise
+    ``{reloaded: false, reason: ...}``. This lets the dashboard apply a new
+    token/password without closing the window.
+    """
+    global _BRIDGE_THREAD, _IN_PROCESS_BRIDGE
+    settings = config.Settings.load()
+    token, allowed = settings.telegram()
+    if not token:
+        return {"reloaded": False, "reason": "no telegram token configured"}
+
+    if _IN_PROCESS_BRIDGE is None or (_BRIDGE_THREAD is None) or not _BRIDGE_THREAD.is_alive():
+        return {"reloaded": False, "reason": "no in-process bridge"}
+
+    _IN_PROCESS_BRIDGE.update_token(token)
+    _IN_PROCESS_BRIDGE.allowed = allowed
+    return {"reloaded": True}
 
 
 def cmd_bridge(args: argparse.Namespace) -> int:
@@ -186,7 +221,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         bridge_task = installer.bridge_task_status()
     except Exception:
         bridge_task = None
-    _print({
+    payload = {
         "home": str(config.HOME),
         "db": str(config.DB_PATH),
         "db_exists": config.DB_PATH.exists(),
@@ -194,7 +229,39 @@ def cmd_status(args: argparse.Namespace) -> int:
         "memory": stats,
         "bridge_running": bridge_running,
         "bridge_task": bridge_task,
-    })
+    }
+    if getattr(args, "json", False):
+        _print(payload)
+    else:
+        # Human-readable summary for the console.
+        print(f"home:       {payload['home']}")
+        print(f"db:         {payload['db']} (exists={payload['db_exists']})")
+        print(f"projects:   {payload['projects']}")
+        print(f"memory:     {payload['memory']}")
+        print(f"bridge:     {payload['bridge_running']}")
+        if payload.get("bridge_task"):
+            task = payload["bridge_task"]
+            print(f"bridge task: exists={task.get('exists')} raw_ok={task.get('raw_ok')}"
+                  f" cmd=\"{task.get('command')}\" args=\"{task.get('arguments')}\"")
+    return 0
+
+
+def cmd_encrypt_config(args: argparse.Namespace) -> int:
+    """Encrypt sensitive values in config.json using PERUN_PASSWORD or a prompt."""
+    _ensure()
+    from . import secrets as _secrets
+    password = args.password or _secrets._password() or _secrets.prompt_password()
+    settings = config.Settings.load()
+    changed = []
+    token = settings.telegram_token
+    if token and not _secrets.is_encrypted(token):
+        settings.telegram_token = _secrets.encrypt_value(token, password)
+        changed.append("telegram_token")
+    if changed:
+        settings.save()
+        print(f"[perun] encrypted {', '.join(changed)}")
+    else:
+        print("[perun] nothing to encrypt")
     return 0
 
 
@@ -347,7 +414,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("status", help="show Perun status")
+    p.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("encrypt-config",
+                       help="encrypt sensitive values in config.json (requires PERUN_PASSWORD)")
+    p.add_argument("--password", default=None, help="password for encryption")
+    p.set_defaults(func=cmd_encrypt_config)
 
     p = sub.add_parser("remember", help="store a fact in unified memory")
     p.add_argument("text")

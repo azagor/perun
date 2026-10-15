@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from perun import config
-from perun.telegram import PidLock, _default_mutex_name
+from perun.telegram import PidLock, _default_mutex_name, PerunTelegramBridge
 
 
 def test_mutex_name_is_namespaced_and_not_bare():
@@ -87,3 +87,16 @@ def test_second_lock_cannot_acquire_while_held(tmp_path: Path):
     assert second.acquire() is True           # now exactly one holder, the second
     second.release()
     assert PidLock.is_held(pid_path) is False
+
+
+def test_bridge_is_running_reflects_lock_state(tmp_path: Path, monkeypatch):
+    import perun.config as config_mod
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    assert PerunTelegramBridge.is_running() is False
+    lock = PidLock(tmp_path / "telegram.pid")
+    assert lock.acquire() is True
+    try:
+        assert PerunTelegramBridge.is_running() is True
+    finally:
+        lock.release()
+    assert PerunTelegramBridge.is_running() is False

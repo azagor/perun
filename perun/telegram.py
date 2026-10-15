@@ -239,6 +239,10 @@ class PerunTelegramBridge:
         self.offset: Optional[int] = None
         self._state_lock = threading.Lock()
 
+    def update_token(self, token: str) -> None:
+        """Update the bot token used by this bridge instance."""
+        self.token = token
+
     @property
     def api_base(self) -> str:
         return f"https://api.telegram.org/bot{self.token}"
@@ -264,7 +268,16 @@ class PerunTelegramBridge:
                 delay = min(delay * 2, 30.0)
         return {}
 
-    def send(self, chat_id: str, text: str, *, reply_to: Optional[int] = None) -> None:
+    @classmethod
+    def is_running(cls) -> bool:
+        """Best-effort check for an active bridge poller on this machine."""
+        try:
+            return PidLock.is_held(config.HOME / "telegram.pid")
+        except Exception:  # pragma: no cover
+            return False
+
+    def send(self, chat_id: str, text: str, *, reply_to: Optional[int] = None,
+             reply_markup: Optional[Dict[str, Any]] = None) -> None:
         for piece in chunk(text or "(empty reply)", self.max_chars):
             payload: Dict[str, Any] = {
                 "chat_id": chat_id,
@@ -275,12 +288,16 @@ class PerunTelegramBridge:
             if reply_to is not None:
                 payload["reply_to_message_id"] = reply_to
                 payload["allow_sending_without_reply"] = True
+            if reply_markup is not None:
+                payload["reply_markup"] = reply_markup
             res = self.api("sendMessage", **payload)
             if not res.get("ok"):
                 payload.pop("parse_mode", None)
+                payload.pop("reply_markup", None)
                 payload["text"] = piece
                 self.api("sendMessage", **payload)
             reply_to = None
+            reply_markup = None
 
     def _typing_loop(self, chat_id: str, done: threading.Event) -> None:
         while not done.wait(TYPING_INTERVAL):
@@ -312,7 +329,56 @@ class PerunTelegramBridge:
             return None
 
     # ---- commands ---- #
-    def handle_command(self, chat_id: str, text: str, message_id: int) -> bool:
+    def _project_keyboard(self, projects: list[Dict[str, Any]], chat_id: str) -> Dict[str, Any]:
+        """Build an inline keyboard that maps each project to a callback payload.
+
+        Telegram limits ``callback_data`` to 64 bytes, so we use the numeric
+        project id instead of the slug when the slug would be too long. The
+        ``_handle_callback`` method resolves either form back to a project.
+        """
+        buttons: list[list[Dict[str, Any]]] = []
+        current_id = (self._chat_state(chat_id).get("project_id"))
+        for p in projects:
+            label = ("▸ " if p.get("id") == current_id else "") + p["name"]
+            if control.is_control(p):
+                label += " 🛰"
+            # Telegram callback_data has a hard 64-byte limit.
+            slug = p["slug"]
+            payload = f"project:{slug}"
+            if len(payload.encode("utf-8")) > 64:
+                payload = f"project:id:{p['id']}"
+            buttons.append([{"text": label, "callback_data": payload}])
+        return {"inline_keyboard": buttons}
+
+    def _handle_callback(self, update: Dict[str, Any]) -> None:
+        """Handle inline-keyboard button taps for project selection."""
+        cq = update.get("callback_query") or {}
+        data = (cq.get("data") or "").strip()
+        if not data or not data.startswith("project:"):
+            return
+        payload = data.split(":", 1)[1]
+        chat_id = str((cq.get("message", {}).get("chat") or {}).get("id"))
+        message_id = int(cq.get("message", {}).get("message_id") or 0)
+        if not chat_id:
+            return
+        if not self.authorised(chat_id):
+            self.api("answerCallbackQuery", callback_query_id=cq.get("id"), text="Not authorised.")
+            return
+        # Long slugs are encoded as "id:<project_id>" to fit Telegram's 64-byte limit.
+        if payload.startswith("id:"):
+            project = registry.get_project(payload.split(":", 1)[1])
+        else:
+            project = registry.get_project(payload)
+        if not project:
+            self.api("answerCallbackQuery", callback_query_id=cq.get("id"), text="Project not found.")
+            return
+        registry.set_bridge_link(chat_id, project["id"], None)
+        self.api("answerCallbackQuery", callback_query_id=cq.get("id"),
+                  text=f"Now talking to {project['name']}")
+        self.send(chat_id, f"✅ Now talking to *{project['name']}* (`{project['slug']}`).",
+                  reply_to=message_id if message_id else None)
+
+    def _handle_text_command(self, chat_id: str, text: str, message_id: int) -> bool:
         parts = text.strip().split()
         if not parts:
             return True
@@ -355,7 +421,8 @@ class PerunTelegramBridge:
                 mark = "▸" if self._is_current(chat_id, p) else " "
                 tag = "  🛰 orchestrator" if control.is_control(p) else ""
                 lines.append(f"{mark} {i}. `{p['slug']}` — {p['name']} ({p['kind']}){tag}")
-            self.send(chat_id, "\n".join(lines), reply_to=message_id)
+            keyboard = self._project_keyboard(projects, chat_id)
+            self.send(chat_id, "\n".join(lines), reply_to=message_id, reply_markup=keyboard)
             return True
         if root == "/project":
             projects = registry.list_projects()
@@ -455,6 +522,9 @@ class PerunTelegramBridge:
         cur = self._current_project(chat_id)
         return bool(cur and cur["id"] == project["id"])
 
+    def handle_command(self, chat_id: str, text: str, message_id: int) -> bool:
+        return self._handle_text_command(chat_id, text, message_id)
+
     # ---- run a message ---- #
     def run_message(self, chat_id: str, text: str, message_id: int) -> None:
         proj = self._current_project(chat_id)
@@ -466,7 +536,7 @@ class PerunTelegramBridge:
                           reply_to=message_id)
             else:
                 self.send(chat_id, "Multiple projects registered — pick one with "
-                                   "`/project <name>` (`/projects` to list).",
+                                   "`/projects` for buttons or `/project <name>`.",
                           reply_to=message_id)
             return
         link = self._chat_state(chat_id)
@@ -538,6 +608,9 @@ class PerunTelegramBridge:
         return False
 
     def _handle_update(self, update: Dict[str, Any]) -> None:
+        if update.get("callback_query"):
+            self._handle_callback(update)
+            return
         msg = (update.get("message") or update.get("edited_message")
                or update.get("channel_post") or {})
         if (msg.get("from") or {}).get("is_bot"):

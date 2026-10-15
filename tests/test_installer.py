@@ -413,7 +413,7 @@ def test_status_includes_bridge_task(monkeypatch, capsys):
 
     monkeypatch.setattr(installer, "bridge_task_status",
                         lambda: {"windows": True, "exists": True, "command": "py.exe"})
-    args = build_parser().parse_args(["status"])
+    args = build_parser().parse_args(["status", "--json"])
     assert args.func(args) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["bridge_task"]["exists"] is True

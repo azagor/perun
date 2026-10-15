@@ -382,6 +382,7 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # shell still gets the right command-line syntax.
     exe = os.path.basename(argv[0]).lower().replace(".exe", "")
     shell_cls = shell.lower().replace(".exe", "") or exe
+    use_cmdline = False
     # Windows Terminal needs the starting directory; then it should run the
     # provided command. PowerShell/cmd are launched with a single command line.
     if shell_cls in ("wt",):
@@ -393,11 +394,16 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             except (ValueError, IndexError):
                 wt_argv.extend(["-d", cwd])
         # Keep the tab open after opencode exits so the user can see results.
-        wt_argv.extend(["cmd", "/k", cmd_text])
-        argv = wt_argv
+        # Build as a string so Python does not wrap the whole command in outer
+        # quotes; cmd.exe would strip them and corrupt the quoting of the path.
+        cmdline = subprocess.list2cmdline(wt_argv) + " cmd /k " + cmd_text
+        use_cmdline = True
     elif shell_cls in ("cmd",):
         # /k keeps the console window alive after opencode exits.
-        argv = [argv[0], "/k", cmd_text]
+        # Build as a string so Python does not wrap the whole command in outer
+        # quotes; cmd.exe would strip them and corrupt the quoting of the path.
+        cmdline = subprocess.list2cmdline([argv[0]]) + " /k " + cmd_text
+        use_cmdline = True
     elif shell_cls in ("powershell", "pwsh"):
         # Launch PowerShell directly with a new console. Using subprocess with
         # CREATE_NEW_CONSOLE avoids the fragile cmd.exe "start" quoting dance.
@@ -416,11 +422,18 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         else:
             creationflags = 0
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd or None,
-            creationflags=creationflags,
-        )
+        if use_cmdline:
+            proc = subprocess.Popen(
+                cmdline,
+                cwd=cwd or None,
+                creationflags=creationflags,
+            )
+        else:
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd or None,
+                creationflags=creationflags,
+            )
         run_uid = (payload.get("run_uid") or "").strip()
         if run_uid:
             from . import process_tracker
@@ -990,11 +1003,16 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not project:
         raise HTTPException(status_code=404, detail="no such project")
     run_uid = uuid.uuid4().hex[:16]
-    prompt = (payload.get("prompt") or "").strip() or "Working session in progress."
+    prompt = (payload.get("prompt") or "").strip() or "Start a working session for this project."
+    # Prefer an explicit model/agent passed by the frontend; fall back to the
+    # project's configured defaults so the run record matches what opencode
+    # actually receives.
+    model = (payload.get("model") or "").strip() or project.get("model", "")
+    agent = (payload.get("agent") or "").strip() or project.get("agent", "")
     _registry.create_run(
         run_uid, project["id"], prompt,
-        model=project.get("model", ""), model_explicit=bool(project.get("model")),
-        agent=project.get("agent", ""),
+        model=model, model_explicit=bool(model),
+        agent=agent,
     )
     _registry.update_run(run_uid, status="running", started_at=_registry.now_iso())
     _registry.log_activity(project["id"], "run",
@@ -1254,11 +1272,29 @@ def api_telegram_bot(payload: dict[str, Any] = Body(default={})) -> dict[str, An
                     status_code=400,
                     detail=me.get("description") or "Telegram rejected that token",
                 )
-            SETTINGS.telegram_token = token
+            from . import secrets as _secrets
+            password = (payload.get("password") or "").strip()
+            if password:
+                SETTINGS.telegram_token = _secrets.encrypt_value(token, password)
+            else:
+                SETTINGS.telegram_token = token
             changed.append("token")
         else:
             SETTINGS.telegram_token = ""
             changed.append("token(cleared)")
+    elif "password" in payload:
+        # If a password is supplied without a new token, try to encrypt an
+        # existing plain-text token in place. This lets the dashboard add
+        # encryption to a token that was already saved.
+        from . import secrets as _secrets
+        password = (payload.get("password") or "").strip()
+        current = SETTINGS.telegram_token
+        if password and current and not _secrets.is_encrypted(current):
+            try:
+                SETTINGS.telegram_token = _secrets.encrypt_value(current, password)
+                changed.append("token-encrypted")
+            except Exception:
+                pass
 
     SETTINGS.save()
 
@@ -1283,9 +1319,40 @@ def api_telegram_bot(payload: dict[str, Any] = Body(default={})) -> dict[str, An
     )
 
 
+@app.post("/api/telegram/bot/change-password")
+def api_telegram_change_password(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Change the encryption password for the stored Telegram token."""
+    from . import secrets as _secrets
+
+    old_pw = (payload.get("old_password") or "").strip()
+    new_pw = (payload.get("new_password") or "").strip()
+    if not old_pw or not new_pw:
+        raise HTTPException(status_code=400, detail="old and new passwords are required")
+    current = SETTINGS.telegram_token
+    if not current:
+        raise HTTPException(status_code=400, detail="no token stored")
+    if not _secrets.is_encrypted(current):
+        raise HTTPException(status_code=400, detail="token is not encrypted")
+    decrypted = _secrets.decrypt_value(current, old_pw)
+    if decrypted is None:
+        raise HTTPException(status_code=400, detail="current password is incorrect")
+    try:
+        SETTINGS.telegram_token = _secrets.encrypt_value(decrypted, new_pw)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"could not re-encrypt token: {exc}")
+    SETTINGS.save()
+    return _ok(changed=True)
+
+
 @app.post("/api/telegram/bridge/restart")
 def api_telegram_bridge_restart() -> dict[str, Any]:
-    """Restart the ``PerunBridge`` task so it re-reads the configured bot."""
+    """Reload the in-process bridge if the dashboard owns it, otherwise restart
+    the standalone ``PerunBridge`` task so it re-reads the configured bot."""
+    from . import __main__ as _main
+
+    reloaded = _main.reload_in_process_bridge()
+    if reloaded.get("reloaded"):
+        return _ok(restart=reloaded)
     try:
         from . import installer
     except Exception as exc:  # pragma: no cover - defensive

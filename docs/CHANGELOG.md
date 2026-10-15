@@ -89,6 +89,67 @@ closes the window.
     `-NoExit`/`-Command` flags from `Settings.terminal_cmd()`, which caused the
     "filename, directory name, or volume label syntax is incorrect" error
     when launching the OpenCode TUI on Windows.
+  - Fixed `POST /api/run-in-terminal` for `cmd.exe` (and Windows Terminal using
+    `cmd` tabs): the command is now passed as a raw command-line string so
+    Python's `list2cmdline` does not wrap it in outer quotes, which `cmd.exe`
+    would strip and corrupt the `cd /d` path and `opencode` argument quoting.
+  - Project-card **OpenCode** TUI launch is now equivalent to running `opencode`
+    in the project directory: it no longer sends a forced prompt, so OpenCode
+    uses its normal session/model resolution (the same as a manual launch)
+    instead of starting a fresh chat that triggers provider region errors. The
+    Agent Console still passes the composed prompt.
+  - `/api/runs/tui` now accepts explicit `model`/`agent` overrides from the
+    frontend; without them it falls back to the project's configured defaults.
+  - Fixed **Agent Console stop button** reliability: it now uses the same
+    `/api/runs/{uid}/cancel` endpoint as the project card (so the run record is
+    finalised even when the terminal process was not tracked), passes the
+    project's `model`/`agent` through to the TUI launch, and resets the UI if the
+    initial run request fails instead of leaving the button stuck disabled.
+  - Fixed `PERUN_RUN_UID` marker handling for bash-like terminals: the marker
+    is now placed directly on the `opencode` process (`cd ... && PERUN_RUN_UID=…
+    opencode ...`) instead of being scoped only to the `cd` command, so the
+    process tracker can resolve the TUI tab on macOS/Linux shells.
+  - Telegram `/projects` command now sends an inline keyboard with one button
+    per project (and the current project marked ▸). Tapping a button switches the
+    chat to that project without typing `/project <slug>`.
+  - `Perun.cmd` now starts the Telegram bridge **in-process** with
+    `perun serve --bridge` instead of relying on the standalone `PerunBridge`
+    scheduled task. Before launching it asks `perun status --json` whether the
+    bridge mutex is actually held; only a *live* bridge suppresses the in-process
+    start. A crashed/stale task no longer leaves Telegram silent. Duplicate
+    pollers are prevented by the existing machine-global `PidLock` mutex.
+  - `python -m perun status` now has a `--json` flag for machine-readable output
+    (the default remains human-readable).
+  - Added optional password-based encryption for the Telegram bot token (and
+    future secrets) in `config.json`. Set `PERUN_PASSWORD`, then run
+    `python -m perun encrypt-config`. `Settings.telegram()` decrypts
+    transparently when the password is available; otherwise Telegram degrades
+    gracefully to "not configured". Requires `cryptography` (added to
+    `requirements.txt`).
+  - The Telegram page in the dashboard now has an **Encryption password** field.
+    If you enter a password when saving the bot token, it is encrypted in
+    `config.json`. You can also encrypt an already-saved plain token by entering
+    a password and leaving the token field blank, and a **Change password**
+    button lets you re-encrypt the stored token without pasting it again.
+  - `POST /api/telegram/bot` now only encrypts when an explicit password is
+    supplied in the request; the `PERUN_PASSWORD` environment variable is no
+    longer used as an implicit encryption trigger.
+  - `POST /api/telegram/bridge/restart` now reloads the in-process bridge token
+    when the dashboard owns the bridge, so token/password changes take effect
+    without closing the window. It still falls back to restarting the standalone
+    `PerunBridge` task when that task owns the lock.
+  - Manifest tab file and doc paths are now rendered as clickable links that
+    open via `vscode://file/...` / `file://...`. Paths are normalised so they
+    cannot escape the project root.
+  - Project Memory form now defaults to **This project** scope when opened
+    inside a project, so facts count toward the project instead of becoming
+    global by default.
+  - Added missing `perun/secrets.py` entry to `docs/CODEMAP.md`; restored
+    regression tests for config-token-overrides-env and settings source
+    reporting.
+  - Added `tools/migrate_global_facts.py` to move Perun-specific global facts
+    onto the `perun` control-plane project. It is non-destructive by default and
+    only deletes duplicate global rows when passed `--delete-duplicates`.
 
 ## v0.5.0 - 2026-10-14
 

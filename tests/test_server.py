@@ -543,6 +543,47 @@ def test_run_in_terminal_powershell_no_duplicate_flags(client, tmp_path, monkeyp
     assert argv[-1] == "cd \"C:\\\\x\"; opencode"
 
 
+def test_run_in_terminal_cmd_uses_string_command_line(client, tmp_path, monkeypatch):
+    from perun import process_tracker, config
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "CmdProj", "path": str(tmp_path / "cmd"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    captured: list[tuple[object, ...]] = []
+
+    class FakeProc:
+        pid = 55555
+        def poll(self): return None
+
+    def fake_popen(*args, **kwargs):
+        captured.append((args, kwargs))
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(config.Settings, "terminal_cmd",
+                        lambda self, shell_hint="": ["cmd.exe"])
+
+    r = client.post("/api/run-in-terminal", json={
+        "project": slug,
+        "command": 'cd /d "C:\\\\x" && opencode --prompt "hi"',
+        "shell": "cmd",
+    })
+    assert r.status_code == 200
+    (popen_args, popen_kwargs) = captured[-1]
+    # Passing the command as a single string prevents Python's list2cmdline from
+    # wrapping it in outer quotes, which cmd.exe would strip and corrupt.
+    assert isinstance(popen_args[0], str)
+    assert "cmd.exe /k " in popen_args[0]
+    assert 'cd /d "C:\\\\x" && opencode --prompt "hi"' in popen_args[0]
+    assert popen_kwargs.get("cwd") == str(tmp_path / "cmd")
+
+
 def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):
     from perun import skills
 

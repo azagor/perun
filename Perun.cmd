@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 title Perun - Overseer
 
 rem =====================================================================
@@ -16,6 +16,8 @@ rem  Optional overrides (set before running, or edit below):
 rem    PERUN_PYTHON=<path to python.exe>   pick a specific interpreter
 rem    PERUN_PORT=<n>                      dashboard port (default: config/8760)
 rem    PERUN_NO_BROWSER=1                  do not open a browser
+rem    PERUN_FORCE_BRIDGE=1                always start bridge in dashboard (debug)
+rem    PERUN_PASSWORD=<password>           decrypt encrypted config values
 rem =====================================================================
 
 set "PERUN_DIR=%~dp0"
@@ -55,16 +57,28 @@ if not errorlevel 1 (
 
 rem -- Telegram: the bridge is a SINGLETON, never started more than once --
 rem  `getUpdates` allows one consumer per token, so two pollers would fight
-rem  with HTTP 409s. Two independent guards prevent that:
-rem    1. this launcher NEVER runs `perun bridge` itself;
-rem    2. the bridge holds a machine-global named mutex (PidLock), and the
-rem       PerunBridge logon task is registered with "IgnoreNew" (a second
-rem       trigger is refused). `schtasks /run` therefore just ENSURES it is up.
-set "BRIDGE=not running"
-schtasks /query /tn "PerunBridge" >nul 2>nul
-if not errorlevel 1 (
-    schtasks /run /tn "PerunBridge" >nul 2>nul
-    set "BRIDGE=running (single instance, PerunBridge task)"
+rem  with HTTP 409s. The dashboard process now owns the bridge by default
+rem  (`--bridge`), guarded by a machine-global named mutex (PidLock). The
+rem  separate PerunBridge logon task still exists for auto-start-at-logon,
+rem  but this launcher no longer depends on it being healthy.
+set "BRIDGE=in dashboard process"
+
+rem  Ask Perun itself whether the bridge mutex is currently held. This is the
+rem  definitive check: it is true only when a live process (the PerunBridge
+rem  task or another dashboard) is actually polling Telegram. A stale/crashed
+rem  task will report "bridge_running: false" even if schtasks claims it is
+rem  "Running", so we always fall back to starting the bridge in-process.
+set "BRIDGE_ALREADY_UP=0"
+if not defined PERUN_FORCE_BRIDGE (
+    for /f "usebackq delims=" %%j in (`%PY% -m perun status --json 2^>nul ^| powershell -NoProfile -Command "$in=$input -join '\n'; if($in -match 'bridge_running\s*:\s*true'){ '1' } else { '0' }"`) do (
+        set "BRIDGE_ALREADY_UP=%%j"
+    )
+)
+if "%BRIDGE_ALREADY_UP%"=="1" (
+    set "BRIDGE=running (detected live bridge)"
+    set "BRIDGE_ARGS="
+) else (
+    set "BRIDGE_ARGS=--bridge"
 )
 
 echo.
@@ -83,7 +97,20 @@ echo.
 rem -- open the dashboard once the server is listening ------------------
 if not defined PERUN_NO_BROWSER start "" /min powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 3; Start-Process '%URL%'" 1>nul 2>nul
 
-%PY% -m perun serve --port %PORT%
+:serve
+if not defined PERUN_PASSWORD (
+    rem  If config contains encrypted values, the user must set PERUN_PASSWORD.
+    rem  We do not prompt here so the launcher remains non-interactive when run
+    rem  from the task scheduler or a service wrapper.
+    for /f "usebackq delims=" %%e in (`%PY% -c "from perun import config,secrets; print('1' if secrets.is_encrypted(config.Settings.load().telegram_token or '') else '0')" 2^>nul`) do (
+        if "%%e"=="1" (
+            echo [Perun] Encrypted config values detected. Set PERUN_PASSWORD to decrypt.
+            pause
+            exit /b 1
+        )
+    )
+)
+%PY% -m perun serve --port %PORT% %BRIDGE_ARGS%
 set "RC=%errorlevel%"
 if not "%RC%"=="0" (
     echo.

@@ -10,6 +10,12 @@ the file and the key identifiers you'll jump to.
 ### `perun/__init__.py`
 Package docstring + `__version__` (`"0.6.0"`).
 
+### `perun/secrets.py`
+Optional password-based encryption for sensitive config values.
+* `encrypt_value()`, `decrypt_value()`, `is_encrypted()`, `prompt_password()`.
+* Used by `Settings.telegram()` to transparently decrypt an `enc:<base64>`
+  Telegram token when `PERUN_PASSWORD` is available.
+
 ### `perun/config.py`
 Filesystem layout + persisted settings.
 * Constants: `PACKAGE_DIR`, `REPO_ROOT`, `HOME`, `DB_PATH`, `CONFIG_PATH`,
@@ -170,10 +176,13 @@ Shared Telegram ⇄ Perun bridge.
   `is_held()`, `_default_mutex_name()` namespaces the mutex by `PERUN_HOME`),
   `_pid_alive()`. One poller machine-wide (`getUpdates` allows a single consumer);
   a second start is refused rather than fighting with HTTP 409s.
-* `PerunTelegramBridge`: `api()`, `send()`, `handle_command()`,
+* `PerunTelegramBridge`: `api()`, `send()` (supports optional `reply_markup`),
+  `handle_command()`, `_handle_text_command()`, `_project_keyboard()`,
+  `_handle_callback()` (inline-keyboard project selection; falls back to numeric
+  ids for slugs that exceed Telegram's 64-byte `callback_data` limit),
   `_current_project()` (single-user-project auto-select, else the control plane),
   `run_message()`, `worker()`, `authorised()`, `run()`. Commands include
-  `/orchestrator` (`/perun`, `/overseer`).
+  `/orchestrator` (`/perun`, `/overseer`); `/projects` sends an inline keyboard.
 * Entry: `run_bridge()`, `_setup_logging()`.
 
 ### `perun/server.py`
@@ -207,8 +216,10 @@ CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
 `installer.machine_install()`, `--machine --uninstall` to `installer`),
 `cmd_mcp`, `build_parser()`, `main()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
-  — the `serve --bridge` path starts the bridge at most once per process and keeps
-  the single-instance mutex alive for the whole process.
+  / `_IN_PROCESS_BRIDGE` — the `serve --bridge` path starts the bridge at most once
+  per *machine* and keeps the single-instance mutex alive for the whole process.
+  `reload_in_process_bridge()` updates the token of a running in-process bridge
+  so token/password changes take effect without closing the dashboard.
 
 ### `perun/integrations/install_global.py`
 Idempotent global install into `~/.config/opencode`.
@@ -286,6 +297,8 @@ stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
 * `tools/make_icon.py` — regenerates `web/assets/perun.ico` / `perun.png`.
+* `tools/migrate_global_facts.py` — one-off helper that moves Perun-related
+  global facts onto the `perun` control-plane project.
 * `opencode.json` — repo-local OpenCode config (perun MCP + AGENTS.md).
 * `requirements.txt`, `.gitignore`, `README.md`, `AGENTS.md`.
 
@@ -298,6 +311,11 @@ stdio MCP server (`perun`). 17 tools: `perun_list_projects`,
 * `test_memory.py` — remember/sensitive/dedupe, chunking, index, search,
   unified_search, stats (Ollama-independent).
 * `test_install_global.py` — merge/uninstall idempotency against a temp config.
+* `test_mcp_memory.py` — MCP `perun_memory_store` resolves to project scope when
+  called inside a project and to global scope when no project context is given.
+* `test_migrate_global_facts.py` — the one-off `tools/migrate_global_facts.py`
+  migration is non-destructive by default and only deletes duplicates when
+  explicitly requested.
 * `test_installer.py` — prerequisites, `pip`, the `PerunBridge` task XML and the
   `schtasks` invocation (faked), `machine_install` orchestration, the CLI flags,
   the `bootstrap.ps1` delegation contract, and `restart_bridge_task()`.

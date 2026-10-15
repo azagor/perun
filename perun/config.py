@@ -124,13 +124,19 @@ class Settings:
     # -- Telegram resolution (settings first, environment as fallback) -------
 
     def telegram(self) -> tuple[str, list[str]]:
-        token = (self.telegram_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-                 or os.environ.get("TG_BOT_TOKEN") or "").strip()
+        from . import secrets
+        config_token = (self.telegram_token or "").strip()
+        # Decrypt only a config-stored token, never an environment fallback.
+        if config_token and secrets.is_encrypted(config_token):
+            token = secrets.decrypt_value(config_token) or ""
+        else:
+            token = config_token or os.environ.get("TELEGRAM_BOT_TOKEN") \
+                    or os.environ.get("TG_BOT_TOKEN") or ""
         chats = list(self.telegram_allowed_chats)
         if not chats:
             env_chats = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TG_CHAT_ID") or ""
             chats = [c.strip() for c in env_chats.split(",") if c.strip()]
-        return token, chats
+        return token.strip(), chats
 
     def terminal_cmd(self, shell_hint: str = "") -> list[str]:
         """Return the argv to start the user's preferred terminal emulator.
@@ -191,15 +197,19 @@ class Settings:
         return {"source": "os", "path": os.environ.get("SHELL", shutil.which("bash") or shutil.which("sh") or "")}
 
     def telegram_sources(self) -> dict[str, str]:
-        """Where the *effective* token/chats come from: ``settings`` | ``env`` | ``""``.
+        """Where the *effective* token/chats come from: ``settings`` | ``settings-encrypted`` | ``env`` | ``""``.
 
         ``Settings.telegram()`` prefers ``config.json`` and falls back to
         environment variables, so the dashboard has to be able to say which one
         is actually in force — otherwise "Disconnect" looks broken when a token
         is shadowing it from the environment.
         """
+        from . import secrets
         if (self.telegram_token or "").strip():
-            token_src = "settings"
+            if secrets.is_encrypted(self.telegram_token):
+                token_src = "settings-encrypted"
+            else:
+                token_src = "settings"
         elif (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TG_BOT_TOKEN") or "").strip():
             token_src = "env"
         else:

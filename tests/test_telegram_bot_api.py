@@ -105,6 +105,85 @@ def test_bot_verifies_then_persists_a_new_token(client, monkeypatch):
     assert "bridge_running" in st and "bridge_task" in st
 
 
+def test_bot_encrypts_token_when_password_supplied(client, monkeypatch):
+    from perun import secrets, server
+
+    monkeypatch.setattr(server, "_telegram_getme", _fake_getme(username="enc_bot"))
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+
+    r = client.post("/api/telegram/bot", json={"token": "abc123", "password": "s3cret"})
+    assert r.status_code == 200, r.text
+    assert r.json()["token_source"] == "settings-encrypted"
+    assert server.SETTINGS.telegram_token.startswith("enc:")
+    # Decrypt round-trip.
+    assert secrets.decrypt_value(server.SETTINGS.telegram_token, "s3cret") == "abc123"
+
+
+def test_bot_encrypts_existing_plain_token_when_only_password_supplied(client, monkeypatch):
+    from perun import secrets, server
+
+    server.SETTINGS.telegram_token = "plain123"
+    monkeypatch.setattr(server, "_telegram_getme", _fake_getme())
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+
+    r = client.post("/api/telegram/bot", json={"password": "s3cret"})
+    assert r.status_code == 200, r.text
+    assert r.json()["token_source"] == "settings-encrypted"
+    assert secrets.decrypt_value(server.SETTINGS.telegram_token, "s3cret") == "plain123"
+
+
+def test_bot_does_not_auto_encrypt_from_env_password(client, monkeypatch):
+    from perun import secrets, server
+
+    monkeypatch.setenv("PERUN_PASSWORD", "envpw")
+    monkeypatch.setattr(server, "_telegram_getme", _fake_getme())
+    server.SETTINGS.telegram_token = ""
+
+    r = client.post("/api/telegram/bot", json={"token": "abc123"})
+    assert r.status_code == 200, r.text
+    assert r.json()["token_source"] == "settings"
+    assert server.SETTINGS.telegram_token == "abc123"
+
+
+def test_env_token_is_never_treated_as_encrypted(client, monkeypatch):
+    from perun import secrets, server
+
+    # A literal env value starting with "enc:" should be used as-is, not decrypted.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "enc:NOT-A-SECRET")
+    server.SETTINGS.telegram_token = ""
+    monkeypatch.setattr(server, "_telegram_api", lambda method, **kw: {"ok": True, "result": {}})
+    st = client.get("/api/telegram/status").json()
+    assert st["configured"] is True
+    assert st["token_source"] == "env"
+    assert secrets.decrypt_value("enc:NOT-A-SECRET") is None
+
+
+def test_change_password_re_encrypts_stored_token(client, monkeypatch):
+    from perun import secrets, server
+
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+    server.SETTINGS.telegram_token = secrets.encrypt_value("abc123", "oldpw")
+
+    r = client.post("/api/telegram/bot/change-password",
+                    json={"old_password": "oldpw", "new_password": "newpw"})
+    assert r.status_code == 200, r.text
+    assert r.json()["changed"] is True
+    assert secrets.decrypt_value(server.SETTINGS.telegram_token, "newpw") == "abc123"
+    assert secrets.decrypt_value(server.SETTINGS.telegram_token, "oldpw") is None
+
+
+def test_change_password_rejects_wrong_old_password(client, monkeypatch):
+    from perun import secrets, server
+
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+    server.SETTINGS.telegram_token = secrets.encrypt_value("abc123", "oldpw")
+
+    r = client.post("/api/telegram/bot/change-password",
+                    json={"old_password": "wrong", "new_password": "newpw"})
+    assert r.status_code == 400
+    assert "current password is incorrect" in r.json()["detail"]
+
+
 def test_bot_clear_token_disconnects(client, monkeypatch):
     from perun import server
 
@@ -146,19 +225,14 @@ def test_bridge_restart_delegates_to_installer(client, monkeypatch):
     assert r.json()["restart"]["ok"] is True
 
 
-# --------------------------------------------------------------------------- #
-# Environment fallback (this machine really does configure Telegram this way)
-# --------------------------------------------------------------------------- #
-def test_env_token_is_a_documented_fallback(client, monkeypatch):
-    from perun import server
+def test_bridge_restart_reloads_in_process_bridge(client, monkeypatch):
+    from perun import server, __main__ as main_module
 
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "envtoken")
-    monkeypatch.setattr(server, "_telegram_api", lambda method, **kw: {
-        "ok": True, "result": {"first_name": "Env", "username": "env_bot"}})
-    st = client.get("/api/telegram/status").json()
-    assert st["configured"] is True
-    assert st["token_source"] == "env"          # dashboard shows the warning
-    assert st["bot"]["username"] == "env_bot"
+    monkeypatch.setattr(main_module, "reload_in_process_bridge",
+                        lambda: {"reloaded": True})
+    r = client.post("/api/telegram/bridge/restart")
+    assert r.status_code == 200
+    assert r.json()["restart"]["reloaded"] is True
 
 
 def test_config_token_overrides_env(client, monkeypatch):
@@ -181,3 +255,21 @@ def test_status_reports_settings_source_when_configured(client, monkeypatch):
     monkeypatch.setattr(server, "_telegram_api", lambda method, **kw: {"ok": True, "result": {}})
     st = client.get("/api/telegram/status").json()
     assert st["token_source"] == "settings"
+
+
+# --------------------------------------------------------------------------- #
+# Environment fallback (this machine really does configure Telegram this way)
+# --------------------------------------------------------------------------- #
+def test_env_token_is_a_documented_fallback(client, monkeypatch):
+    from perun import server
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "envtoken")
+    monkeypatch.setattr(server, "_telegram_api", lambda method, **kw: {
+        "ok": True, "result": {"first_name": "Env", "username": "env_bot"}})
+    st = client.get("/api/telegram/status").json()
+    assert st["configured"] is True
+    assert st["token_source"] == "env"          # dashboard shows the warning
+    assert st["bot"]["username"] == "env_bot"
+
+
+

@@ -224,19 +224,31 @@ const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => 
     const marker = runUid ? `PERUN_RUN_UID=${runUid}` : '';
     const psTuiCmd = () => {
         let cmd = marker ? `$env:${escPs(marker)}; ` : '';
-        cmd += `cd "${escPs(cwd)}"; opencode --prompt "${escPs(prompt || 'Working session in progress.')}"`;
+        cmd += `cd "${escPs(cwd)}"; opencode`;
+        if (prompt) cmd += ` --prompt "${escPs(prompt)}"`;
+        if (model) cmd += ` --model "${escPs(model)}"`;
+        if (agent) cmd += ` --agent "${escPs(agent)}"`;
         if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
         return cmd;
     };
     const bashTuiCmd = () => {
-        let cmd = marker ? `${escBash(marker)} ` : '';
-        cmd += `cd '${escBash(cwd)}' && opencode --prompt '${escBash(prompt || 'Working session in progress.')}'`;
+        let cmd = `cd '${escBash(cwd)}' && `;
+        // Set the marker on the opencode process itself so the process tracker
+        // can resolve the TUI tab even if bash only inherited it for a subshell.
+        if (marker) cmd += `${escBash(marker)} `;
+        cmd += `opencode`;
+        if (prompt) cmd += ` --prompt '${escBash(prompt)}'`;
+        if (model) cmd += ` --model '${escBash(model)}'`;
+        if (agent) cmd += ` --agent '${escBash(agent)}'`;
         if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
         return cmd;
     };
     const cmdTuiCmd = () => {
         let cmd = marker ? `set "${escPs(marker)}" && ` : '';
-        cmd += `cd /d "${escPs(cwd)}" && opencode --prompt "${escPs(prompt || 'Working session in progress.')}"`;
+        cmd += `cd /d "${escPs(cwd)}" && opencode`;
+        if (prompt) cmd += ` --prompt "${escPs(prompt)}"`;
+        if (model) cmd += ` --model "${escPs(model)}"`;
+        if (agent) cmd += ` --agent "${escPs(agent)}"`;
         if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
         return cmd;
     };
@@ -250,8 +262,9 @@ const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => 
         return cmd;
     };
     const bashRunCmd = () => {
-        let cmd = marker ? `${escBash(marker)} ` : '';
-        cmd += `cd '${escBash(cwd)}' && opencode run`;
+        let cmd = `cd '${escBash(cwd)}' && `;
+        if (marker) cmd += `${escBash(marker)} `;
+        cmd += `opencode run`;
         if (model) cmd += ` --model '${escBash(model)}'`;
         if (agent) cmd += ` --agent '${escBash(agent)}'`;
         if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
@@ -895,12 +908,15 @@ function projectCard(p) {
 
 async function openProjectTui(p) {
     try {
+        // Project-card launch behaves like running `opencode` in the project
+        // directory: no forced prompt, so OpenCode uses its own session/model
+        // resolution instead of starting a fresh chat.
         const res = await api('/api/runs/tui', {
             method: 'POST',
-            body: { project: p.slug, prompt: 'Working session in progress.' },
+            body: { project: p.slug, model: p.model, agent: p.agent },
         });
         const runUid = res.run && res.run.run_uid;
-        await launchInTerminal({ cwd: p.path, tui: true, runUid });
+        await launchInTerminal({ cwd: p.path, model: p.model, agent: p.agent, tui: true, runUid });
         await refreshPresence();
         if (runUid) {
             // Optimistically show working state so the card lights up immediately.
@@ -1658,6 +1674,30 @@ async function loadGitLog(container, slug) {
 }
 
 /* ======================================================== MANIFEST ====== */
+/* Open a file path from a manifest anchor. We try a direct window.open to the
+   OS handler (vscode://file/... or file://...). The path is normalised so it
+   cannot escape the project root. */
+function openManifestPath(projectRoot, relPath) {
+    let clean = String(relPath || '').replace(/^[\/]+/, '').replace(/\.{2,}(?:[\/]|$)/g, '').replace(/[\/]+/g, '/');
+    if (!clean) return;
+    const root = String(projectRoot || '').replace(/[\/]+$/, '').replace(/\\/g, '/');
+    const absolute = root + '/' + clean;
+    const vscodeUrl = 'vscode://file/' + absolute;
+    const fileUrl = 'file:///' + absolute;
+    const tryOpen = (url) => {
+        const w = window.open(url, '_blank');
+        return w;
+    };
+    const opened = tryOpen(vscodeUrl);
+    if (!opened) {
+        setTimeout(() => {
+            if (!tryOpen(fileUrl)) {
+                toast(`Could not open ${clean} — no local file handler`, 'err');
+            }
+        }, 200);
+    }
+}
+
 function manifestOverview(p) {
     const data = p.manifest || {};
     const body = p.manifest_body || '';
@@ -1675,10 +1715,26 @@ function manifestOverview(p) {
         const list = el('div', { class: 'anchor-list' });
         for (const a of anchors) {
             const target = a.path || a.url || a.command || '';
-            list.appendChild(el('div', { class: 'anchor-item' },
-                `<span class="ai-kind">${esc(a.kind || '')}</span>
+            const kind = a.kind || 'file';
+            const isFile = kind === 'file' || kind === 'doc';
+            const isUrl = kind === 'url';
+            let targetHtml;
+            if (isUrl) {
+                targetHtml = `<a class="ai-target" href="${safeUrl(target)}" target="_blank" rel="noopener noreferrer" title="${esc(target)}">${esc(target)}</a>`;
+            } else if (isFile) {
+                targetHtml = `<button class="ai-target" data-path="${esc(target)}" title="Open ${esc(target)}" type="button">${esc(target)}</button>`;
+            } else {
+                targetHtml = `<span class="ai-target">${esc(target)}</span>`;
+            }
+            const item = el('div', { class: 'anchor-item' },
+                `<span class="ai-kind">${esc(kind)}</span>
                  <span class="ai-label">${esc(a.label || '')}</span>
-                 <span class="ai-target">${esc(target)}</span>`));
+                 ${targetHtml}`);
+            if (isFile) {
+                const btn = item.querySelector('[data-path]');
+                if (btn) btn.addEventListener('click', () => openManifestPath(p.path, btn.dataset.path));
+            }
+            list.appendChild(item);
         }
         box.appendChild(list);
     }
@@ -1697,23 +1753,46 @@ function manifestOverview(p) {
         box.appendChild(el('div', { class: 'subhead' }, 'Links & docs'));
         const row = el('div', { class: 'row wrap' });
         for (const [k, v] of links) row.appendChild(el('a', { class: 'chip', href: safeUrl(v), target: '_blank', rel: 'noopener noreferrer' }, `<b>${esc(k)}</b>`));
-        for (const [k, v] of docs) row.appendChild(el('span', { class: 'chip', title: v }, `<b>${esc(k)}</b> ${esc(v)}`));
+        for (const [k, v] of docs) {
+            const chip = el('button', { class: 'chip chip-link', title: v, type: 'button' }, `<b>${esc(k)}</b> ${esc(v)}`);
+            chip.addEventListener('click', () => openManifestPath(p.path, v));
+            row.appendChild(chip);
+        }
         box.appendChild(row);
     }
 
     if (body && body.trim()) {
         box.appendChild(el('div', { class: 'subhead' }, 'Overview'));
-        box.appendChild(el('div', { class: 'md-body', html: renderMarkdown(body) }));
+        const md = el('div', { class: 'md-body', html: renderMarkdown(body) });
+        box.appendChild(md);
+        // Make relative/local links in the overview body open via the OS handler.
+        md.querySelectorAll('a[href]').forEach((a) => {
+            const href = a.getAttribute('href') || '';
+            if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) {
+                a.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    openManifestPath(p.path, href);
+                });
+            }
+        });
     }
     return box;
 }
 
 async function mountManifest(container, p) {
     container.innerHTML = '<div class="empty"><span class="spinner"></span> loading manifest…</div>';
-    let snap;
-    try { snap = (await api(`/api/projects/${p.slug}/manifest`)).manifest; }
+    let detail, snap;
+    try {
+        detail = await api(`/api/projects/${p.slug}`);
+        snap = (await api(`/api/projects/${p.slug}/manifest`)).manifest;
+    }
     catch (e) { container.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-    renderManifestEditor(container, p, snap);
+    container.innerHTML = '';
+    // Show the same read-only manifest card that appears on the Overview tab.
+    if (detail.project && detail.project.has_manifest) {
+        container.appendChild(manifestOverview(detail.project));
+    }
+    renderManifestEditor(container, p, snap || {});
 }
 
 function renderManifestEditor(container, p, snap) {
@@ -1782,9 +1861,9 @@ function renderManifestEditor(container, p, snap) {
         card.appendChild(el('div', { class: 'subhead' }, title));
         const host = el('div', { class: 'kv-editor' });
         card.appendChild(host);
-        for (const [k, v] of Object.entries(pairs || {})) addKvRow(host, group, k, v, placeholder);
+        for (const [k, v] of Object.entries(pairs || {})) addKvRow(host, group, k, v, placeholder, p.path);
         const add = el('button', { class: 'btn sm ghost' }, '＋ Add');
-        add.addEventListener('click', () => addKvRow(host, group, '', '', placeholder));
+        add.addEventListener('click', () => addKvRow(host, group, '', '', placeholder, p.path));
         card.appendChild(add);
         return host;
     };
@@ -1821,13 +1900,19 @@ function renderManifestEditor(container, p, snap) {
     container.appendChild(card);
 }
 
-function addKvRow(host, group, key, value, placeholder) {
+function addKvRow(host, group, key, value, placeholder, projectRoot) {
     const row = el('div', { class: 'kv-edit-row', dataset: { group } });
     const k = el('input', { type: 'text', value: key || '', placeholder: 'key', dataset: { role: 'key' } });
     const v = el('input', { type: 'text', value: value || '', placeholder: placeholder || 'value', dataset: { role: 'value' } });
     const del = el('button', { class: 'icon-btn', title: 'Remove', type: 'button' }, '✕');
     del.addEventListener('click', () => row.remove());
     row.appendChild(k); row.appendChild(v); row.appendChild(del);
+    // Documentation rows get an Open button so the file can be launched from the editor.
+    if (group === 'docs' && projectRoot) {
+        const open = el('button', { class: 'icon-btn', title: 'Open file', type: 'button' }, '↗');
+        open.addEventListener('click', () => openManifestPath(projectRoot, v.value));
+        row.appendChild(open);
+    }
     host.appendChild(row);
     return row;
 }
@@ -2215,27 +2300,34 @@ function mountConsole(host, initial) {
         if (!prompt) { toast('Enter a prompt or queue a task', 'err'); return; }
         logLine('› ' + (promptEl().value.trim() || 'Queued tasks only'));
         try {
-            const res = await api('/api/runs/tui', { method: 'POST', body: { project: slug, prompt } });
-            currentRun = res.run.run_uid;
+            const res = await api('/api/runs/tui', {
+                method: 'POST',
+                body: { project: slug, prompt, model: p.model, agent: p.agent },
+            });
+            const runUid = res && res.run && res.run.run_uid;
+            if (!runUid) { throw new Error('Perun did not return a run id'); }
+            currentRun = runUid;
             runBtn.disabled = true; stopBtn.disabled = false;
-            refreshPresence();
+            await refreshPresence();
             perunFx.flash($('#perun-sigil'));
             const sessionOpt = $('#c-session').selectedOptions[0];
             const sessionId = sessionOpt ? (sessionOpt.dataset.oc || '') : '';
-            await launchInTerminal({ cwd: p.path, prompt, tui: true, runUid: currentRun, sessionId });
+            await launchInTerminal({ cwd: p.path, model: p.model, agent: p.agent, prompt, tui: true, runUid: currentRun, sessionId });
             logLine(`[TUI session ${currentRun}] opened in ${slug}`);
             promptEl().value = '';
             taskQueue = [];
             updateQueue();
-        } catch (e) { logLine('error: ' + e.message); toast(e.message, 'err'); }
+        } catch (e) { logLine('error: ' + e.message); toast(e.message, 'err'); runBtn.disabled = false; stopBtn.disabled = true; currentRun = null; }
     });
 
     stopBtn.addEventListener('click', async () => {
         if (!currentRun) return;
         try {
-            await api(`/api/runs/${currentRun}/kill`, { method: 'POST' });
+            // /cancel finalises the run even if the terminal process was not
+            // tracked, so the Agent Console state never leaves a zombie run.
+            await api(`/api/runs/${currentRun}/cancel`, { method: 'POST' });
             logLine('[TUI session closed]');
-        } catch (e) { logLine('kill warning: ' + e.message); }
+        } catch (e) { logLine('stop warning: ' + e.message); }
         runBtn.disabled = false; stopBtn.disabled = true; currentRun = null;
         await refreshPresence(); await loadProjects();
     });
@@ -2330,8 +2422,8 @@ function memoryForm(slug) {
          <div class="form-row">
             <label class="field"><span class="lab">Topic</span><input type="text" id="mf-topic" value="general"></label>
             <label class="field"><span class="lab">Scope</span><select id="mf-scope">
+                <option value="project" ${slug ? '' : 'disabled'} ${slug ? 'selected' : ''}>This project</option>
                 <option value="global">Global (all projects)</option>
-                <option value="project" ${slug ? '' : 'disabled'}>This project</option>
             </select></label>
          </div>
          <div class="form-actions"><button class="btn primary" id="mf-save">Store fact</button></div>`);
@@ -2431,7 +2523,14 @@ function mountTelegram(host, status, reload) {
              <span class="mono">TELEGRAM_BOT_TOKEN</span> environment variable, not from Perun.
              Saving a token here stores it in <span class="mono">config.json</span>, which takes
              precedence over the environment.</p>`
-        : '';
+        : (status.token_source === 'settings-encrypted'
+            ? `<p class="muted mt">🔒 The token is encrypted in <span class="mono">config.json</span>.
+                 Set <span class="mono">PERUN_PASSWORD</span> when launching Perun so the bridge can decrypt it.
+                 If you change the password, paste the token again below to re-encrypt it.</p>`
+            : '');
+    const tokenPlaceholder = status.token_source === 'settings-encrypted'
+        ? '••••••••  (encrypted — paste token + password to re-encrypt, blank to keep)'
+        : (status.configured ? '••••••••  (hidden — leave blank to keep the current token)' : '123456789:ABC-DEF…');
     const sCard = el('div', { class: 'card mb' },
         `<div class="card-head"><h4>Bot settings</h4><span class="badge gold">machine-wide</span></div>
          <p class="secondary">Switch Perun to a <b>different</b> bot, or edit the one in use. Ask
@@ -2440,13 +2539,20 @@ function mountTelegram(host, status, reload) {
          <label class="field"><span class="lab">Name <span class="muted">— a label to tell bots apart</span></span>
             <input type="text" id="tg-name" value="${esc(status.bot_name || '')}" placeholder="${esc(bot.first_name || 'Perun bot')}"></label>
          <label class="field"><span class="lab">API key (bot token) ${status.configured ? '<span class="badge green">set</span>' : ''}</span>
-            <input type="password" id="tg-token" autocomplete="off"
-                   placeholder="${status.configured ? '••••••••  (hidden — leave blank to keep the current token)' : '123456789:ABC-DEF…'}"></label>
+            <input type="password" id="tg-token" autocomplete="off" placeholder="${tokenPlaceholder}"></label>
+         <label class="field"><span class="lab">Encryption password <span class="muted">— optional; if set, the token is encrypted in config.json. Set PERUN_PASSWORD at launch so the bridge can decrypt it.</span></span>
+            <input type="password" id="tg-password" autocomplete="off"
+                   placeholder="${status.token_source === 'settings-encrypted' ? 'paste token again to re-encrypt' : 'leave blank to store plain text'}"></label>
+         <p class="muted mt">🔐 If you lose this password, you cannot recover the stored token. You must get a new API key from
+            <span class="mono">@BotFather</span> and save it here again.</p>
          <label class="field"><span class="lab">Allowed chat ids <span class="muted">(comma separated${status.chats_source === 'env' ? ' — currently from the environment' : ''})</span></span>
             <input type="text" id="tg-chats" value="${esc((status.allowed_chats || []).join(', '))}"
                    placeholder="blank = pair on the first incoming message"></label>
          <div class="form-actions">
             <button class="btn primary" id="tg-save">Save bot settings</button>
+            ${status.token_source === 'settings-encrypted'
+                ? `<button class="btn" id="tg-change-pw">Change password</button>`
+                : ''}
             ${status.configured ? `<button class="btn danger ghost" id="tg-disconnect"${status.token_source === 'env' ? ' disabled title="The active token comes from the environment"' : ''}>Disconnect</button>` : ''}
          </div>`);
     host.appendChild(sCard);
@@ -2454,7 +2560,11 @@ function mountTelegram(host, status, reload) {
     sCard.querySelector('#tg-save').addEventListener('click', async () => {
         const payload = { name: $('#tg-name').value.trim(), chats: $('#tg-chats').value };
         const tok = $('#tg-token').value.trim();
-        if (tok) payload.token = tok;
+        const pwd = $('#tg-password').value.trim();
+        if (tok) {
+            payload.token = tok;
+            if (pwd) payload.password = pwd;
+        }
         const btn = sCard.querySelector('#tg-save');
         btn.disabled = true;
         try {
@@ -2466,6 +2576,33 @@ function mountTelegram(host, status, reload) {
         } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
     });
 
+    const pwBtn = sCard.querySelector('#tg-change-pw');
+    if (pwBtn) pwBtn.addEventListener('click', () => {
+        const body = el('div', {}, `
+            <p class="secondary">Enter the current password to decrypt the stored token, then a new password to re-encrypt it. The token is never sent back to the browser.</p>
+            <p class="muted">If you forgot the current password, disconnect the bot below and reconnect with a new API key from @BotFather.</p>
+            <label class="field"><span class="lab">Current password</span><input type="password" id="pw-old"></label>
+            <label class="field"><span class="lab">New password</span><input type="password" id="pw-new"></label>`);
+        modal('Change encryption password', body, [
+            { label: 'Cancel', class: 'ghost', onClick: closeModal },
+            { label: 'Re-encrypt', class: 'primary', onClick: async () => {
+                const oldPw = body.querySelector('#pw-old').value;
+                const newPw = body.querySelector('#pw-new').value;
+                if (!oldPw || !newPw) { toast('Both passwords are required', 'err'); return; }
+                closeModal();
+                pwBtn.disabled = true;
+                try {
+                    const r = await api('/api/telegram/bot/change-password', {
+                        method: 'POST',
+                        body: { old_password: oldPw, new_password: newPw },
+                    });
+                    toast(r.changed ? 'Password changed — click Restart bridge to apply it' : 'No change needed', r.changed ? 'ok' : 'ok');
+                    await reload();
+                } catch (e) { toast(e.message, 'err'); pwBtn.disabled = false; }
+            }},
+        ]);
+    });
+
     const dbtn = sCard.querySelector('#tg-disconnect');
     if (dbtn) dbtn.addEventListener('click', () => confirmDialog('Disconnect the bot',
         'Clear the stored Telegram bot token? The bridge stops polling until a new token is saved.',
@@ -2475,29 +2612,32 @@ function mountTelegram(host, status, reload) {
         }, 'Disconnect'));
 
     // ---- Bridge process -----------------------------------------------------
+    const inProcess = status.bridge_running;
     host.appendChild(el('div', { class: 'card mb' },
         `<div class="card-head"><h4>Bridge process</h4></div>
-         <p class="secondary">The bridge resolves the bot token <b>once, at startup</b>, so a new token only takes
-            effect after a restart. Restarting only ends the process the logon task started — never the dashboard.</p>
+         <p class="secondary">The bridge resolves the bot token <b>once, at startup</b>. A restart makes it
+            re-read the configured token/password.</p>
+         ${inProcess
+            ? `<p class="muted mt">🔌 The bridge is running <b>inside this dashboard process</b>.
+                 <strong>Restart bridge</strong> will reload the token without closing the window.</p>`
+            : `<p class="muted mt">The bridge is not currently running. ${task.exists
+                ? 'You can restart the standalone <span class="mono">PerunBridge</span> logon task below.'
+                : 'No <span class="mono">PerunBridge</span> logon task found — run <span class="mono">python -m perun install --machine</span> to register it, or start it by hand: <span class="mono">python -m perun bridge</span>.'}</p>`}
          <div class="form-actions">
-            <button class="btn" id="tg-restart" ${task.exists ? '' : 'disabled'}>⟳ Restart bridge</button>
+            <button class="btn" id="tg-restart" ${(inProcess || task.exists) ? '' : 'disabled'}>⟳ Restart bridge</button>
          </div>
          ${task.exists
-            ? `<p class="muted mt">Runs as <span class="mono">python -m perun bridge</span> under the
-                 <span class="mono">PerunBridge</span> logon task.
-                 ${task.command ? `Command: <span class="mono">${esc(task.command)} ${esc(task.arguments || '')}</span>` : ''}</p>`
-            : `<p class="muted mt">No <span class="mono">PerunBridge</span> logon task found — run
-                 <span class="mono">python -m perun install --machine</span> to register it, or start the bridge by hand:
-                 <span class="mono">python -m perun bridge</span>.</p>`}
+            ? `<p class="muted mt">Logon task command: <span class="mono">${esc(task.command || 'python')} ${esc(task.arguments || '-m perun bridge')}</span></p>`
+            : ''}
          <p class="muted mt">Commands: <span class="mono">/projects</span>, <span class="mono">/project</span>,
             <span class="mono">/recall</span>, <span class="mono">/orchestrator</span>.</p>`));
 
     const rbtn = host.querySelector('#tg-restart');
-    if (rbtn && task.exists) rbtn.addEventListener('click', async () => {
+    if (rbtn && (inProcess || task.exists)) rbtn.addEventListener('click', async () => {
         rbtn.disabled = true;
         try {
             const r = await api('/api/telegram/bridge/restart', { method: 'POST' });
-            const ok = r.restart && r.restart.ok;
+            const ok = r.restart && (r.restart.reloaded || r.restart.ok);
             toast(ok ? 'Bridge restarted' : ((r.restart && r.restart.reason) || 'Restart failed'), ok ? 'ok' : 'err');
             setTimeout(reload, 1500);
         } catch (e) { toast(e.message, 'err'); rbtn.disabled = false; }
