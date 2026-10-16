@@ -16,5 +16,8 @@ Use the `perun_memory_store` MCP tool:
 
 User summary: $ARGUMENTS
 
-If the summary above is empty, ask the user for a one-line summary before calling
-`perun_memory_store`. Do not store an empty fact.
+If the summary above is empty, compose a very short one-sentence summary of the
+work done in the current session based on the conversation so far, then call
+`perun_memory_store` with that summary. Only ask the user if the conversation
+is too ambiguous to summarize. Avoid including secrets or raw credentials in
+the fact.
