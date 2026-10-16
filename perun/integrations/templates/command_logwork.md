@@ -15,3 +15,6 @@ Use the `perun_memory_store` MCP tool:
   called from the orchestrator / global context it becomes a global fact.
 
 User summary: $ARGUMENTS
+
+If the summary above is empty, ask the user for a one-line summary before calling
+`perun_memory_store`. Do not store an empty fact.
