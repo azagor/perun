@@ -710,11 +710,24 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `telegram_allowed_chats` | `[]` | falls back to `TELEGRAM_CHAT_ID`; empty = pair-on-first-message |
 | `auto_discover_on_start` | `true` | discovery on service startup |
 | `index_docs_on_discover` | `false` | index new projects' docs on discover |
+| `terminal` | `""` | preferred terminal emulator for `Run in Terminal` / TUI launches. Empty = OS default (`pwsh`/`powershell` on Windows, `$SHELL` elsewhere). Accepts an alias (`cmd`, `pwsh`, `wt`) or a full path. The dashboard Settings page edits this value; it only affects future launches. |
 
 Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
 `TELEGRAM_CHAT_ID`. A config.json value wins over the environment;
 `Settings.telegram_sources()` reports which is actually in force (surfaced as
 `token_source` / `chats_source` so the dashboard can explain it).
+
+### Terminal selection and duplicate TUI windows
+
+Perun does not control OpenCode's TUI tab/session restore behavior; the TUI
+itself reopens previous sessions as tabs. Perun **does** control which terminal
+emulator is used when the dashboard launches a TUI via `POST /api/run-in-terminal`
+(or the dashboard "Run" / "OpenCode" buttons). If you see two identical session
+windows, you probably launched the TUI from two different terminals (e.g.,
+classic `cmd.exe` and PowerShell). Set `Settings.terminal` to a single value
+(`pwsh`, `wt`, `cmd`, or a full path) in the dashboard Settings page so every
+future launch uses the same terminal. Existing windows are not closed by this
+setting.
 
 ---
 
@@ -755,6 +768,21 @@ Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
 * **Docs.** Fixed a stray `)` before a `### Added` heading in `docs/CHANGELOG.md`
   and documented the search layer here (§8).
 * **Tests:** full suite at **377 passed** (+6 regression tests).
+
+### 2026-10-16 — Terminal setting documented and configured
+
+* **Configuration reference updated.** Added `Settings.terminal` to the settings
+  table (§13) and documented how Perun resolves the terminal emulator for TUI
+  launches (`terminal_cmd()`). The dashboard Settings page is the recommended
+  place to change it.
+* **Duplicate-window guidance.** Added a note (§13) explaining that multiple
+  identical session windows come from launching the TUI in different terminals
+  (e.g., `cmd.exe` vs. PowerShell), while TUI tabs are controlled by OpenCode's
+  own session restore, not Perun. Set `Settings.terminal` to a single value to
+  keep future launches consistent.
+* **Runtime configuration.** The local Perun instance was configured to use
+  `pwsh` (PowerShell 7) as its explicit terminal, replacing the previous OS
+  default resolution.
 
 ### 2026-10-14 — Agent Console & session-start improvements
 
