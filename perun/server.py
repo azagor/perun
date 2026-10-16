@@ -483,15 +483,19 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             except (ValueError, IndexError):
                 wt_argv.extend(["-d", cwd])
         # Keep the tab open after opencode exits so the user can see results.
-        # Quote the command as a single /k argument so shell metacharacters in
-        # the frontend-built text are not interpreted by cmd.exe.
-        cmdline = subprocess.list2cmdline(wt_argv + ["cmd", "/k", cmd_text])
+        # Build the trailing "cmd /k <text>" as raw text, never through
+        # list2cmdline(... + cmd_text): cmd.exe does not understand C-runtime
+        # \" quoting, so list2cmdline would emit \" and cmd would fail with
+        # "The filename, directory name, or volume label syntax is incorrect."
+        cmdline = subprocess.list2cmdline(wt_argv) + " cmd /k " + cmd_text
         use_cmdline = True
     elif shell_cls in ("cmd",):
-        # /k keeps the console window alive after opencode exits.
-        # Quote the command as a single /k argument so shell metacharacters are
-        # not interpreted by cmd.exe.
-        cmdline = subprocess.list2cmdline([argv[0], "/k", cmd_text])
+        # /k keeps the console window alive after opencode exits. Same rule as
+        # above: cmd_text is authored (and quoted) by the frontend for cmd.exe
+        # itself, so hand it over verbatim. Passing [argv[0], "/k", cmd_text]
+        # through list2cmdline escapes the inner quotes as \" which cmd.exe
+        # cannot parse.
+        cmdline = subprocess.list2cmdline([argv[0]]) + " /k " + cmd_text
         use_cmdline = True
     elif shell_cls in ("powershell", "pwsh"):
         # Launch PowerShell directly with a new console. Using subprocess with
@@ -530,6 +534,55 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"could not open terminal: {exc}")
     return _ok(launched=True, shell=shell, command=cmd_text, pid=proc.pid if 'proc' in locals() else None)
+
+
+# --------------------------------------------------------------------------- #
+# MCP servers
+# --------------------------------------------------------------------------- #
+@app.get("/api/mcp/servers")
+def api_mcp_servers() -> dict[str, Any]:
+    """Every MCP server OpenCode is configured to use (global + per project).
+
+    Config-only: no server is started. Each entry carries a cheap derived status
+    (``ready``/``missing``/``disabled``/``remote``/``invalid``); use
+    ``POST /api/mcp/servers/probe`` for a live handshake against one server.
+    """
+    from . import mcp_servers
+
+    return _ok(**mcp_servers.snapshot(registry.list_projects()))
+
+
+@app.post("/api/mcp/servers/probe")
+def api_mcp_probe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Live-probe one configured MCP server (explicit, on-demand action).
+
+    The command/URL is read from the on-disk config for the named server, so the
+    request cannot make Perun run an arbitrary command. Local servers are spawned
+    and driven through the MCP ``initialize`` + ``tools/list`` handshake; remote
+    servers get a best-effort HTTP handshake. Always returns a status object, even
+    when the server is unreachable. Probes are gated (at most a handful run at
+    once), so a burst of Test clicks yields ``status: "busy"`` instead of pinning
+    worker threads, and the timeout is capped so no probe can hold one for long.
+    """
+    from . import mcp_servers
+
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    scope = "project" if str(payload.get("scope") or "").lower() == "project" else "global"
+    project = str(payload.get("project") or "").strip()
+    if scope == "project" and not project:
+        raise HTTPException(status_code=400, detail="project is required for project scope")
+    try:
+        timeout = float(payload.get("timeout") or mcp_servers.DEFAULT_PROBE_TIMEOUT)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="timeout must be a number") from None
+    try:
+        result = mcp_servers.probe(name, scope=scope, projects=registry.list_projects(),
+                                   project=project, timeout=timeout)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return _ok(**result)
 
 
 # --------------------------------------------------------------------------- #

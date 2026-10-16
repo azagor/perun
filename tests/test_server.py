@@ -789,15 +789,54 @@ def test_run_in_terminal_cmd_uses_string_command_line(client, tmp_path, monkeypa
     })
     assert r.status_code == 200
     (popen_args, popen_kwargs) = captured[-1]
-    # The command is passed as a single quoted /k argument so shell
-    # metacharacters cannot break out, while cmd.exe still receives the
-    # intended command text.
+    # The command text must reach cmd.exe verbatim. list2cmdline would escape
+    # the inner quotes as \" (C-runtime style), which cmd.exe cannot parse and
+    # turns into "The filename, directory name, or volume label syntax is
+    # incorrect." So no backslash-escaped quotes may appear.
     assert isinstance(popen_args[0], str)
     assert popen_args[0].startswith("cmd.exe /k ")
-    assert "cd /d" in popen_args[0]
-    assert "opencode" in popen_args[0]
-    assert "hi" in popen_args[0]
+    assert '\\"' not in popen_args[0]
+    assert popen_args[0].endswith('cd /d "C:\\\\x" && opencode --prompt "hi"')
     assert popen_kwargs.get("cwd") == str(tmp_path / "cmd")
+
+
+def test_run_in_terminal_wt_keeps_raw_quotes(client, tmp_path, monkeypatch):
+    from perun import process_tracker, config
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "WtProj", "path": str(tmp_path / "wt"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    captured: list[tuple[object, ...]] = []
+
+    class FakeProc:
+        pid = 44444
+        def poll(self): return None
+
+    def fake_popen(*args, **kwargs):
+        captured.append((args, kwargs))
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(config.Settings, "terminal_cmd",
+                        lambda self, shell_hint="": ["wt.exe", "-d", "."])
+
+    r = client.post("/api/run-in-terminal", json={
+        "project": slug,
+        "command": 'cd /d "C:\\\\x" && opencode',
+        "shell": "wt",
+    })
+    assert r.status_code == 200
+    (popen_args, _) = captured[-1]
+    assert isinstance(popen_args[0], str)
+    assert popen_args[0].startswith("wt.exe -d ")
+    assert '\\"' not in popen_args[0]
+    assert popen_args[0].endswith(' cmd /k cd /d "C:\\\\x" && opencode')
 
 
 def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):

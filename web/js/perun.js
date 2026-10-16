@@ -51,7 +51,9 @@ async function api(path, opts = {}) {
     try { data = await res.json(); } catch (_) { /* no body */ }
     if (!res.ok) {
         const detail = (data && (data.detail || data.reason)) || res.statusText;
-        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+        const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+        err.status = res.status;
+        throw err;
     }
     return data;
 }
@@ -797,6 +799,7 @@ const routes = {
     '#/console': viewConsole,
     '#/memory': viewMemory,
     '#/activity': viewActivity,
+    '#/mcp': viewMcp,
     '#/telegram': viewTelegram,
     '#/settings': viewSettings,
 };
@@ -2619,6 +2622,189 @@ function activityRow(a) {
         `<span class="badge muted">${esc(a.kind)}</span>
          <span class="grow msg">${esc(a.message)}</span>
          <span class="ts">${esc(timeAgo(a.ts))}</span>`);
+}
+
+/* ============================================================ MCP ======= */
+const MCP_STATUS_BADGE = {
+    ready: 'green', remote: 'blue', disabled: 'muted', missing: 'amber', invalid: 'red',
+};
+
+async function viewMcp() {
+    $('#topbar-title').textContent = 'MCP Servers';
+    await loadProjects();
+    const v = $('#view');
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow">Integrations</div><h1>MCP Servers</h1>
+          <div class="sub">Every Model Context Protocol server OpenCode loads — machine-wide and per project.
+          Status is read from config; <b>Test</b> starts a server and performs the real MCP handshake
+          (<span class="mono">initialize</span> + <span class="mono">tools/list</span>).</div></div>`));
+    const wrap = el('div');
+    v.appendChild(wrap);
+
+    const render = async () => {
+        wrap.innerHTML = '';
+        let data;
+        try { data = await api('/api/mcp/servers'); }
+        catch (e) {
+            // A 404 means the running service predates this view's endpoint —
+            // static JS is read live from disk, so the page can render while the
+            // backend is still the old one. Say so instead of showing "no servers".
+            const stale = e.status === 404;
+            wrap.appendChild(el('div', { class: 'empty' }, stale
+                ? 'Perun\'s API does not know this endpoint yet — the running service was started before this view existed.<br>'
+                  + 'Restart Perun (<span class="mono">Perun.cmd</span> or <span class="mono">python -m perun serve</span>) and reload.'
+                : esc(e.message || 'failed to load')));
+            return;
+        }
+
+        const servers = data.servers || [];
+        const counts = data.counts || {};
+        const bar = el('div', { class: 'card' });
+        bar.appendChild(el('div', { class: 'card-head' },
+            `<h4>Configured servers</h4><span class="muted">${servers.length} total</span>`));
+        const chips = el('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' });
+        const chip = (label, n, cls) => el('span', { class: `badge ${cls}` }, `${esc(label)} · ${n}`);
+        chips.appendChild(chip('ready', counts.ready || 0, 'green'));
+        chips.appendChild(chip('remote', counts.remote || 0, 'blue'));
+        chips.appendChild(chip('missing', counts.missing || 0, 'amber'));
+        chips.appendChild(chip('disabled', counts.disabled || 0, 'muted'));
+        if (counts.invalid) chips.appendChild(chip('invalid', counts.invalid, 'red'));
+        bar.appendChild(chips);
+        const files = ((data.config_files || {}).global || []);
+        if (files.length) {
+            bar.appendChild(el('div', { class: 'muted', style: 'font-size:.78rem;margin-top:10px' },
+                `Global config: <span class="mono">${esc(files.join(', '))}</span>`));
+        }
+        const actions = el('div', { class: 'row', style: 'gap:8px;margin-top:12px' });
+        const testAll = el('button', { class: 'btn ghost sm', title: 'Probe every enabled server in turn' }, '⚡ Test all enabled');
+        testAll.addEventListener('click', async () => {
+            testAll.disabled = true;
+            const targets = servers.filter((s) => s.enabled);
+            for (let i = 0; i < targets.length; i++) {
+                testAll.textContent = `⚡ Testing ${i + 1}/${targets.length}…`;
+                const host = document.getElementById(`mcp-host-${mcpId(targets[i])}`);
+                if (host) await probeMcp(targets[i], host);
+            }
+            testAll.disabled = false;
+            testAll.textContent = '⚡ Test all enabled';
+            toast('MCP probe complete', 'ok');
+        });
+        actions.appendChild(testAll);
+        bar.appendChild(actions);
+        wrap.appendChild(bar);
+
+        const perrs = data.parse_errors || [];
+        if (perrs.length) {
+            wrap.appendChild(el('div', { class: 'card', style: 'border-color:var(--amber,#d9a13b);margin-top:10px' },
+                `<div class="card-head"><h4 style="color:var(--amber,#d9a13b)">⚠ Config not read</h4>
+                 <span class="muted">${perrs.length} file${perrs.length > 1 ? 's' : ''}</span></div>
+                 <div class="mono" style="font-size:.76rem;line-height:1.7;word-break:break-word">`
+                + perrs.map((p) => `${esc(p.source)} → ${esc(p.error)}`).join('<br>')
+                + '</div>'));
+        }
+
+        if (!servers.length) {
+            wrap.appendChild(el('div', { class: 'empty' },
+                perrs.length
+                    ? 'No servers could be loaded because OpenCode\'s config could not be parsed — fix the file(s) above.'
+                    : 'No MCP servers are configured in OpenCode.<br>Add one to <span class="mono">~/.config/opencode/opencode.json</span> under <span class="mono">mcp</span>, '
+                      + 'or run <span class="mono">python -m perun install --machine</span> to register Perun.'));
+            return;
+        }
+
+        const globals = servers.filter((s) => s.scope === 'global');
+        const byProject = {};
+        for (const s of servers.filter((s) => s.scope === 'project')) {
+            (byProject[s.project] = byProject[s.project] || []).push(s);
+        }
+
+        const section = (title, sub, rows) => {
+            if (!rows.length) return;
+            wrap.appendChild(el('div', { class: 'view-head', style: 'margin-top:18px' },
+                `<div><h4>${esc(title)}</h4><div class="sub">${esc(sub)}</div></div>`));
+            for (const s of rows) wrap.appendChild(mcpCard(s));
+        };
+
+        section('Global', 'Loaded by every OpenCode project on this machine.', globals);
+        for (const [slug, rows] of Object.entries(byProject)) {
+            const name = rows[0].project_name || slug;
+            section(`Project · ${name}`, slug, rows);
+        }
+    };
+
+    await render();
+}
+
+const mcpId = (s) => `${s.scope}-${s.project || 'global'}-${s.name}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+function mcpCard(s) {
+    const card = el('div', { class: 'card' });
+    const head = el('div', { class: 'card-head' });
+    head.appendChild(el('div', {},
+        `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+            <b class="mono">${esc(s.name)}</b>
+            <span class="badge ${MCP_STATUS_BADGE[s.status] || 'muted'}">${esc(s.status)}</span>
+            <span class="badge muted">${esc(s.transport)}</span>
+            ${s.scope === 'project' ? '<span class="badge blue">project</span>' : ''}
+            ${s.enabled ? '' : '<span class="badge muted">disabled</span>'}
+         </div>
+         <div class="muted mono" style="font-size:.74rem;margin-top:4px">${esc(s.source)}</div>`));
+    const test = el('button', { class: 'btn sm', title: 'Launch and handshake this server' }, '⚡ Test');
+    head.appendChild(test);
+    card.appendChild(head);
+
+    const target = s.transport === 'remote' ? s.url : (s.command || []).join(' ');
+    let kv = `<span class="k">Target</span><span class="v mono">${esc(target || '—')}</span>`;
+    if (s.transport === 'local') {
+        kv += `<span class="k">Resolves</span><span class="v mono">${esc(s.resolved || 'not found on PATH')}</span>`;
+    }
+    if (s.shadowed_by && s.shadowed_by.length) {
+        kv += `<span class="k">Overridden by</span><span class="v">${esc(s.shadowed_by.join(', '))}</span>`;
+    }
+    card.appendChild(el('div', { class: 'kv' }, kv));
+
+    const host = el('div', { class: 'mcp-probe', id: `mcp-host-${mcpId(s)}` });
+    card.appendChild(host);
+    test.addEventListener('click', () => probeMcp(s, host, test));
+    return card;
+}
+
+async function probeMcp(s, host, btn) {
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⚡ Testing…'; }
+    host.innerHTML = '<div class="muted" style="font-size:.82rem">Launching and handshaking…</div>';
+    try {
+        const res = await api('/api/mcp/servers/probe', {
+            method: 'POST',
+            body: { name: s.name, scope: s.scope, project: s.project || '' },
+        });
+        renderMcpProbe(host, res);
+    } catch (e) {
+        host.innerHTML = `<div class="row" style="gap:8px;align-items:center">
+            <span class="badge red">error</span>
+            <span class="muted">${esc(e.message)}</span></div>`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+}
+
+function renderMcpProbe(host, res) {
+    const ok = res.ok;
+    const cls = { ok: 'green', busy: 'amber', unreachable: 'amber', missing: 'amber', disabled: 'muted', invalid: 'red', error: 'red' }[res.status] || (ok ? 'green' : 'red');
+    const info = res.server_info && (res.server_info.name || res.server_info.version)
+        ? `${esc(res.server_info.name || 'server')} ${esc(res.server_info.version || '')}`.trim() : '';
+    let out = `<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <span class="badge ${cls}">${esc(res.status || (ok ? 'ok' : 'error'))}</span>
+        <span class="muted" style="font-size:.8rem">${res.latency_ms != null ? `${res.latency_ms} ms` : ''}${info ? ` · ${info}` : ''}</span>
+        ${ok ? `<span class="badge blue">${Number(res.tool_count || (res.tools || []).length)} tools</span>` : ''}</div>`;
+    if (res.error) out += `<div class="muted" style="font-size:.82rem;margin-top:6px">${esc(res.error)}</div>`;
+    if (ok && (res.tools || []).length) {
+        out += `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer;font-size:.82rem">Tools (${res.tools.length})</summary>
+        <div class="mono" style="font-size:.78rem;margin-top:6px;line-height:1.7;word-break:break-word">${esc(res.tools.join(' · '))}</div></details>`;
+    }
+    if (res.stderr) out += `<pre class="mono" style="font-size:.72rem;margin-top:8px;white-space:pre-wrap;color:var(--text-muted)">${esc(res.stderr)}</pre>`;
+    host.innerHTML = out;
 }
 
 /* ========================================================= TELEGRAM ===== */

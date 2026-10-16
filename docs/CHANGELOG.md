@@ -4,6 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## v0.6.4 - 2026-10-16
 
+### Added
+
+- **MCP Servers dashboard view.** New `#/mcp` page (nav item *MCP Servers*) lists
+  every MCP server OpenCode is configured to load — the machine-wide
+  `~/.config/opencode/opencode.json[c]` plus each registered project's
+  `opencode.json[c]` — with scope, transport, command/URL, resolved executable,
+  and a config-derived status (`ready`/`missing`/`disabled`/`remote`/`invalid`).
+  A project server that overrides a global name of the same name is marked
+  `Overridden by`. Backed by `perun/mcp_servers.py` and `GET /api/mcp/servers`.
+- **On-demand live MCP probe.** The `Test` button (and `Test all enabled`) calls
+  `POST /api/mcp/servers/probe`, which spawns a local server (or calls a remote
+  URL) and performs the real MCP `initialize` + `tools/list` handshake, reporting
+  the live tool list, latency, and any captured stderr. Nothing spawns
+  automatically, and the command always comes from disk — never the request — so
+  the endpoint cannot be used to run arbitrary commands.
+
 ### Removed
 
 - **Legacy instruction migration is gone.** Instruction text now lives *only* on
@@ -45,6 +61,14 @@ All notable changes are recorded here. Single source of truth for release notes.
   /api/projects/{slug}/manifest` and the `perun_set_manifest` MCP tool now go
   through `projects.sync_manifest()`, so declared `instructions` are seeded to
   `.perun/instructions/default.md` instead of being silently dropped.
+- **The dashboard's OpenCode button works again on `cmd`/Windows Terminal.**
+  `/api/run-in-terminal` wrapped the frontend-built command text in
+  `subprocess.list2cmdline([exe, "/k", cmd_text])`, which escapes inner quotes as
+  `\"` — a C-runtime convention `cmd.exe` does not understand. Every launch died
+  with *"The filename, directory name, or volume label syntax is incorrect."* The
+  `cmd` and `wt` branches build the command line as raw text again (`... /k ` +
+  `cmd_text`), so the inner quotes reach cmd intact; both branches are covered by
+  regression tests.
 - **`db._migrate()` tolerates a failed `DROP COLUMN`.** The retired-column drop is
   wrapped, so SQLite < 3.35 (which has no `DROP COLUMN`) or a concurrent drop can
   no longer abort `init_db()`.
@@ -67,6 +91,22 @@ All notable changes are recorded here. Single source of truth for release notes.
   `docs/TECHNICAL_DOCUMENTATION.md`; added `perun_list_instruction_files` to the
   global `INSTRUCTIONS.md` tool table; removed the orphaned `.migrated` marker and
   unused imports; renamed a stale test.
+- **MCP discovery no longer hides a broken config, and lists nothing twice.**
+  `perun/mcp_servers.py` now returns unreadable/unparseable config files as
+  `parse_errors` (shown in the dashboard as a warning card) instead of treating
+  them as "no servers", tolerates JSONC trailing commas as well as comments, and
+  collapses duplicate `(scope, project, name)` entries — e.g. a name declared in
+  both `opencode.json` and `opencode.jsonc` — to a single row.
+- **MCP probing can no longer pin the server.** Concurrent probes are capped by a
+  module semaphore (a saturated gate returns `status:"busy"` instead of blocking a
+  worker), the timeout is clamped to `MAX_PROBE_TIMEOUT` (60 s), the HTTP probe
+  shares one deadline across `initialize` + `tools/list` (≈timeout, not 2×), the
+  stdio stderr buffer is bounded, non-`.exe` shims (`.cmd`/`.bat`/`.ps1`) are
+  launched through the right interpreter, and a force-killed child is reaped.
+- **The MCP view explains a stale backend.** Because `web/` is served live from
+  disk, a browser can load the new page while the running service is still the old
+  process; the view now detects the endpoint's 404 and says to restart Perun,
+  rather than rendering a misleading empty list.
 
 ## v0.6.3 - 2026-10-16
 

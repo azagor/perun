@@ -190,6 +190,33 @@ Discovery of OpenCode agent skills and tools available to a project.
   definitions, merging them with the built-in tool set.
 * Used by `/api/skills` and `/api/tools`.
 
+### `perun/mcp_servers.py`
+Discover the MCP servers OpenCode is configured to load, and live-probe them on
+demand. Perun only *reads* the config here (the global installer owns Perun's own
+entry); probing never happens automatically.
+* `global_config_files()`, `project_config_files()`, `_read_config()` — locate and
+  parse ``~/.config/opencode/opencode.json[c]`` plus each project's
+  ``opencode.json[c]`` (comments *and* trailing commas tolerated); a file that
+  cannot be parsed is returned as an error, not silently treated as empty.
+* `snapshot(projects)` — every server (global first, then per project) with a
+  cheap config-derived `status` (`ready`/`missing`/`disabled`/`remote`/`invalid`),
+  transport, resolved executable, and `shadowed_by` when a project overrides a
+  global name. Duplicate `(scope, project, name)` entries (e.g. a name in both
+  ``opencode.json`` and ``opencode.jsonc``) collapse to one; unreadable configs
+  surface in `parse_errors`.
+* `find(name, scope=…, projects=…, project=…)` — resolve one server by name.
+* `probe(name, …)` — spawn a local server (or call a remote URL) and perform the
+  MCP `initialize` + `tools/list` handshake, returning status, `tools`, latency,
+  and any stderr tail. The command always comes from disk, never the request.
+  Concurrency is gated (a saturated gate returns `busy` instead of pinning a
+  worker thread) and the timeout is clamped to `MAX_PROBE_TIMEOUT`.
+* `_probe_stdio()`, `_probe_http()`, `_derived_status()` — the two transports and
+  the static status rule. `_probe_http()` shares one deadline across its two
+  requests; `_probe_stdio()` bounds its stderr buffer and reaps children it kills.
+* `windows_launch_argv()` — pure helper that routes ``.cmd``/``.bat``/``.ps1``
+  shims through `cmd` / PowerShell so CreateProcess can launch them.
+* Backs `GET /api/mcp/servers` and `POST /api/mcp/servers/probe`.
+
 ### `perun/process_tracker.py`
 Lifecycle tracking for externally-launched TUI/terminal sessions.
 * `ProcessTracker`: `register()`, `get()`, `is_alive()`, `terminate()`,
@@ -321,9 +348,11 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
   `refreshPresence()`, `updateStormMeter()`), and the view renderers (`viewDashboard`,
   `viewOrchestrator`, `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`,
   `mountGit`, `mountManifest`, `manifestOverview`, `projectInstructionsForm`,
-  `viewConsole`, `viewMemory`, `viewActivity`, `viewTelegram`, `mountTelegram`,
+  `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,
   `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`,
   `promptForUnlockPassword()` (dashboard modal for encrypted Telegram tokens).
+  The MCP Servers view (`mcpCard()`, `probeMcp()`, `renderMcpProbe()`) lists the
+  configured MCP servers and live-probes them on demand.
   Project cards (`projectCard()`) render `🖵 OpenCode` (primary TUI launch),
   `■ Stop`, `Open`, `Index docs`, and delete actions for every project; the
   orchestrator chat lives only in the sidebar (`Orchestrator Chat`).

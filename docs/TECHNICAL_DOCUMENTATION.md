@@ -10,6 +10,9 @@ older databases on next start. A single shared writer
 (`orchestrator.write_project_instruction_file()`) is used by the project API, MCP tools,
 discovery, and manifest sync. The MCP tools `perun_get_instructions`, `perun_set_instructions`,
 and `perun_list_instruction_files` operate only on the multi-file system.
+v0.6.4 also fixes `/api/run-in-terminal`: its `cmd`/`wt` branches hand the frontend-built
+command text to `cmd /k` as raw text, because cmd.exe cannot parse the C-runtime `\"` quoting
+that `subprocess.list2cmdline()` produces.
 
 The obsolete inline global instruction fields `orchestrator_instructions` and
 `global_agent_instructions` are not part of `Settings` and are never read. The dashboard
@@ -370,6 +373,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/agents` | OpenCode agents: built-ins (`build`,`plan`,`general`,`explore`) + user-defined agents on disk (+ `count`) |
 | GET | `/api/skills` | OpenCode skills: global `~/.config/opencode/skills/` + project-local `.opencode/skills/` + runtime built-ins (`code-audit`, `android-design-guidelines`, `find-skills`) (+ `count`) |
 | GET | `/api/tools` | OpenCode tools: built-ins + custom `.ts/.js/.mjs` under `~/.config/opencode/tools/` and project-local `.opencode/tools/` (+ `count`) |
+| GET | `/api/mcp/servers` | every MCP server OpenCode loads (global `~/.config/opencode/opencode.json[c]` + per-project `opencode.json[c]`) with a config-derived `status`, transport, resolved executable, and `shadowed_by` (+ `count`, `counts`); duplicate names across config-file variants collapse to one and unparseable files appear in `parse_errors`; config only, nothing is spawned |
+| POST | `/api/mcp/servers/probe` | live-probe one configured MCP server `{name,scope:"global"\|"project",project?}` — spawns a local server (or calls a remote URL) and runs the MCP `initialize` + `tools/list` handshake, returning `status`, `tools`, `latency_ms`, and any `stderr`; the command is read from disk, never the request. Gated and timeout-capped, so a probe may return `status:"busy"` when too many run at once |
 | GET | `/api/projects` | list projects |
 | POST | `/api/projects` | wizard: register / create / clone `{method,path,…}` |
 | GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
@@ -635,7 +640,16 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 * **Views:** Dashboard, Orchestrator chat (`#/orchestrator`), Projects (+ detail
   with tabs Overview/Console/Sessions/Memory/Activity/Git/Manifest/Instructions/
   Config), Agent Console (live SSE), Memory Explorer, Activity (live
-  `/api/stream`), Telegram, Settings.
+  `/api/stream`), MCP Servers (`#/mcp`), Telegram, Settings.
+* **MCP Servers view.** Lists every MCP server OpenCode is configured to load
+  (global + per project) with a config-derived status badge, transport, target,
+  and resolved executable. A `Test` button (and `Test all enabled`) calls
+  `POST /api/mcp/servers/probe` to spawn the server and run the MCP handshake,
+  showing the live tool list, latency, and any stderr. A config file that fails
+  to parse is called out in a warning card (rather than looking like "no
+  servers"), and if the endpoint itself 404s — the running service is older than
+  the static JS the browser loaded from disk — the view names the fix (restart
+  Perun) instead of showing an empty list.
 * **Uniform project cards.** `projectCard()` renders the *same* action set for
   every project, including the orchestrator control-plane card: `Open` (project
   page) and `Run` (Agent Console with that project preselected). The old
