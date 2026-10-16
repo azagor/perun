@@ -769,7 +769,11 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   top, a live output/chat log in the middle, and a prompt composer + task queue at
   the bottom. The output pane shows a centered placeholder (`Agent output will
   appear here…`) when no run is active and clears it as soon as the first event
-  arrives.
+  arrives. The primary action button is **Run** (labelled `Run N tasks` when
+  tasks are queued). Skill tasks (`kind: "skill"`) are emitted as `/<skillname>`
+  slash commands by `web/js/prompt_chain.js`; other task kinds are appended as
+  structured instructions. The task editor hides the **Tools** selector for skill
+  tasks because tools are not used by slash commands.
 * **Uniform project cards.** `projectCard()` renders the *same* action set for
   every project, including the orchestrator control-plane card: `Open` (project
   page) and `Run` (Agent Console with that project preselected). The old
@@ -853,8 +857,16 @@ setting.
 
 ## 14. Revision history
 
-### 2026-10-16 — Unreleased: model/agent sync, providers tab, memory filter
+### 2026-10-16 — v0.7.0 released: installer, providers, model/agent sync, slash-command tasks
 
+* **Windows GUI installer + web installers + CI release.** Added `installer/`
+  (Inno Setup `PerunSetup.iss`, `install-prereqs.ps1`, `uninstall.ps1`,
+  `build.ps1`, `sign.ps1`), repo-root `setup.ps1` / `setup.sh`, and
+  `.github/workflows/release.yml`. The wizard installs Python, git, OpenCode CLI,
+  and Ollama as needed, verifies downloaded binaries against built-in SHA256
+  hashes, installs Perun, registers the `PerunBridge` task, and creates shortcuts.
+  The release workflow builds and signs `PerunSetup.exe` on `v*` tags and attaches
+  it to the GitHub release.
 * **Dashboard model/agent overrides are mirrored into project `opencode.json`.**
   Added `projects.sync_opencode_config()` which writes `model` / `default_agent`
   into a project's `opencode.json[c]` whenever a dashboard config save, wizard
@@ -872,11 +884,24 @@ setting.
 * **Providers tab + dashboard preview.** New `perun/providers.py` module and
   endpoints `GET /api/providers` and `POST /api/providers/{id}/logout`. The list
   is sourced from `opencode auth list --format json`, enriched with credential
-  status, and cached for 30 seconds (bypassed with `?refresh=true`). A dedicated
-  `#/providers` view and a Dashboard stat card show connected/total providers;
-  the Connect button opens the configured terminal with
-  `opencode auth login <id>` so Perun never sees API keys. Provider IDs are
-  validated before logout and the cache is evicted on disconnect.
+  status, and cached for 30 seconds (bypassed with `?refresh=true`, cache guarded
+  by `threading.Lock`). A dedicated `#/providers` view and a Dashboard stat card
+  show connected/total providers; the Connect button opens the configured terminal
+  with `opencode auth login <id>` so Perun never sees API keys. Provider IDs are
+  validated before logout; invalid IDs return HTTP 400, and the cache is evicted
+  on disconnect.
+* **Skill tasks run as TUI slash commands.** The Agent Console prompt chain now
+  emits `/<skillname>` for queued `kind: "skill"` tasks. The logic was extracted
+  into `web/js/prompt_chain.js` for testability and is covered by
+  `tests/test_prompt_chain.js` (run from `tests/test_js_prompt_chain.py`). The
+  task editor hides the **Tools** selector for skill tasks because tools are not
+  applicable to slash commands.
+* **Skill name validation.** `perun/skills.py` rejects skill manifests whose
+  `name` contains characters outside `[a-z0-9_-]`, preventing malformed names from
+  reaching the TUI as slash commands.
+* **Consistent "Run" labelling.** The project-card primary action and the Agent
+  Console action button are now labelled **Run** (previously `🖵 OpenCode`), and
+  the Agent Console button updates to "Run N tasks" when tasks are queued.
 * **Memory Explorer filters by project without a query.** Selecting a project in
   the Memory view now reloads recent facts (`GET /api/memory/recent?project=`)
   and stats (`GET /api/memory/stats?project=`) for that project even when the
@@ -887,10 +912,16 @@ setting.
   `read_opencode_config()` and now returns a `lossy` flag so callers can detect
   when comments/trailing commas had to be stripped and avoid clobbering them on
   rewrite.
-* **Docs/tests.** `docs/CODEMAP.md` and `docs/TECHNICAL_DOCUMENTATION.md` updated
-  with the new endpoints and modules. New `tests/test_providers.py` and expanded
-  `tests/test_server.py` cover model/agent sync and provider endpoints; full
-  suite passes.
+* **Git workflow instruction.** Added a project-local instruction file
+  `.perun/instructions/git-workflow.md` covering credential setup and the release
+  checklist; `AGENTS.md` documents the same for agents.
+* **Docs/tests/versions.** `docs/CODEMAP.md`, `docs/TECHNICAL_DOCUMENTATION.md`,
+  `docs/CHANGELOG.md`, `AGENTS.md`, `README.md`, and
+  `perun/integrations/templates/INSTRUCTIONS.md` updated. Version bumped to
+  `0.7.0` in `perun/__init__.py`, `pyproject.toml`, and `installer/PerunSetup.iss`.
+  New tests: `tests/test_providers.py`, `tests/test_setup_scripts.py`,
+  `tests/test_js_prompt_chain.py`; expanded `tests/test_server.py`. Full suite
+  passes.
 
 ### 2026-10-16 — v0.6.4: on-disk instructions, DPAPI secrets & bundled search
 
