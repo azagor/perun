@@ -57,6 +57,13 @@ def test_same_origin_post_allowed(client):
     assert r.status_code == 200
 
 
+def test_cross_port_origin_blocked(client):
+    """Browsers treat port as part of origin; another local app must not drive Perun."""
+    r = client.post("/api/projects", json={"name": "X", "path": r"C:\x"},
+                    headers={"origin": "http://127.0.0.1:8000"})
+    assert r.status_code == 403
+
+
 def test_dashboard_route_is_not_guarded(client):
     """Only /api/* is guarded — static assets keep working with any Host."""
     assert client.get("/", headers={"host": "whatever.example"}).status_code == 200
@@ -80,3 +87,10 @@ def test_exposed_bind_still_blocks_cross_origin(monkeypatch):
         r = c.post("/api/projects", json={"name": "X", "path": r"C:\x"},
                    headers={"origin": "http://evil.example"})
         assert r.status_code == 403
+
+
+def test_security_headers_on_dashboard(client):
+    r = client.get("/")
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("X-Frame-Options") == "DENY"
+    assert "default-src 'self'" in r.headers.get("Content-Security-Policy", "")

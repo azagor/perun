@@ -14,6 +14,70 @@ def test_init_db_creates_tables():
         assert t in names
 
 
+def test_projects_table_has_no_instruction_columns():
+    """Instruction text lives on disk, never in the projects table."""
+    with db.db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "instructions" not in cols
+    assert "instructions_path" not in cols
+
+
+def test_init_db_drops_retired_instruction_columns():
+    """An older DB that stored instruction text has those columns dropped."""
+    with db.db() as conn:
+        conn.execute("ALTER TABLE projects ADD COLUMN instructions TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE projects ADD COLUMN instructions_path TEXT DEFAULT ''")
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert {"instructions", "instructions_path"} <= cols
+
+    db.init_db()
+
+    with db.db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "instructions" not in cols
+    assert "instructions_path" not in cols
+
+
+def test_init_db_is_idempotent():
+    """Running init_db twice (with a retired column present) never raises."""
+    with db.db() as conn:
+        conn.execute("ALTER TABLE projects ADD COLUMN instructions TEXT DEFAULT ''")
+    db.init_db()
+    db.init_db()  # second run finds nothing left to drop
+    with db.db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "instructions" not in cols
+
+
+def test_migrate_tolerates_drop_column_unsupported(monkeypatch):
+    """SQLite < 3.35 (or a race) must not abort ``_migrate`` when DROP COLUMN fails."""
+    import sqlite3
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def __iter__(self):
+            return iter(self._rows)
+
+        def fetchall(self):
+            return self._rows
+
+    class _Conn:
+        def __init__(self, columns):
+            self._columns = columns
+
+        def execute(self, sql, params=()):
+            if "PRAGMA table_info" in sql:
+                return _Cursor([{"name": c} for c in self._columns])
+            if "DROP COLUMN" in sql:
+                raise sqlite3.OperationalError("near \"DROP\": syntax error")
+            return _Cursor([])
+
+    # Should neither raise nor propagate the OperationalError.
+    db._migrate(_Conn(["id", "instructions", "instructions_path"]))
+
+
 def test_add_get_list_update_delete_project():
     p = registry.add_project("Trading Bot", r"C:\apps\trading_bot",
                              kind="opencode", description="bot")

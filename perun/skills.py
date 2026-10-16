@@ -150,12 +150,27 @@ def discover_tools(project_path: str | Path | None = None) -> list[dict[str, Any
     ``.opencode/tools/`` directory. Multiple named exports in one file become
     ``filename_exportname`` tools.
     """
+    from . import grep
+
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     for t in BUILTIN_TOOLS:
         seen.add(t["name"])
         out.append({**t, "project_local": False, "builtin": True})
+
+    # Perun bundled search tools (no external MCP server required).
+    perun_search_tools = [
+        {"name": "perun_grep", "description": "Fast regex content search across the project (ripgrep + Python fallback)."},
+        {"name": "perun_ast_grep", "description": "Structural code search across the project (ast-grep + Python fallback)."},
+        {"name": "perun_global_grep", "description": "Fast regex content search across all registered projects (ripgrep + Python fallback)."},
+        {"name": "perun_global_ast_grep", "description": "Structural code search across all registered projects (ast-grep + Python fallback)."},
+        {"name": "perun_unified_search", "description": "Unified cross-project search: vector memory + grep + ast-grep."},
+    ]
+    for t in perun_search_tools:
+        if t["name"] not in seen:
+            seen.add(t["name"])
+            out.append({**t, "project_local": False, "builtin": True})
 
     def _collect(root: Path, *, project_local: bool) -> None:
         if not root.is_dir():

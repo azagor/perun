@@ -92,6 +92,135 @@ def test_settings_get_patch(client):
     assert client.get("/api/settings").json()["settings"]["max_concurrent_runs"] == 5
 
 
+def test_global_instruction_file_apis(client, tmp_path, monkeypatch):
+    from perun import config, orchestrator
+
+    monkeypatch.setattr(config, "INSTRUCTIONS_DIR", tmp_path)
+    r = client.post("/api/instructions", json={
+        "filename": "guidance.md",
+        "name": "Code search guidance",
+        "scope": "all_projects",
+        "body": "Use ast-grep first.",
+    })
+    assert r.status_code == 200
+    assert r.json()["filename"] == "guidance.md"
+    files = client.get("/api/instructions").json()["instructions"]
+    assert any(f["filename"] == "guidance.md" and f["enabled"] for f in files)
+    detail = client.get("/api/instructions/guidance.md").json()
+    assert detail["body"].strip() == "Use ast-grep first."
+    r = client.patch("/api/instructions/guidance.md/toggle", json={"enabled": False})
+    assert r.json()["enabled"] is False
+    client.delete("/api/instructions/guidance.md")
+    files_after = client.get("/api/instructions").json()["instructions"]
+    assert not any(f["filename"] == "guidance.md" for f in files_after)
+
+
+def test_global_instruction_get_endpoints_do_not_seed_files(client, tmp_path, monkeypatch):
+    """GET /api/instructions must not create files in an empty instructions dir."""
+    from perun import config
+
+    fresh = tmp_path / "empty_global"
+    fresh.mkdir()
+    monkeypatch.setattr(config, "INSTRUCTIONS_DIR", fresh)
+    r = client.get("/api/instructions")
+    assert r.status_code == 200
+    assert r.json()["instructions"] == []
+    assert not any(f.suffix.lower() == ".md" for f in fresh.iterdir())
+
+
+def test_project_instruction_get_endpoints_do_not_seed_files(client, tmp_path):
+    """GET /api/projects/{slug}/instructions must not create files."""
+    from perun import orchestrator
+
+    target = tmp_path / "no_seed"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "NoSeed", "path": str(target), "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+    r = client.get(f"/api/projects/{slug}/instructions")
+    assert r.status_code == 200
+    assert r.json()["instructions"] == ""
+    instr_dir = target / orchestrator.PROJECT_INSTRUCTIONS_DIR
+    assert not instr_dir.exists() or not any(f.suffix.lower() == ".md" for f in instr_dir.iterdir())
+
+
+def test_project_instruction_files_listing_does_not_create_dir(client, tmp_path):
+    """GET .../instruction-files is read-only and must not mkdir .perun/instructions."""
+    from perun import orchestrator
+
+    target = tmp_path / "listing"
+    target.mkdir()
+    r = client.post("/api/projects", json={
+        "method": "existing", "name": "Listing", "path": str(target),
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    instr_dir = target / orchestrator.PROJECT_INSTRUCTIONS_DIR
+    assert not instr_dir.exists()
+    r = client.get(f"/api/projects/{slug}/instruction-files")
+    assert r.status_code == 200
+    assert r.json()["files"] == []
+    assert not instr_dir.exists()
+
+
+def test_instructions_dir_endpoint_is_read_only(client, tmp_path, monkeypatch):
+    """GET /api/instructions/dir returns the path without creating it."""
+    from perun import config
+
+    fresh = tmp_path / "fresh_instr"
+    monkeypatch.setattr(config, "INSTRUCTIONS_DIR", fresh)
+    r = client.get("/api/instructions/dir")
+    assert r.status_code == 200
+    assert r.json()["dir"] == str(fresh)
+    assert not fresh.exists()
+
+
+def test_project_instruction_delete_missing_returns_404(client, tmp_path):
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "DelMissing", "path": str(tmp_path / "dm"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+    assert client.delete(f"/api/projects/{slug}/instruction-files/missing.md").status_code == 404
+
+
+def test_settings_patch_coerces_and_validates(client):
+    from perun import server
+
+    server.SETTINGS.telegram_token = "secret-token"
+    r = client.patch("/api/settings", json={
+        "max_concurrent_runs": "7",
+        "run_timeout": "3600",
+        "port": 9000,
+        "auto_discover_on_start": "false",
+        "telegram_allowed_chats": "123, 456",
+    })
+    assert r.status_code == 200, r.text
+    s = r.json()["settings"]
+    assert s["max_concurrent_runs"] == 7
+    assert s["run_timeout"] == 3600
+    assert s["port"] == 9000
+    assert s["auto_discover_on_start"] is False
+    assert s["telegram_allowed_chats"] == ["123", "456"]
+    # Token must never be echoed.
+    assert s["telegram_token"] == ""
+    assert s["telegram_token_set"] is True
+
+    bad = client.patch("/api/settings", json={"max_concurrent_runs": "lots"})
+    assert bad.status_code == 400
+    bad2 = client.patch("/api/settings", json={"port": 70000})
+    assert bad2.status_code == 400
+
+
+def test_settings_patch_rejects_bad_types_and_leaks_no_token(client):
+    from perun import server
+
+    server.SETTINGS.telegram_token = "another-secret"
+    r = client.patch("/api/settings", json={"max_concurrent_runs": 999})
+    assert r.status_code == 200
+    assert r.json()["settings"]["telegram_token"] == ""
+
+
 def test_start_run_validation(client, monkeypatch):
     fake_runs: dict = {}
 
@@ -277,12 +406,76 @@ def test_project_instructions_roundtrip(client, tmp_path):
                    json={"instructions": "Always run tests."})
     assert r.status_code == 200
     assert r.json()["instructions"] == "Always run tests."
+    assert r.json()["filename"] == "default.md"
 
     assert client.get(f"/api/projects/{slug}/instructions").json()["instructions"] \
         == "Always run tests."
-    # Also surfaced on the project detail.
-    detail = client.get(f"/api/projects/{slug}").json()
-    assert detail["project"]["instructions"] == "Always run tests."
+    # The file lives under .perun/instructions/default.md.
+    target = tmp_path / "instr" / ".perun" / "instructions" / "default.md"
+    assert target.is_file()
+    assert "Always run tests." in target.read_text(encoding="utf-8")
+
+
+def test_project_instruction_files_crud(client, tmp_path):
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "InstrFiles", "path": str(tmp_path / "if"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    # Empty list initially.
+    assert client.get(f"/api/projects/{slug}/instruction-files").json()["files"] == []
+
+    # Create two files.
+    r = client.post(f"/api/projects/{slug}/instruction-files/alpha.md", json={
+        "name": "Alpha", "body": "ALPHA RULE", "enabled": True,
+    })
+    assert r.status_code == 200
+    assert r.json()["filename"] == "alpha.md"
+
+    client.post(f"/api/projects/{slug}/instruction-files/beta.md", json={
+        "name": "Beta", "body": "BETA RULE", "enabled": True,
+    })
+
+    # List returns sorted files.
+    files = client.get(f"/api/projects/{slug}/instruction-files").json()["files"]
+    assert [f["filename"] for f in files] == ["alpha.md", "beta.md"]
+
+    # Read single file.
+    detail = client.get(f"/api/projects/{slug}/instruction-files/alpha.md").json()
+    assert detail["body"].strip() == "ALPHA RULE"
+    assert detail["enabled"] is True
+
+    # Toggle off.
+    r = client.patch(f"/api/projects/{slug}/instruction-files/alpha.md/toggle",
+                     json={"enabled": False})
+    assert r.json()["enabled"] is False
+    assert client.get(f"/api/projects/{slug}/instruction-files/alpha.md").json()["enabled"] is False
+
+    # Delete.
+    assert client.delete(f"/api/projects/{slug}/instruction-files/beta.md").status_code == 200
+    files = client.get(f"/api/projects/{slug}/instruction-files").json()["files"]
+    assert [f["filename"] for f in files] == ["alpha.md"]
+
+
+def test_project_instruction_files_path_traversal(client, tmp_path):
+    from urllib.parse import quote
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "Traverse", "path": str(tmp_path / "tr"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    for bad in ["../escape.md", "a/../b.md", "\\windows.md", ""]:
+        encoded = quote(bad, safe="")
+        path = f"/api/projects/{slug}/instruction-files/{encoded}"
+        res = client.post(path, json={"body": "x"})
+        assert res.status_code in (400, 404, 405), f"{bad}: {res.status_code}"
+
+    # A filename containing a path separator does not match the single-segment route.
+    res = client.post(f"/api/projects/{slug}/instruction-files/sub/file.md", json={"body": "x"})
+    assert res.status_code in (404, 405)
 
 
 def test_manifest_export_and_read(client, tmp_path):
@@ -347,6 +540,26 @@ def test_manifest_put_structured(client, tmp_path):
     assert r.status_code == 200, r.text
     snap = client.get(f"/api/projects/{slug}/manifest").json()["manifest"]
     assert snap["data"]["anchors"][0]["path"] == "main.py"
+
+
+def test_manifest_put_instructions_creates_file(client, tmp_path):
+    """A manifest PUT with ``instructions`` seeds .perun/instructions/default.md."""
+    target = tmp_path / "maninstr"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "InstrPack", "path": str(target), "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    r = client.put(f"/api/projects/{slug}/manifest", json={
+        "data": {"version": 1, "name": "InstrPack",
+                 "instructions": "MANIFEST RULE 7"},
+        "body": "",
+    })
+    assert r.status_code == 200, r.text
+
+    target_file = target / ".perun" / "instructions" / "default.md"
+    assert target_file.is_file()
+    assert "MANIFEST RULE 7" in target_file.read_text(encoding="utf-8")
 
 
 def test_manifest_missing_returns_not_found_on_refresh(client, tmp_path):
@@ -576,11 +789,14 @@ def test_run_in_terminal_cmd_uses_string_command_line(client, tmp_path, monkeypa
     })
     assert r.status_code == 200
     (popen_args, popen_kwargs) = captured[-1]
-    # Passing the command as a single string prevents Python's list2cmdline from
-    # wrapping it in outer quotes, which cmd.exe would strip and corrupt.
+    # The command is passed as a single quoted /k argument so shell
+    # metacharacters cannot break out, while cmd.exe still receives the
+    # intended command text.
     assert isinstance(popen_args[0], str)
-    assert "cmd.exe /k " in popen_args[0]
-    assert 'cd /d "C:\\\\x" && opencode --prompt "hi"' in popen_args[0]
+    assert popen_args[0].startswith("cmd.exe /k ")
+    assert "cd /d" in popen_args[0]
+    assert "opencode" in popen_args[0]
+    assert "hi" in popen_args[0]
     assert popen_kwargs.get("cwd") == str(tmp_path / "cmd")
 
 

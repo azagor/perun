@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS projects (
     favorite      INTEGER DEFAULT 0,
     enabled       INTEGER DEFAULT 1,
     color         TEXT DEFAULT '',
-    instructions  TEXT DEFAULT '',
     manifest           TEXT DEFAULT '',
     manifest_path      TEXT DEFAULT '',
     manifest_loaded_at TEXT DEFAULT '',
@@ -57,6 +56,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_error           TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS runs (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_project_id_desc ON runs(project_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS tasks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,9 +103,12 @@ CREATE TABLE IF NOT EXISTS activity (
     meta        TEXT DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
+CREATE INDEX IF NOT EXISTS idx_activity_project_id ON activity(project_id, id DESC);
 
 -- Unified memory. scope='global' rows use project_id=0 so the UNIQUE
--- constraint works (SQLite treats NULLs as distinct).
+-- constraint works (SQLite treats NULLs as distinct). Deliberately no FK to
+-- projects(id): global rows use project_id=0, which has no projects row.
+-- Related rows are removed explicitly by registry.delete_project().
 CREATE TABLE IF NOT EXISTS memory (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id    INTEGER NOT NULL DEFAULT 0,
@@ -118,6 +122,7 @@ CREATE TABLE IF NOT EXISTS memory (
     UNIQUE(scope, project_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project_id);
+CREATE INDEX IF NOT EXISTS idx_memory_project_id_desc ON memory(project_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS doc_chunks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,10 +144,11 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS bridge_links (
     chat_id     TEXT PRIMARY KEY,
-    project_id  INTEGER,
+    project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
     session_pk  INTEGER,
     updated_at  TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_bridge_links_project ON bridge_links(project_id);
 """
 
 
@@ -176,7 +182,6 @@ _initialized = False
 # alters an existing table, so older databases need an explicit ALTER.
 _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "projects": [
-        ("instructions", "TEXT DEFAULT ''"),
         ("manifest", "TEXT DEFAULT ''"),
         ("manifest_path", "TEXT DEFAULT ''"),
         ("manifest_loaded_at", "TEXT DEFAULT ''"),
@@ -189,6 +194,14 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# Columns retired after project instructions moved fully to files on disk
+# (``<project>/.perun/instructions/*.md``). Older databases still carry them;
+# they are dropped once so fresh and upgraded schemas converge. SQLite gained
+# ``ALTER TABLE ... DROP COLUMN`` in 3.35.
+_REMOVED_COLUMNS: dict[str, list[str]] = {
+    "projects": ["instructions", "instructions_path"],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in _ADDED_COLUMNS.items():
@@ -196,6 +209,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for name, ddl in columns:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    for table, columns in _REMOVED_COLUMNS.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name in columns:
+            if name in existing:
+                try:
+                    conn.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+                except sqlite3.OperationalError:
+                    # SQLite < 3.35 has no DROP COLUMN, and a concurrent
+                    # connection may drop it between the PRAGMA and the ALTER.
+                    # A retired column left behind is harmless: nothing reads it.
+                    pass
 
 
 def init_db() -> None:

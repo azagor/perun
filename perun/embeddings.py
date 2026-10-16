@@ -12,6 +12,7 @@ import json
 import math
 import re
 import struct
+import time
 import urllib.error
 import urllib.request
 
@@ -38,6 +39,26 @@ class EmbeddingError(RuntimeError):
 
 def _settings():
     return config.Settings.load()
+
+
+_OLLAMA_HEALTH_CACHE: dict[str, Any] = {"ts": 0.0, "ok": False}
+_OLLAMA_HEALTH_TTL = 15.0
+
+
+def ollama_ok(timeout: float = 2.0) -> bool:
+    """Best-effort cached health check for the configured Ollama server."""
+    now = time.time()
+    if now - _OLLAMA_HEALTH_CACHE["ts"] < _OLLAMA_HEALTH_TTL:
+        return _OLLAMA_HEALTH_CACHE["ok"]
+    cfg = _settings()
+    url = f"{cfg.ollama_host.rstrip('/')}/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            ok = 200 <= getattr(resp, "status", 200) < 300
+    except Exception:
+        ok = False
+    _OLLAMA_HEALTH_CACHE.update(ts=now, ok=ok)
+    return ok
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

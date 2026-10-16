@@ -99,14 +99,11 @@ if not defined PERUN_NO_BROWSER start "" /min powershell -NoProfile -WindowStyle
 
 :serve
 if not defined PERUN_PASSWORD (
-    rem  If config contains encrypted values, the user must set PERUN_PASSWORD.
-    rem  We do not prompt here so the launcher remains non-interactive when run
-    rem  from the task scheduler or a service wrapper.
+    rem  If config contains encrypted values, the dashboard will prompt for the
+    rem  password once it is running. The bridge degrades gracefully until then.
     for /f "usebackq delims=" %%e in (`%PY% -c "from perun import config,secrets; print('1' if secrets.is_encrypted(config.Settings.load().telegram_token or '') else '0')" 2^>nul`) do (
         if "%%e"=="1" (
-            echo [Perun] Encrypted config values detected. Set PERUN_PASSWORD to decrypt.
-            pause
-            exit /b 1
+            echo [Perun] Encrypted Telegram token found. The dashboard will ask for the password.
         )
     )
 )

@@ -7,9 +7,7 @@ instructions + persona into a new session's prompt.
 
 from __future__ import annotations
 
-import pytest
-
-from perun import config, control, registry
+from perun import config, control, orchestrator, registry
 from perun.orchestrator import compose_prompt
 
 
@@ -45,19 +43,31 @@ def test_control_persona_injected_into_new_session(control_repo):  # noqa: ARG00
     assert compose_prompt(proj, "again", new_session=False) == "again"
 
 
-def test_custom_orchestrator_instructions_are_injected(control_repo):  # noqa: ARG001
+def test_custom_orchestrator_instructions_are_injected(control_repo, tmp_path, monkeypatch):  # noqa: ARG001
     proj = control.ensure()
-    settings = config.Settings.load()
-    settings.orchestrator_instructions = "Always reply in bullet points."
-    out = compose_prompt(proj, "hi", new_session=True, settings=settings)
+    monkeypatch.setattr(config, "INSTRUCTIONS_DIR", tmp_path)
+    (tmp_path / "orch.md").write_text(
+        "---\nname: Orch\nscope: orchestrator\nenabled: true\n---\n\nAlways reply in bullet points.\n",
+        encoding="utf-8",
+    )
+    out = compose_prompt(proj, "hi", new_session=True)
     assert "Always reply in bullet points." in out
 
 
-def test_non_control_project_gets_no_persona(control_repo):  # noqa: ARG001
-    other = registry.add_project("Other", r"C:\other", instructions="Be terse.")
+def test_non_control_project_gets_no_persona(control_repo, tmp_path):  # noqa: ARG001
+    orchestrator.write_project_instruction_file(str(tmp_path), "Be terse.")
+    other = registry.add_project("Other", str(tmp_path))
     out = compose_prompt(other, "hi", new_session=True)
     assert "Be terse." in out
     assert "machine-wide overseer" not in out
+
+
+def test_project_instructions_from_file_are_injected(control_repo, tmp_path):  # noqa: ARG001
+    orchestrator.write_project_instruction_file(
+        str(tmp_path), "Use tabs, not spaces.", name="Custom")
+    other = registry.add_project("FileInstr", str(tmp_path))
+    out = compose_prompt(other, "hi", new_session=True)
+    assert "Use tabs, not spaces." in out
 
 
 def test_control_project_is_protected_from_http_delete(control_repo):  # noqa: ARG001
@@ -96,23 +106,6 @@ def test_models_endpoint_is_structured(control_repo):  # noqa: ARG001
         assert "models" in body and "providers" in body and "count" in body
         for m in body["models"]:
             assert set(m) >= {"id", "provider", "name"}
-
-
-def test_settings_expose_orchestrator_fields(control_repo):  # noqa: ARG001
-    from fastapi.testclient import TestClient
-
-    from perun import server
-
-    server.SETTINGS.auto_discover_on_start = False
-    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
-        r = client.patch("/api/settings", json={
-            "orchestrator_model": "provider/model-x",
-            "orchestrator_instructions": "Be concise.",
-        })
-        assert r.status_code == 200
-        s = r.json()["settings"]
-        assert s["orchestrator_model"] == "provider/model-x"
-        assert s["orchestrator_instructions"] == "Be concise."
 
 
 def test_run_without_project_targets_control(control_repo, monkeypatch):  # noqa: ARG001

@@ -43,6 +43,9 @@ TEMPLATES_DIR: Path = PACKAGE_DIR / "integrations" / "templates"
 OPENCODE_CONFIG_DIR: Path = Path.home() / ".config" / "opencode"
 GLOBAL_SKILLS_DIR: Path = OPENCODE_CONFIG_DIR / "skills"
 PROJECT_SKILLS_DIR: Path = Path(".opencode") / "skills"
+# Global instruction Markdown files ride alongside the OpenCode config so they
+# are visible to OpenCode V2's ambient instruction loading and easy to edit by hand.
+INSTRUCTIONS_DIR: Path = OPENCODE_CONFIG_DIR / "perun" / "instructions"
 
 
 def is_control_path(path: "str | Path | None") -> bool:
@@ -85,7 +88,6 @@ class Settings:
     default_agent: str = ""
     orchestrator_model: str = ""
     orchestrator_agent: str = ""
-    orchestrator_instructions: str = ""
     max_concurrent_runs: int = 3
     run_timeout: int = 1800
     ollama_host: str = "http://127.0.0.1:11434"
@@ -117,6 +119,13 @@ class Settings:
     def save(self) -> None:
         ensure_dirs()
         CONFIG_PATH.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        # Restrict read access to the owner on POSIX systems.
+        if os.name != "nt":
+            try:
+                import stat
+                os.chmod(CONFIG_PATH, stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:  # pragma: no cover
+                pass
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -225,7 +234,7 @@ class Settings:
 
 
 def ensure_dirs() -> None:
-    for d in (HOME, LOGS_DIR, RUNS_DIR):
+    for d in (HOME, LOGS_DIR, RUNS_DIR, INSTRUCTIONS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 

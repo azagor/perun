@@ -160,6 +160,19 @@ def reload_in_process_bridge() -> dict[str, Any]:
     return {"reloaded": True}
 
 
+def start_or_reload_in_process_bridge() -> dict[str, Any]:
+    """Start the in-process bridge if it is not running, otherwise reload it.
+
+    Used after a password unlock so the bridge picks up the newly available
+    decrypted token. Returns ``{started: true}`` or ``{reloaded: true}``.
+    """
+    global _IN_PROCESS_BRIDGE
+    if _IN_PROCESS_BRIDGE is None:
+        _start_bridge_thread()
+        return {"started": _IN_PROCESS_BRIDGE is not None}
+    return reload_in_process_bridge()
+
+
 def cmd_bridge(args: argparse.Namespace) -> int:
     _ensure()
     from .orchestrator import Orchestrator
@@ -262,6 +275,39 @@ def cmd_encrypt_config(args: argparse.Namespace) -> int:
         print(f"[perun] encrypted {', '.join(changed)}")
     else:
         print("[perun] nothing to encrypt")
+    return 0
+
+
+def cmd_global_instructions(args: argparse.Namespace) -> int:
+    _ensure()
+    from . import orchestrator
+
+    if args.clear:
+        # Delete every instruction file *before* re-seeding, so the default
+        # guidance block always survives a clear.
+        for f in orchestrator._instruction_files():
+            f.unlink()
+        orchestrator._seed_default_instructions()
+        print("[perun] all custom global instruction files cleared; the default block was re-seeded")
+        return 0
+    orchestrator._seed_default_instructions()
+    if args.text:
+        default_path = config.INSTRUCTIONS_DIR / "custom.md"
+        text = (
+            "---\nname: Custom guidance\nscope: all_projects\nenabled: true\n---\n\n"
+            + args.text + "\n"
+        )
+        default_path.write_text(text, encoding="utf-8")
+        print(f"[perun] global instructions written to {default_path}")
+        return 0
+    files = orchestrator._instruction_files()
+    if not files:
+        print("[perun] no custom global instruction files; the default block is active")
+        return 0
+    for f in files:
+        name, scope, enabled, body = orchestrator._load_instruction_file(f)
+        status = "enabled" if enabled else "disabled"
+        print(f"\n--- {name} ({f.name}) [{scope}] {status} ---\n{body}\n")
     return 0
 
 
@@ -421,6 +467,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="encrypt sensitive values in config.json (requires PERUN_PASSWORD)")
     p.add_argument("--password", default=None, help="password for encryption")
     p.set_defaults(func=cmd_encrypt_config)
+
+    p = sub.add_parser("global-instructions",
+                       help="show or set global Markdown instruction files")
+    p.add_argument("text", nargs="?", default=None,
+                   help="new instructions written to custom.md (omit to list files)")
+    p.add_argument("--clear", action="store_true",
+                   help="delete all custom instruction files and re-seed the default block")
+    p.set_defaults(func=cmd_global_instructions)
 
     p = sub.add_parser("remember", help="store a fact in unified memory")
     p.add_argument("text")

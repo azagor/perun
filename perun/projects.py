@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import git, manifest, memory, registry, scaffold
+from . import git, manifest, memory, orchestrator, registry, scaffold
 
 
 class ProjectError(Exception):
@@ -24,15 +24,29 @@ def name_from_repo(url: str) -> str:
 
 
 def sync_manifest(project: dict[str, Any]) -> dict[str, Any]:
-    """Re-read a project's manifest from disk and merge declared fields."""
+    """Re-read a project's manifest from disk and merge declared fields.
+
+    A manifest's ``instructions`` becomes ``.perun/instructions/default.md``
+    (seed-once, so later dashboard edits are never clobbered); every other
+    declared field is merged into the registry. Instruction text never touches
+    the database.
+    """
     snap = manifest.load(project["path"])
     if snap["found"]:
         declared = manifest.to_project_fields(snap["data"])
+        instructions = declared.pop("instructions", "")
         if declared:
             registry.update_project(project["slug"], **declared)
+        orchestrator.write_project_instruction_file(
+            project["path"], instructions, overwrite=False)
         registry.set_project_manifest(project["slug"], manifest.snapshot(snap),
                                       snap["path"])
     return snap
+
+
+def _write_default_instructions(path: str, instructions: str) -> None:
+    """Write ``instructions`` to ``.perun/instructions/default.md``."""
+    orchestrator.write_project_instruction_file(path, instructions)
 
 
 def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
@@ -55,14 +69,18 @@ def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
             agent=agent or existing.get("agent", ""),
             tags=tags or existing.get("tags", ""),
             color=color or existing.get("color", ""),
-            instructions=instructions or existing.get("instructions", ""),
         )
+        _write_default_instructions(path, instructions)
         return project or existing, False
-    project = registry.add_project(
-        name, path, root=root, kind=kind or "dir", description=description,
-        tags=tags, model=model, agent=agent, color=color,
-        instructions=instructions,
-    )
+    try:
+        project = registry.add_project(
+            name, path, root=root, kind=kind or "dir", description=description,
+            tags=tags, model=model, agent=agent, color=color,
+        )
+    except ValueError as exc:
+        # e.g. all slug candidates are taken — surface as a clean client error.
+        raise ProjectError(str(exc)) from exc
+    _write_default_instructions(path, instructions)
     return project, True
 
 

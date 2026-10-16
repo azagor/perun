@@ -21,47 +21,292 @@ import time
 import uuid
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 
 from . import config, control, registry
 
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
 
+PROJECT_INSTRUCTIONS_DIR = ".perun/instructions"
+
+# Size caps for instruction files (bytes). A single file over the per-file cap
+# is skipped entirely; the total cap stops appending once exceeded.
+MAX_INSTRUCTION_BYTES = 32 * 1024
+MAX_TOTAL_INSTRUCTION_BYTES = 128 * 1024
+
 DEFAULT_SESSION_PROMPT = "Working session in progress."
+
+# Global tool-preference instructions injected into every Perun-started OpenCode
+# session. Emphasises structural/search tools and Perun memory over blind grep.
+DEFAULT_AGENT_INSTRUCTIONS = """
+When exploring or modifying code, follow this search priority unless the user
+explicitly overrides it:
+
+1. Start with `docs/CODEMAP.md` (and any relevant `AGENTS.md` sections). Use the
+   anchor links and file/identifier tables to navigate to the right module before
+   doing broad searches.
+2. Use `perun_unified_search` as the single entry point for cross-project
+   discovery. It fuses vector memory, global ripgrep, and global ast-grep in one
+   call, so prefer it over running the individual search tools separately.
+3. If you need a targeted second pass, use the global code-search tools:
+   * `perun_global_grep` for regex/lexical searches across all projects.
+   * `perun_global_ast_grep` for structural/AST searches across all projects.
+4. For work inside a single project, use `perun_grep` and `perun_ast_grep`.
+5. Use the OpenCode built-in `grep` tool only as a last resort, when Perun's
+   bundled search tools are unavailable or the query is trivial.
+6. Prefer `perun_memory_search` / `perun_memory_store` (or the Perun dashboard)
+   for durable facts and cross-project context that should outlive the session.
+""".strip()
+
+
+# --------------------------------------------------------------------------- #
+# Instruction file helpers
+# --------------------------------------------------------------------------- #
+def _instruction_files() -> list[Path]:
+    """Return enabled Markdown instruction files under the instructions dir."""
+    config.ensure_dirs()
+    files: list[Path] = []
+    if not config.INSTRUCTIONS_DIR.is_dir():
+        return files
+    for p in sorted(config.INSTRUCTIONS_DIR.iterdir()):
+        if p.suffix.lower() == ".md" and p.is_file():
+            files.append(p)
+    return files
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Parse optional YAML front matter and return (meta, body)."""
+    if not text.startswith("---"):
+        return {}, text
+    idx = text.find("\n---", 3)
+    if idx < 0:
+        return {}, text
+    try:
+        import yaml  # type: ignore
+        meta = yaml.safe_load(text[3:idx]) or {}
+    except Exception:
+        meta = {}
+    return (meta if isinstance(meta, dict) else {}), text[idx + 4:].lstrip()
+
+
+def _build_frontmatter(meta: dict[str, Any]) -> str:
+    """Render a YAML front-matter block followed by a blank line."""
+    import yaml  # PyYAML is a declared dependency; imported lazily.
+
+    clean = {k: v for k, v in meta.items() if v is not None}
+    front = yaml.safe_dump(clean, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    return f"---\n{front}---\n\n"
+
+
+def _coerce_enabled(value: Any) -> bool:
+    """Coerce an enabled value from bool, string, or int.
+
+    Strings such as ``false``, ``no``, ``0``, ``off`` (case-insensitive) are
+    treated as disabled; everything else follows normal truthiness.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "no", "0", "off")
+    if isinstance(value, int):
+        return bool(value)
+    return bool(value)
+
+
+def _load_instruction_file(path: Path) -> tuple[str, str, bool, str]:
+    """Return (name, scope, enabled, body) for an instruction Markdown file."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, PermissionError, OSError):
+        return path.stem, "all_projects", False, ""
+    meta, body = _parse_frontmatter(text)
+    name = (meta.get("name") or path.stem).strip()
+    scope = str(meta.get("scope") or "all_projects").strip()
+    enabled = _coerce_enabled(meta.get("enabled", True))
+    return name, scope, enabled, body
+
+
+def instruction_blocks(scope: str) -> list[str]:
+    """Load enabled instruction bodies for the given scope.
+
+    Skips individual files larger than ``MAX_INSTRUCTION_BYTES`` and stops
+    appending once ``MAX_TOTAL_INSTRUCTION_BYTES`` is exceeded.
+    """
+    bodies: list[str] = []
+    total = 0
+    for path in _instruction_files():
+        name, file_scope, enabled, body = _load_instruction_file(path)
+        if not enabled:
+            continue
+        # Only include files whose declared scope matches the requested scope.
+        if file_scope != scope:
+            continue
+        raw_bytes = body.encode("utf-8")
+        if len(raw_bytes) > MAX_INSTRUCTION_BYTES:
+            continue
+        cleaned = body.strip()
+        if not cleaned:
+            continue
+        total += len(raw_bytes)
+        if total > MAX_TOTAL_INSTRUCTION_BYTES:
+            break
+        bodies.append(cleaned)
+    return bodies
+
+
+def _seed_default_instructions() -> None:
+    """Create the default tool-preference instruction file if needed.
+
+    A file is seeded when no enabled ``all_projects`` instruction file exists,
+    so a previously disabled or scoped file does not block global guidance.
+    """
+    config.ensure_dirs()
+    for path in _instruction_files():
+        name, file_scope, enabled, body = _load_instruction_file(path)
+        if enabled and file_scope == "all_projects":
+            return
+    default_path = config.INSTRUCTIONS_DIR / "default-agent-guidance.md"
+    default_path.write_text(
+        _build_frontmatter({
+            "name": "Default agent guidance",
+            "scope": "all_projects",
+            "enabled": True,
+        }) + DEFAULT_AGENT_INSTRUCTIONS + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_project_instruction_file(
+    project_path: str,
+    text: str,
+    *,
+    name: str = "Default instructions",
+    filename: str = "default.md",
+    overwrite: bool = True,
+) -> Path | None:
+    """Write *text* to ``<project>/.perun/instructions/<filename>``.
+
+    This is the single writer for project instruction files, shared by the
+    project API, MCP tools, discovery, and manifest sync. Returns the path
+    written, or ``None`` when *text* is blank or the target already exists and
+    *overwrite* is ``False`` (used for manifest-declared instructions so later
+    dashboard edits are never clobbered).
+    """
+    if not text.strip():
+        return None
+    d = Path(project_path) / PROJECT_INSTRUCTIONS_DIR
+    target = d / filename
+    if target.exists() and not overwrite:
+        return None
+    d.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        _build_frontmatter({"name": name, "enabled": True}) + text.strip() + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def _project_instruction_dir(project: dict[str, Any], *, create: bool = True) -> Path | None:
+    """Return the project-local instructions directory.
+
+    The directory is created unless *create* is ``False`` (read-only callers
+    use that so listing files never mutates the filesystem). Returns ``None``
+    when the project dict has no usable path.
+    """
+    path_str = (project.get("path") or "").strip()
+    if not path_str:
+        return None
+    path = Path(path_str) / PROJECT_INSTRUCTIONS_DIR
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _project_instruction_files(project: dict[str, Any]) -> list[Path]:
+    """Return all Markdown instruction files under ``.perun/instructions``."""
+    d = _project_instruction_dir(project, create=False)
+    if d is None or not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir() if p.suffix.lower() == ".md" and p.is_file())
+
+
+def _load_project_instruction_file(path: Path) -> tuple[str, bool, str]:
+    """Parse a project-local instruction file and return (name, enabled, body)."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, PermissionError, OSError):
+        return path.stem, False, ""
+    meta, body = _parse_frontmatter(text)
+    name = (meta.get("name") or path.stem).strip()
+    enabled = _coerce_enabled(meta.get("enabled", True))
+    return name, enabled, body
+
+
+def _project_instruction_blocks(project: dict[str, Any]) -> list[str]:
+    """Return bodies of all enabled project-local instruction files.
+
+    Files are returned in sorted filename order.
+
+    Skips individual files larger than ``MAX_INSTRUCTION_BYTES`` and stops
+    appending once ``MAX_TOTAL_INSTRUCTION_BYTES`` is exceeded.
+    """
+    blocks: list[str] = []
+    total = 0
+    for path in _project_instruction_files(project):
+        name, enabled, body = _load_project_instruction_file(path)
+        if not enabled:
+            continue
+        raw_bytes = body.encode("utf-8")
+        if len(raw_bytes) > MAX_INSTRUCTION_BYTES:
+            continue
+        cleaned = body.strip()
+        if not cleaned:
+            continue
+        total += len(raw_bytes)
+        if total > MAX_TOTAL_INSTRUCTION_BYTES:
+            break
+        blocks.append(cleaned)
+    return blocks
 
 
 def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
                    settings: config.Settings | None = None) -> str:
     """Prepend per-session instructions to a fresh session's prompt.
 
-    Three layers ride along, in order: the **orchestrator persona** (only for the
-    control-plane project — see :mod:`perun.control`), the user's **custom
-    orchestrator instructions** (again, control-plane only), and the project's
-    own custom instructions. All are injected only when a **new** session
-    starts; continuations inherit them from the session history, so they are
-    never repeated on every turn.
+    Layers ride along, in order:
+
+    1. The **orchestrator persona** (control plane only — see :mod:`perun.control`).
+    2. The user's **orchestrator-scoped** Markdown instruction files (control plane only).
+    3. The user's **all-projects-scoped** Markdown instruction files (every project).
+    4. The project's own multi-file instructions under ``.perun/instructions/*.md``.
+
+    All are injected only when a **new** session starts; continuations inherit
+    them from the session history, so they are never repeated on every turn.
+
+    This function is read-only: default global guidance is seeded once at
+    module import time.
     """
     if not new_session:
         return prompt
     blocks: list[str] = []
     if control.is_control(project):
         blocks.append(control.ORCHESTRATOR_INSTRUCTIONS.strip())
-        custom = (getattr(settings, "orchestrator_instructions", "") or "").strip()
-        if custom:
-            blocks.append(f"Additional standing instructions from the user:\n\n{custom}")
-    instructions = (project.get("instructions") or "").strip()
-    if instructions:
-        blocks.append(instructions)
+        blocks.extend(instruction_blocks("orchestrator"))
+    blocks.extend(instruction_blocks("all_projects"))
+    blocks.extend(_project_instruction_blocks(project))
     body = "\n\n".join(b for b in blocks if b)
     if not body:
         return prompt
+    # Escape only the closing tag so a malicious body cannot prematurely close
+    # the instruction envelope.
+    safe_body = body.replace("</perun_instructions>", "&lt;/perun_instructions&gt;")
     return (
-        "[PERUN PROJECT INSTRUCTIONS]\n"
+        "<perun_instructions scope=\"project\" source=\"perun\">\n"
         "The following are project-level instructions. Follow them for every task "
         "in this session unless the user explicitly says otherwise.\n\n"
-        f"{body}\n"
-        "[END PERUN PROJECT INSTRUCTIONS]\n\n"
+        f"{safe_body}\n"
+        "</perun_instructions>\n\n"
         f"{prompt}"
     )
 
@@ -120,8 +365,15 @@ class EventBus:
     def close(self, channel: str) -> None:
         with self._lock:
             subs = self._subs.pop(channel, [])
+            global_subs = list(self._global_subs)
+        eof = {"type": "__eof__", "run": channel}
         for q in subs:
-            q.put({"type": "__eof__", "run": channel})
+            q.put(eof)
+        for q in global_subs:
+            try:
+                q.put(eof)
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------------- #
@@ -240,7 +492,8 @@ class Orchestrator:
         agent = (agent or "").strip() or project.get("agent")
         if not agent and control.is_control(project):
             agent = self.settings.orchestrator_agent
-        agent = agent or self.settings.default_agent
+        if not agent and control.is_control(project):
+            agent = self.settings.default_agent
 
         run = registry.create_run(
             run_uid, project["id"], prompt,
@@ -294,6 +547,12 @@ class Orchestrator:
         if not acquired:
             self._finalize(run_uid, "failed", None, "queue timeout", cancelled=False)
             return
+        # A cancel() issued while we were waiting in the semaphore should win.
+        with self._lock:
+            if run_uid in self._cancelled:
+                self._sem.release()
+                self._finalize(run_uid, "cancelled", None, "cancelled by user", cancelled=True)
+                return
         try:
             self._execute(run_uid, project, prompt, run)
         except Exception as exc:  # pragma: no cover - defensive
@@ -365,16 +624,26 @@ class Orchestrator:
         timed_out = False
         start = time.time()
 
+        def _watchdog() -> None:
+            # Kill the run even if stdout is blocked and no lines are produced.
+            deadline = start + self.settings.run_timeout
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    return
+                time.sleep(1)
+            nonlocal timed_out
+            timed_out = True
+            terminate_tree(proc)
+
+        watchdog = threading.Thread(target=_watchdog, daemon=True)
+        watchdog.start()
+
         try:
             assert proc.stdout is not None
             with log_path.open("w", encoding="utf-8", errors="replace") as logf:
                 for line in proc.stdout:
                     logf.write(line)
-                    if time.time() - start > self.settings.run_timeout:
-                        timed_out = True
-                        terminate_tree(proc)
-                        break
-                    if run_uid in self._cancelled:
+                    if timed_out or run_uid in self._cancelled:
                         terminate_tree(proc)
                         break
                     evt = parse_event(line)
@@ -505,6 +774,13 @@ class Orchestrator:
         done = self._done.get(run_uid)
         if done:
             done.set()
+        # Release in-memory state once the run is final so a long-lived server
+        # does not leak memory.
+        with self._lock:
+            self._done.pop(run_uid, None)
+            self._replies.pop(run_uid, None)
+            self._cancelled.discard(run_uid)
+            self._procs.pop(run_uid, None)
 
     def stream(self, run_uid: str) -> Iterator[dict[str, Any]]:
         """Blocking generator of events for a run (used by SSE endpoints)."""
@@ -523,3 +799,8 @@ class Orchestrator:
                     break
         finally:
             self.bus.unsubscribe(run_uid, q)
+
+
+# One-time setup: seed the default global guidance file if none exists.
+# Idempotent and safe to repeat from the server lifespan.
+_seed_default_instructions()

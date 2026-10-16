@@ -20,7 +20,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 // Only allow href schemes we trust; anything else (e.g. javascript:) is dropped.
 const safeUrl = (u) => {
     const s = String(u ?? '').trim();
-    return /^(https?:|mailto:|\/|#|\.)/i.test(s) ? s : '#';
+    return /^(https?:|mailto:|vscode:\/\/file\/|\/|#|\.)/i.test(s) ? s : '#';
 };
 
 const state = {
@@ -78,7 +78,7 @@ function modal(title, bodyNode, actions = []) {
     }
     box.appendChild(acts);
     back.appendChild(box);
-    back.addEventListener('mousedown', (e) => { if (e.target === back) root.innerHTML = ''; });
+    back.addEventListener('click', (e) => { if (e.target === back) root.innerHTML = ''; });
     root.appendChild(back);
     return box;
 }
@@ -151,6 +151,30 @@ async function loadProjects() {
 }
 async function loadHealth() { state.health = await api('/api/health'); }
 async function loadSettings() { state.settings = (await api('/api/settings')).settings; }
+
+let _globalInstructionsDir = null;
+async function loadGlobalInstructionsDir() {
+    if (_globalInstructionsDir !== null) return _globalInstructionsDir;
+    try {
+        const res = await api('/api/instructions/dir');
+        _globalInstructionsDir = res.dir || '';
+    } catch (e) {
+        console.error('loadGlobalInstructionsDir failed', e);
+        _globalInstructionsDir = '';
+    }
+    return _globalInstructionsDir;
+}
+
+function instructionFileUrl(filename, isGlobal, projectPath) {
+    const base = isGlobal ? (_globalInstructionsDir || '') : (projectPath || '');
+    if (!base || !filename) return '#';
+    const cleanBase = String(base).replace(/\\/g, '/').replace(/\/+$/, '');
+    const cleanFile = String(filename).replace(/\\/g, '/').replace(/^\/+/, '');
+    if (isGlobal) {
+        return `vscode://file/${cleanBase}/${cleanFile}`;
+    }
+    return `vscode://file/${cleanBase}/.perun/instructions/${cleanFile}`;
+}
 
 function projectBySlug(slug) { return state.projects.find((p) => p.slug === slug); }
 
@@ -486,15 +510,48 @@ function pipState(slug) {
 
 function applyCardStates() {
     document.querySelectorAll('.proj-card[data-slug]').forEach((card) => {
-        const ps = pipState(card.dataset.slug);
+        const slug = card.dataset.slug;
+        const ps = pipState(slug);
         card.classList.toggle('is-working', ps.working);
         card.classList.toggle('is-awake', ps.awake);
         const pip = card.querySelector('.card-pip');
-        if (!pip) return;
-        pip.classList.toggle('working', ps.working);
-        pip.classList.toggle('awake', ps.awake);
-        const lbl = pip.querySelector('[data-pip-label]');
-        if (lbl) lbl.textContent = ps.label;
+        if (pip) {
+            pip.classList.toggle('working', ps.working);
+            pip.classList.toggle('awake', ps.awake);
+            const lbl = pip.querySelector('[data-pip-label]');
+            if (lbl) lbl.textContent = ps.label;
+        }
+        // Sync running banner and stop button with the current active run so
+        // cards update live without requiring a full page re-render.
+        const run = ps.working ? (state.activeRuns || []).find((r) => r.project_slug === slug) : null;
+        let banner = card.querySelector('.pc-running');
+        let stopBtn = card.querySelector('[data-stop]');
+        if (run) {
+            const promptText = esc((run.prompt || '').slice(0, 140));
+            if (!banner) {
+                banner = el('div', { class: 'pc-running' }, `⚡ <span class="pr-prompt">${promptText}</span>`);
+                const meta = card.querySelector('.pc-meta');
+                if (meta) card.insertBefore(banner, meta);
+            } else {
+                const span = banner.querySelector('.pr-prompt');
+                if (span) span.textContent = run.prompt ? run.prompt.slice(0, 140) : '';
+            }
+            if (!stopBtn) {
+                stopBtn = el('button', {
+                    class: 'btn sm danger',
+                    dataset: { stop: '', runUid: run.run_uid },
+                    title: 'Cancel this run',
+                }, '■ Stop');
+                const actions = card.querySelector('.pc-actions');
+                const openBtn = actions && actions.querySelector('[data-open]');
+                if (actions) actions.insertBefore(stopBtn, openBtn || null);
+            } else {
+                stopBtn.dataset.runUid = run.run_uid;
+            }
+        } else {
+            if (banner) banner.remove();
+            if (stopBtn) stopBtn.remove();
+        }
     });
 }
 
@@ -935,9 +992,17 @@ async function openProjectTui(p) {
 
 async function cancelProjectRun(runUid) {
     if (!runUid) return;
+    // Find the card that owns this run so we update the right one when multiple
+    // projects are working.
+    let card = null;
+    for (const btn of document.querySelectorAll('[data-stop]')) {
+        if (btn.dataset.runUid === runUid) {
+            card = btn.closest('.proj-card');
+            break;
+        }
+    }
     // Optimistically remove the working state from the affected card so the UI
     // feels instant, then let the next poll confirm it.
-    const card = document.querySelector('.proj-card.is-working');
     if (card) {
         card.classList.remove('is-working');
         const pip = card.querySelector('.card-pip');
@@ -1036,7 +1101,7 @@ function projectWizard() {
         step: 0, method: '',
         path: '', clone_url: '',
         name: '', kind: 'opencode', description: '', tags: '',
-        model: '', agent: '', instructions: '',
+        model: '', agent: '',
         bootstrap: true, git_init: false, git_remote: '', git_branch: 'main',
         index_docs: false,
     };
@@ -1102,8 +1167,6 @@ function projectWizard() {
             <label class="field"><span class="lab">Agent</span><input type="text" data-field="agent" value="${esc(wiz.agent)}" placeholder="build (optional)"></label>
         </div>
         <label class="field"><span class="lab">Tags</span><input type="text" data-field="tags" value="${esc(wiz.tags)}" placeholder="python, trading (optional)"></label>
-        <label class="field"><span class="lab">Custom instructions (optional)</span>
-            <textarea data-field="instructions" rows="3" placeholder="Project-specific rules the agent should always follow…">${esc(wiz.instructions)}</textarea></label>
         <div class="wiz-options">
             ${wiz.method === 'new' ? `<label class="opt"><input type="checkbox" data-field="bootstrap" ${wiz.bootstrap ? 'checked' : ''}> Bootstrap starter files (README, AGENTS.md, opencode.json)</label>` : ''}
             ${wiz.method !== 'clone' ? `<label class="opt"><input type="checkbox" data-field="git_init" ${wiz.git_init ? 'checked' : ''}> Initialise a Git repository</label>` : ''}
@@ -1366,36 +1429,93 @@ function renderProjectTab(name, detail) {
 }
 
 function projectInstructionsForm(p) {
-    const card = el('div', { class: 'card' },
-        `<div class="card-head"><h4>Custom instructions</h4><span class="badge gold">project scoped</span></div>
-         <p class="secondary">These apply only to <b>${esc(p.name)}</b>. Perun prepends them to every <b>new</b> agent session started in this project — from the Agent Console, Telegram, or MCP — so the agent always follows your project-specific rules. Continuations of an existing session inherit them from the session history.</p>
-         <label class="field"><span class="lab">Instructions</span>
-            <textarea id="pi-text" rows="12" placeholder="e.g. Always run the test suite before committing.&#10;Use British spelling in docs.&#10;Never modify the legacy/ folder.">${esc(p.instructions || '')}</textarea></label>
+    const wrap = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Project instruction files</h4><span class="badge gold">project scoped</span></div>
+         <p class="secondary">These apply only to <b>${esc(p.name)}</b>. Perun prepends enabled files to every <b>new</b> agent session, in sorted filename order. Continuations inherit them from the session history.</p>
+         <p class="muted" style="font-size:.8rem">Click a filename to open it in your default editor.</p>
+         <div id="pi-list"></div>
+         <hr>
+         <h4 id="pi-edit-title">New instruction file</h4>
+         <div class="form-row">
+            <label class="field"><span class="lab">Filename</span><input type="text" id="pi-filename" placeholder="guidance.md"></label>
+            <label class="field"><span class="lab">Name</span><input type="text" id="pi-name" placeholder="Display name"></label>
+         </div>
+         <label class="field"><span class="lab">Body</span>
+            <textarea id="pi-body" rows="8" placeholder="Markdown instructions..."></textarea></label>
          <div class="form-actions">
-            <button class="btn primary" id="pi-save">Save instructions</button>
-            <button class="btn ghost" id="pi-clear">Clear</button>
-            <span class="muted" id="pi-count"></span>
+            <button class="btn primary" id="pi-save">Save file</button>
+            <button class="btn ghost" id="pi-new">New file</button>
          </div>`);
-    const ta = card.querySelector('#pi-text');
-    const count = card.querySelector('#pi-count');
-    const upd = () => { count.textContent = `${ta.value.length} chars`; };
-    ta.addEventListener('input', upd); upd();
-    card.querySelector('#pi-save').addEventListener('click', async () => {
+
+    async function refreshList() {
+        const host = wrap.querySelector('#pi-list');
+        host.innerHTML = '';
         try {
-            await api(`/api/projects/${p.slug}/instructions`, { method: 'PUT', body: { instructions: ta.value } });
-            toast('Instructions saved', 'ok');
-            await loadProjects();
+            const res = await api(`/api/projects/${p.slug}/instruction-files`);
+            const files = res.files || [];
+            if (!files.length) {
+                host.innerHTML = '<p class="secondary">No instruction files yet. Use the editor below to create one.</p>';
+                return;
+            }
+            const ul = el('ul', { class: 'instr-list' });
+            for (const f of files) {
+                const fileUrl = instructionFileUrl(f.filename, false, p.path);
+                const li = el('li', { class: 'row', style: 'gap:12px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)' },
+                    `<span class="row" style="gap:6px;flex:1;align-items:center"><input type="checkbox" ${f.enabled ? 'checked' : ''}> <a class="link instr-link" href="${esc(safeUrl(fileUrl))}" title="Click to open in editor">${esc(f.name)}</a> <span class="secondary">${esc(f.filename)}</span></span>
+                     <button class="btn ghost" data-edit="${esc(f.filename)}">Edit</button>
+                     <button class="btn ghost danger" data-del="${esc(f.filename)}">Delete</button>`);
+                const cb = li.querySelector('input');
+                cb.addEventListener('change', async () => {
+                    await api(`/api/projects/${p.slug}/instruction-files/${encodeURIComponent(f.filename)}/toggle`, {
+                        method: 'PATCH', body: { enabled: cb.checked }
+                    });
+                    toast(`${f.name} ${cb.checked ? 'enabled' : 'disabled'}`, 'ok');
+                });
+                li.querySelector('[data-edit]').addEventListener('click', async () => {
+                    const d = await api(`/api/projects/${p.slug}/instruction-files/${encodeURIComponent(f.filename)}`);
+                    wrap.querySelector('#pi-filename').value = d.filename;
+                    wrap.querySelector('#pi-name').value = d.name;
+                    wrap.querySelector('#pi-body').value = d.body;
+                    wrap.querySelector('#pi-edit-title').textContent = `Edit ${esc(d.filename)}`;
+                });
+                li.querySelector('[data-del]').addEventListener('click', async () => {
+                    if (!confirm(`Delete ${f.name}?`)) return;
+                    await api(`/api/projects/${p.slug}/instruction-files/${encodeURIComponent(f.filename)}`, { method: 'DELETE' });
+                    refreshList();
+                    toast(`${f.name} deleted`, 'ok');
+                });
+                ul.appendChild(li);
+            }
+            host.appendChild(ul);
+        } catch (e) { toast(e.message, 'err'); }
+    }
+    refreshList();
+
+    const resetEditor = () => {
+        wrap.querySelector('#pi-filename').value = '';
+        wrap.querySelector('#pi-name').value = '';
+        wrap.querySelector('#pi-body').value = '';
+        wrap.querySelector('#pi-edit-title').textContent = 'New instruction file';
+    };
+    wrap.querySelector('#pi-new').addEventListener('click', resetEditor);
+    wrap.querySelector('#pi-save').addEventListener('click', async () => {
+        const filename = (wrap.querySelector('#pi-filename').value || '').trim() || 'guidance.md';
+        try {
+            await api(`/api/projects/${p.slug}/instruction-files/${encodeURIComponent(filename)}`, {
+                method: 'POST',
+                body: {
+                    name: wrap.querySelector('#pi-name').value.trim(),
+                    body: wrap.querySelector('#pi-body').value,
+                    enabled: true,
+                }
+            });
+            toast('Instruction file saved', 'ok');
+            refreshList();
+            resetEditor();
         } catch (e) { toast(e.message, 'err'); }
     });
-    card.querySelector('#pi-clear').addEventListener('click', () => {
-        confirmDialog('Clear instructions', `Remove the custom instructions for “${p.name}”?`, async () => {
-            try {
-                await api(`/api/projects/${p.slug}/instructions`, { method: 'PUT', body: { instructions: '' } });
-                ta.value = ''; upd(); toast('Cleared', 'ok'); await loadProjects();
-            } catch (e) { toast(e.message, 'err'); }
-        }, 'Clear');
-    });
-    return card;
+
+    return wrap;
 }
 
 function projectConfigForm(p) {
@@ -1720,7 +1840,7 @@ function manifestOverview(p) {
             const isUrl = kind === 'url';
             let targetHtml;
             if (isUrl) {
-                targetHtml = `<a class="ai-target" href="${safeUrl(target)}" target="_blank" rel="noopener noreferrer" title="${esc(target)}">${esc(target)}</a>`;
+                targetHtml = `<a class="ai-target" href="${esc(safeUrl(target))}" target="_blank" rel="noopener noreferrer" title="${esc(target)}">${esc(target)}</a>`;
             } else if (isFile) {
                 targetHtml = `<button class="ai-target" data-path="${esc(target)}" title="Open ${esc(target)}" type="button">${esc(target)}</button>`;
             } else {
@@ -2111,11 +2231,12 @@ async function persistOrchModel(id) {
     } catch (e) { toast(e.message, 'err'); }
 }
 
-function streamOrchestrator(uid, onEvent, onEnd) {
+function streamOrchestrator(uid, onEvent, onEnd, attempt = 0) {
     if (state.runSource) state.runSource.close();
     const src = new EventSource(`/api/runs/${uid}/stream`);
     state.runSource = src;
     src.onmessage = (ev) => {
+        attempt = 0; // Reset backoff after a successful message.
         let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
         if (onEvent) onEvent(d);
         if (d.type === 'end') {
@@ -2124,7 +2245,15 @@ function streamOrchestrator(uid, onEvent, onEnd) {
             if (onEnd) onEnd(d.status);
         }
     };
-    src.onerror = () => { /* server pings; keep the stream open */ };
+    src.onerror = () => {
+        // The run may still be alive server-side; reconnect with capped backoff.
+        if (state.runSource === src) state.runSource = null;
+        src.close();
+        const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+        if (attempt < 10) {
+            setTimeout(() => streamOrchestrator(uid, onEvent, onEnd, attempt + 1), delay);
+        }
+    };
 }
 
 /* ========================================================= CONSOLE ====== */
@@ -2457,17 +2586,32 @@ async function viewActivity() {
     const initial = await api('/api/activity?limit=60');
     for (const a of initial.activity || []) list.appendChild(activityRow(a));
 
-    const src = new EventSource('/api/stream');
-    state.activitySource = src;
-    src.onmessage = (ev) => {
-        let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
-        if (d.type === 'activity') {
-            const row = activityRow(d);
-            list.prepend(row);
-            while (list.children.length > 200) list.lastChild.remove();
-        }
-    };
-    src.onerror = () => { const b = $('#live-badge'); if (b) { b.className = 'badge red'; b.textContent = 'reconnecting'; } };
+    function connectActivity(attempt = 0) {
+        const src = new EventSource('/api/stream');
+        state.activitySource = src;
+        src.onmessage = (ev) => {
+            attempt = 0;
+            let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+            if (d.type === 'activity') {
+                const row = activityRow(d);
+                list.prepend(row);
+                while (list.children.length > 200) list.lastChild.remove();
+            }
+            const b = $('#live-badge');
+            if (b) { b.className = 'badge green'; b.textContent = 'live'; }
+        };
+        src.onerror = () => {
+            const b = $('#live-badge');
+            if (b) { b.className = 'badge red'; b.textContent = 'reconnecting'; }
+            if (state.activitySource === src) state.activitySource = null;
+            src.close();
+            const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+            if (attempt < 10) {
+                setTimeout(() => connectActivity(attempt + 1), delay);
+            }
+        };
+    }
+    connectActivity();
 }
 
 function activityRow(a) {
@@ -2525,7 +2669,9 @@ function mountTelegram(host, status, reload) {
              precedence over the environment.</p>`
         : (status.token_source === 'settings-encrypted'
             ? `<p class="muted mt">🔒 The token is encrypted in <span class="mono">config.json</span>.
-                 Set <span class="mono">PERUN_PASSWORD</span> when launching Perun so the bridge can decrypt it.
+                 ${status.configured
+                     ? 'The bridge is using the decrypted token.'
+                     : '<button class="btn primary small" id="tg-unlock">Unlock token</button> <span class="muted">(or set <span class="mono">PERUN_PASSWORD</span>)</span>'}
                  If you change the password, paste the token again below to re-encrypt it.</p>`
             : '');
     const tokenPlaceholder = status.token_source === 'settings-encrypted'
@@ -2575,6 +2721,9 @@ function mountTelegram(host, status, reload) {
             await reload();
         } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
     });
+
+    const unlockBtn = sCard.querySelector('#tg-unlock');
+    if (unlockBtn) unlockBtn.addEventListener('click', () => promptForUnlockPassword(true));
 
     const pwBtn = sCard.querySelector('#tg-change-pw');
     if (pwBtn) pwBtn.addEventListener('click', () => {
@@ -2717,13 +2866,11 @@ async function viewSettings() {
     v.appendChild(sectionTitle('Orchestrator'));
     const orchCard = el('div', { class: 'card' },
         `<div class="card-head"><h4>Perun Orchestrator</h4><span class="badge gold">machine-wide</span></div>
-         <p class="secondary">The orchestrator is the agent you talk to when <b>no project is selected</b> — from the <a href="#/orchestrator">Orchestrator chat</a> or Telegram. Its model, agent, and custom instructions apply machine-wide.</p>
+         <p class="secondary">The orchestrator is the agent you talk to when <b>no project is selected</b> — from the <a href="#/orchestrator">Orchestrator chat</a> or Telegram. Its model and agent apply machine-wide; add custom instructions in the <b>Agent instructions</b> files below with scope <b>orchestrator</b>.</p>
          <div class="form-row">
             <label class="field"><span class="lab">Orchestrator model</span><span id="s-orch-model-host"></span></label>
             <label class="field"><span class="lab">Orchestrator agent</span><span id="s-orch-agent-host"></span></label>
          </div>
-         <label class="field"><span class="lab">Custom instructions</span>
-            <textarea id="s-orch-instr" rows="6" placeholder="Standing instructions the orchestrator should always follow…">${esc(s.orchestrator_instructions || '')}</textarea></label>
          <div class="form-actions">
             <button class="btn primary" id="s-orch-save">Save orchestrator</button>
             <button class="btn ghost" id="s-orch-open">▶ Open orchestrator chat</button>
@@ -2738,13 +2885,102 @@ async function viewSettings() {
             await api('/api/settings', { method: 'PATCH', body: {
                 orchestrator_model: msOrch.getValue(),
                 orchestrator_agent: sOrchAgent.getValue(),
-                orchestrator_instructions: $('#s-orch-instr').value,
             } });
             toast('Orchestrator saved', 'ok');
             await loadSettings();
         } catch (e) { toast(e.message, 'err'); }
     });
     orchCard.querySelector('#s-orch-open').addEventListener('click', () => goto('#/orchestrator'));
+
+    // ---- global instruction Markdown files ----
+    v.appendChild(sectionTitle('Agent instructions'));
+    const instrCard = el('div', { class: 'card', id: 'global-instr-card' },
+        `<div class="card-head"><h4>Global instruction files</h4><span class="badge gold">machine-wide</span></div>
+         <p class="secondary">Markdown files stored under <b>~/.config/opencode/perun/instructions/</b>. Each has a scope (<b>orchestrator</b> = control-plane only, <b>all_projects</b> = every Perun-started session) and an enabled flag.</p>
+         <p class="muted" style="font-size:.8rem">Click a filename to open it in your default editor.</p>
+         <div id="s-instr-list"></div>
+         <hr>
+         <h4>Edit file</h4>
+         <div class="form-row">
+             <label class="field"><span class="lab">Filename</span><input type="text" id="s-instr-filename" placeholder="guidance.md"></label>
+             <label class="field"><span class="lab">Name</span><input type="text" id="s-instr-name" placeholder="Display name"></label>
+             <label class="field"><span class="lab">Scope</span><select id="s-instr-scope"><option value="all_projects">All projects</option><option value="orchestrator">Orchestrator only</option></select></label>
+         </div>
+         <label class="field"><span class="lab">Body</span>
+             <textarea id="s-instr-body" rows="8" placeholder="# Markdown instructions..."></textarea></label>
+         <div class="form-actions">
+             <button class="btn primary" id="s-instr-save">Save file</button>
+             <button class="btn ghost" id="s-instr-new">New file</button>
+         </div>`);
+    v.appendChild(instrCard);
+
+    async function refreshInstrList() {
+        const list = $('#s-instr-list');
+        list.innerHTML = '';
+        await loadGlobalInstructionsDir();
+        const res = await api('/api/instructions');
+        const files = res.instructions || [];
+        if (!files.length) {
+            list.innerHTML = '<p class="secondary">No instruction files yet. Use the editor below to create one.</p>';
+            return;
+        }
+        const ul = el('ul', { class: 'instr-list' });
+        for (const f of files) {
+            const fileUrl = instructionFileUrl(f.filename, true);
+            const li = el('li', { class: 'row', style: 'gap:12px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)' },
+                `<span class="row" style="gap:6px;flex:1;align-items:center"><input type="checkbox" ${f.enabled ? 'checked' : ''}> <a class="link instr-link" href="${esc(safeUrl(fileUrl))}" title="Click to open in editor">${esc(f.name)}</a> <span class="badge ${f.scope === 'orchestrator' ? 'blue' : 'green'}">${esc(f.scope)}</span></span>
+                 <span class="secondary" style="font-size:12px">${esc(f.filename)}</span>
+                 <button class="btn ghost" data-edit="${esc(f.filename)}">Edit</button>
+                 <button class="btn ghost danger" data-del="${esc(f.filename)}">Delete</button>`);
+            const cb = li.querySelector('input');
+            cb.addEventListener('change', async () => {
+                await api(`/api/instructions/${encodeURIComponent(f.filename)}/toggle`, {
+                    method: 'PATCH', body: { enabled: cb.checked }
+                });
+                toast(`${f.name} ${cb.checked ? 'enabled' : 'disabled'}`, 'ok');
+            });
+            li.querySelector('[data-edit]').addEventListener('click', async () => {
+                const d = await api(`/api/instructions/${encodeURIComponent(f.filename)}`);
+                $('#s-instr-filename').value = d.filename;
+                $('#s-instr-name').value = d.name;
+                $('#s-instr-scope').value = d.scope;
+                $('#s-instr-body').value = d.body;
+            });
+            li.querySelector('[data-del]').addEventListener('click', async () => {
+                if (!confirm(`Delete ${f.name}?`)) return;
+                await api(`/api/instructions/${encodeURIComponent(f.filename)}`, { method: 'DELETE' });
+                refreshInstrList();
+                toast(`${f.name} deleted`, 'ok');
+            });
+            ul.appendChild(li);
+        }
+        list.appendChild(ul);
+    }
+    refreshInstrList();
+
+    $('#s-instr-save').addEventListener('click', async () => {
+        const filename = $('#s-instr-filename').value.trim() || 'guidance.md';
+        try {
+            await api('/api/instructions', {
+                method: 'POST',
+                body: {
+                    filename,
+                    name: $('#s-instr-name').value.trim(),
+                    scope: $('#s-instr-scope').value,
+                    body: $('#s-instr-body').value,
+                    enabled: true,
+                }
+            });
+            toast('Instruction file saved', 'ok');
+            refreshInstrList();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    $('#s-instr-new').addEventListener('click', () => {
+        $('#s-instr-filename').value = '';
+        $('#s-instr-name').value = '';
+        $('#s-instr-scope').value = 'all_projects';
+        $('#s-instr-body').value = '';
+    });
 
     v.appendChild(sectionTitle('Telegram'));
     v.appendChild(el('div', { class: 'card mb' },
@@ -2819,6 +3055,53 @@ async function refreshHealth() {
     }
 }
 
+let _unlockPromptDismissed = false;
+
+async function promptForUnlockPassword(force = false) {
+    if (!force && _unlockPromptDismissed) return;
+    _unlockPromptDismissed = false;
+    let status;
+    try { status = await api('/api/telegram/status'); } catch (e) { return; }
+    if (!status || status.token_source !== 'settings-encrypted' || status.configured) return;
+
+    const isWindows = status.platform === 'win32';
+    const rememberHtml = isWindows
+        ? `<label class="field row" style="gap:8px;align-items:center;margin-top:8px" title="Encrypts the password with Windows DPAPI and stores it for this user, so future launches skip this prompt.">
+               <input type="checkbox" id="unlock-remember">
+               <span class="muted">Remember on this PC</span>
+           </label>`
+        : `<p class="muted mt">Remember is only available on Windows. Set PERUN_PASSWORD in your environment to skip this prompt.</p>`;
+    const body = el('div', {}, `
+        <p class="secondary">The Telegram bot token in <span class="mono">config.json</span> is encrypted.
+           Enter the password to enable the bridge.</p>
+        <label class="field"><span class="lab">Password</span>
+            <input type="password" id="unlock-password" autocomplete="off" placeholder="Perun encryption password"></label>
+        ${rememberHtml}
+        <p class="muted mt" id="unlock-error" style="color:var(--red);min-height:1.2em"></p>
+    `);
+    const submit = async () => {
+        const pw = $('#unlock-password').value;
+        const rememberBox = $('#unlock-remember');
+        const remember = rememberBox ? rememberBox.checked : false;
+        const err = $('#unlock-error');
+        if (!pw) { err.textContent = 'Password is required.'; return; }
+        try {
+            await api('/api/telegram/unlock', { method: 'POST', body: { password: pw, remember } });
+            closeModal();
+            toast('Telegram bridge unlocked', 'ok');
+            if (location.hash === '#/telegram') router();
+        } catch (e) {
+            err.textContent = e.message || 'Incorrect password.';
+        }
+    };
+    modal('Unlock Telegram token', body, [
+        { label: 'Cancel', class: 'ghost', onClick: () => { _unlockPromptDismissed = true; closeModal(); } },
+        { label: 'Unlock', class: 'primary', onClick: submit },
+    ]);
+    $('#unlock-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    $('#unlock-password').focus();
+}
+
 async function boot() {
     wireChrome();
     perunFx.init();
@@ -2839,6 +3122,7 @@ async function boot() {
     await loadProjects().catch(() => {});
     await refreshPresence();
     await router();
+    promptForUnlockPassword();
     setInterval(refreshHealth, 15000);
     setInterval(refreshPresence, 4000);
     window.addEventListener('hashchange', router);

@@ -1,19 +1,25 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.6.0 — a **TUI-first workflow**. The Agent Console and
-project cards now launch the OpenCode TUI with a composed prompt and queued tasks;
-Perun tracks the external terminal process so runs auto-finalize when the user
-closes the window, and the Stop button kills the tracked process tree. The
-previous headless streaming path for `opencode-go/*` models was removed because
-those models can only run inside the OpenCode TUI. Added `perun/process_tracker.py`
-for external-process lifecycle tracking, `POST /api/runs/tui`,
-`POST /api/runs/{uid}/finish`, and `POST /api/runs/{uid}/kill`. Also includes
-reusable project tasks (`tasks` table + CRUD + UI tab). Builds on v0.5.0
-(UI-consistency pass + Telegram bot switching + Agent Console dropdown fixes +
-`Settings.terminal`), v0.4.0 (one-command machine install), v0.3.0 (control plane
-+ orchestrator chat + storm layer + `Perun.cmd`), v0.2.1 (security hardening),
-v0.2.0 (project management + Git + manifest), and v0.1.0 (registry + memory +
-orchestrator + dashboard + Telegram bridge + MCP server).
+**Latest release:** v0.6.4 — instruction text lives *only* on disk. Projects keep custom
+instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
+(`name`, `enabled`); enabled files are injected into new agent sessions in sorted filename
+order. The legacy `projects.instructions` / `projects.instructions_path` columns and both
+one-off migrations (project and global) have been removed, along with the
+`perun_migrate_project_instructions` MCP tool. `db._migrate()` drops the retired columns from
+older databases on next start. A single shared writer
+(`orchestrator.write_project_instruction_file()`) is used by the project API, MCP tools,
+discovery, and manifest sync. The MCP tools `perun_get_instructions`, `perun_set_instructions`,
+and `perun_list_instruction_files` operate only on the multi-file system.
+
+The obsolete inline global instruction fields `orchestrator_instructions` and
+`global_agent_instructions` are not part of `Settings` and are never read. The dashboard
+settings UI manages the instruction file list only. Manifest `instructions` from the HTTP PUT
+and the `perun_set_manifest` MCP tool are routed through `projects.sync_manifest()` to
+`.perun/instructions/default.md`; `db._migrate()` tolerates a failed `DROP COLUMN` (SQLite
+< 3.35); and the persisted password is now Windows **DPAPI**-encrypted in `<PERUN_HOME>/secret`
+instead of plaintext in the user environment. Builds on v0.6.2 (bundled `perun_grep` /
+`perun_ast_grep` code-search tools and matching HTTP endpoints, TUI runs, reusable tasks) and
+v0.6.3 (multi-file instruction system).
 
 ---
 
@@ -43,6 +49,7 @@ Ollama instance for embeddings.
 ~/.perun/
   perun.db        registry + facts + doc_chunks + vectors
   config.json     Settings (Telegram token may be stored as `enc:<base64>`)
+  secret          DPAPI-encrypted password (Windows; written by "Remember on this PC")
   logs/           telegram.log, service logs
   runs/           <run_uid>.log — raw opencode stdout per run
 ```
@@ -79,7 +86,7 @@ can all write concurrently.
 
 | Table | Purpose | Notes |
 |---|---|---|
-| `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `instructions`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch` |
+| `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch` |
 | `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `message_count`, `status` |
 | `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 when `--model` was explicitly requested), `agent`, `output`, `error` |
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
@@ -89,8 +96,10 @@ can all write concurrently.
 | `bridge_links` | Telegram routing | `chat_id` → `project_id` + `session_pk` |
 
 Column additions after v0.1.0 are applied idempotently by `db._ADDED_COLUMNS`
-(`instructions`, `manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
-`runs.model_explicit`), so existing databases migrate in place.
+(`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`, `runs.model_explicit`), so existing
+databases migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
+`projects.instructions_path`) are dropped idempotently by `db._REMOVED_COLUMNS` on next start, so
+fresh and upgraded schemas converge. Instruction text is never stored in the database.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
 `UNIQUE(scope, project_id, content_hash)` constraint would not dedupe global
@@ -173,7 +182,7 @@ structured `info()` (`repo`, `branch`, `dirty`, `change_count`, `ahead`,
 `behind`, `remote_url`). It **never** rewrites a working tree implicitly —
 `init`/`remote`/`commit`/`push` are explicit user actions.
 
-**Custom project instructions** (`projects.instructions`). Project-scoped rules
+**Custom project instructions** (`.perun/instructions/*.md`). Project-scoped rules
 injected only when a **new** session starts: `orchestrator.compose_prompt()`
 prepends
 
@@ -187,6 +196,22 @@ prepends
 
 (The previous XML-style delimiters were dropped because models interpreted them
 as markup and sometimes discarded the prompt that followed.)
+
+Project instructions are stored as Markdown files under `.perun/instructions/`
+with YAML front matter (`name`, `enabled`). Enabled files are included in sorted
+filename order. HTTP endpoints: `GET /api/projects/{slug}/instruction-files`,
+`GET /api/projects/{slug}/instruction-files/{filename}`,
+`POST /api/projects/{slug}/instruction-files/{filename}`,
+`PATCH /api/projects/{slug}/instruction-files/{filename}/toggle`,
+`DELETE /api/projects/{slug}/instruction-files/{filename}`. Filenames must be safe
+(no `/`, `\`, `..`) and are normalized to `.md`.
+
+**Single writer.** All project instruction files are written by
+`orchestrator.write_project_instruction_file(project_path, text, *, name, filename, overwrite)`.
+It is used by the project API, the MCP tools, discovery, and manifest sync.
+Manifest-declared instructions use `overwrite=False` (seed once), so a later dashboard edit is
+never clobbered; explicit user writes use `overwrite=True` (default). Instruction text is never
+stored in the database — there is no legacy column and no migration.
 
 Continuations of an existing session inherit the rules from history, so they are
 not re-injected. The raw user prompt is what gets stored on the run row.
@@ -218,13 +243,17 @@ be confused with — or deleted as — a user project.
 * `POST /api/runs` with no `project` targets the control slug, and `/api/health`
   reports it as `control`.
 
-**Orchestrator instructions** (`Settings.orchestrator_instructions`) are the
-control-plane analogue of project instructions: a machine-wide persona/rules
-block injected ahead of every orchestrator prompt. They live in **Settings**, not
-on the project row, because the orchestrator is a singleton and its config must
-survive a registry wipe + `control.ensure()` re-creation. `compose_prompt(
-project, prompt, settings=…)` injects them only when the target project
-`is_control`.
+**Orchestrator instructions** are scoped Markdown files under
+`~/.config/opencode/perun/instructions/` with `scope: orchestrator`. They are
+the control-plane analogue of project instructions: a machine-wide persona/rules
+block injected ahead of every orchestrator prompt. `compose_prompt(project,
+prompt, settings=…)` loads them only when the target project `is_control`.
+
+**Managing global instruction files from the CLI.** `python -m perun
+global-instructions` lists the global instruction files (name, scope, enabled,
+body); `python -m perun global-instructions "<text>"` writes `custom.md` with
+`scope: all_projects`; `python -m perun global-instructions --clear` deletes every
+custom file and re-seeds the default guidance block.
 
 ---
 
@@ -349,7 +378,18 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | DELETE | `/api/sessions/{pk}` | delete a session |
 | GET | `/api/projects/{slug}/activity` | project activity |
 | GET | `/api/projects/{slug}/memory` | project facts + stats |
-| GET/PUT | `/api/projects/{slug}/instructions` | project-scoped instructions |
+| GET/PUT | `/api/projects/{slug}/instructions` | project-scoped instructions; GET returns the effective combined text; PUT writes `{instructions}` to `.perun/instructions/default.md` (or `{filename}`) with YAML front matter |
+| GET | `/api/instructions` | list global instruction Markdown files (name, scope, enabled) |
+| GET | `/api/instructions/dir` | absolute path to the global instructions directory |
+| GET | `/api/instructions/{filename}` | read one global instruction file body + metadata |
+| POST | `/api/instructions` | create/update a global instruction Markdown file |
+| PATCH | `/api/instructions/{filename}/toggle` | enable/disable a global instruction file |
+| DELETE | `/api/instructions/{filename}` | delete a global instruction file |
+| POST | `/api/search/grep` | regex content search across a project (`pattern`, optional `case_sensitive`, `whole_word`, `include`, `max_results`) — uses ripgrep with Python fallback |
+| POST | `/api/search/ast-grep` | structural code search across a project (`rule`, optional `max_results`) — uses ast-grep with Python-AST fallback |
+| POST | `/api/search/global-grep` | regex content search across all registered projects (`pattern`, optional `projects`, `case_sensitive`, `whole_word`, `include`, `max_results`) — uses ripgrep with Python fallback |
+| POST | `/api/search/global/ast-grep` | structural code search across all registered projects (`rule`, optional `projects`, `max_results`) — uses ast-grep with Python-AST fallback |
+| POST | `/api/search/unified` | unified cross-project search (`query` for memory, `pattern` for grep, `rule` for ast-grep); fuses and re-ranks results |
 | GET | `/api/projects/{slug}/manifest` | manifest (`?live=true` reads disk) |
 | POST | `/api/projects/{slug}/manifest/refresh` | re-read disk, merge to registry |
 | POST | `/api/projects/{slug}/manifest/export` | generate manifest from registry (409 if exists) |
@@ -387,10 +427,11 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/memory/prune` | drop old non-global facts |
 | GET | `/api/activity` | global feed |
 | GET/PATCH | `/api/settings` | read/update `Settings` (GET returns `telegram_token: ""` — never the value — plus `telegram_token_set`) |
-| GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` |
+| GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` + `platform` |
 | POST | `/api/telegram/bot` | `{name?,token?,chats?,password?}` — verifies a new token with `getMe` **before** saving; `password` encrypts the token; `token: ""` clears; `{restart_required}` |
 | POST | `/api/telegram/bot/change-password` | `{old_password,new_password}` — decrypt and re-encrypt the stored token with a new password; you still need to restart the bridge so it loads the re-encrypted token |
 | POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the standalone `PerunBridge` task re-reads the bot |
+| POST | `/api/telegram/unlock` | `{password,remember?}` — decrypt and unlock an encrypted stored token, set `PERUN_PASSWORD` for the running process, optionally persist it (Windows DPAPI-encrypted in `<PERUN_HOME>/secret`), then start/reload the bridge; if another process owns the bridge lock and `remember` is false, `bridge.reason` explains why |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/` etc. | static dashboard from `web/` |
 
@@ -525,7 +566,7 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 ## 11. MCP server
 
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
-`db.init_db()`s, calls `control.ensure()` at import, and exposes **seventeen**
+`db.init_db()`s, calls `control.ensure()` at import, and exposes **twenty-three**
 tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
@@ -534,9 +575,15 @@ tools:
 * **Memory & docs:** `perun_memory_search`, `perun_memory_store`,
   `perun_docs_index`.
 * **Instructions & manifest:** `perun_get_instructions`,
-  `perun_set_instructions`, `perun_get_manifest`, `perun_set_manifest`.
+  `perun_set_instructions`, `perun_list_instruction_files`,
+  `perun_get_manifest`, `perun_set_manifest`.
 * **Runs & messaging:** `perun_start_session` (returns a run id immediately),
   `perun_ask` (blocking), `perun_run_status`, `perun_telegram_send`.
+* **Code search:** `perun_grep` (regex content search) and `perun_ast_grep`
+  (structural/AST search), plus the cross-project `perun_global_grep` and
+  `perun_global_ast_grep`, so projects get code search without extra MCP
+  configuration. `perun_unified_search` is the preferred bundled search tool,
+  fusing memory, ripgrep, and ast-grep behind a single MCP call.
 
 `_resolve_project()` accepts a slug, a path, or `None` — for `None` it walks up
 from the current working directory to the nearest registered project. Project
@@ -603,7 +650,6 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `host` / `port` | `127.0.0.1` / `8760` | dashboard bind |
 | `default_model` / `default_agent` | `""` | fallbacks **only for the control plane**; ordinary projects fall back to OpenCode's own defaults when these are empty |
 | `orchestrator_model` / `orchestrator_agent` | `""` | control-plane (orchestrator) model/agent, outranking the global default |
-| `orchestrator_instructions` | `""` | machine-wide persona/rules injected into every orchestrator prompt |
 | `max_concurrent_runs` | `3` | orchestrator semaphore |
 | `run_timeout` | `1800` | seconds per run |
 | `ollama_host` | `http://127.0.0.1:11434` | embeddings provider |

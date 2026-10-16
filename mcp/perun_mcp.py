@@ -10,14 +10,20 @@ Tools
 ``perun_list_projects``  List every registered project.
 ``perun_project_info``   Details + recent activity for one project.
 ``perun_create_project`` Register/scaffold/clone a project.
-``perun_update_project`` Rename, retag, or set model/agent/instructions.
+``perun_update_project`` Rename, retag, or set model/agent, or write instructions.
 ``perun_delete_project`` Remove a project from the registry (files kept).
 ``perun_discover``       Rescan the configured roots for projects.
 ``perun_memory_search``  Search facts + indexed docs (this or all projects).
 ``perun_memory_store``   Store a durable fact (global or project scope).
 ``perun_docs_index``     (Re)index a project's docs into the vector store.
-``perun_get_instructions`` Read a project's custom instructions.
-``perun_set_instructions`` Set a project's custom instructions.
+``perun_get_instructions`` Read a project's custom instructions (effective or a specific file).
+``perun_set_instructions`` Set a project's custom instructions in ``.perun/instructions/*.md``.
+``perun_list_instruction_files`` List project-local instruction Markdown files.
+``perun_grep``           Fast regex content search across a project (ripgrep + fallback).
+``perun_ast_grep``       Structural code search across a project (ast-grep + fallback).
+``perun_global_grep``    Fast regex content search across *all* registered projects.
+``perun_global_ast_grep`` Structural code search across *all* registered projects.
+``perun_unified_search``  Unified cross-project search: vector memory + grep + ast-grep.
 ``perun_get_manifest``   Read a project's perun.md manifest (data + body).
 ``perun_set_manifest``   Write a project's perun.md manifest.
 ``perun_start_session``  Start an agent run in a project (returns run id).
@@ -41,7 +47,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastmcp import FastMCP  # noqa: E402
 
-from perun import config, control, db, discovery, memory, projects, registry  # noqa: E402
+from perun import config, control, db, discovery, grep, memory, orchestrator, projects, registry  # noqa: E402
 
 mcp = FastMCP("Perun")
 
@@ -54,6 +60,17 @@ try:
     control.ensure()
 except Exception:  # pragma: no cover - never block the MCP server from starting
     pass
+
+# Shared orchestrator for MCP-initiated runs so they live in the same in-memory
+# event bus and can be observed/cancelled consistently.
+_ORCH: orchestrator.Orchestrator | None = None
+
+
+def _mcp_orchestrator() -> orchestrator.Orchestrator:
+    global _ORCH
+    if _ORCH is None:
+        _ORCH = orchestrator.Orchestrator(config.Settings.load())
+    return _ORCH
 
 
 # --------------------------------------------------------------------------- #
@@ -91,6 +108,72 @@ def _project_line(p: dict) -> str:
     tag = "  [orchestrator]" if p.get("is_control") else ""
     return (f"{p['slug']}  —  {p['name']} ({p['kind']})"
             f"  [{p['path']}]{tag}")
+
+
+def _normalize_project_instruction_filename(filename: str) -> tuple[str | None, str]:
+    """Validate and normalize a project-local instruction filename.
+
+    Rejects empty names, special directory entries (``.``, ``..``), and any
+    path containing ``/`` or ``\\``. Ensures the filename ends with ``.md``.
+    Returns ``(normalized_filename, "")`` on success or ``(None, error_msg)``.
+    """
+    filename = (filename or "").strip()
+    if not filename:
+        return None, "[perun] filename is required"
+    # Segment-level traversal detection: after normalizing separators the name
+    # must be exactly one non-special segment.
+    parts = filename.replace("\\", "/").split("/")
+    if len(parts) != 1 or parts[0] in ("", ".", ".."):
+        return None, "[perun] filename must be a single safe name (no path separators or parent-directory references) ending in .md"
+    if not filename.lower().endswith(".md"):
+        return None, "[perun] filename must end in .md"
+    return filename, ""
+
+
+def _project_instruction_file_path(project: dict, filename: str) -> tuple[Path | None, str]:
+    """Return the validated absolute path for a project-local instruction file."""
+    normalized, error = _normalize_project_instruction_filename(filename)
+    if error:
+        return None, error
+    root = Path(project["path"]).resolve()
+    path = (root / orchestrator.PROJECT_INSTRUCTIONS_DIR / normalized).resolve()
+    try:
+        if not path.is_relative_to(root):
+            raise ValueError("path escapes project root")
+    except ValueError:
+        return None, "[perun] filename must resolve inside the project directory"
+    return path, ""
+
+
+def _safe_int(value, name: str, min_val: int | None = None,
+              max_val: int | None = None) -> tuple[int | None, str]:
+    """Coerce ``value`` to int and optionally clamp between bounds.
+
+    Returns ``(int_value, "")`` on success or ``(None, "[perun] ...")``.
+    """
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None, f"[perun] {name} must be an integer"
+    if min_val is not None and v < min_val:
+        return None, f"[perun] {name} must be at least {min_val}"
+    if max_val is not None and v > max_val:
+        return None, f"[perun] {name} must be at most {max_val}"
+    return v, ""
+
+
+def _validate_projects_list(projects) -> tuple[list | None, str]:
+    """Accept ``None`` or a list of slugs; reject other types.
+
+    Returns ``(None, "")`` when the caller omitted the filter, and the list
+    otherwise, so an explicit empty list stays distinguishable from "no
+    filter" (an empty list means "no projects to search").
+    """
+    if projects is None:
+        return None, ""
+    if not isinstance(projects, list):
+        return None, "[perun] projects must be a list of slugs or omitted"
+    return projects, ""
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +255,7 @@ def perun_create_project(name: str = "", path: str = "", method: str = "existing
         root: Base directory to place the project under when ``path`` is empty.
         bootstrap: For ``new``, scaffold AGENTS.md + docs + .opencode.
         description/tags/model/agent/instructions: Optional project metadata.
+            ``instructions`` is written to ``.perun/instructions/default.md``.
         git_init/git_remote/git_branch: Optional git configuration.
         index_docs: Index the project's docs into Perun's memory immediately.
     """
@@ -199,22 +283,30 @@ def perun_update_project(slug: str, name: str = "", description: str = "",
     Args:
         slug: The project slug to update.
         name/description/tags/model/agent/color: New values (omit to keep).
-        instructions: New custom instructions for the project's sessions.
+        instructions: New custom instructions for the project's sessions, written
+            to ``.perun/instructions/default.md``.
     """
+    from perun import orchestrator
+
     p = registry.get_project(slug)
     if not p:
         return f"[perun] No such project: {slug}"
     fields: dict[str, str] = {}
     for key, value in (("name", name), ("description", description),
                        ("tags", tags), ("model", model), ("agent", agent),
-                       ("color", color), ("instructions", instructions)):
+                       ("color", color)):
         if value:
             fields[key] = value
-    if not fields:
+    if fields:
+        registry.update_project(slug, **fields)
+    wrote_instructions = bool(
+        orchestrator.write_project_instruction_file(p["path"], instructions)
+    )
+    if not fields and not wrote_instructions:
         return f"[perun] Nothing to update for {slug}."
-    registry.update_project(slug, **fields)
     registry.log_activity(p["id"], "config", "Project updated via MCP")
-    return f"[perun] Updated {slug}: {', '.join(sorted(fields))}."
+    changed = sorted(fields) + (["instructions"] if wrote_instructions else [])
+    return f"[perun] Updated {slug}: {', '.join(changed)}."
 
 
 @mcp.tool
@@ -284,7 +376,9 @@ def perun_memory_search(query: str, project: str | None = None, k: int = 5,
         k: Maximum number of results (1-8).
         all_projects: Search the document store across every project.
     """
-    k = max(1, min(int(k), 8))
+    k, error = _safe_int(k, "k", min_val=1, max_val=8)
+    if error:
+        return error
     p = _resolve_project(project)
     results = memory.unified_search(query, p["id"] if p else 0, k=k,
                                     all_projects=all_projects)
@@ -342,44 +436,303 @@ def perun_docs_index(project: str | None = None) -> str:
 
 
 @mcp.tool
-def perun_get_instructions(project: str | None = None) -> str:
+def perun_get_instructions(project: str | None = None, filename: str = "") -> str:
     """Read the custom instructions stored for a project.
 
     Instructions are scoped to a single project and are injected into every new
-    agent session started in that project.
+    agent session started in that project. If ``filename`` is omitted, the
+    effective combined instructions from ``.perun/instructions/*.md`` are
+    returned. If ``filename`` is given, that specific file is returned.
 
     Args:
         project: Project slug/path. Omit for the current project.
+        filename: Optional project-local instruction filename to read.
     """
+    from perun import orchestrator
+
     p = _resolve_project(project)
     if not p:
         return "[perun] No project resolved; pass `project`."
-    detail = registry.get_project(p["slug"]) or p
-    text = (detail.get("instructions") or "").strip()
-    if not text:
+    filename = (filename or "").strip()
+    if filename:
+        path, error = _project_instruction_file_path(p, filename)
+        if error:
+            return error
+        if not path.exists():
+            return f"[perun] Instruction file not found: {path.name}"
+        name, enabled, body = orchestrator._load_project_instruction_file(path)
+        return (f"[perun] Instruction file {path.name} for {p['slug']} "
+                f"(enabled={enabled}):\n---\nname: {name}\nenabled: {enabled}\n---\n\n{body}")
+    blocks = orchestrator._project_instruction_blocks(p)
+    if not blocks:
         return f"[perun] No custom instructions set for {p['slug']}."
-    return f"[perun] Instructions for {p['slug']}:\n{text}"
+    return f"[perun] Effective instructions for {p['slug']}:\n\n" + "\n\n".join(blocks)
 
 
 @mcp.tool
-def perun_set_instructions(instructions: str, project: str | None = None) -> str:
-    """Set the custom instructions for a project (replaces the current text).
+def perun_set_instructions(instructions: str,
+                           filename: str = "",
+                           enabled: bool = True,
+                           project: str | None = None) -> str:
+    """Set the custom instructions for a project.
 
-    The text is scoped to this project only and is prepended to every new agent
-    session started in it.
+    Writes ``instructions`` to ``.perun/instructions/<filename>`` (default
+    ``default.md``) with YAML front matter.  Pass an empty ``instructions`` string
+    to clear the file.
 
     Args:
         instructions: The full instruction text. Pass an empty string to clear.
+        filename: Optional ``.perun/instructions/<filename>`` file to write.
+        enabled: Front-matter enabled flag when writing by filename (default True).
         project: Project slug/path. Omit for the current project.
+    """
+    from perun import orchestrator
+
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    filename = (filename or "").strip()
+    if not filename:
+        filename = "default.md"
+    path, error = _project_instruction_file_path(p, filename)
+    if error:
+        return error
+    name = path.stem
+    text = orchestrator._build_frontmatter({"name": name, "enabled": enabled}) + f"{instructions}\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    registry.log_activity(p["id"], "config", f"Instruction file {path.name} saved")
+    if not instructions.strip():
+        return f"[perun] Cleared instruction file {path.name} for {p['slug']}."
+    return f"[perun] Wrote instruction file {path.name} for {p['slug']} ({len(instructions)} chars)."
+
+
+@mcp.tool
+def perun_list_instruction_files(project: str | None = None) -> str:
+    """List project-local instruction Markdown files for a project.
+
+    Args:
+        project: Project slug/path. Omit for the current project.
+    """
+    from perun import orchestrator
+
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    files = orchestrator._project_instruction_files(p)
+    if not files:
+        return f"[perun] No instruction files for {p['slug']}."
+    lines = [f"[perun] Instruction files for {p['slug']}:"]
+    for path in files:
+        name, enabled, body = orchestrator._load_project_instruction_file(path)
+        lines.append(f"  - {path.name}: {name} (enabled={enabled}, {len(body)} chars)")
+    return "\n".join(lines)
+
+
+@mcp.tool
+def perun_grep(pattern: str, project: str | None = None,
+               case_sensitive: bool = True, whole_word: bool = False,
+               include: str = "", max_results: int = 50) -> str:
+    """Search file contents in a project with ripgrep (or a Python fallback).
+
+    Args:
+        pattern: POSIX/ripgrep regex.
+        project: Project slug/path. Omit for the current project.
+        case_sensitive: False to ignore case.
+        whole_word: True to match whole words only.
+        include: Optional glob filter (e.g. "*.py").
+        max_results: Maximum matches to return (1-200).
     """
     p = _resolve_project(project)
     if not p:
         return "[perun] No project resolved; pass `project`."
-    registry.update_project(p["slug"], instructions=instructions or "")
-    registry.log_activity(p["id"], "config", "Project instructions updated")
-    if not (instructions or "").strip():
-        return f"[perun] Cleared instructions for {p['slug']}."
-    return f"[perun] Updated instructions for {p['slug']} ({len(instructions)} chars)."
+    if not (pattern or "").strip():
+        return "[perun] pattern is required"
+    max_results, error = _safe_int(max_results, "max_results", min_val=1, max_val=200)
+    if error:
+        return error
+    result = grep.rg_search(
+        pattern, p["path"],
+        case_sensitive=case_sensitive, whole_word=whole_word,
+        include=include or None, max_results=max_results,
+    )
+    if not result.get("ok"):
+        return f"[perun] search failed: {result.get('error')}"
+    matches = result.get("matches", [])
+    if not matches:
+        return "[perun] No matches."
+    lines = [f"{m['file']}:{m['line']}:{m['column']}  {m['text']}" for m in matches]
+    return "[perun] Matches:\n" + "\n".join(lines) + f"\n\n(tool={result.get('tool')}, total={len(matches)})"
+
+
+@mcp.tool
+def perun_ast_grep(rule: str, project: str | None = None,
+                   max_results: int = 50) -> str:
+    """Structural code search in a project with ast-grep (or a Python fallback).
+
+    Args:
+        rule: An ast-grep rule, e.g. "$F($$$ARGS)" or a YAML rule.
+        project: Project slug/path. Omit for the current project.
+        max_results: Maximum matches to return (1-200).
+    """
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    if not (rule or "").strip():
+        return "[perun] rule is required"
+    max_results, error = _safe_int(max_results, "max_results", min_val=1, max_val=200)
+    if error:
+        return error
+    result = grep.ast_grep_search(rule, p["path"], max_results=max_results)
+    if not result.get("ok"):
+        return f"[perun] search failed: {result.get('error')}"
+    matches = result.get("matches", [])
+    if not matches:
+        return "[perun] No matches."
+    lines = [f"{m['file']}:{m['line']}:{m['column']}  {m['text']}" for m in matches]
+    return "[perun] Matches:\n" + "\n".join(lines) + f"\n\n(tool={result.get('tool')}, total={len(matches)})"
+
+
+@mcp.tool
+def perun_global_grep(pattern: str, projects: list[str] | None = None,
+                      case_sensitive: bool = True, whole_word: bool = False,
+                      include: str = "", max_results: int = 20) -> str:
+    """Regex content search across *all* registered projects (or a subset).
+
+    Args:
+        pattern: POSIX/ripgrep regex.
+        projects: Optional list of project slugs to restrict the search.
+        case_sensitive: False to ignore case.
+        whole_word: True to match whole words only.
+        include: Optional glob filter (e.g. "*.py").
+        max_results: Maximum total matches to return (default 20, max 200).
+    """
+    if not (pattern or "").strip():
+        return "[perun] pattern is required"
+    max_results, error = _safe_int(max_results, "max_results", min_val=1, max_val=200)
+    if error:
+        return error
+    projects, error = _validate_projects_list(projects)
+    if error:
+        return error
+    all_projects = registry.list_projects()
+    if projects is not None:
+        allowed = {p.strip().lower() for p in projects if isinstance(p, str) and p.strip()}
+        all_projects = [p for p in all_projects if p["slug"].lower() in allowed]
+    if not all_projects:
+        return "[perun] No projects to search."
+    result = grep.rg_search_global(
+        pattern, all_projects,
+        case_sensitive=case_sensitive, whole_word=whole_word,
+        include=include or None, max_results=max_results,
+    )
+    if not result.get("ok"):
+        return f"[perun] search failed: {result.get('error')}"
+    matches = result.get("matches", [])
+    if not matches:
+        return "[perun] No matches."
+    lines = [f"{m.get('project','?')}/{m['file']}:{m['line']}:{m['column']}  {m['text']}" for m in matches]
+    return "[perun] Matches:\n" + "\n".join(lines) + f"\n\n(tool={result.get('tool')}, projects={result.get('projects_searched')}, total={len(matches)})"
+
+
+@mcp.tool
+def perun_global_ast_grep(rule: str, projects: list[str] | None = None,
+                          max_results: int = 20) -> str:
+    """Structural code search across *all* registered projects (or a subset).
+
+    Args:
+        rule: An ast-grep rule, e.g. "$F($$$ARGS)" or a YAML rule.
+        projects: Optional list of project slugs to restrict the search.
+        max_results: Maximum total matches to return (default 20, max 200).
+    """
+    if not (rule or "").strip():
+        return "[perun] rule is required"
+    max_results, error = _safe_int(max_results, "max_results", min_val=1, max_val=200)
+    if error:
+        return error
+    projects, error = _validate_projects_list(projects)
+    if error:
+        return error
+    all_projects = registry.list_projects()
+    if projects is not None:
+        allowed = {p.strip().lower() for p in projects if isinstance(p, str) and p.strip()}
+        all_projects = [p for p in all_projects if p["slug"].lower() in allowed]
+    if not all_projects:
+        return "[perun] No projects to search."
+    result = grep.ast_grep_search_global(rule, all_projects, max_results=max_results)
+    if not result.get("ok"):
+        return f"[perun] search failed: {result.get('error')}"
+    matches = result.get("matches", [])
+    if not matches:
+        return "[perun] No matches."
+    lines = [f"{m.get('project','?')}/{m['file']}:{m['line']}:{m['column']}  {m['text']}" for m in matches]
+    return "[perun] Matches:\n" + "\n".join(lines) + f"\n\n(tool={result.get('tool')}, projects={result.get('projects_searched')}, total={len(matches)})"
+
+
+@mcp.tool
+def perun_unified_search(
+    query: str = "",
+    pattern: str = "",
+    rule: str = "",
+    projects: list[str] | None = None,
+    memory: bool = True,
+    grep: bool = True,
+    ast_grep: bool = True,
+    max_results: int = 20,
+    max_memory: int = 6,
+) -> str:
+    """Unified search across all projects: vector memory + global grep + ast-grep.
+
+    This is the preferred Perun search tool. Use it after consulting CODEMAP.
+
+    Args:
+        query: Natural-language query for semantic/conceptual memory search.
+        pattern: Optional POSIX regex for global grep.
+        rule: Optional ast-grep rule for structural search.
+        projects: Optional project slugs to restrict the search.
+        memory: Enable vector memory search (default True).
+        grep: Enable global regex search when pattern is given (default True).
+        ast_grep: Enable global structural search when rule is given (default True).
+        max_results: Maximum code-level results to return (default 20, max 200).
+        max_memory: Maximum memory results to return (default 6, clamped 1-50).
+
+    Returns:
+        Compact, ranked results with source attribution.
+    """
+    from perun import search as search_mod
+    max_results, error = _safe_int(max_results, "max_results", min_val=1, max_val=200)
+    if error:
+        return error
+    max_memory, error = _safe_int(max_memory, "max_memory", min_val=1, max_val=50)
+    if error:
+        return error
+    projects, error = _validate_projects_list(projects)
+    if error:
+        return error
+    result = search_mod.unified_search(
+        query=query,
+        pattern=pattern,
+        rule=rule,
+        projects=projects,
+        use_memory=memory,
+        use_grep=grep,
+        use_ast_grep=ast_grep,
+        max_code=max_results,
+        max_memory=max_memory,
+    )
+    if not result.get("ok"):
+        return f"[perun] search failed: {result.get('error')}"
+    lines = [f"Tools used: {', '.join(result.get('tools_used', []))}",
+             f"Projects searched: {result.get('projects_searched', 0)}", ""]
+    if result.get("memory"):
+        lines.append("Memory matches:")
+        for m in result["memory"]:
+            lines.append(f"  {m['project']}/{m.get('file','')}#{m.get('section','')}  {m['text']}")
+    if result.get("code"):
+        lines.append("Code matches:")
+        for m in result["code"]:
+            lines.append(f"  {m['project']}/{m['file']}:{m['line']}:{m['column']}  {m['text']}")
+    return "\n".join(lines)
 
 
 @mcp.tool
@@ -418,7 +771,7 @@ def perun_set_manifest(data: dict, body: str = "", project: str | None = None) -
         body: Optional Markdown body shown as the project overview.
         project: Project slug/path. Omit for the current project.
     """
-    from perun import manifest, registry
+    from perun import manifest, projects, registry
     p = _resolve_project(project)
     if not p:
         return "[perun] No project resolved; pass `project`."
@@ -426,11 +779,7 @@ def perun_set_manifest(data: dict, body: str = "", project: str | None = None) -
         target = manifest.save(p["path"], data or {}, body or "")
     except manifest.ManifestError as exc:
         return f"[perun] Could not write manifest: {exc}"
-    snap = manifest.load(p["path"])
-    declared = manifest.to_project_fields(snap["data"])
-    if declared:
-        registry.update_project(p["slug"], **declared)
-    registry.set_project_manifest(p["slug"], manifest.snapshot(snap), str(target))
+    projects.sync_manifest(p)
     registry.log_activity(p["id"], "config", "Manifest updated via MCP")
     return f"[perun] Wrote manifest for {p['slug']} ({target})."
 
@@ -453,8 +802,7 @@ def perun_start_session(prompt: str, project: str | None = None,
     p = _resolve_project(project)
     if not p:
         return "[perun] No project resolved; pass `project`."
-    from perun.orchestrator import Orchestrator
-    orch = Orchestrator()
+    orch = _mcp_orchestrator()
     try:
         run = orch.start_run(p["slug"], prompt, model=model, agent=agent,
                              opencode_session_id=session)
@@ -480,8 +828,7 @@ def perun_ask(prompt: str, project: str | None = None, model: str = "",
     p = _resolve_project(project)
     if not p:
         return "[perun] No project resolved; pass `project`."
-    from perun.orchestrator import Orchestrator
-    orch = Orchestrator(config.Settings.load())
+    orch = _mcp_orchestrator()
     result = orch.run_and_wait(p["slug"], prompt, timeout=timeout, model=model,
                                agent=agent, opencode_session_id=session)
     run = result.get("run") or {}

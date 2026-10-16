@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import queue
+import sys
 import subprocess
 import time
 import uuid
@@ -34,7 +35,7 @@ from starlette.concurrency import iterate_in_threadpool
 
 from . import (__version__, config, control, db, discovery, git, manifest,
                memory, projects, registry, scaffold)
-from .orchestrator import Orchestrator
+from . import orchestrator
 
 STARTED_AT = time.time()
 
@@ -45,7 +46,7 @@ _SSE_HEADERS = {
 }
 
 SETTINGS = config.Settings.load()
-ORCH = Orchestrator(SETTINGS)
+ORCH = orchestrator.Orchestrator(SETTINGS)
 
 
 def _control_project() -> dict[str, Any]:
@@ -70,6 +71,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_db()
     config.ensure_dirs()
     _control_project()
+    # Seed the default global guidance file once on startup.
+    orchestrator._seed_default_instructions()
     # After a restart we lose all in-memory process tracking; any run still marked
     # running is effectively stale. Finalize them so cards don't stay lit forever.
     for run in registry.list_active_runs():
@@ -132,14 +135,45 @@ def _host_allowed(host_header: str) -> bool:
     return host == _hostname(SETTINGS.host)
 
 
+def _split_host_port(value: str) -> tuple[str, int]:
+    """Return ``(host, port)`` from a ``Host`` header or an ``Origin`` URL.
+
+    Handles IPv6 brackets and default/omitted ports. Used by the origin guard
+    so loopback aliases are allowed only when the port matches exactly.
+    """
+    v = (value or "").strip()
+    if not v:
+        return "", 0
+    if "//" in v:
+        v = urlsplit(v).netloc
+    if v.startswith("["):
+        host = v[1:].split("]", 1)[0].lower()
+        rest = v.split("]", 1)[1]
+        port = int(rest[1:]) if rest.startswith(":") and rest[1:].isdigit() else 0
+        return host, port
+    if v.count(":") == 1:
+        host, port_str = v.rsplit(":", 1)
+        port = int(port_str) if port_str.isdigit() else 0
+        return host.lower(), port
+    return v.lower(), 0
+
+
 def _origin_ok(origin: str, host_header: str) -> bool:
-    """True when a browser ``Origin`` is same-host or loopback."""
-    o = _hostname(origin)
-    if not o:
+    """True when a browser ``Origin`` matches the request host including port."""
+    o_host, o_port = _split_host_port(origin)
+    h_host, h_port = _split_host_port(host_header)
+    if not o_host:
         return False
-    if o in _LOOPBACK_NAMES and _hostname(host_header) in _LOOPBACK_NAMES:
-        return True                  # localhost <-> 127.0.0.1 aliasing
-    return o == _hostname(host_header)
+    # Ports must match. If the Host header omits an explicit port, treat it as
+    # unknown rather than matching every origin port.
+    if o_port and h_port and o_port != h_port:
+        return False
+    if o_host == h_host:
+        return True
+    # Allow loopback aliases (127.0.0.1 / localhost / ::1) only when ports match.
+    if o_host in _LOOPBACK_NAMES and h_host in _LOOPBACK_NAMES:
+        return True
+    return False
 
 
 @app.middleware("http")
@@ -155,7 +189,20 @@ async def _origin_guard(request: Request, call_next):
             return JSONResponse(
                 {"detail": "blocked: cross-origin request"},
                 status_code=403)
-    return await call_next(request)
+    response = await call_next(request)
+    # Harden the dashboard with baseline security headers.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "img-src 'self' data:; "
+        "font-src 'self';"
+    )
+    return response
 
 
 # --------------------------------------------------------------------------- #
@@ -176,6 +223,48 @@ def _resolve_project(ref: str | int | None) -> dict[str, Any] | None:
 
 def _ok(**kw: Any) -> dict[str, Any]:
     return {"ok": True, **kw}
+
+
+def _normalize_instruction_filename(filename: str) -> str:
+    """Validate and normalize an instruction filename.
+
+    Rejects path separators, parent-directory references, and empty names;
+    ensures the file has a ``.md`` suffix.
+    """
+    filename = (filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if not filename.lower().endswith(".md"):
+        filename += ".md"
+    return filename
+
+
+def _project_instruction_path(project: dict[str, Any], filename: str) -> Path:
+    """Return the validated path for a project-local instruction file."""
+    filename = _normalize_instruction_filename(filename)
+    root = Path(project["path"]).resolve()
+    path = (root / orchestrator.PROJECT_INSTRUCTIONS_DIR / filename).resolve()
+    try:
+        if not path.is_relative_to(root):
+            raise ValueError("path escapes project root")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="instruction file must be inside the project") from exc
+    return path
+
+
+def _clamp(value: Any, min_val: int, max_val: int, name: str) -> int:
+    """Validate and clamp an integer query/body parameter."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{name} must be an integer") from exc
+    if v < min_val:
+        raise HTTPException(status_code=400, detail=f"{name} must be at least {min_val}")
+    if v > max_val:
+        raise HTTPException(status_code=400, detail=f"{name} must be at most {max_val}")
+    return v
 
 
 # --------------------------------------------------------------------------- #
@@ -394,15 +483,15 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             except (ValueError, IndexError):
                 wt_argv.extend(["-d", cwd])
         # Keep the tab open after opencode exits so the user can see results.
-        # Build as a string so Python does not wrap the whole command in outer
-        # quotes; cmd.exe would strip them and corrupt the quoting of the path.
-        cmdline = subprocess.list2cmdline(wt_argv) + " cmd /k " + cmd_text
+        # Quote the command as a single /k argument so shell metacharacters in
+        # the frontend-built text are not interpreted by cmd.exe.
+        cmdline = subprocess.list2cmdline(wt_argv + ["cmd", "/k", cmd_text])
         use_cmdline = True
     elif shell_cls in ("cmd",):
         # /k keeps the console window alive after opencode exits.
-        # Build as a string so Python does not wrap the whole command in outer
-        # quotes; cmd.exe would strip them and corrupt the quoting of the path.
-        cmdline = subprocess.list2cmdline([argv[0]]) + " /k " + cmd_text
+        # Quote the command as a single /k argument so shell metacharacters are
+        # not interpreted by cmd.exe.
+        cmdline = subprocess.list2cmdline([argv[0], "/k", cmd_text])
         use_cmdline = True
     elif shell_cls in ("powershell", "pwsh"):
         # Launch PowerShell directly with a new console. Using subprocess with
@@ -573,32 +662,127 @@ def api_delete_session(pk: int) -> dict[str, Any]:
 @app.get("/api/projects/{slug}/activity")
 def api_project_activity(slug: str, limit: int = 100) -> dict[str, Any]:
     project = _project_or_404(slug)
-    return _ok(activity=registry.list_activity(project["id"], limit=limit))
+    return _ok(activity=registry.list_activity(project["id"], limit=_clamp(limit, 1, 500, "limit")))
 
 
 @app.get("/api/projects/{slug}/memory")
 def api_project_memory(slug: str, limit: int = 100) -> dict[str, Any]:
     project = _project_or_404(slug)
-    return _ok(facts=memory.recent_facts(project["id"], limit=limit),
+    return _ok(facts=memory.recent_facts(project["id"], limit=_clamp(limit, 1, 500, "limit")),
                stats=memory.stats(project["id"]))
 
 
 @app.get("/api/projects/{slug}/instructions")
 def api_get_instructions(slug: str) -> dict[str, Any]:
     project = _project_or_404(slug)
-    return _ok(instructions=project.get("instructions", "") or "")
+    from . import orchestrator
+
+    blocks = orchestrator._project_instruction_blocks(project)
+    return _ok(instructions="\n\n".join(blocks))
 
 
 @app.put("/api/projects/{slug}/instructions")
 def api_set_instructions(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Replace a project's custom instructions (project-scoped)."""
+    """Replace a project's custom instructions (project-scoped).
+
+    Writes the provided ``instructions`` text to ``.perun/instructions/default.md``
+    (or ``filename`` when supplied) with YAML front matter.
+    """
+    from . import orchestrator
+
     project = _project_or_404(slug)
     text = payload.get("instructions", "")
     if not isinstance(text, str):
         raise HTTPException(status_code=400, detail="instructions must be a string")
-    registry.update_project(slug, instructions=text)
-    registry.log_activity(project["id"], "config", "Project instructions updated")
-    return _ok(instructions=(registry.get_project(slug) or project).get("instructions", ""))
+    filename = str(payload.get("filename") or "").strip() or "default.md"
+    path = _project_instruction_path(project, filename)
+    name = str(payload.get("name") or "").strip() or path.stem
+    enabled = orchestrator._coerce_enabled(payload.get("enabled", True))
+    body = text.strip()
+    file_text = orchestrator._build_frontmatter({
+        "name": name,
+        "enabled": enabled,
+    }) + body + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(file_text, encoding="utf-8")
+    registry.log_activity(project["id"], "config", f"Instruction file {path.name} saved")
+    blocks = orchestrator._project_instruction_blocks(project)
+    return _ok(instructions="\n\n".join(blocks), filename=path.name)
+
+
+@app.get("/api/projects/{slug}/instruction-files")
+def api_list_project_instruction_files(slug: str) -> dict[str, Any]:
+    """List project-local instruction Markdown files with parsed metadata."""
+    project = _project_or_404(slug)
+    files: list[dict[str, Any]] = []
+    for path in orchestrator._project_instruction_files(project):
+        name, enabled, body = orchestrator._load_project_instruction_file(path)
+        files.append({
+            "filename": path.name,
+            "name": name,
+            "enabled": enabled,
+            "size": len(body),
+        })
+    return _ok(files=files, count=len(files))
+
+
+@app.get("/api/projects/{slug}/instruction-files/{filename}")
+def api_get_project_instruction_file(slug: str, filename: str) -> dict[str, Any]:
+    """Read a single project-local instruction file."""
+    project = _project_or_404(slug)
+    path = _project_instruction_path(project, filename)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    name, enabled, body = orchestrator._load_project_instruction_file(path)
+    return _ok(filename=path.name, name=name, enabled=enabled, body=body)
+
+
+@app.post("/api/projects/{slug}/instruction-files/{filename}")
+def api_save_project_instruction_file(slug: str, filename: str,
+                                      payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create or update a project-local instruction Markdown file."""
+    project = _project_or_404(slug)
+    path = _project_instruction_path(project, filename)
+    name = str(payload.get("name") or "").strip() or path.stem
+    enabled = orchestrator._coerce_enabled(payload.get("enabled", True))
+    body = str(payload.get("body") or "").strip()
+    text = orchestrator._build_frontmatter({
+        "name": name,
+        "enabled": enabled,
+    }) + body + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    registry.log_activity(project["id"], "config", f"Instruction file {path.name} saved")
+    return _ok(filename=path.name, name=name, enabled=enabled)
+
+
+@app.patch("/api/projects/{slug}/instruction-files/{filename}/toggle")
+def api_toggle_project_instruction_file(slug: str, filename: str,
+                                          payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Toggle a project-local instruction file on or off."""
+    project = _project_or_404(slug)
+    path = _project_instruction_path(project, filename)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    name, _, body = orchestrator._load_project_instruction_file(path)
+    enabled = orchestrator._coerce_enabled(payload.get("enabled", True))
+    text = orchestrator._build_frontmatter({
+        "name": name,
+        "enabled": enabled,
+    }) + body + "\n"
+    path.write_text(text, encoding="utf-8")
+    return _ok(filename=path.name, enabled=enabled)
+
+
+@app.delete("/api/projects/{slug}/instruction-files/{filename}")
+def api_delete_project_instruction_file(slug: str, filename: str) -> dict[str, Any]:
+    """Delete a project-local instruction Markdown file."""
+    project = _project_or_404(slug)
+    path = _project_instruction_path(project, filename)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    path.unlink()
+    return _ok(deleted=path.name)
 
 
 # --------------------------------------------------------------------------- #
@@ -702,11 +886,7 @@ def api_put_manifest(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str
         except manifest.ManifestError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    snap = manifest.load(base)
-    declared = manifest.to_project_fields(snap["data"])
-    if declared:
-        registry.update_project(slug, **declared)
-    registry.set_project_manifest(slug, manifest.snapshot(snap), str(target))
+    snap = projects.sync_manifest(project)
     registry.log_activity(project["id"], "config", "Manifest saved")
     return _ok(path=str(target), manifest=snap,
                project=registry.get_project(slug))
@@ -825,7 +1005,7 @@ def api_git_push(slug: str, payload: dict[str, Any] = Body(default={})) -> dict[
 @app.post("/api/discover")
 def api_discover(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     roots = payload.get("roots") or SETTINGS.roots
-    max_depth = int(payload.get("max_depth", 1))
+    max_depth = _clamp(payload.get("max_depth", 1), 0, 5, "max_depth")
     result = discovery.discover_and_sync(roots, max_depth=max_depth)
     if SETTINGS.index_docs_on_discover:
         for slug in result.get("created", []):
@@ -838,7 +1018,7 @@ def api_discover(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
 @app.get("/api/discover/scan")
 def api_discover_scan(roots: str = "", max_depth: int = 1) -> dict[str, Any]:
     root_list = [r for r in roots.split(",") if r.strip()] or SETTINGS.roots
-    return _ok(found=discovery.scan(root_list, max_depth=max_depth))
+    return _ok(found=discovery.scan(root_list, max_depth=_clamp(max_depth, 0, 5, "max_depth")))
 
 
 # --------------------------------------------------------------------------- #
@@ -850,7 +1030,7 @@ def api_list_runs(project: str | None = None, limit: int = 50) -> dict[str, Any]
     if project:
         p = registry.get_project(project)
         pid = p["id"] if p else None
-    return _ok(runs=registry.list_runs(pid, limit=limit))
+    return _ok(runs=registry.list_runs(pid, limit=_clamp(limit, 1, 500, "limit")))
 
 
 @app.get("/api/runs/active")
@@ -1030,7 +1210,8 @@ def api_finish_tui_run(run_uid: str) -> dict[str, Any]:
     run = _registry.get_run(run_uid)
     if not run:
         raise HTTPException(status_code=404, detail="no such run")
-    _registry.update_run(run_uid, status="done", ended_at=_registry.now_iso())
+    if run.get("status") in ("queued", "running"):
+        _registry.update_run(run_uid, status="done", ended_at=_registry.now_iso())
     # Also stop tracking the external process; caller should use /kill to close the window.
     process_tracker.TRACKER.finalize(run_uid)
     return _ok(finished=True)
@@ -1117,7 +1298,7 @@ def api_memory_search(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
     project = _resolve_project(payload.get("project"))
-    k = int(payload.get("k", 6))
+    k = _clamp(payload.get("k", 6), 1, 20, "k")
     results = memory.unified_search(
         query, project["id"] if project else 0, k=k,
         include_facts=payload.get("include_facts", True),
@@ -1137,7 +1318,7 @@ def api_memory_stats(project: str | None = None) -> dict[str, Any]:
 @app.get("/api/memory/recent")
 def api_memory_recent(project: str | None = None, limit: int = 50) -> dict[str, Any]:
     p = registry.get_project(project) if project else None
-    return _ok(facts=memory.recent_facts(p["id"] if p else None, limit=limit))
+    return _ok(facts=memory.recent_facts(p["id"] if p else None, limit=_clamp(limit, 1, 500, "limit")))
 
 
 @app.post("/api/memory/import-legacy")
@@ -1161,7 +1342,7 @@ def api_memory_prune(payload: dict[str, Any] = Body(default={})) -> dict[str, An
 @app.get("/api/activity")
 def api_activity(project: str | None = None, limit: int = 100) -> dict[str, Any]:
     p = registry.get_project(project) if project else None
-    return _ok(activity=registry.list_activity(p["id"] if p else None, limit=limit))
+    return _ok(activity=registry.list_activity(p["id"] if p else None, limit=_clamp(limit, 1, 500, "limit")))
 
 
 # --------------------------------------------------------------------------- #
@@ -1178,15 +1359,308 @@ def api_get_settings() -> dict[str, Any]:
     return _ok(settings=data)
 
 
+@app.get("/api/instructions")
+def api_list_instructions() -> dict[str, Any]:
+    """List global instruction Markdown files with parsed metadata."""
+    from . import orchestrator
+
+    files: list[dict[str, Any]] = []
+    for path in orchestrator._instruction_files():
+        name, scope, enabled, body = orchestrator._load_instruction_file(path)
+        files.append({
+            "filename": path.name,
+            "name": name,
+            "scope": scope,
+            "enabled": enabled,
+            "size": len(body),
+        })
+    return _ok(instructions=files)
+
+
+@app.get("/api/instructions/dir")
+def api_instructions_dir() -> dict[str, Any]:
+    """Return the absolute path to the global instructions directory.
+
+    Read-only: the directory is created on demand by the writers, not here.
+    """
+    return _ok(dir=str(config.INSTRUCTIONS_DIR))
+
+
+@app.post("/api/instructions")
+def api_save_instruction(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create or update an instruction Markdown file."""
+    from . import orchestrator
+
+    filename = str(payload.get("filename") or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if not filename.lower().endswith(".md"):
+        filename += ".md"
+    name = str(payload.get("name") or "").strip() or filename[:-3]
+    scope = str(payload.get("scope") or "all_projects").strip()
+    if scope not in ("orchestrator", "all_projects"):
+        raise HTTPException(status_code=400, detail="scope must be orchestrator or all_projects")
+    enabled = orchestrator._coerce_enabled(payload.get("enabled", True))
+    body = str(payload.get("body") or "").strip()
+    text = orchestrator._build_frontmatter({
+        "name": name,
+        "scope": scope,
+        "enabled": enabled,
+    }) + body + "\n"
+    path = config.INSTRUCTIONS_DIR / filename
+    config.ensure_dirs()
+    path.write_text(text, encoding="utf-8")
+    return _ok(filename=filename, name=name, scope=scope, enabled=enabled)
+
+
+@app.delete("/api/instructions/{filename}")
+def api_delete_instruction(filename: str) -> dict[str, Any]:
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = config.INSTRUCTIONS_DIR / filename
+    if path.exists() and path.suffix.lower() == ".md":
+        path.unlink()
+    return _ok(deleted=filename)
+
+
+@app.get("/api/instructions/{filename}")
+def api_get_instruction(filename: str) -> dict[str, Any]:
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = config.INSTRUCTIONS_DIR / filename
+    if not path.exists() or path.suffix.lower() != ".md":
+        raise HTTPException(status_code=404, detail="not found")
+    from . import orchestrator
+
+    name, scope, enabled, body = orchestrator._load_instruction_file(path)
+    return _ok(filename=filename, name=name, scope=scope, enabled=enabled, body=body)
+
+
+@app.patch("/api/instructions/{filename}/toggle")
+def api_toggle_instruction(filename: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = config.INSTRUCTIONS_DIR / filename
+    if not path.exists() or path.suffix.lower() != ".md":
+        raise HTTPException(status_code=404, detail="not found")
+    from . import orchestrator
+
+    name, scope, _, body = orchestrator._load_instruction_file(path)
+    enabled = orchestrator._coerce_enabled(payload.get("enabled", True))
+    text = orchestrator._build_frontmatter({
+        "name": name,
+        "scope": scope,
+        "enabled": enabled,
+    }) + body + "\n"
+    path.write_text(text, encoding="utf-8")
+    return _ok(filename=filename, enabled=enabled)
+
+
+# --------------------------------------------------------------------------- #
+# Integrated code search (ripgrep / ast-grep)
+# --------------------------------------------------------------------------- #
+@app.post("/api/search/grep")
+def api_search_grep(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Fast regex content search in a project directory."""
+    from . import grep
+
+    project_ref = payload.get("project")
+    pattern = str(payload.get("pattern") or "").strip()
+    if not pattern:
+        raise HTTPException(status_code=400, detail="pattern is required")
+    project = _resolve_project(project_ref)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    include = payload.get("include")
+    if include is not None and not isinstance(include, str):
+        raise HTTPException(status_code=400, detail="include must be a string")
+    result = grep.rg_search(
+        pattern, project["path"],
+        case_sensitive=bool(payload.get("case_sensitive", True)),
+        whole_word=bool(payload.get("whole_word", False)),
+        include=(include or "").strip() or None,
+        max_results=_clamp(payload.get("max_results", 50), 1, 200, "max_results"),
+    )
+    if not result.get("ok"):
+        detail = result.get("error", "search failed")
+        status = 400 if result.get("error_kind") == "invalid_input" else 500
+        raise HTTPException(status_code=status, detail=detail)
+    return _ok(**result)
+
+
+@app.post("/api/search/ast-grep")
+def api_search_ast_grep(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Structural code search in a project directory."""
+    from . import grep
+
+    project_ref = payload.get("project")
+    rule = str(payload.get("rule") or "").strip()
+    if not rule:
+        raise HTTPException(status_code=400, detail="rule is required")
+    project = _resolve_project(project_ref)
+    if not project:
+        raise HTTPException(status_code=404, detail="project not found")
+    result = grep.ast_grep_search(
+        rule, project["path"],
+        max_results=_clamp(payload.get("max_results", 50), 1, 200, "max_results"),
+    )
+    if not result.get("ok"):
+        detail = result.get("error", "search failed")
+        status = 400 if result.get("error_kind") == "invalid_input" else 500
+        raise HTTPException(status_code=status, detail=detail)
+    return _ok(**result)
+
+
+@app.post("/api/search/global-grep")
+def api_search_global_grep(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Fast regex content search across all registered projects (or a subset)."""
+    from . import grep, registry
+
+    pattern = str(payload.get("pattern") or "").strip()
+    if not pattern:
+        raise HTTPException(status_code=400, detail="pattern is required")
+    all_projects = registry.list_projects()
+    project_refs = payload.get("projects")
+    if project_refs is not None:
+        if not isinstance(project_refs, list):
+            raise HTTPException(status_code=400, detail="projects must be a list")
+        if not all(isinstance(p, str) for p in project_refs):
+            raise HTTPException(status_code=400, detail="projects must be a list of strings")
+        allowed = {p.strip().lower() for p in project_refs if p.strip()}
+        all_projects = [p for p in all_projects if p["slug"].lower() in allowed]
+    if not all_projects:
+        raise HTTPException(status_code=404, detail="no projects to search")
+    include = payload.get("include")
+    if include is not None and not isinstance(include, str):
+        raise HTTPException(status_code=400, detail="include must be a string")
+    result = grep.rg_search_global(
+        pattern, all_projects,
+        case_sensitive=bool(payload.get("case_sensitive", True)),
+        whole_word=bool(payload.get("whole_word", False)),
+        include=(include or "").strip() or None,
+        max_results=_clamp(payload.get("max_results", 20), 1, 200, "max_results"),
+    )
+    if not result.get("ok"):
+        detail = result.get("error", "search failed")
+        status = 400 if result.get("error_kind") == "invalid_input" else 500
+        raise HTTPException(status_code=status, detail=detail)
+    return _ok(**result)
+
+
+@app.post("/api/search/global/ast-grep")
+def api_search_global_ast_grep(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Structural code search across all registered projects (or a subset)."""
+    from . import grep, registry
+
+    rule = str(payload.get("rule") or "").strip()
+    if not rule:
+        raise HTTPException(status_code=400, detail="rule is required")
+    all_projects = registry.list_projects()
+    project_refs = payload.get("projects")
+    if project_refs is not None:
+        if not isinstance(project_refs, list):
+            raise HTTPException(status_code=400, detail="projects must be a list")
+        if not all(isinstance(p, str) for p in project_refs):
+            raise HTTPException(status_code=400, detail="projects must be a list of strings")
+        allowed = {p.strip().lower() for p in project_refs if p.strip()}
+        all_projects = [p for p in all_projects if p["slug"].lower() in allowed]
+    if not all_projects:
+        raise HTTPException(status_code=404, detail="no projects to search")
+    result = grep.ast_grep_search_global(
+        rule, all_projects,
+        max_results=_clamp(payload.get("max_results", 20), 1, 200, "max_results"),
+    )
+    if not result.get("ok"):
+        detail = result.get("error", "search failed")
+        status = 400 if result.get("error_kind") == "invalid_input" else 500
+        raise HTTPException(status_code=status, detail=detail)
+    return _ok(**result)
+
+
+@app.post("/api/search/unified")
+def api_search_unified(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Unified cross-project search: memory + grep + ast-grep."""
+    from . import search as search_mod
+
+    project_refs = payload.get("projects")
+    if project_refs is not None:
+        if not isinstance(project_refs, list):
+            raise HTTPException(status_code=400, detail="projects must be a list")
+        if not all(isinstance(p, str) for p in project_refs):
+            raise HTTPException(status_code=400, detail="projects must be a list of strings")
+    result = search_mod.unified_search(
+        query=str(payload.get("query") or ""),
+        pattern=str(payload.get("pattern") or ""),
+        rule=str(payload.get("rule") or ""),
+        projects=project_refs,
+        use_memory=bool(payload.get("memory", True)),
+        use_grep=bool(payload.get("grep", True)),
+        use_ast_grep=bool(payload.get("ast_grep", True)),
+        max_code=_clamp(payload.get("max_results", 20), 1, 200, "max_results"),
+        max_memory=_clamp(payload.get("max_memory", 6), 1, 50, "max_memory"),
+    )
+    if not result.get("ok"):
+        status = 400 if result.get("error_kind") == "invalid_input" else 500
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return _ok(**result)
+
+
+def _coerce_setting(key: str, value: Any) -> Any:
+    """Validate and coerce a setting value to the expected type."""
+    int_fields = {"port", "max_concurrent_runs", "run_timeout", "embed_dim"}
+    bool_fields = {"auto_discover_on_start", "index_docs_on_discover"}
+    list_fields = {"roots", "telegram_allowed_chats"}
+    str_fields = {
+        "host", "default_model", "default_agent", "orchestrator_model",
+        "orchestrator_agent", "ollama_host", "embed_model", "telegram_token",
+        "telegram_bot_name", "terminal",
+    }
+    if key in int_fields:
+        try:
+            v = int(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"{key} must be an integer") from exc
+        if key == "port" and not (1 <= v <= 65535):
+            raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 65535")
+        if key in ("max_concurrent_runs", "run_timeout") and v < 1:
+            raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
+        if key == "embed_dim" and v < 1:
+            raise HTTPException(status_code=400, detail=f"{key} must be positive")
+        return v
+    if key in bool_fields:
+        if isinstance(value, str):
+            return value.lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if key in list_fields:
+        if isinstance(value, str):
+            return [p.strip() for p in value.split(",") if p.strip()]
+        if isinstance(value, (list, tuple)):
+            return [str(p).strip() for p in value if str(p).strip()]
+        raise HTTPException(status_code=400, detail=f"{key} must be a list")
+    if key in str_fields:
+        return str(value).strip() if value is not None else ""
+    # Unknown field — fall back to the raw value; the caller filters by allowed keys.
+    return value
+
+
 @app.patch("/api/settings")
 def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    global SETTINGS
+    global SETTINGS, ORCH
     allowed = set(config.Settings.__dataclass_fields__)
     for key, value in payload.items():
         if key in allowed:
-            setattr(SETTINGS, key, value)
+            setattr(SETTINGS, key, _coerce_setting(key, value))
     SETTINGS.save()
-    return _ok(settings=SETTINGS.to_dict())
+    # Keep the orchestrator in sync so run_timeout, default_model, etc. apply
+    # immediately instead of requiring a server restart.
+    ORCH.settings = SETTINGS
+    data = SETTINGS.to_dict()
+    data["telegram_token"] = ""
+    data["telegram_token_set"] = bool(SETTINGS.telegram()[0])
+    data["telegram_chat_count"] = len(SETTINGS.telegram()[1])
+    return _ok(settings=data)
 
 
 # --------------------------------------------------------------------------- #
@@ -1238,6 +1712,7 @@ def api_telegram_status() -> dict[str, Any]:
         bridge_running=bridge_running,
         bridge_task=task,
         bot=data.get("result") if data.get("ok") else None,
+        platform=sys.platform,
     )
 
 
@@ -1275,7 +1750,10 @@ def api_telegram_bot(payload: dict[str, Any] = Body(default={})) -> dict[str, An
             from . import secrets as _secrets
             password = (payload.get("password") or "").strip()
             if password:
-                SETTINGS.telegram_token = _secrets.encrypt_value(token, password)
+                try:
+                    SETTINGS.telegram_token = _secrets.encrypt_value(token, password)
+                except _secrets.SecretError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
             else:
                 SETTINGS.telegram_token = token
             changed.append("token")
@@ -1293,8 +1771,8 @@ def api_telegram_bot(payload: dict[str, Any] = Body(default={})) -> dict[str, An
             try:
                 SETTINGS.telegram_token = _secrets.encrypt_value(current, password)
                 changed.append("token-encrypted")
-            except Exception:
-                pass
+            except _secrets.SecretError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     SETTINGS.save()
 
@@ -1358,6 +1836,71 @@ def api_telegram_bridge_restart() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail=str(exc))
     return _ok(restart=installer.restart_bridge_task())
+
+
+@app.post("/api/telegram/unlock")
+def api_telegram_unlock(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Unlock an encrypted Telegram token with a password.
+
+    Validates the password by decrypting the stored token, then makes it
+    available to the running process. When ``remember`` is true, the password is
+    persisted to the user's Windows environment so future launches do not need
+    to prompt again. Finally the in-process bridge is started/reloaded, and the
+    standalone ``PerunBridge`` task is restarted if the password was persisted.
+    """
+    from . import __main__ as _main, secrets as _secrets
+
+    password = (payload.get("password") or "").strip()
+    if not password:
+        raise HTTPException(status_code=400, detail="password is required")
+
+    current = SETTINGS.telegram_token
+    if not _secrets.is_encrypted(current):
+        raise HTTPException(status_code=400, detail="token is not encrypted")
+
+    if _secrets.decrypt_value(current, password) is None:
+        raise HTTPException(status_code=400, detail="incorrect password")
+
+    os.environ["PERUN_PASSWORD"] = password
+
+    persisted = False
+    if payload.get("remember"):
+        persisted = _secrets.persist_password(password)
+
+    bridge = _main.start_or_reload_in_process_bridge()
+
+    if not bridge.get("started") and not bridge.get("reloaded"):
+        # Determine whether another process owns the singleton bridge lock.
+        try:
+            from .telegram import PidLock
+            lock_held_elsewhere = PidLock.is_held(config.HOME / "telegram.pid")
+        except Exception:  # pragma: no cover - defensive
+            lock_held_elsewhere = False
+
+        if lock_held_elsewhere:
+            if persisted:
+                try:
+                    from . import installer
+                    if installer.bridge_task_exists():
+                        bridge["standalone_restarted"] = installer.restart_bridge_task()
+                except Exception as exc:  # pragma: no cover - defensive
+                    bridge["standalone_error"] = str(exc)
+            else:
+                bridge["reason"] = (
+                    "another bridge process owns the lock; enable 'Remember on this PC' "
+                    "to restart it with the password"
+                )
+        elif persisted:
+            # No in-process bridge started and no external lock; a registered
+            # standalone task may pick up the persisted password.
+            try:
+                from . import installer
+                if installer.bridge_task_exists():
+                    bridge["standalone_restarted"] = installer.restart_bridge_task()
+            except Exception as exc:  # pragma: no cover - defensive
+                bridge["standalone_error"] = str(exc)
+
+    return _ok(unlocked=True, persisted=persisted, bridge=bridge)
 
 
 @app.post("/api/telegram/send")

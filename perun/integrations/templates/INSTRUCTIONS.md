@@ -27,8 +27,14 @@ regardless of which folder this repository lives in:
 | `perun_docs_index` | (Re)index a project's `docs/*` into the vector store. |
 | `perun_get_instructions` | Read a project's custom instructions. |
 | `perun_set_instructions` | Write a project's custom instructions. |
+| `perun_list_instruction_files` | List a project's `.perun/instructions/*.md` files. |
 | `perun_get_manifest` | Read a project's `perun.md` manifest (front matter + body). |
 | `perun_set_manifest` | Write a project's `perun.md` manifest. |
+| `perun_grep` | Fast regex content search across the current project (ripgrep + fallback). |
+| `perun_ast_grep` | Structural code search across the current project (ast-grep + fallback). |
+| `perun_global_grep` | Fast regex content search across *all* registered projects (or a subset). |
+| `perun_global_ast_grep` | Structural code search across *all* registered projects (or a subset). |
+| `perun_unified_search` | Unified cross-project search: vector memory + global grep + ast-grep. |
 | `perun_start_session` | Start an agent run in a project; returns a run id. |
 | `perun_ask` | Run a prompt in a project and wait for the reply. |
 | `perun_run_status` | Status / output of a previously started run. |

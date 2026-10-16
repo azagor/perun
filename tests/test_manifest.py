@@ -127,6 +127,29 @@ def test_to_project_fields():
     assert fields["git_branch"] == "dev"
 
 
+def test_sync_manifest_routes_instructions_to_file(tmp_path):
+    """A manifest's ``instructions`` is written to .perun/instructions/default.md."""
+    from perun import orchestrator, projects, registry
+
+    manifest.save(str(tmp_path), {
+        "version": 1, "name": "SyncInstr", "instructions": "FOLLOW MANIFEST RULE",
+    }, "")
+    p = registry.add_project("SyncInstr", str(tmp_path))
+    projects.sync_manifest(p)
+
+    target = tmp_path / orchestrator.PROJECT_INSTRUCTIONS_DIR / "default.md"
+    assert target.is_file()
+    assert "FOLLOW MANIFEST RULE" in target.read_text(encoding="utf-8")
+    # Runtime instructions come from the file, not the database.
+    blocks = orchestrator._project_instruction_blocks(registry.get_project(p["slug"]))
+    assert "FOLLOW MANIFEST RULE" in "\n".join(blocks)
+    # A later sync must not clobber a dashboard edit (seed-once).
+    target.write_text("---\nname: Edited\nenabled: true\n---\n\nuser edit\n",
+                      encoding="utf-8")
+    projects.sync_manifest(registry.get_project(p["slug"]))
+    assert "user edit" in target.read_text(encoding="utf-8")
+
+
 def test_from_project_suggests_anchors(tmp_path):
     (tmp_path / "README.md").write_text("# hi", encoding="utf-8")
     project = {"name": "P", "slug": "p", "path": str(tmp_path), "kind": "opencode",

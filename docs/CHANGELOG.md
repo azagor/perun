@@ -2,6 +2,275 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.6.4 - 2026-10-16
+
+### Removed
+
+- **Legacy instruction migration is gone.** Instruction text now lives *only* on
+  disk (global `~/.config/opencode/perun/instructions/*.md`, project
+  `<project>/.perun/instructions/*.md`). Deleted
+  `orchestrator._migrate_legacy_project_instructions()` and
+  `orchestrator._migrate_legacy_text_instructions()` (plus the `.migrated`
+  marker), the `perun_migrate_project_instructions` MCP tool, and every call
+  site in `server.py` and `mcp/perun_mcp.py`.
+- **The `projects.instructions` / `projects.instructions_path` columns are
+  dropped.** `db._migrate()` removes them from older databases on next start so
+  fresh and upgraded schemas converge; `registry.add_project`/`update_project`
+  no longer accept them, and `manifest.from_project()` (export) no longer emits
+  `instructions`.
+
+### Changed
+
+- **One writer for project instruction files.**
+  `orchestrator.write_project_instruction_file()` is now the shared implementation
+  (with `overwrite=False` for seed-once semantics) used by the project API, MCP
+  tools, discovery, and manifest sync — replacing three copy-pasted helpers in
+  `discovery.py`, `projects.py`, and the MCP server.
+- **Manifest `instructions` is always routed to a file.** `projects.sync_manifest()`
+  now writes declared `instructions` to `.perun/instructions/default.md`
+  (seed-once) like discovery does, instead of writing the legacy DB column. This
+  fixes an inconsistency where discovery wrote a file but manifest sync wrote the
+  column.
+- `perun_update_project` writes instructions via the shared helper and no longer
+  touches a phantom registry field.
+- **Password persistence is encrypted at rest.** `secrets.persist_password()` (the
+  dashboard's "Remember on this PC") no longer writes `PERUN_PASSWORD` in plaintext
+  to `HKCU\Environment`; it DPAPI-encrypts the password into `<PERUN_HOME>/secret`
+  (bound to the current Windows user). `secrets._password()` still prefers the
+  `PERUN_PASSWORD` environment variable and only then falls back to the file.
+
+### Fixed
+
+- **Manifest `instructions` from HTTP/MCP is routed to a file too.** `PUT
+  /api/projects/{slug}/manifest` and the `perun_set_manifest` MCP tool now go
+  through `projects.sync_manifest()`, so declared `instructions` are seeded to
+  `.perun/instructions/default.md` instead of being silently dropped.
+- **`db._migrate()` tolerates a failed `DROP COLUMN`.** The retired-column drop is
+  wrapped, so SQLite < 3.35 (which has no `DROP COLUMN`) or a concurrent drop can
+  no longer abort `init_db()`.
+- **`perun global-instructions --clear` re-seeds the default block.** Custom files
+  are deleted *before* the default guidance is re-seeded, so global guidance is
+  never left absent.
+- **`search.unified_search()` no longer blocks on a hung backend.** The executor
+  shuts down without waiting, making the per-future timeout a real bound.
+- **`grep.py` no longer passes the unsupported `--files-from` flag.** ripgrep and
+  ast-grep have no path-list flag, so the "long command line" branch always failed
+  and silently degraded to the pure-Python fallback. Global searches now always
+  pass project paths positionally (an oversized command line still degrades safely),
+  and the dead `_path_list_file` helper is gone.
+- **A "no matches" exit code is no longer treated as a search failure.**
+  ripgrep/ast-grep exit `1` when a pattern simply matches nothing; `perun/grep.py`
+  now returns a successful empty result instead of re-running the whole search with
+  the Python fallback (previously a full directory walk on every zero-hit query).
+- **Docs & cleanup.** Documented `cmd_global_instructions` (plus `cmd_run` and
+  `cmd_encrypt_config`) in `docs/CODEMAP.md` and the `global-instructions` CLI in
+  `docs/TECHNICAL_DOCUMENTATION.md`; added `perun_list_instruction_files` to the
+  global `INSTRUCTIONS.md` tool table; removed the orphaned `.migrated` marker and
+  unused imports; renamed a stale test.
+
+## v0.6.3 - 2026-10-16
+
+### Added
+
+- **Project-local multi-file instruction system.** Projects now keep their
+  custom instructions as Markdown files under `.perun/instructions/`. Each file
+  has YAML front matter (`name`, `enabled`). Enabled files are injected into
+  every new agent session in sorted filename order.
+- **HTTP CRUD for project instruction files.** New endpoints:
+  `GET /api/projects/{slug}/instruction-files`,
+  `GET /api/projects/{slug}/instruction-files/{filename}`,
+  `POST /api/projects/{slug}/instruction-files/{filename}`,
+  `PATCH /api/projects/{slug}/instruction-files/{filename}/toggle`, and
+  `DELETE /api/projects/{slug}/instruction-files/{filename}`. Filenames are
+  validated (no `/`, `\`, `..`) and normalized to `.md`; resolved paths are checked
+  to stay within the project root.
+- **MCP tool updates for project instruction files.** `perun_get_instructions`
+  now returns the effective combined instructions by default and can read a
+  specific file when `filename` is given. `perun_set_instructions` writes to
+  `.perun/instructions/<filename>` when `filename` is provided. New tool
+  `perun_list_instruction_files` lists project-local instruction files. New tool
+  `perun_migrate_project_instructions` triggers the legacy migration explicitly.
+- **Lazy migration from legacy instructions.** `_migrate_legacy_project_instructions`
+  in `perun/orchestrator.py` moves the old inline `instructions` column or the
+  old `instructions_path` file into `.perun/instructions/legacy.md` and clears the
+  registry columns. It runs automatically on first read.
+- **Dashboard: clickable instruction file links.** Global and project instruction
+  filenames in the dashboard are now `vscode://file/` links that open the file in
+  the user's default editor. Added `GET /api/instructions/dir` to expose the
+  absolute global instructions directory, and `safeUrl()` now allows `vscode:` URLs.
+
+### Changed
+
+- `perun/orchestrator.py` now layers `_project_instruction_blocks(project)`
+  after global instructions and before the user prompt. The legacy
+  `_project_instruction_text()` helper has been removed.
+- `PUT /api/projects/{slug}/instructions` now writes to
+  `.perun/instructions/default.md` (or the supplied `filename`) and ignores
+  `instructions_path`.
+- `perun_set_instructions` no longer accepts `instructions_path` and always
+  writes to `.perun/instructions/<filename or default.md>`.
+- `perun_create_project` and `perun_update_project` write `instructions` to
+  `.perun/instructions/default.md` instead of the legacy column.
+- Project discovery writes manifest `instructions` to
+  `.perun/instructions/default.md` instead of the legacy column.
+
+### Fixed
+
+- **MCP input validation hardening.** Instruction tools now strictly validate
+  filenames: empty names, `.`, `..`, `/`, `\\`, non-`.md` extensions, and any
+  path escaping the project root are rejected with a clear `[perun]` error.
+  Global search tools reject empty patterns/rules, require `projects` to be a
+  list (or omitted), and safely coerce numeric params (`max_results`, `max_memory`,
+  `k`) before use.
+- **Instruction system hardening.** Added `_coerce_enabled()` for robust boolean
+  parsing, `MAX_INSTRUCTION_BYTES` / `MAX_TOTAL_INSTRUCTION_BYTES` caps, and
+  XML-style `<perun_instructions>` delimiters with escaping to prevent prompt
+  injection. Default-seeding and legacy-text migration now happen once at module
+  import / server lifespan, keeping `compose_prompt()` read-only. Front matter is
+  generated with `yaml.safe_dump` everywhere.
+- **Search error mapping.** `perun/grep.py` error responses now include
+  `error_kind` (`invalid_input`, `not_found`, `timeout`, `unknown`). HTTP search
+  endpoints use this for 400 vs 500 status mapping.
+- **Unified search filtering.** `_resolve_projects()` now returns `None` for an
+  explicit but empty project filter so `unified_search()` returns empty results
+  instead of searching globally.
+- **Discovery no longer clobbers instruction edits.** Manifest `instructions`
+  seed `.perun/instructions/default.md` only on first discovery; an existing file
+  (including dashboard edits) is left untouched on later scans.
+- **Memory writes no longer hold a DB connection across a network call.**
+  `memory.remember()` computes the Ollama embedding before opening the
+  connection.
+- **MCP `projects` filter.** `_validate_projects_list()` now keeps `None`
+  ("no filter") distinct from `[]` ("no projects"), fixing `perun_unified_search`
+  returning empty results when `projects` was omitted.
+- **MCP instruction front matter.** `perun_set_instructions` now builds YAML
+  front matter with `yaml.safe_dump`, so filenames with YAML-special characters
+  cannot corrupt the file.
+- **GET endpoints are read-only.** `GET /api/instructions/dir` and
+  `GET /api/projects/{slug}/instruction-files` no longer create directories.
+- **`unified_search` error kind.** Returns `error_kind` so `POST /api/search/unified`
+  maps invalid input to 400 and internal failures to 500.
+- **Robustness.** `process_tracker._kill_tree` restores the `taskkill` timeout and
+  `CREATE_NO_WINDOW` flag; `projects.register_or_update` translates a slug
+  exhaustion `ValueError` into a clean `ProjectError`; the invalid
+  `memory.project_id` foreign key (global rows use `project_id=0`) was removed.
+
+### Removed
+
+- **Legacy single-file / inline project instructions are gone.** The
+  `projects.instructions` and `projects.instructions_path` SQLite columns are kept
+  as migration sources but are no longer read or written by the orchestrator,
+  HTTP API, or MCP tools. The dashboard's **Project → Instructions** tab no longer
+  shows the "Legacy single-file instructions" editor, and the project-creation
+  wizard no longer offers a "Custom instructions" field (it was never submitted).
+  Instruction files are managed exclusively through the multi-file list.
+- **Obsolete inline global instruction fields are gone.** `Settings.orchestrator_instructions`
+  and `Settings.global_agent_instructions` have been removed from the dataclass.
+  Legacy values are still read once from `config.json` and migrated to scoped
+  Markdown files under `~/.config/opencode/perun/instructions/`, after which
+  the keys are stripped from `config.json`. The dashboard settings UI now only
+  manages the instruction file list.
+
+## v0.6.2 - 2026-10-15
+
+### Added
+
+- **Bundled code-search tools.** Perun now provides `perun_grep`,
+  `perun_ast_grep`, `perun_global_grep`, and `perun_global_ast_grep` directly
+  through the global Perun MCP server, with matching HTTP endpoints
+  `POST /api/search/grep`, `POST /api/search/ast-grep`,
+  `POST /api/search/global-grep`, and `POST /api/search/global/ast-grep`. All
+  use the native `rg` / `ast-grep` CLIs when available and fall back to
+  pure-Python implementations otherwise, so every project gets structural and
+  regex search without installing separate MCP servers. The `global_*` variants
+  search every registered project at once and accept an optional `projects` list
+  to restrict the scope.
+- **Unified cross-project search.** New `perun/search.py` fuses vector memory,
+  `perun_global_grep`, and `perun_global_ast_grep` using Reciprocal Rank Fusion,
+  exposing a single MCP tool (`perun_unified_search`) and HTTP endpoint
+  (`POST /api/search/unified`). Default agent guidance now routes agents through
+  CODEMAP → `perun_unified_search` → targeted global code search → built-in grep.
+- **RRF fusion for cross-project code search.** `perun/search.py` fuses ranked
+  ripgrep and ast-grep results with Reciprocal Rank Fusion, deduplicating by
+  project, file, and line/column before truncation.
+- **Token-efficient truncation and global match caps.** Grep, ast-grep, and
+  unified search cap total result counts and truncate long lines to keep
+  responses within token budgets.
+- **Per-source error surfacing in unified search.** Each search backend reports
+  its own success or failure; partial failures are surfaced in the response
+  instead of failing the entire query.
+
+### Fixed
+
+- **Unified search now respects the `projects` filter for vector-memory results.**
+  `_search_memory()` queries only the requested projects instead of returning
+  memory hits from every registered project.
+- **Search endpoints validate `max_results`, `projects`, and `include` types.**
+  `POST /api/search/*` handlers reject malformed arguments before invoking the
+  underlying search tools.
+
+### Changed
+
+- Default agent guidance now points to Perun's own `perun_grep` and
+  `perun_ast_grep` as the preferred search tools, with the built-in `grep` tool
+  reserved as the last resort.
+
+## v0.6.1 - 2026-10-15
+
+Security, reliability and performance fixes following a whole-system audit.
+
+### Fixed
+
+- **XSS via project links.** `safeUrl()` in the dashboard now escapes its output
+  so malicious project URLs cannot inject HTML/JS.
+- **Settings token leak.** `PATCH /api/settings` no longer echoes back the
+  Telegram token and validates/coerces numeric fields before saving.
+- **Cross-port origin bypass.** The origin guard now compares ports exactly,
+  blocking `127.0.0.1:8761` from reaching `127.0.0.1:8760`.
+- **Run finish race.** `/api/runs/{uid}/finish` now rejects transitions from
+  already-final states.
+- **Cancelled-run race.** The orchestrator re-checks cancellation after acquiring
+  the concurrency semaphore so a cancelled run never spawns a process.
+- **Memory-leak cleanup.** `EventBus.close` clears global subscribers and the
+  orchestrator prunes its internal process/reply maps when runs finalize.
+- **Database cascade consistency.** Foreign keys and `ON DELETE CASCADE` are now
+  declared for `memory`, `activity`, `doc_chunks` and `bridge_links`;
+  `registry.delete_project` also explicitly cleans related rows for existing DBs.
+- **Race-safe inserts.** Project slug insertion and `memory.remember` now use
+  explicit `INSERT OR IGNORE` patterns to avoid check-then-insert races.
+- **Ollama health caching.** The memory stats probe caches the Ollama reachability
+  result to avoid repeated failed probes.
+- **Process tracker descendant-only walk.** Marker lookup now walks descendants of
+  the known parent first and only falls back to a full-system scan when the
+  parent is gone, dramatically reducing CPU usage.
+- **Run wall-clock watchdog.** A dedicated watchdog thread kills runs that exceed
+  `run_timeout` even when stdout is blocked.
+- **Telegram message deduplication.** The bridge now drops duplicate updates
+  (same chat + message id) that can occur during long-polling reconnects.
+- **Chunk size cap.** `chunk_markdown` splits sections larger than 8 KB so no
+  single embedding row can grow unbounded.
+- **Search result caps.** Keyword fact/document queries are limited to 200
+  candidates to keep memory search responsive on large indexes.
+- **Unified search pooling.** `unified_search` fetches more candidates from each
+  source, pools them once, and truncates to `k` so a high-scoring document is
+  not displaced by lower-scoring facts.
+- **Prune retention scope.** The retention subquery in `prune()` is now scoped to
+  the same project filter so per-project pruning does not touch other projects.
+- **Settings staleness.** `PATCH /api/settings` now propagates the updated
+  settings object to the orchestrator so `run_timeout`, model fallbacks, etc.
+  apply immediately without a restart.
+- **Security headers.** The dashboard now serves `X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy` and a restrictive `Content-Security-Policy`
+  on every response.
+
+### Frontend
+
+- **SSE reconnection.** Both the per-run stream and the global activity stream
+  reconnect automatically with capped exponential backoff when the connection
+  drops.
+- **Modal close on click.** Modal backdrop dismissal now uses `click` instead of
+  `mousedown`, preventing accidental closes during text selection.
+
 ## v0.6.0 - 2026-10-15
 
 A **TUI-first workflow** for Perun. The dashboard no longer tries to stream
@@ -26,6 +295,17 @@ closes the window.
 
 ### Added
 
+- **File-based global instructions.** Markdown files under
+  `~/.config/opencode/perun/instructions/` carry Perun-wide agent guidance with
+  YAML front matter (`name`, `scope: orchestrator|all_projects`, `enabled`).
+  New APIs: `GET/POST /api/instructions`, `GET /api/instructions/{filename}`,
+  `PATCH /api/instructions/{filename}/toggle`, `DELETE /api/instructions/{filename}`.
+- **File-based project instructions.** The existing `PUT /api/projects/{slug}/instructions`
+  now accepts an optional `instructions_path` to write a project-local Markdown file
+  instead of storing the text inline.
+- **Default agent guidance block.** When no custom global instruction files exist,
+  Perun seeds one that tells every agent to prefer `docs/CODEMAP.md` anchors first,
+  then `ast-grep`/`mcp-grep`, and only fall back to built-in `grep` as a last resort.
 - **`perun/process_tracker.py`** — lifecycle tracking for externally-launched
   terminal/TUI processes. Uses `psutil` to walk process trees, resolves Windows
   Terminal child processes via an injected `PERUN_RUN_UID` environment marker,
@@ -150,6 +430,17 @@ closes the window.
   - Added `tools/migrate_global_facts.py` to move Perun-specific global facts
     onto the `perun` control-plane project. It is non-destructive by default and
     only deletes duplicate global rows when passed `--delete-duplicates`.
+  - **Encrypted Telegram tokens no longer block the launcher.** `Perun.cmd`
+    starts the dashboard even when `config.json` contains an encrypted token and
+    `PERUN_PASSWORD` is not set. The dashboard shows an unlock modal on startup,
+    validates the password via `POST /api/telegram/unlock`, and can persist it
+    to the Windows user environment with the "Remember on this PC" option.
+    `perun/secrets.py` gained `persist_password()` for the registry write.
+- **Project cards now show the Stop button immediately when a run starts.**
+  Previously `applyCardStates()` only updated the pip/class visuals; the running
+  banner and **■ Stop** button were only rendered on the next full page render.
+  `applyCardStates()` now syncs the banner and stop button against the current
+  active runs, so launching OpenCode from a card updates the card live.
 
 ## v0.5.0 - 2026-10-14
 

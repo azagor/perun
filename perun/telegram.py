@@ -238,6 +238,10 @@ class PerunTelegramBridge:
         self._allowed_runtime: List[str] = []
         self.offset: Optional[int] = None
         self._state_lock = threading.Lock()
+        # Bounded deduplication set for Telegram message IDs. Telegram can
+        # redeliver updates when long polling overlaps with a reconnect.
+        self._seen_ids: set[tuple[str, int]] = set()
+        self._seen_ids_lock = threading.Lock()
 
     def update_token(self, token: str) -> None:
         """Update the bot token used by this bridge instance."""
@@ -625,6 +629,15 @@ class PerunTelegramBridge:
             self.send(chat_id, "⛔ Not authorised.")
             return
         message_id = int(msg.get("message_id") or 0)
+        dedup_key = (chat_id, message_id)
+        with self._seen_ids_lock:
+            if dedup_key in self._seen_ids:
+                LOG.debug("skipping duplicate Telegram update %s/%s", chat_id, message_id)
+                return
+            self._seen_ids.add(dedup_key)
+            # Keep the set bounded.
+            if len(self._seen_ids) > 1000:
+                self._seen_ids = set(list(self._seen_ids)[-500:])
         if self.handle_command(chat_id, text, message_id):
             return
         self.work.put({"chat_id": chat_id, "text": text, "message_id": message_id})
@@ -723,6 +736,10 @@ def run_bridge(orch: Orchestrator) -> int:
     except KeyboardInterrupt:
         bridge.stop_event.set()
     finally:
+        try:
+            bridge.client.close()
+        except Exception:  # pragma: no cover - best-effort
+            pass
         lock.release()
         LOG.info("bridge stopped")
     return 0

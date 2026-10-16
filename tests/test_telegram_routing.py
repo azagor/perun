@@ -176,6 +176,21 @@ def test_free_form_message_routes_to_orchestrator(bridge, orch):
     assert bridge.sent[-1] == "reply::perun"
 
 
+def test_handle_update_deduplicates_messages(bridge):
+    update = {
+        "update_id": 10,
+        "message": {
+            "message_id": 42,
+            "chat": {"id": "1"},
+            "text": "duplicate me",
+        },
+    }
+    bridge._handle_update(update)
+    bridge._handle_update(update)
+    # The second identical message should be ignored before reaching the queue.
+    assert bridge.work.qsize() == 1
+
+
 def test_orchestrator_command_selects_control(bridge):
     bridge.handle_command("1", "/orchestrator", 1)
     link = registry.get_bridge_link("1")

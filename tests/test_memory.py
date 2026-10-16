@@ -54,6 +54,16 @@ def test_chunk_markdown_fallback():
     assert chunks[0][1] == "just text no headings"
 
 
+def test_chunk_markdown_caps_section_size():
+    big = "x" * (memory.MAX_CHUNK_CHARS + 100)
+    md = f"# Title\n\n## Big\n\n{big}\n"
+    chunks = memory.chunk_markdown(md)
+    assert all(len(c) <= memory.MAX_CHUNK_CHARS for _, c in chunks)
+    big_chunks = [(t, c) for t, c in chunks if t != "(top)"]
+    assert len(big_chunks) >= 2
+    assert all("Big" in t for t, _ in big_chunks)
+
+
 def test_index_text_and_search_docs_keyword():
     p = registry.add_project("P", r"C:\p")
     text = "# Doc\n\n## Request gate\n\nThe request gate prevents 429 storms.\n"

@@ -13,7 +13,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import manifest, registry
+from . import manifest, orchestrator, registry
+
 
 SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "__pycache__", ".buildozer",
@@ -90,6 +91,8 @@ def _candidate_dirs(root: Path, max_depth: int) -> list[Path]:
     out: list[Path] = []
     if not root.is_dir():
         return out
+    # Track visited (dev, ino) pairs to avoid symlink cycles.
+    visited: set[tuple[int, int]] = set()
 
     def walk(d: Path, depth: int) -> None:
         try:
@@ -99,6 +102,15 @@ def _candidate_dirs(root: Path, max_depth: int) -> list[Path]:
         for entry in entries:
             if not entry.is_dir() or entry.name in SKIP_DIRS or entry.name.startswith("."):
                 continue
+            try:
+                st = entry.stat()
+                key = (st.st_dev, st.st_ino)
+            except OSError:
+                key = None
+            if key is not None:
+                if key in visited:
+                    continue
+                visited.add(key)
             out.append(entry)
             if depth < max_depth:
                 walk(entry, depth + 1)
@@ -115,7 +127,9 @@ def scan(roots: list[str], *, max_depth: int = 1) -> list[dict[str, Any]]:
         if not rp.is_dir():
             continue
         for cand in _candidate_dirs(rp, max_depth):
-            key = os.path.normcase(str(cand.resolve()))
+            # Use absolute() rather than resolve() so symlinks under a root do
+            # not escape the configured root.
+            key = os.path.normcase(str(cand.absolute()))
             if key in seen:
                 continue
             seen.add(key)
@@ -129,14 +143,16 @@ def scan(roots: list[str], *, max_depth: int = 1) -> list[dict[str, Any]]:
     return found
 
 
-def register(info: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def register(info: dict[str, Any],
+             existing_by_path: dict[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any], bool]:
     """Insert or update a discovered project. Returns (project, created).
 
     A ``perun.md``/``perun.json`` manifest, when present, is authoritative for
     the fields it declares (name, kind, description, tags, model, agent,
     instructions, git) and its snapshot is stored for the dashboard.
     """
-    existing = registry.get_project_by_path(info["path"])
+    norm = os.path.normcase(os.path.abspath(info["path"]))
+    existing = existing_by_path.get(norm) if existing_by_path else registry.get_project_by_path(info["path"])
     caps = info.get("capabilities", {})
     cap_tags = ",".join(sorted(k for k, v in caps.items() if v))
 
@@ -148,6 +164,7 @@ def register(info: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     description = declared.get("description") or info.get("description", "")
     tags = declared.get("tags") or cap_tags
 
+    instructions = declared.get("instructions", "")
     if existing:
         updated = registry.update_project(
             existing["slug"],
@@ -157,8 +174,10 @@ def register(info: dict[str, Any]) -> tuple[dict[str, Any], bool]:
             description=description,
             tags=tags,
             **{k: v for k, v in declared.items()
-               if k in ("model", "agent", "instructions", "git_remote", "git_branch")},
+               if k in ("model", "agent", "git_remote", "git_branch")},
         )
+        orchestrator.write_project_instruction_file(
+            info["path"], instructions, overwrite=False)
         if man["found"]:
             registry.set_project_manifest(existing["slug"], manifest.snapshot(man),
                                           man["path"])
@@ -174,8 +193,9 @@ def register(info: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         tags=tags,
         model=declared.get("model", ""),
         agent=declared.get("agent", ""),
-        instructions=declared.get("instructions", ""),
     )
+    orchestrator.write_project_instruction_file(
+        info["path"], instructions, overwrite=False)
     if declared.get("git_remote") or declared.get("git_branch"):
         registry.update_project(created["slug"],
                                 git_remote=declared.get("git_remote", ""),
@@ -191,11 +211,15 @@ def register(info: dict[str, Any]) -> tuple[dict[str, Any], bool]:
 def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]:
     found = scan(roots, max_depth=max_depth)
     created, updated = [], []
+    # Build a path lookup once so registration is O(1) per candidate.
+    existing_by_path: dict[str, dict[str, Any]] = {}
+    for p in registry.list_projects():
+        existing_by_path[os.path.normcase(os.path.abspath(p["path"]))] = p
     for info in found:
         if info["kind"] == "dir":
             # Do not auto-register anonymous plain directories.
             continue
-        proj, is_new = register(info)
+        proj, is_new = register(info, existing_by_path=existing_by_path)
         (created if is_new else updated).append(proj["slug"])
     return {
         "scanned": len(found),

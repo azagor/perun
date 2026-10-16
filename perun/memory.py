@@ -30,6 +30,7 @@ from .embeddings import (
     cosine_similarity,
     embed_texts,
     extract_metadata,
+    ollama_ok,
     pack_vector,
     unpack_vector,
 )
@@ -104,47 +105,73 @@ def remember(content: str, *, project_id: int = 0, scope: str | None = None,
     pid = 0 if scope == "global" else project_id
     h = content_hash(content)
     ts = registry.now_iso()
+    # Compute the embedding before opening the connection: _embed performs an
+    # HTTP call and a DB connection must never be held across a network call.
+    emb = _embed(content, QUERY_PREFIX)
     with db.db() as conn:
+        cur = conn.execute(
+            """INSERT INTO memory
+               (project_id,scope,topic,content,embedding,source,content_hash,ts)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(scope, project_id, content_hash) DO NOTHING""",
+            (pid, scope, topic, content, emb, source, h, ts),
+        )
+        if cur.lastrowid:
+            return {"ok": True, "id": cur.lastrowid, "embedded": emb is not None}
         existing = db.one(
             conn,
             "SELECT id FROM memory WHERE scope=? AND project_id=? AND content_hash=?",
             (scope, pid, h),
         )
-        if existing:
-            return {"ok": True, "duplicate": True, "id": existing["id"]}
-        emb = _embed(content, QUERY_PREFIX)
-        cur = conn.execute(
-            """INSERT INTO memory
-               (project_id,scope,topic,content,embedding,source,content_hash,ts)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (pid, scope, topic, content, emb, source, h, ts),
-        )
-        rid = cur.lastrowid
-    return {"ok": True, "id": rid, "embedded": emb is not None}
+        return {"ok": True, "duplicate": True, "id": existing["id"] if existing else None}
 
 
 def _fact_rows(conn: sqlite3.Connection, project_id: int,
-               include_global: bool) -> list[sqlite3.Row]:
+               include_global: bool, limit: int = 200) -> list[sqlite3.Row]:
     if include_global:
         return db.rows(
             conn,
-            "SELECT * FROM memory WHERE project_id=? OR (scope='global' AND project_id=0)",
-            (project_id,),
+            "SELECT * FROM memory WHERE project_id=? OR (scope='global' AND project_id=0) LIMIT ?",
+            (project_id, limit),
         )
-    return db.rows(conn, "SELECT * FROM memory WHERE project_id=?", (project_id,))
+    return db.rows(conn, "SELECT * FROM memory WHERE project_id=? LIMIT ?", (project_id, limit))
+
+
+def _keyword_clause(columns: list[str], words: list[str]) -> tuple[str, list[str]]:
+    """Build a SQL LIKE clause and parameter list for keyword pre-filtering."""
+    patterns = [f"%{w}%" for w in words]
+    clauses = []
+    for col in columns:
+        for _ in words:
+            clauses.append(f"LOWER({col}) LIKE ?")
+    return " OR ".join(clauses), patterns * len(columns)
 
 
 def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
                  include_global: bool = True) -> list[dict[str, Any]]:
+    words = _keywords(query)
+    low_q = query.lower()
     q_emb = None
+    with db.db() as conn:
+        if words:
+            kw_clause, patterns = _keyword_clause(["content", "topic"], words)
+            if include_global:
+                sql = (
+                    f"SELECT * FROM memory WHERE "
+                    f"(project_id=? OR (scope='global' AND project_id=0)) AND ({kw_clause}) "
+                    f"LIMIT ?"
+                )
+                params = (project_id, *patterns, MAX_SEARCH_CANDIDATES)
+            else:
+                sql = f"SELECT * FROM memory WHERE project_id=? AND ({kw_clause}) LIMIT ?"
+                params = (project_id, *patterns, MAX_SEARCH_CANDIDATES)
+            rows = db.rows(conn, sql, params)
+        else:
+            rows = _fact_rows(conn, project_id, include_global, limit=MAX_SEARCH_CANDIDATES)
     try:
         q_emb = embed_texts([query], prefix=QUERY_PREFIX)[0]
     except Exception:
         q_emb = None
-    words = _keywords(query)
-    low_q = query.lower()
-    with db.db() as conn:
-        rows = _fact_rows(conn, project_id, include_global)
     scored: list[dict[str, Any]] = []
     for r in rows:
         content = r["content"] or ""
@@ -176,8 +203,17 @@ def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
 # --------------------------------------------------------------------------- #
 # Document chunks
 # --------------------------------------------------------------------------- #
+MAX_CHUNK_CHARS = 8000
+MAX_SEARCH_CANDIDATES = 200
+
+
 def chunk_markdown(text: str) -> list[tuple[str, str]]:
-    """Split Markdown into ``(section, content)`` pairs at level-2 headings."""
+    """Split Markdown into ``(section, content)`` pairs at level-2 headings.
+
+    Oversized sections are split further so that no single chunk exceeds
+    ``MAX_CHUNK_CHARS``. This keeps embedding calls bounded and avoids storing
+    pathological multi-megabyte rows.
+    """
     text = text.replace("\r\n", "\n")
     sections: list[tuple[str, str]] = []
     current_title = "(top)"
@@ -185,8 +221,30 @@ def chunk_markdown(text: str) -> list[tuple[str, str]]:
 
     def flush() -> None:
         body = "\n".join(buf).strip()
-        if body:
+        if not body:
+            return
+        if len(body) <= MAX_CHUNK_CHARS:
             sections.append((current_title, body))
+            return
+        # Split the section into roughly equal parts under the cap.
+        part_no = 1
+        start = 0
+        while start < len(body):
+            end = start + MAX_CHUNK_CHARS
+            if end >= len(body):
+                part = body[start:].strip()
+                if part:
+                    sections.append((f"{current_title} (part {part_no})", part))
+                break
+            # Try to break at a newline to keep chunks readable.
+            nl = body.rfind("\n", start, end)
+            if nl > start:
+                end = nl
+            part = body[start:end].strip()
+            if part:
+                sections.append((f"{current_title} (part {part_no})", part))
+                part_no += 1
+            start = end
 
     for line in text.splitlines():
         if line.startswith("## "):
@@ -197,7 +255,7 @@ def chunk_markdown(text: str) -> list[tuple[str, str]]:
             buf.append(line)
     flush()
     if not sections and text.strip():
-        sections.append(("(document)", text.strip()))
+        sections.append(("(document)", text.strip()[:MAX_CHUNK_CHARS]))
     return sections
 
 
@@ -205,30 +263,38 @@ def index_text(project_id: int, source_file: str, text: str) -> int:
     """Index/refresh one document's chunks. Returns number of chunks upserted."""
     ts = registry.now_iso()
     sections = chunk_markdown(text)
-    changed = 0
+    changed: list[tuple[str, str, str]] = []
     with db.db() as conn:
         for section, content in sections:
             h = content_hash(content)
             row = db.one(
                 conn,
-                """SELECT id,content_hash FROM doc_chunks
-                   WHERE project_id=? AND source_file=? AND section=?""",
+                "SELECT content_hash FROM doc_chunks WHERE project_id=? AND source_file=? AND section=?",
                 (project_id, source_file, section),
             )
             if row and row["content_hash"] == h:
                 continue
-            emb = _embed(content, DOC_PREFIX)
+            changed.append((section, content, h))
+        if not changed:
+            return 0
+        contents = [c for _, c, _ in changed]
+        try:
+            vectors = embed_texts(contents, prefix=DOC_PREFIX)
+        except Exception:
+            vectors = [None] * len(contents)
+        for (section, content, h), vec in zip(changed, vectors):
+            emb = pack_vector(vec) if vec is not None else None
             conn.execute(
                 """INSERT INTO doc_chunks
                    (project_id,source_file,section,content,embedding,content_hash,updated_at)
                    VALUES (?,?,?,?,?,?,?)
                    ON CONFLICT(project_id,source_file,section) DO UPDATE SET
-                     content=excluded.content, embedding=excluded.embedding,
+                     content=excluded.content,
+                     embedding=COALESCE(excluded.embedding, doc_chunks.embedding),
                      content_hash=excluded.content_hash, updated_at=excluded.updated_at""",
                 (project_id, source_file, section, content, emb, h, ts),
             )
-            changed += 1
-    return changed
+    return len(changed)
 
 
 def index_project_docs(project_id: int) -> dict[str, Any]:
@@ -256,17 +322,29 @@ def index_project_docs(project_id: int) -> dict[str, Any]:
 
 def search_docs(query: str, project_id: int = 0, *, top_k: int = 6,
                 all_projects: bool = False) -> list[dict[str, Any]]:
+    words = _keywords(query)
     q_emb = None
+    with db.db() as conn:
+        if words:
+            kw_clause, patterns = _keyword_clause(["content"], words)
+            if all_projects:
+                sql = f"SELECT * FROM doc_chunks WHERE {kw_clause} LIMIT ?"
+                params = (*patterns, MAX_SEARCH_CANDIDATES)
+            else:
+                sql = f"SELECT * FROM doc_chunks WHERE project_id=? AND ({kw_clause}) LIMIT ?"
+                params = (project_id, *patterns, MAX_SEARCH_CANDIDATES)
+            rows = db.rows(conn, sql, params)
+        else:
+            if all_projects:
+                rows = db.rows(conn, "SELECT * FROM doc_chunks LIMIT ?",
+                               (MAX_SEARCH_CANDIDATES,))
+            else:
+                rows = db.rows(conn, "SELECT * FROM doc_chunks WHERE project_id=? LIMIT ?",
+                               (project_id, MAX_SEARCH_CANDIDATES))
     try:
         q_emb = embed_texts([query], prefix=QUERY_PREFIX)[0]
     except Exception:
         q_emb = None
-    words = _keywords(query)
-    with db.db() as conn:
-        if all_projects:
-            rows = db.rows(conn, "SELECT * FROM doc_chunks")
-        else:
-            rows = db.rows(conn, "SELECT * FROM doc_chunks WHERE project_id=?", (project_id,))
     scored: list[dict[str, Any]] = []
     for r in rows:
         content = r["content"] or ""
@@ -302,14 +380,17 @@ def unified_search(query: str, project_id: int = 0, *, k: int = 6,
                    include_facts: bool = True, include_docs: bool = True,
                    include_global: bool = True,
                    all_projects: bool = False) -> list[dict[str, Any]]:
-    merged: list[dict[str, Any]] = []
+    # Fetch more candidates from each source than the final k, then pool and
+    # truncate once so a high-scoring doc is not displaced by lower-scoring facts.
+    candidates: list[dict[str, Any]] = []
     if include_facts:
-        merged += search_facts(query, project_id, top_k=k,
-                               include_global=include_global)
+        candidates += search_facts(query, project_id, top_k=k * 2,
+                                   include_global=include_global)
     if include_docs:
-        merged += search_docs(query, project_id, top_k=k, all_projects=all_projects)
-    merged.sort(key=lambda x: x["score"], reverse=True)
-    return merged[:k]
+        candidates += search_docs(query, project_id, top_k=k * 2,
+                                  all_projects=all_projects)
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:k]
 
 
 def stats(project_id: int | None = None) -> dict[str, Any]:
@@ -327,7 +408,7 @@ def stats(project_id: int | None = None) -> dict[str, Any]:
         embedded = db.one(
             conn, "SELECT COUNT(*) c FROM memory WHERE embedding IS NOT NULL")["c"]
         out["facts_embedded"] = embedded
-        out["ollama_ok"] = _embed("ping", QUERY_PREFIX) is not None
+        out["ollama_ok"] = ollama_ok()
         return out
 
 
@@ -353,10 +434,13 @@ def prune(project_id: int | None = None, keep: int = 200,
     with db.db() as conn:
         where = "project_id=?" if project_id else "1"
         params: tuple = (project_id,) if project_id else ()
+        # Scope the retention window to rows the outer DELETE could actually
+        # delete (same filter, excluding global facts).
+        retention_where = f"{where} AND scope!='global'"
         cur = conn.execute(
             f"DELETE FROM memory WHERE {where} AND scope!='global' AND ts < ? "
-            f"AND id NOT IN (SELECT id FROM memory ORDER BY id DESC LIMIT ?)",
-            (*params, cutoff, keep))
+            f"AND id NOT IN (SELECT id FROM memory WHERE {retention_where} ORDER BY id DESC LIMIT ?)",
+            (*params, cutoff, *params, keep))
         return cur.rowcount
 
 

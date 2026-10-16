@@ -109,14 +109,29 @@ class ProcessTracker:
             parent = psutil.Process(parent_pid)
         except psutil.NoSuchProcess:
             parent = None
-        # 1) Marker-based lookup. The frontend injects PERUN_RUN_UID=<uid> into the
-        # shell command; any process in the TUI tree (cmd, pwsh, opencode, …)
-        # will carry it in its environment or command line.
-        if run_uid:
-            marker = f"PERUN_RUN_UID={run_uid}"
+        # Walk descendants of the known parent first; fall back to a full
+        # scan only when the parent is gone or no descendant matches.
+        candidate_pids: list[int] = []
+        fallback_to_all = False
+        if parent:
+            try:
+                candidate_pids = [c.pid for c in parent.children(recursive=True)]
+            except Exception:
+                candidate_pids = []
+            if not candidate_pids:
+                fallback_to_all = True
+        else:
+            fallback_to_all = True
+
+        def _scan_marker(pids: list[int]) -> list[tuple[int, Any]]:
+            """Return processes carrying the PERUN_RUN_UID marker."""
             matching: list[tuple[int, Any]] = []
-            for p in psutil.process_iter():
+            if not run_uid:
+                return matching
+            marker = f"PERUN_RUN_UID={run_uid}"
+            for pid in pids:
                 try:
+                    p = psutil.Process(pid)
                     if run_uid in (p.environ() or {}).get("PERUN_RUN_UID", ""):
                         matching.append((0, p))
                         continue
@@ -125,33 +140,52 @@ class ProcessTracker:
                         matching.append((1, p))
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
-            if matching:
-                # Prefer the process that has the most descendants — usually the
-                # shell or WindowsTerminal tab that owns the TUI.
-                def _depth(proc: Any) -> int:
-                    d = 0
-                    try:
-                        for _ in proc.children(recursive=True):
-                            d += 1
-                    except Exception:
-                        pass
-                    return d
-                matching.sort(key=lambda x: (x[0], -_depth(x[1])))
-                return matching[0][1].pid
+            return matching
+
+        def _best_marker_match(pids: list[int]) -> int | None:
+            matching = _scan_marker(pids)
+            if not matching:
+                return None
+            def _depth(proc: Any) -> int:
+                d = 0
+                try:
+                    for _ in proc.children(recursive=True):
+                        d += 1
+                except Exception:
+                    pass
+                return d
+            matching.sort(key=lambda x: (x[0], -_depth(x[1])))
+            return matching[0][1].pid
+
+        result = _best_marker_match(candidate_pids)
+        if result is not None:
+            return result
+        if fallback_to_all:
+            result = _best_marker_match([p.pid for p in psutil.process_iter()])
+            if result is not None:
+                return result
+
         # 2) Windows Terminal parent/creation-time heuristic.
         if "wt" in shell:
             cutoff = entry.get("started_at", time.time()) - 5
+            pids_to_check = candidate_pids if candidate_pids else (
+                [p.pid for p in psutil.process_iter()] if fallback_to_all else [])
             candidates = []
-            for p in psutil.process_iter(["pid", "name", "ppid", "create_time"]):
+            for pid in pids_to_check:
                 try:
-                    if "WindowsTerminal" not in (p.info.get("name") or ""):
+                    p = psutil.Process(pid)
+                    if "WindowsTerminal" not in (p.name() or ""):
                         continue
-                    if p.info.get("ppid") == parent_pid:
-                        candidates.append((0, p.info["pid"], p))
-                    elif parent and p.info.get("ppid") == parent.pid:
-                        candidates.append((1, p.info["pid"], p))
-                    elif p.info.get("create_time", 0) >= cutoff:
-                        candidates.append((2, p.info["pid"], p))
+                    create_time = p.create_time()
+                    ppid = p.ppid()
+                    rank = 2
+                    if ppid == parent_pid:
+                        rank = 0
+                    elif parent and ppid == parent.pid:
+                        rank = 1
+                    elif create_time < cutoff:
+                        continue
+                    candidates.append((rank, pid, p))
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
             # Prefer candidates that actually have a shell child.
@@ -171,8 +205,6 @@ class ProcessTracker:
             if candidates:
                 return sorted(candidates, key=lambda x: x[0])[0][1]
         return None
-
-
 
     def _kill_tree(self, pid: int) -> None:
         if not _HAS_PSUTIL:

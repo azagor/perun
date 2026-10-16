@@ -112,3 +112,24 @@ def test_register_merges_manifest(workdir):
     stored = registry.get_project_manifest(proj["slug"])
     assert stored["data"]["name"] == "Fancy Name"
     assert "body" in stored["body"]
+
+
+def test_register_seeds_manifest_instructions_once(workdir):
+    """Manifest instructions create default.md, but re-discovery never clobbers it."""
+    p = _mk(workdir / "manifested", "opencode.json")
+    (p / "perun.md").write_text(
+        "---\nname: Manifested\ninstructions: Always run tests.\n---\n",
+        encoding="utf-8",
+    )
+    discovery.register(discovery.detect(p))
+    target = p / ".perun" / "instructions" / "default.md"
+    assert target.is_file()
+    assert "Always run tests." in target.read_text(encoding="utf-8")
+
+    # A user edit must survive the next discovery pass.
+    target.write_text(
+        "---\nname: Edited\nenabled: true\n---\n\nuser edits win\n",
+        encoding="utf-8",
+    )
+    discovery.register(discovery.detect(p))
+    assert "user edits win" in target.read_text(encoding="utf-8")

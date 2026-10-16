@@ -34,32 +34,37 @@ def add_project(
     model: str = "",
     agent: str = "",
     color: str = "",
-    instructions: str = "",
 ) -> dict[str, Any]:
-    slug = slugify(name)
+    base_slug = slugify(name)
     ts = now_iso()
-    with db.db() as conn:
-        # ensure the slug is unique
-        base, n = slug, 1
-        while db.one(conn, "SELECT 1 FROM projects WHERE slug=?", (slug,)):
-            n += 1
-            slug = f"{base}-{n}"
-        conn.execute(
-            """INSERT INTO projects
-               (slug,name,path,root,kind,description,tags,model,agent,color,
-                instructions,created_at,updated_at,last_seen_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (slug, name, path, root, kind, description, tags, model, agent,
-             color, instructions, ts, ts, ts),
-        )
-        row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
-        return project_dict(conn, row)
+    # Suffixes start at 2 to match the historical behavior (same → same-2).
+    candidates = [base_slug] + [f"{base_slug}-{n}" for n in range(2, 22)]
+    for slug in candidates:
+        try:
+            with db.db() as conn:
+                existing = db.one(conn, "SELECT 1 FROM projects WHERE slug=?", (slug,))
+                if existing:
+                    continue
+                conn.execute(
+                    """INSERT INTO projects
+                       (slug,name,path,root,kind,description,tags,model,agent,color,
+                        created_at,updated_at,last_seen_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (slug, name, path, root, kind, description, tags, model, agent,
+                     color, ts, ts, ts),
+                )
+                row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
+                return project_dict(conn, row)
+        except sqlite3.IntegrityError:
+            # Another transaction won the race for this slug; try the next candidate.
+            continue
+    raise ValueError("could not generate a unique project slug")
 
 
 def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
     allowed = {
         "name", "path", "root", "kind", "description", "tags", "model",
-        "agent", "favorite", "enabled", "color", "instructions",
+        "agent", "favorite", "enabled", "color",
         "manifest", "manifest_path", "manifest_loaded_at",
         "git_remote", "git_branch", "git_provider",
     }
@@ -108,7 +113,11 @@ def get_project_by_path(path: str) -> dict[str, Any] | None:
     return None
 
 
-def project_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
+                 session_count: int | None = None,
+                 memory_count: int | None = None,
+                 chunk_count: int | None = None,
+                 last_activity: dict[str, Any] | None = None) -> dict[str, Any]:
     pid = row["id"]
     d = dict(row)
     d["favorite"] = bool(d.get("favorite"))
@@ -128,32 +137,80 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
             d["manifest"] = {}
     else:
         d["manifest"] = {}
-    d["session_count"] = db.one(
+    d["session_count"] = session_count if session_count is not None else db.one(
         conn, "SELECT COUNT(*) c FROM sessions WHERE project_id=?", (pid,)
     )["c"]
-    d["memory_count"] = db.one(
+    d["memory_count"] = memory_count if memory_count is not None else db.one(
         conn, "SELECT COUNT(*) c FROM memory WHERE project_id=?", (pid,)
     )["c"]
-    d["chunk_count"] = db.one(
+    d["chunk_count"] = chunk_count if chunk_count is not None else db.one(
         conn, "SELECT COUNT(*) c FROM doc_chunks WHERE project_id=?", (pid,)
     )["c"]
-    last = db.one(
-        conn, "SELECT ts,kind,message FROM activity WHERE project_id=? ORDER BY id DESC LIMIT 1",
-        (pid,),
-    )
-    d["last_activity"] = dict(last) if last else None
+    if last_activity is not None:
+        d["last_activity"] = last_activity
+    else:
+        last = db.one(
+            conn, "SELECT ts,kind,message FROM activity WHERE project_id=? ORDER BY id DESC LIMIT 1",
+            (pid,),
+        )
+        d["last_activity"] = dict(last) if last else None
     return d
 
 
 def list_projects() -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(conn, "SELECT * FROM projects ORDER BY favorite DESC, name COLLATE NOCASE")
-        return [project_dict(conn, r) for r in rows]
+        if not rows:
+            return []
+        pids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(pids))
+        sessions_counts = dict(conn.execute(
+            f"SELECT project_id, COUNT(*) FROM sessions WHERE project_id IN ({placeholders}) GROUP BY project_id",
+            pids,
+        ))
+        memory_counts = dict(conn.execute(
+            f"SELECT project_id, COUNT(*) FROM memory WHERE project_id IN ({placeholders}) GROUP BY project_id",
+            pids,
+        ))
+        chunk_counts = dict(conn.execute(
+            f"SELECT project_id, COUNT(*) FROM doc_chunks WHERE project_id IN ({placeholders}) GROUP BY project_id",
+            pids,
+        ))
+        last_activities: dict[int, dict[str, Any]] = {}
+        for r in conn.execute(
+            f"SELECT project_id, ts, kind, message FROM activity WHERE project_id IN ({placeholders}) ORDER BY id DESC",
+            pids,
+        ):
+            if r["project_id"] not in last_activities:
+                last_activities[r["project_id"]] = dict(r)
+        return [
+            project_dict(
+                conn, r,
+                session_count=sessions_counts.get(r["id"], 0),
+                memory_count=memory_counts.get(r["id"], 0),
+                chunk_count=chunk_counts.get(r["id"], 0),
+                last_activity=last_activities.get(r["id"]),
+            )
+            for r in rows
+        ]
 
 
 def delete_project(slug: str) -> bool:
     with db.db() as conn:
-        cur = conn.execute("DELETE FROM projects WHERE slug=?", (slug,))
+        row = db.one(conn, "SELECT id FROM projects WHERE slug=?", (slug,))
+        if not row:
+            return False
+        pid = row["id"]
+        # Explicit cleanup for related rows. SQLite FKs are not enabled by default
+        # (global facts use project_id=0), so delete every related table manually.
+        conn.execute("DELETE FROM memory WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM activity WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM doc_chunks WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM tasks WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM runs WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM sessions WHERE project_id=?", (pid,))
+        conn.execute("UPDATE bridge_links SET project_id=NULL, session_pk=NULL WHERE project_id=?", (pid,))
+        cur = conn.execute("DELETE FROM projects WHERE id=?", (pid,))
         return cur.rowcount > 0
 
 

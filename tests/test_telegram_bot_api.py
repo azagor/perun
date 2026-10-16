@@ -13,6 +13,8 @@ Network calls are mocked — these tests must never contact Telegram.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,7 +26,7 @@ def client(monkeypatch):
     server.SETTINGS.auto_discover_on_start = False
     # Settings.telegram() falls back to the environment, and this machine has a
     # real bot in TELEGRAM_BOT_TOKEN — clear it so every test is deterministic.
-    for var in ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TG_CHAT_ID"):
+    for var in ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TG_CHAT_ID", "PERUN_PASSWORD"):
         monkeypatch.delenv(var, raising=False)
     # Start from a known-clean bot config and restore it afterwards.
     saved = (server.SETTINGS.telegram_token,
@@ -233,6 +235,92 @@ def test_bridge_restart_reloads_in_process_bridge(client, monkeypatch):
     r = client.post("/api/telegram/bridge/restart")
     assert r.status_code == 200
     assert r.json()["restart"]["reloaded"] is True
+
+
+def test_unlock_rejects_missing_password(client):
+    r = client.post("/api/telegram/unlock", json={})
+    assert r.status_code == 400
+    assert "password is required" in r.json()["detail"]
+
+
+def test_unlock_rejects_unencrypted_token(client):
+    from perun import server
+
+    server.SETTINGS.telegram_token = "plain-token"
+    r = client.post("/api/telegram/unlock", json={"password": "pw"})
+    assert r.status_code == 400
+    assert "token is not encrypted" in r.json()["detail"]
+
+
+def test_unlock_rejects_wrong_password(client, monkeypatch):
+    from perun import secrets, server
+
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+    server.SETTINGS.telegram_token = secrets.encrypt_value("abc123", "rightpw")
+    r = client.post("/api/telegram/unlock", json={"password": "wrongpw"})
+    assert r.status_code == 400
+    assert "incorrect password" in r.json()["detail"]
+
+
+def test_unlock_decrypts_and_sets_env(client, monkeypatch):
+    from perun import secrets, server, __main__ as main_module
+
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+    server.SETTINGS.telegram_token = secrets.encrypt_value("abc123", "rightpw")
+    monkeypatch.setattr(main_module, "start_or_reload_in_process_bridge",
+                        lambda: {"started": True})
+    monkeypatch.setattr(secrets, "persist_password", lambda pw: False)
+
+    r = client.post("/api/telegram/unlock",
+                    json={"password": "rightpw", "remember": False})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["unlocked"] is True
+    assert body["persisted"] is False
+    assert body["bridge"]["started"] is True
+    assert os.environ.get("PERUN_PASSWORD") == "rightpw"
+
+
+def test_unlock_remembers_password_when_requested(client, monkeypatch):
+    from perun import secrets, server, __main__ as main_module
+
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+    server.SETTINGS.telegram_token = secrets.encrypt_value("abc123", "rightpw")
+    monkeypatch.setattr(main_module, "start_or_reload_in_process_bridge",
+                        lambda: {"started": True})
+    persist_calls = []
+    monkeypatch.setattr(secrets, "persist_password", lambda pw: persist_calls.append(pw) or True)
+
+    r = client.post("/api/telegram/unlock",
+                    json={"password": "rightpw", "remember": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["persisted"] is True
+    assert persist_calls == ["rightpw"]
+
+
+def test_unlock_reports_reason_when_bridge_lock_held_without_persist(client, monkeypatch):
+    from perun import secrets, server, __main__ as main_module, telegram
+
+    monkeypatch.setattr(secrets, "_password", lambda: None)
+    server.SETTINGS.telegram_token = secrets.encrypt_value("abc123", "rightpw")
+    monkeypatch.setattr(main_module, "start_or_reload_in_process_bridge",
+                        lambda: {"started": False})
+    monkeypatch.setattr(telegram.PidLock, "is_held", lambda path, name=None: True)
+    monkeypatch.setattr(secrets, "persist_password", lambda pw: False)
+
+    r = client.post("/api/telegram/unlock",
+                    json={"password": "rightpw", "remember": False})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["persisted"] is False
+    assert "another bridge process owns the lock" in body["bridge"]["reason"]
+
+
+def test_status_includes_platform(client):
+    import sys
+
+    st = client.get("/api/telegram/status").json()
+    assert st["platform"] == sys.platform
 
 
 def test_config_token_overrides_env(client, monkeypatch):

@@ -318,8 +318,7 @@ def to_project_fields(data: dict[str, Any]) -> dict[str, Any]:
 def from_project(project: dict[str, Any]) -> dict[str, Any]:
     """Build manifest data from a registry project row (used by export)."""
     data: dict[str, Any] = {"version": SCHEMA_VERSION}
-    for key in ("name", "slug", "kind", "description", "model", "agent",
-                "instructions"):
+    for key in ("name", "slug", "kind", "description", "model", "agent"):
         value = project.get(key)
         if value:
             data[key] = value

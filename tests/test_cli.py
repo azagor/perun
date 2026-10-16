@@ -67,3 +67,24 @@ def test_run_command_starts_session_for_project(monkeypatch, capsys):
     rc = cli.main(["run", "p", "hello"])
     assert rc == 0
     assert calls[-1] == ("p", "hello")
+
+
+def test_global_instructions_clear_reseeds_default(monkeypatch, tmp_path):
+    """``--clear`` removes custom files but the default guidance is re-seeded."""
+    from perun import config, orchestrator
+
+    instr = tmp_path / "global"
+    monkeypatch.setattr(config, "INSTRUCTIONS_DIR", instr)
+
+    # Seed the default block plus a user-authored file.
+    orchestrator._seed_default_instructions()
+    (instr / "custom.md").write_text(
+        "---\nname: Custom\nscope: all_projects\nenabled: true\n---\n\nCUSTOM\n",
+        encoding="utf-8",
+    )
+    assert (instr / "default-agent-guidance.md").is_file()
+
+    rc = cli.main(["global-instructions", "--clear"])
+    assert rc == 0
+    files = {p.name for p in instr.glob("*.md")}
+    assert files == {"default-agent-guidance.md"}
