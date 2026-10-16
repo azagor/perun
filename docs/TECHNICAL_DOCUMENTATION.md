@@ -19,7 +19,10 @@ and the `perun_set_manifest` MCP tool are routed through `projects.sync_manifest
 < 3.35); and the persisted password is now Windows **DPAPI**-encrypted in `<PERUN_HOME>/secret`
 instead of plaintext in the user environment. Builds on v0.6.2 (bundled `perun_grep` /
 `perun_ast_grep` code-search tools and matching HTTP endpoints, TUI runs, reusable tasks) and
-v0.6.3 (multi-file instruction system).
+v0.6.3 (multi-file instruction system). v0.6.4 also hardens the bundled code-search layer: a
+ripgrep/ast-grep "no matches" exit code (`1`) is now a successful empty result instead of
+triggering the pure-Python fallback, and the unsupported `--files-from` flag is gone (global
+searches pass project paths positionally). `perun.__version__` reports `0.6.4`.
 
 ---
 
@@ -438,6 +441,39 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 `GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
 literal path is not swallowed by the parameterised route.
 
+### Integrated code search
+
+The `/api/search/*` endpoints and their MCP equivalents are backed by a bundled
+search layer (`perun/grep.py` for a single backend, `perun/search.py` for fusion),
+so projects get code search without installing extra MCP servers. Every backend
+degrades to a pure-Python implementation when its CLI is missing.
+
+| Backend | Fast path | Fallback | Match shape |
+|---|---|---|---|
+| Regex content | `ripgrep` (`rg --json`) | `grep._python_grep` | `{file,line,column,text,match}` |
+| Structural/AST | `ast-grep` (`sg run --lang py`, or `sg scan` for YAML rules) | `grep._python_ast_search` (Python) | same |
+| Semantic | Ollama embeddings via `memory` | keyword + recency | `{project,file,section,text,score}` |
+
+* **Result envelope.** Every match is normalized to `{ok, matches:[…], tool}` (plus
+  `projects_searched` for the global variants); `tool` names the backend actually
+  used (`rg` / `rg-global` / `python-grep` / `ast-grep` / `ast-grep-global` /
+  `python-ast` / `python-ast-global`).
+* **Exit-code semantics.** `rg` and `sg` exit `0` with matches and `1` with none;
+  an exit of `1` is a **successful empty result**, not an error. Any other non-zero
+  code (e.g. `2` for a bad flag, `8` for an invalid ast-grep rule) falls through to
+  the Python fallback, and an invalid rule surfaces as `error_kind: "invalid_input"`.
+* **Positional paths only.** Both tools receive project directories as positional
+  arguments — neither supports a `--files-from` path-list flag. A command line too
+  long for the OS simply fails and is served by the Python fallback.
+* **Caps & token frugality.** `MAX_RESULTS = 200`, lines truncated to 160 chars, and
+  subprocess output capped at 16 MiB; matches are de-duplicated before returning.
+* **Unified fusion.** `search.unified_search()` runs the active backends in parallel
+  (a 3-worker `ThreadPoolExecutor`, 60 s per backend) and fuses the ripgrep and
+  ast-grep rankings with **Reciprocal Rank Fusion** (`_rrf_fuse`, `k = 60`),
+  deduplicating by `(project, file, line[, column])`. Memory results are returned
+  separately. The executor is shut down **without waiting**, so a hung backend
+  cannot block the response past its per-future timeout.
+
 ### SSE notes
 
 SSE endpoints are `async` and wrap the blocking `EventBus`/`Orchestrator.stream`
@@ -583,7 +619,8 @@ tools:
   (structural/AST search), plus the cross-project `perun_global_grep` and
   `perun_global_ast_grep`, so projects get code search without extra MCP
   configuration. `perun_unified_search` is the preferred bundled search tool,
-  fusing memory, ripgrep, and ast-grep behind a single MCP call.
+  fusing memory, ripgrep, and ast-grep behind a single MCP call; code results from
+  ripgrep and ast-grep are combined with Reciprocal Rank Fusion (see §8).
 
 `_resolve_project()` accepts a slug, a path, or `None` — for `None` it walks up
 from the current working directory to the nearest registered project. Project
@@ -668,6 +705,42 @@ Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
 ---
 
 ## 14. Revision history
+
+### 2026-10-16 — v0.6.4: on-disk instructions, DPAPI secrets & bundled search
+
+* **Instruction text lives only on disk.** Project instructions are Markdown files
+  under `<project>/.perun/instructions/` (global under
+  `~/.config/opencode/perun/instructions/`), each with `name`/`scope`/`enabled`
+  front matter; enabled files are injected into new sessions in sorted filename
+  order. Removed the legacy `projects.instructions` / `projects.instructions_path`
+  columns, both one-off migrations, the `.migrated` marker, and the
+  `perun_migrate_project_instructions` MCP tool. `db._migrate()` drops the retired
+  columns from older databases. `orchestrator.write_project_instruction_file()` is
+  the single writer; `projects.sync_manifest()` is the single manifest-merge path,
+  and manifest-declared `instructions` are seeded once to `default.md` — now also
+  from the HTTP `PUT …/manifest` and the `perun_set_manifest` MCP tool.
+* **DPAPI-encrypted remembered password.** `secrets.persist_password()` (the
+  dashboard's "Remember on this PC") now DPAPI-encrypts the password into
+  `<PERUN_HOME>/secret` (bound to the current Windows user) instead of writing a
+  plaintext `PERUN_PASSWORD` to the user environment.
+* **Robustness fixes.** `db._migrate()` tolerates a failed `DROP COLUMN` (SQLite
+  < 3.35); `search.unified_search()` no longer blocks on a hung backend (the
+  executor is shut down without waiting); `perun global-instructions --clear`
+  deletes custom files before re-seeding the default guidance block.
+* **Bundled code search (landed in v0.6.2).** `perun/grep.py` + `perun/search.py`
+  add ripgrep/ast-grep search with pure-Python fallbacks; new `/api/search/*`
+  endpoints and the MCP tools `perun_grep`, `perun_ast_grep`, `perun_global_grep`,
+  `perun_global_ast_grep`, and `perun_unified_search` (see §8 and §11).
+* **Search correctness hardening.** Dropped the unsupported `--files-from` flag
+  (neither ripgrep nor ast-grep supports it) so global searches pass project paths
+  positionally; a ripgrep/ast-grep "no matches" exit code (`1`) is now a successful
+  empty result instead of re-running the entire search with the Python fallback;
+  removed the dead `_path_list_file` helper. Added regression tests for both.
+* **Version.** Bumped `perun.__version__` to `0.6.4` to match the changelog;
+  `/api/health` and the OpenAPI title report it.
+* **Docs.** Fixed a stray `)` before a `### Added` heading in `docs/CHANGELOG.md`
+  and documented the search layer here (§8).
+* **Tests:** full suite at **377 passed** (+6 regression tests).
 
 ### 2026-10-14 — Agent Console & session-start improvements
 
