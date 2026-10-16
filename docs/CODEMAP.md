@@ -79,6 +79,17 @@ Shared project creation/registration, used by **both** the HTTP wizard
 (`POST /api/projects`) and the MCP tools.
 * `ProjectError`, `name_from_repo()`, `sync_manifest()`, `register_or_update()`,
   `create()` (the `existing` / `new` / `clone` methods + optional git/index steps).
+* `OPENCODE_CONFIG_NAMES`, `sync_opencode_config()` — mirror a project's
+  `model` / `agent` override into its `opencode.json[c]` (`model` /
+  `default_agent` keys) so the OpenCode TUI honors the dashboard setting.
+
+### `perun/providers.py`
+Read-only LLM provider discovery and status. Perun never stores credentials;
+OpenCode's own ``auth`` command is the source of truth.
+* `list_providers()` — ``GET /api/providers``; runs ``opencode auth list --format json``
+  and enriches entries with ``connected`` / ``status``. Results are cached.
+* `logout_provider()` — ``POST /api/providers/{id}/logout``; runs
+  ``opencode auth logout`` and validates the provider id.
 
 ### `perun/embeddings.py`
 Ollama transport + vector math (project-agnostic).
@@ -194,7 +205,7 @@ Discovery of OpenCode agent skills and tools available to a project.
 Discover the MCP servers OpenCode is configured to load, and live-probe them on
 demand. Perun only *reads* the config here (the global installer owns Perun's own
 entry); probing never happens automatically.
-* `global_config_files()`, `project_config_files()`, `_read_config()` — locate and
+* `global_config_files()`, `project_config_files()`, `read_opencode_config()` — locate and
   parse ``~/.config/opencode/opencode.json[c]`` plus each project's
   ``opencode.json[c]`` (comments *and* trailing commas tolerated); a file that
   cannot be parsed is returned as an error, not silently treated as empty.
@@ -341,6 +352,8 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
   wizard, folder-browser, structured-editor, manifest, `modelSelect`, chat, and
   the storm/FX styles (sigil eyes, storm meter, `.is-awake` / `.is-working`,
   `.card-pip`, `.perun-flash`), with a `prefers-reduced-motion` guard.
+* `web/js/prompt_chain.js` — `buildPromptChain()` (Agent Console prompt/task
+  composition, unit-testable).
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
   `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `terminalId()`,
   `buildCommand()`, `launchInTerminal()`, the `perunFx` canvas engine (`flash()`),
@@ -353,7 +366,7 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
   `promptForUnlockPassword()` (dashboard modal for encrypted Telegram tokens).
   The MCP Servers view (`mcpCard()`, `probeMcp()`, `renderMcpProbe()`) lists the
   configured MCP servers and live-probes them on demand.
-  Project cards (`projectCard()`) render `🖵 OpenCode` (primary TUI launch),
+  Project cards (`projectCard()`) render `▶ Run` (primary TUI launch),
   `■ Stop`, `Open`, `Index docs`, and delete actions for every project; the
   orchestrator chat lives only in the sidebar (`Orchestrator Chat`).
 * `web/assets/Cinzel.ttf` — heading font (shared with the company site).
@@ -364,6 +377,24 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
 
 ## Root files
 
+* `installer/` — Windows installer source.
+  * `PerunSetup.iss` — Inno Setup script that produces `PerunSetup.exe`.
+  * `install-prereqs.ps1` — prerequisite installer (Python, git, OpenCode CLI,
+    Ollama) and Perun machine setup; invoked by the wizard.
+  * `uninstall.ps1` — reverses the global OpenCode integration and removes the
+    `PerunBridge` task during uninstall.
+  * `build.ps1` — compiles `installer\Output\PerunSetup.exe`.
+  * `sign.ps1` — signs `PerunSetup.exe` with `signtool`. Supports an external
+    PFX via parameters or the `PERUN_SIGN_PFX` / `PERUN_SIGN_PFX_BASE64` /
+    `PERUN_SIGN_PASSWORD` environment variables; falls back to a self-signed
+    certificate when none is provided.
+* `.github/workflows/release.yml` — GitHub Actions workflow that builds and
+  signs `PerunSetup.exe` on `v*` tags and attaches it to the release.
+* `setup.ps1` — Windows web installer: clones (or reuses) the repo and
+  delegates to `bootstrap.ps1`. Designed to be run with
+  `iwr ... | iex` straight from GitHub.
+* `setup.sh` — Unix web installer: clones (or reuses) the repo, installs
+  Python dependencies, and runs the global OpenCode integration.
 * `bootstrap.ps1` — Windows cold-start installer for a new machine: locates
   Python 3.10+ (honours `PERUN_PYTHON`) and delegates to
   `python -m perun install --machine`; optionally creates the desktop shortcut.

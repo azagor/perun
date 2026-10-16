@@ -114,28 +114,29 @@ def _strip_jsonc(text: str) -> str:
     return "".join(out)
 
 
-def _read_config(path: Path) -> tuple[dict[str, Any], str | None]:
+def read_opencode_config(path: Path) -> tuple[dict[str, Any], str | None, bool]:
     """Parse a JSON/JSONC file.
 
-    Returns ``(data, error)``; ``error`` is a human-readable string when the file
-    exists but could not be read or parsed, so a broken config surfaces in the
-    dashboard instead of silently looking like "no servers".
+    Returns ``(data, error, lossy)``. ``error`` is a human-readable string when
+    the file exists but could not be read or parsed. ``lossy`` is ``True`` when
+    comments or trailing commas had to be stripped to parse the file, signalling
+    that a rewrite would destroy those comments.
     """
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return {}, f"cannot read: {exc}"
+        return {}, f"cannot read: {exc}", False
     last: json.JSONDecodeError | None = None
-    for candidate in (raw, _strip_jsonc(raw)):
+    for idx, candidate in enumerate((raw, _strip_jsonc(raw))):
         try:
             data = json.loads(candidate)
         except json.JSONDecodeError as exc:
             last = exc
             continue
         if isinstance(data, dict):
-            return data, None
-        return {}, "top-level value is not a JSON object"
-    return {}, f"invalid JSON: {last}"
+            return data, None, idx == 1
+        return {}, "top-level value is not a JSON object", False
+    return {}, f"invalid JSON: {last}", False
 
 
 def _config_files(directory: Path) -> list[Path]:
@@ -252,7 +253,7 @@ def _collect(files: list[Path], *, scope: str, project: dict[str, Any] | None
     entries: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for path in files:
-        data, error = _read_config(path)
+        data, error, _lossy = read_opencode_config(path)
         if error:
             errors.append({"source": str(path), "error": error})
             continue

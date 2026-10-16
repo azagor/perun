@@ -4,8 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.0 - 2026-10-16
+
 ### Added
 
+- **Dashboard model/agent overrides are mirrored into `opencode.json`.** Saving
+  a model or agent on a project (dashboard config tab, wizard, or
+  `perun_update_project`) now writes the override into the project's own
+  `opencode.json` (`model` / `default_agent` keys), so an OpenCode TUI launched
+  from the project card honors it too. Existing keys are preserved, clearing the
+  override removes the key, and an unparseable config is never clobbered.
+  Implemented as `projects.sync_opencode_config()`.
+- **Providers tab + dashboard preview.** New `GET /api/providers` and
+  `POST /api/providers/{id}/logout` endpoints surface OpenCode auth providers
+  and their connection status. A dedicated **Providers** tab and a dashboard
+  stat card show connected/total providers; the Connect button opens a terminal
+  running `opencode auth login <id>` so Perun never sees API keys.
 - **`/logwork` global slash command.** Saves a one-sentence work summary to
   Perun memory via `perun_memory_store`. Called inside a project it stores a
   project-scoped fact; called from the orchestrator / global context it stores a
@@ -14,11 +28,66 @@ All notable changes are recorded here. Single source of truth for release notes.
 - **Global slash-command reference.** `perun/integrations/templates/INSTRUCTIONS.md`
   and the managed `~/.config/opencode/AGENTS.md` now list `/perun-projects`,
   `/perun-ask`, and `/logwork`.
+- **Web installers.** Added `setup.ps1` (Windows) and `setup.sh` (Unix) at the
+  repo root. They can be run straight from GitHub with `iwr ... | iex` or
+  `curl ... | bash`; they clone (or reuse) the repo, install Python
+  dependencies, and run the machine installer. `README.md`,
+  `docs/CODEMAP.md`, and `docs/TECHNICAL_DOCUMENTATION.md` now document the
+  one-liner install paths.
+- **Windows installer (`PerunSetup.exe`).** Added an Inno Setup project under
+  `installer/` that builds a wizard installer. It can install missing
+  prerequisites (Python, git, OpenCode CLI, Ollama), installs Perun, registers
+  the `PerunBridge` task, creates shortcuts, and provides a clean uninstall.
+  Build it with `installer\build.ps1`.
+- **Self-sign helper (`installer\sign.ps1`).** Creates a self-signed
+  code-signing certificate and signs `PerunSetup.exe` with `signtool`. Useful
+  for dev/enterprise builds; public releases still need a trusted certificate.
+- **CI/CD release signing.** Added `.github/workflows/release.yml` to build
+  and sign `PerunSetup.exe` automatically on `v*` tags. `sign.ps1` now reads
+  an external PFX from `PERUN_SIGN_PFX` / `PERUN_SIGN_PFX_BASE64` and
+  `PERUN_SIGN_PASSWORD` environment variables, so a free Certum open-source
+  code-signing certificate can be used for trusted releases.
 
 ### Changed
 
 - `install_global.py` now installs/removes `logwork.md` alongside the existing
   `perun-projects.md` and `perun-ask.md` command files.
+
+### Fixed
+
+- **Installer verifies SHA256 hashes for downloaded binaries.**
+  `installer/install-prereqs.ps1` now checks every downloaded installer
+  (Python, Git, OpenCode standalone zip, Ollama fallback EXE) against a
+  built-in hash table before executing it. The Ollama fallback URL is pinned to
+  a specific GitHub release so the hash stays stable.
+- **Provider cache is thread-safe.** `perun/providers.py` guards the provider
+  list cache with a `threading.Lock` to prevent races on concurrent dashboard
+  requests.
+- **Invalid provider logout returns HTTP 400.** `POST /api/providers/{id}/logout`
+  now raises `400 Bad Request` when the provider ID is invalid or `opencode`
+  rejects the logout, instead of returning `200 OK` with `ok: false`.
+- **Skill tasks now invoke TUI slash commands.** In the Agent Console, queued
+  tasks with `kind: "skill"` emit `/<skillname>` at the start of the prompt
+  chain so OpenCode runs them as slash commands instead of just mentioning the
+  skill name in instructions.
+- **Consistent “Run” labelling.** The project-card and Agent Console action
+  buttons are now labelled **Run** (previously “🖵 OpenCode”), and the Agent
+  Console shows “Run 2 tasks” when tasks are queued.
+- **Skill name validation.** `perun/skills.py` now rejects skill manifests whose
+  `name` contains characters outside `[a-z0-9_-]`, preventing malformed names
+  from reaching the TUI as slash commands.
+- **Agent Console prompt chain is unit-tested.** The prompt-building logic is
+  now in `web/js/prompt_chain.js` and covered by `tests/test_prompt_chain.js`
+  run from `tests/test_js_prompt_chain.py`.
+- **Memory view filters by project without a query.** Selecting a project in the
+  Memory Explorer now reloads recent facts and stats for that project even when
+  the query field is empty; semantic search is still used when a query is entered.
+- **Dashboard TUI launch no longer passes `run`-only flags.** The project-card
+  and Agent Console TUI commands used to append `--model` and `--agent` to the
+  base `opencode` invocation, which the OpenCode CLI rejects with
+  `Unrecognized flag: --model in command opencode`. The TUI command now only
+  passes flags accepted by the base `opencode` command (`--prompt` and
+  `--session`) and leaves model/agent resolution to OpenCode's project defaults.
 
 ## v0.6.4 - 2026-10-16
 

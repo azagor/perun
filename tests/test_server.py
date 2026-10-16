@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
+
+from perun import server
 
 
 @pytest.fixture()
@@ -82,6 +86,29 @@ def test_memory_sensitive_rejected(client):
 def test_memory_stats(client):
     r = client.get("/api/memory/stats")
     assert "facts_total" in r.json()["stats"]
+
+
+def test_memory_recent_and_stats_filtered_by_project(client, tmp_path):
+    """Recent facts and stats endpoints accept a project slug query param."""
+    target = tmp_path / "memproj"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "MemProj", "path": str(target), "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    # Global fact
+    client.post("/api/memory/remember", json={"content": "global fact"})
+    # Project fact
+    client.post("/api/memory/remember", json={
+        "content": "project fact", "scope": "project", "project": slug,
+    })
+
+    recent = client.get(f"/api/memory/recent?project={slug}&limit=40").json()
+    assert any("project fact" in f["content"] for f in recent["facts"])
+    assert not any("global fact" in f["content"] for f in recent["facts"])
+
+    stats = client.get(f"/api/memory/stats?project={slug}").json()
+    assert stats["stats"]["facts_project"] >= 1
 
 
 def test_settings_get_patch(client):
@@ -182,6 +209,95 @@ def test_project_instruction_delete_missing_returns_404(client, tmp_path):
     })
     slug = r.json()["project"]["slug"]
     assert client.delete(f"/api/projects/{slug}/instruction-files/missing.md").status_code == 404
+
+
+def test_model_agent_save_writes_opencode_config(client, tmp_path):
+    """Saving a model/agent override also lands in the project's opencode.json,
+    so an OpenCode TUI launched from the card honors it."""
+    target = tmp_path / "cfgsync"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "CfgSync", "path": str(target),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    # Set the override -> opencode.json is created with model/default_agent.
+    r = client.patch(f"/api/projects/{slug}", json={
+        "model": "anthropic/claude-sonnet-4-5", "agent": "plan",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["opencode_config"]["action"] == "created"
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["model"] == "anthropic/claude-sonnet-4-5"
+    assert cfg["default_agent"] == "plan"
+
+    # An unrelated PATCH must not touch the config file.
+    (target / "opencode.json").write_text(
+        json.dumps({"model": "keep/me", "mcp": {}}), encoding="utf-8")
+    r = client.patch(f"/api/projects/{slug}", json={"description": "hi"})
+    assert r.status_code == 200, r.text
+    assert r.json()["opencode_config"]["action"] == "skipped"
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["model"] == "keep/me" and "default_agent" not in cfg
+
+    # Clearing the override removes the keys but preserves other entries.
+    r = client.patch(f"/api/projects/{slug}", json={"model": "", "agent": ""})
+    assert r.status_code == 200, r.text
+    assert r.json()["opencode_config"]["action"] == "updated"
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert "model" not in cfg and "default_agent" not in cfg
+    assert cfg["mcp"] == {}
+
+
+def test_model_agent_save_preserves_existing_opencode_jsonc(client, tmp_path):
+    """A pre-existing opencode.json (with other keys) keeps them on save."""
+    target = tmp_path / "cfgmerge"
+    (tmp_path / "cfgmerge").mkdir()
+    (target / "opencode.json").write_text(json.dumps({
+        "mcp": {"perun": {"type": "local", "command": ["python", "m.py"]}},
+    }), encoding="utf-8")
+    r = client.post("/api/projects", json={
+        "method": "existing", "name": "CfgMerge", "path": str(target),
+        "model": "openai/gpt-5",
+    })
+    slug = r.json()["project"]["slug"]
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["model"] == "openai/gpt-5"
+    assert "perun" in cfg["mcp"]
+
+
+def test_model_agent_save_skips_jsonc_with_comments(client, tmp_path):
+    """A commented opencode.jsonc is left untouched so comments are not lost."""
+    target = tmp_path / "cfgjsonc"
+    target.mkdir()
+    (target / "opencode.jsonc").write_text(
+        '{\n  // keep me\n  "mcp": {}\n}\n', encoding="utf-8")
+    r = client.post("/api/projects", json={
+        "method": "existing", "name": "CfgJsonC", "path": str(target),
+    })
+    slug = r.json()["project"]["slug"]
+    r = client.patch(f"/api/projects/{slug}", json={"model": "x/y"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["opencode_config"]["action"] == "skipped"
+    assert "warning" in body["opencode_config"]
+    assert "// keep me" in (target / "opencode.jsonc").read_text(encoding="utf-8")
+
+
+def test_model_agent_save_reports_unparseable_config(client, tmp_path):
+    """A broken opencode.json is reported, not overwritten."""
+    target = tmp_path / "cfgbroken"
+    target.mkdir()
+    (target / "opencode.json").write_text("not json", encoding="utf-8")
+    r = client.post("/api/projects", json={
+        "method": "existing", "name": "CfgBroken", "path": str(target),
+    })
+    slug = r.json()["project"]["slug"]
+    r = client.patch(f"/api/projects/{slug}", json={"model": "x/y"})
+    assert r.status_code == 200, r.text
+    assert r.json()["opencode_config"]["action"] == "error"
+    assert "warning" in r.json()["opencode_config"]
+    assert (target / "opencode.json").read_text(encoding="utf-8") == "not json"
 
 
 def test_settings_patch_coerces_and_validates(client):
@@ -388,6 +504,50 @@ def test_models_endpoint_shape(client):
     r = client.get("/api/models")
     assert r.status_code == 200
     assert "models" in r.json()
+
+
+def test_providers_endpoint(client, monkeypatch):
+    """GET /api/providers proxies OpenCode auth list with connection status."""
+    monkeypatch.setattr(
+        server.providers, "list_providers",
+        lambda refresh=False: {
+            "ok": True,
+            "providers": [
+                {"id": "opencode-go", "name": "OpenCode Go", "connected": True,
+                 "status": "connected", "connections": [{"type": "credential", "label": "API key"}]},
+                {"id": "ollama-cloud", "name": "Ollama Cloud", "connected": False,
+                 "status": "not_connected", "connections": []},
+            ],
+            "count": 2,
+            "error": None,
+        })
+    r = client.get("/api/providers")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["count"] == 2
+    assert body["providers"][0]["connected"] is True
+    assert body["providers"][1]["connected"] is False
+
+
+def test_provider_logout_endpoint(client, monkeypatch):
+    """POST /api/providers/{id}/logout shells out to opencode auth logout."""
+    monkeypatch.setattr(
+        server.providers, "logout_provider",
+        lambda pid: {"ok": True, "error": None})
+    r = client.post("/api/providers/opencode-go/logout")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_provider_logout_endpoint_returns_400_on_invalid_id(client, monkeypatch):
+    """Invalid provider IDs are rejected with HTTP 400."""
+    monkeypatch.setattr(
+        server.providers, "logout_provider",
+        lambda pid: {"ok": False, "error": f"invalid provider id: {pid!r}"})
+    r = client.post("/api/providers/bad id!/logout")
+    assert r.status_code == 400
+    assert "invalid provider id" in r.json()["detail"]
 
 
 # --------------------------------------------------------------------------- #

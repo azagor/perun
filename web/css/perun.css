@@ -205,6 +205,8 @@ select { cursor: pointer; }
 .console-header { flex: 0 0 auto; }
 .console-header .form-row { gap: 12px; }
 .console-chat { flex: 1 1 auto; overflow-y: auto; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.console-chat:has(.chat-placeholder) { justify-content: center; }
+.chat-placeholder { text-align: center; font-size: .9rem; }
 .console-composer { flex: 0 0 auto; }
 .console-composer textarea { min-height: 64px; }
 .chat-msg { display: flex; }
@@ -537,6 +539,12 @@ body[data-storm="storm"] .topbar::after { opacity: .9; animation: bar-sweep 2.2s
     #perun-fx { display: none; }
 }
 
+.providers-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.provider-card .provider-meta { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.provider-card .provider-meta .mono { font-family: monospace; font-size: 0.85rem; }
+.provider-card .badge.ok { background: var(--ok-bg, #1f3d2b); color: var(--ok-fg, #7ee787); }
+.provider-card .badge.warn { background: var(--warn-bg, #3d2b1f); color: var(--warn-fg, #e7a87e); }
+
 @media (max-width: 900px) {
     .app { grid-template-columns: 64px 1fr; }
     .brand-text, .nav-item .lab, .sidebar-foot { display: none; }
@@ -546,4 +554,5 @@ body[data-storm="storm"] .topbar::after { opacity: .9; animation: bar-sweep 2.2s
     .form-row { grid-template-columns: 1fr; }
     .anchor-row { grid-template-columns: 1fr 1fr; }
     .kv-edit-row { grid-template-columns: 1fr 1fr auto auto; }
+    .providers-grid { grid-template-columns: 1fr; }
 }

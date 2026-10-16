@@ -297,8 +297,17 @@ def perun_update_project(slug: str, name: str = "", description: str = "",
                        ("color", color)):
         if value:
             fields[key] = value
+    opencode_note = ""
     if fields:
         registry.update_project(slug, **fields)
+        if "model" in fields or "agent" in fields:
+            # Mirror into the project's opencode.json so the TUI honors it too.
+            updated = registry.get_project(slug) or p
+            cfg_result = projects.sync_opencode_config(updated)
+            if cfg_result.get("warning"):
+                opencode_note = f" (opencode.json: {cfg_result['warning']})"
+            elif cfg_result.get("action") in ("created", "updated"):
+                opencode_note = " (opencode.json updated)"
     wrote_instructions = bool(
         orchestrator.write_project_instruction_file(p["path"], instructions)
     )
@@ -306,7 +315,7 @@ def perun_update_project(slug: str, name: str = "", description: str = "",
         return f"[perun] Nothing to update for {slug}."
     registry.log_activity(p["id"], "config", "Project updated via MCP")
     changed = sorted(fields) + (["instructions"] if wrote_instructions else [])
-    return f"[perun] Updated {slug}: {', '.join(changed)}."
+    return f"[perun] Updated {slug}: {', '.join(changed)}.{opencode_note}"
 
 
 @mcp.tool

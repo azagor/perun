@@ -1,6 +1,12 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.6.4 — instruction text lives *only* on disk. Projects keep custom
+**Latest release:** v0.7.0 (see §14). This release adds a Windows GUI installer
+(`PerunSetup.exe`), web installers (`setup.ps1` / `setup.sh`), a CI release
+workflow, model/agent overrides mirrored into project `opencode.json`, a new
+**Providers** tab with OpenCode auth status, slash-command skill tasks in the
+Agent Console, and skill-name validation. `perun.__version__` reports `0.7.0`.
+
+**Latest release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
 (`name`, `enabled`); enabled files are injected into new agent sessions in sorted filename
 order. The legacy `projects.instructions` / `projects.instructions_path` columns and both
@@ -25,7 +31,7 @@ instead of plaintext in the user environment. Builds on v0.6.2 (bundled `perun_g
 v0.6.3 (multi-file instruction system). v0.6.4 also hardens the bundled code-search layer: a
 ripgrep/ast-grep "no matches" exit code (`1`) is now a successful empty result instead of
 triggering the pure-Python fallback, and the unsupported `--files-from` flag is gone (global
-searches pass project paths positionally). `perun.__version__` reports `0.6.4`.
+searches pass project paths positionally). `perun.__version__` reports `0.7.0`.
 
 ---
 
@@ -44,10 +50,11 @@ Ollama instance for embeddings.
 | Persistence | one WAL-mode SQLite DB at `~/.perun/perun.db` |
 | Agent execution | `subprocess` of `opencode run …`, one thread per run, semaphore-capped |
 | Embeddings | local Ollama `nomic-embed-text` via `/api/embed` |
+| LLM providers | read-only view of `opencode auth list` (`/api/providers`); Perun does not store credentials |
 | Telegram | a long-polling thread (`PerunTelegramBridge`) |
 | Global integration | stdio MCP server `mcp/perun_mcp.py` + `~/.config/opencode` merge |
 | One-click startup (Windows) | `Perun.cmd` — idempotent dashboard launcher; never starts a second Telegram bridge |
-| Machine install (Windows) | `bootstrap.ps1` → `python -m perun install --machine` (`perun/installer.py`): prerequisites, deps, global install, and the `PerunBridge` task |
+| Machine install (Windows) | `PerunSetup.exe` (wizard), `setup.ps1` (web), or `bootstrap.ps1` (local) → `python -m perun install --machine` (`perun/installer.py`): prerequisites, deps, global install, and the `PerunBridge` task |
 
 ### Runtime layout (`~/.perun`, override with `PERUN_HOME`)
 
@@ -222,6 +229,17 @@ stored in the database — there is no legacy column and no migration.
 Continuations of an existing session inherit the rules from history, so they are
 not re-injected. The raw user prompt is what gets stored on the run row.
 
+**Model/agent overrides are mirrored into the project's OpenCode config.**
+Saving a model or agent override on a project (dashboard config tab, wizard, or
+`perun_update_project` MCP tool) now writes the values into the project's own
+`opencode.json[c]` under the keys `model` and `default_agent`. This lets the
+OpenCode **TUI** honor the override, because the TUI reads project defaults from
+that file rather than command-line flags. Existing keys (`mcp`, `instructions`,
+…) are preserved; clearing an override removes the key. Writes are atomic
+(temp file + `os.replace`) and commented `.jsonc` files are left untouched so
+user comments are not destroyed. `projects.sync_opencode_config()` returns an
+`{action, path, warning}` status that the dashboard surfaces in a toast.
+
 **Model/agent overrides are explicit only.** Perun resolves model/agent as
 `explicit call/project field → control-plane settings`, but the **global**
 `default_model` / `default_agent` are no longer forced onto ordinary project runs.
@@ -229,6 +247,8 @@ That lets OpenCode use its own project defaults when the Model/Agent fields are
 left empty, avoiding surprising provider errors from a machine-wide default. The
 run row records whether the model was explicit (`model_explicit=1`) so `_execute`
 knows whether to pass `--model` to `opencode run`.
+
+### The control plane (always-available orchestrator)
 
 ### The control plane (always-available orchestrator)
 
@@ -331,6 +351,14 @@ opencode run --format json --auto [--model M only if model_explicit] [--agent A 
              [--session <oc_id>] --title "Perun · …" -- <prompt>
 ```
 
+For **TUI** launches (`POST /api/run-in-terminal`, project-card "Run" button,
+Agent Console "Run"), the dashboard builds a base `opencode` command and
+passes only flags accepted by the TUI (`--prompt` and `--session`); `--model` and
+`--agent` are omitted because they belong to `opencode run`, not the base
+`opencode` command. Model and agent resolution for TUI sessions is delegated to
+OpenCode's own project defaults (including the values mirrored into
+`opencode.json` by `sync_opencode_config()`).
+
 `--model` is passed only when `model_explicit=1`; `--agent` is passed only when
 an agent value is set. With `cwd` set to the **target project path** — no
 positional directory argument. stdout is streamed line-by-line to
@@ -370,6 +398,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
+| GET | `/api/providers` | LLM providers from `opencode auth list --format json` with `connected`/`status` (+ `count`, `error`); Perun does not store credentials |
+| POST | `/api/providers/{provider_id}/logout` | disconnect a provider via `opencode auth logout`; returns `{ok, error}` |
 | GET | `/api/agents` | OpenCode agents: built-ins (`build`,`plan`,`general`,`explore`) + user-defined agents on disk (+ `count`) |
 | GET | `/api/skills` | OpenCode skills: global `~/.config/opencode/skills/` + project-local `.opencode/skills/` + runtime built-ins (`code-audit`, `android-design-guidelines`, `find-skills`) (+ `count`) |
 | GET | `/api/tools` | OpenCode tools: built-ins + custom `.ts/.js/.mjs` under `~/.config/opencode/tools/` and project-local `.opencode/tools/` (+ `count`) |
@@ -378,7 +408,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/projects` | list projects |
 | POST | `/api/projects` | wizard: register / create / clone `{method,path,…}` |
 | GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
-| PATCH | `/api/projects/{slug}` | update fields |
+| PATCH | `/api/projects/{slug}` | update fields; when `model`/`agent` change, also mirrors them into the project's `opencode.json[c]` and returns the result in `opencode_config` |
 | DELETE | `/api/projects/{slug}` | unregister (refuses the control project) |
 | POST | `/api/projects/{slug}/index` | sync manifest, then index docs |
 | GET | `/api/projects/{slug}/sessions` | sessions |
@@ -412,7 +442,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/fs/mkdir` | create a directory |
 | POST | `/api/run-in-terminal` | open the configured terminal/shell with a command `{cwd,command,shell?,run_uid?}` (or pass `project` instead of `cwd`); `run_uid` links the terminal to a TUI run record for lifecycle tracking |
 | GET | `/api/projects/{slug}/tasks` | list reusable project tasks |
-| POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}` (`sort_order` is legacy/ignored by UI) |
+| POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}`. `kind` is one of `prompt`, `skill`, `tool`, `combo`. Skill tasks are emitted as `/<skillname>` slash commands by `web/js/prompt_chain.js` |
+
 | PATCH | `/api/projects/{slug}/tasks/{task_id}` | update a task |
 | DELETE | `/api/projects/{slug}/tasks/{task_id}` | delete a task |
 | POST | `/api/discover` | scan roots & register |
@@ -556,6 +587,76 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 Unrelated keys are preserved (JSON load → edit → dump). `uninstall()` removes
 exactly the Perun keys/files; runtime data in `~/.perun` is kept.
 
+### Web installer (`setup.ps1` / `setup.sh`)
+
+For a fresh machine, the repo also ships one-liner installers that clone the
+checkout and then run the local machine installer:
+
+* **Windows:** `powershell -c "iwr -useb https://raw.githubusercontent.com/azagor/perun/master/setup.ps1 | iex"`
+  — `setup.ps1` checks for Python 3.10+ and git, clones the repo to
+  `%USERPROFILE%\perun` by default, and delegates to `bootstrap.ps1`.
+* **Unix:** `curl -fsSL https://raw.githubusercontent.com/azagor/perun/master/setup.sh | bash`
+  — `setup.sh` checks for Python 3.10+ and git, clones to `~/perun`, installs
+  `requirements.txt`, and runs `python -m perun install`.
+
+Both scripts are idempotent: re-running them updates or reuses an existing clone
+and repairs the installation.
+
+### Windows installer (`installer\PerunSetup.iss`)
+
+For end-user distribution, the repo ships an **Inno Setup** project that builds
+`PerunSetup.exe`. The wizard:
+
+1. Installs Perun to `{autopf}\Perun` (administrative install).
+2. Optionally installs missing prerequisites:
+   * **Python 3.12.10** — downloaded from python.org, installed to
+     `{app}\Python`, and `PERUN_PYTHON` is set.
+   * **Git for Windows** — downloaded from the Git for Windows releases page.
+   * **OpenCode CLI** — installed with `npm install -g opencode-ai` if npm is
+     available, otherwise the standalone `opencode-windows-x64.zip` binary is
+     downloaded and extracted.
+   * **Ollama** - installed with `winget install Ollama.Ollama` if winget is
+     available, otherwise a pinned `OllamaSetup.exe` is downloaded.
+
+   Downloaded installers are verified against a built-in SHA256 table before
+   execution.
+3. Runs `python -m pip install -r requirements.txt`.
+4. Runs `python -m perun install --machine` to wire the global OpenCode
+   integration and register the `PerunBridge` task.
+5. Creates Start Menu and optional desktop shortcuts for `Perun.cmd`.
+
+Uninstall runs `python -m perun install --uninstall` and
+`python -m perun install --machine --uninstall` to remove the global integration
+and the bridge task, then removes `PERUN_PYTHON`.
+
+Build it with:
+
+```powershell
+.\installer\build.ps1
+```
+
+The resulting installer is written to `installer\Output\PerunSetup.exe`.
+
+Self-sign the installer (optional, dev/enterprise use only):
+
+```powershell
+.\installer\sign.ps1 -Password 'your-pfx-password'
+```
+
+`sign.ps1` creates a self-signed code-signing certificate, exports it to
+`installer\certs\PerunSelfSign.pfx`, and signs `PerunSetup.exe`. Because the
+certificate is self-signed, it will not be trusted by default on other
+machines; for public distribution, use a publicly trusted code-signing
+certificate.
+
+For open-source releases, a free trusted signing option is available from
+[SignPath Foundation](https://signpath.org). A low-cost paid option is
+[Certum Open Source Code Signing in the Cloud](https://certum.store/open-source-code-signing-on-simplysign.html).
+The repository includes a GitHub Actions workflow
+(`.github/workflows/release.yml`) that builds `PerunSetup.exe` and signs it
+using `PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets,
+then attaches the signed installer to the GitHub release.
+
 ### Machine install (`perun install --machine`, `perun/installer.py`)
 
 `install_global.py` covers the *user-level OpenCode* integration. Everything that
@@ -611,7 +712,8 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
-  `perun_create_project`, `perun_update_project`, `perun_delete_project`
+  `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
+  into the project's `opencode.json[c]` and reports the result), `perun_delete_project`
   (requires `confirm=True`; refuses the control plane), `perun_discover`.
 * **Memory & docs:** `perun_memory_search`, `perun_memory_store`,
   `perun_docs_index`.
@@ -640,7 +742,16 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 * **Views:** Dashboard, Orchestrator chat (`#/orchestrator`), Projects (+ detail
   with tabs Overview/Console/Sessions/Memory/Activity/Git/Manifest/Instructions/
   Config), Agent Console (live SSE), Memory Explorer, Activity (live
-  `/api/stream`), MCP Servers (`#/mcp`), Telegram, Settings.
+  `/api/stream`), MCP Servers (`#/mcp`), **Providers**, Telegram, Settings.
+* **Providers view (`#/providers`).** Shows LLM providers reported by
+  `opencode auth list --format json` with their credential status ("Saved
+  credential" / "No credential"). The Connect button opens the configured
+  terminal running `opencode auth login <id>` so Perun never handles API keys.
+  Disconnect invokes `POST /api/providers/{id}/logout`. Results are cached for
+  30 seconds; a Refresh button fetches with `?refresh=true`.
+* **Dashboard provider preview.** A stat card on the Dashboard shows the count of
+  connected/total providers, complementing the existing Ollama embeddings status
+  card.
 * **MCP Servers view.** Lists every MCP server OpenCode is configured to load
   (global + per project) with a config-derived status badge, transport, target,
   and resolved executable. A `Test` button (and `Test all enabled`) calls
@@ -650,6 +761,15 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   servers"), and if the endpoint itself 404s — the running service is older than
   the static JS the browser loaded from disk — the view names the fix (restart
   Perun) instead of showing an empty list.
+* **Memory Explorer project filter.** Selecting a project in the Memory Explorer
+  now reloads recent facts and stats for that project even when the query field
+  is empty; semantic search via `/api/memory/search` is still used when a query
+  is entered.
+* **Agent Console.** A three-pane layout: project/session/terminal selectors at the
+  top, a live output/chat log in the middle, and a prompt composer + task queue at
+  the bottom. The output pane shows a centered placeholder (`Agent output will
+  appear here…`) when no run is active and clears it as soon as the first event
+  arrives.
 * **Uniform project cards.** `projectCard()` renders the *same* action set for
   every project, including the orchestrator control-plane card: `Open` (project
   page) and `Run` (Agent Console with that project preselected). The old
@@ -733,6 +853,45 @@ setting.
 
 ## 14. Revision history
 
+### 2026-10-16 — Unreleased: model/agent sync, providers tab, memory filter
+
+* **Dashboard model/agent overrides are mirrored into project `opencode.json`.**
+  Added `projects.sync_opencode_config()` which writes `model` / `default_agent`
+  into a project's `opencode.json[c]` whenever a dashboard config save, wizard
+  creation, or MCP `perun_update_project` changes those fields. Existing keys are
+  preserved, clearing the override removes the keys, commented `.jsonc` files are
+  left untouched, and writes are atomic (temp file + `os.replace`). The PATCH
+  endpoint returns the mirror status in `opencode_config` so the UI can toast
+  success or warn about an unparseable config.
+* **TUI launch no longer passes `run`-only flags.** The project-card and Agent
+  Console TUI command builders removed `--model` / `--agent`; the base `opencode`
+  TUI command only accepts `--prompt` and `--session`, so passing model/agent
+  caused `Unrecognized flag: --model in command opencode`. TUI sessions now rely
+  on OpenCode's project defaults, including the newly-mirrored `opencode.json`
+  values.
+* **Providers tab + dashboard preview.** New `perun/providers.py` module and
+  endpoints `GET /api/providers` and `POST /api/providers/{id}/logout`. The list
+  is sourced from `opencode auth list --format json`, enriched with credential
+  status, and cached for 30 seconds (bypassed with `?refresh=true`). A dedicated
+  `#/providers` view and a Dashboard stat card show connected/total providers;
+  the Connect button opens the configured terminal with
+  `opencode auth login <id>` so Perun never sees API keys. Provider IDs are
+  validated before logout and the cache is evicted on disconnect.
+* **Memory Explorer filters by project without a query.** Selecting a project in
+  the Memory view now reloads recent facts (`GET /api/memory/recent?project=`)
+  and stats (`GET /api/memory/stats?project=`) for that project even when the
+  query field is empty; semantic search remains available when a query is entered.
+* **Agent Console placeholder.** The empty output pane now shows a centered
+  "Agent output will appear here…" message before the first run starts.
+* **Shared JSONC reader.** `mcp_servers._read_config()` was promoted to public
+  `read_opencode_config()` and now returns a `lossy` flag so callers can detect
+  when comments/trailing commas had to be stripped and avoid clobbering them on
+  rewrite.
+* **Docs/tests.** `docs/CODEMAP.md` and `docs/TECHNICAL_DOCUMENTATION.md` updated
+  with the new endpoints and modules. New `tests/test_providers.py` and expanded
+  `tests/test_server.py` cover model/agent sync and provider endpoints; full
+  suite passes.
+
 ### 2026-10-16 — v0.6.4: on-disk instructions, DPAPI secrets & bundled search
 
 * **Instruction text lives only on disk.** Project instructions are Markdown files
@@ -801,7 +960,7 @@ setting.
 
 * **Empty-prompt session start.** The Agent Console `Run` button and
   `POST /api/runs` no longer require a prompt; an omitted prompt uses the default
-  starter prompt `"Start a working session for this project."`.
+  starter prompt `"Started a working session for this project."`.
 * **New CLI command:** `python -m perun run <slug> [prompt] [--model M]
   [--agent A] [--title T] [--wait]`.
 * **New endpoint:** `POST /api/projects/{slug}/session` starts a session for a

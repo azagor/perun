@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
 from . import (__version__, config, control, db, discovery, git, manifest,
-               memory, projects, registry, scaffold)
+               memory, projects, providers, registry, scaffold)
 from . import orchestrator
 
 STARTED_AT = time.time()
@@ -343,6 +343,31 @@ def models(refresh: bool = False) -> dict[str, Any]:
     return data
 
 
+@app.get("/api/providers")
+def api_list_providers(refresh: bool = False) -> dict[str, Any]:
+    """LLM providers known to OpenCode auth, with connection status.
+
+    Perun does not store credentials; this endpoint shells out to
+    ``opencode auth list --format json`` and reports whether each provider has
+    at least one saved credential. Results are cached for 30 seconds unless
+    ``refresh=true`` is passed.
+    """
+    return providers.list_providers(refresh=refresh)
+
+
+@app.post("/api/providers/{provider_id}/logout")
+def api_provider_logout(provider_id: str) -> dict[str, Any]:
+    """Disconnect a provider from OpenCode auth.
+
+    Perun does not touch credentials itself; it only invokes
+    ``opencode auth logout <provider_id>``.
+    """
+    result = providers.logout_provider(provider_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "logout failed")
+    return _ok(**result)
+
+
 @app.get("/api/agents")
 def api_list_agents(refresh: bool = False) -> dict[str, Any]:
     """OpenCode agents available to the current installation / project.
@@ -649,9 +674,15 @@ def api_get_project(slug: str) -> dict[str, Any]:
 
 @app.patch("/api/projects/{slug}")
 def api_update_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    _project_or_404(slug)
+    project = _project_or_404(slug)
+    model_agent_changed = "model" in payload or "agent" in payload
     project = registry.update_project(slug, **payload)
-    return _ok(project=project)
+    opencode_config: dict[str, Any] = {"action": "skipped"}
+    if model_agent_changed and project:
+        # The TUI reads model/default_agent from the project's opencode.json,
+        # so mirror the override there and report the result to the dashboard.
+        opencode_config = projects.sync_opencode_config(project)
+    return _ok(project=project, opencode_config=opencode_config)
 
 
 @app.delete("/api/projects/{slug}")
@@ -1236,7 +1267,7 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not project:
         raise HTTPException(status_code=404, detail="no such project")
     run_uid = uuid.uuid4().hex[:16]
-    prompt = (payload.get("prompt") or "").strip() or "Start a working session for this project."
+    prompt = (payload.get("prompt") or "").strip() or "Started a working session for this project."
     # Prefer an explicit model/agent passed by the frontend; fall back to the
     # project's configured defaults so the run record matches what opencode
     # actually receives.

@@ -12,3 +12,8 @@ venv/
 # Local overrides
 config.local.json
 *.log
+
+# Installer build output and signing certs
+installer/Output/
+installer/*.exe
+installer/certs/

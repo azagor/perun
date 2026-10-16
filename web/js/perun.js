@@ -252,8 +252,6 @@ const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => 
         let cmd = marker ? `$env:${escPs(marker)}; ` : '';
         cmd += `cd "${escPs(cwd)}"; opencode`;
         if (prompt) cmd += ` --prompt "${escPs(prompt)}"`;
-        if (model) cmd += ` --model "${escPs(model)}"`;
-        if (agent) cmd += ` --agent "${escPs(agent)}"`;
         if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
         return cmd;
     };
@@ -264,8 +262,6 @@ const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => 
         if (marker) cmd += `${escBash(marker)} `;
         cmd += `opencode`;
         if (prompt) cmd += ` --prompt '${escBash(prompt)}'`;
-        if (model) cmd += ` --model '${escBash(model)}'`;
-        if (agent) cmd += ` --agent '${escBash(agent)}'`;
         if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
         return cmd;
     };
@@ -273,8 +269,6 @@ const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => 
         let cmd = marker ? `set "${escPs(marker)}" && ` : '';
         cmd += `cd /d "${escPs(cwd)}" && opencode`;
         if (prompt) cmd += ` --prompt "${escPs(prompt)}"`;
-        if (model) cmd += ` --model "${escPs(model)}"`;
-        if (agent) cmd += ` --agent "${escPs(agent)}"`;
         if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
         return cmd;
     };
@@ -801,6 +795,7 @@ const routes = {
     '#/activity': viewActivity,
     '#/mcp': viewMcp,
     '#/telegram': viewTelegram,
+    '#/providers': viewProviders,
     '#/settings': viewSettings,
 };
 let currentRoute = '';
@@ -862,11 +857,23 @@ async function viewDashboard() {
     const stat = (label, value, foot) => el('div', { class: 'card stat' },
         `<div class="stat-label">${esc(label)}</div><div class="stat-value">${esc(value)}</div><div class="stat-foot">${esc(foot || '')}</div>`);
     const opencodeCount = state.projects.filter((p) => p.kind === 'opencode').length;
+    let providerSummary;
+    try {
+        const pr = await api('/api/providers');
+        const connected = (pr.providers || []).filter((p) => p.connected).length;
+        const total = (pr.providers || []).length;
+        const prOk = pr.ok && total > 0;
+        providerSummary = stat('Providers', prOk ? `${connected}/${total}` : '—',
+            prOk ? `${connected} connected, ${total - connected} not connected` : (pr.error || 'check opencode auth'));
+    } catch (e) {
+        providerSummary = stat('Providers', '—', 'unavailable');
+    }
     grid.appendChild(stat('Projects', state.projects.length, `${opencodeCount} OpenCode project(s)`));
     grid.appendChild(stat('Working now', presence.working.size, presence.working.size ? 'agent(s) executing' : 'no active runs'));
     grid.appendChild(stat('Awake', presence.awake.size, 'active in the last 15 min'));
     grid.appendChild(stat('Facts', stats.facts_total ?? 0, `${stats.facts_global ?? 0} global`));
     grid.appendChild(stat('Doc chunks', stats.chunks_total ?? 0, 'semantic index'));
+    grid.appendChild(providerSummary);
     grid.appendChild(stat('Embeddings', stats.ollama_ok ? 'Online' : 'Offline', stats.ollama_ok ? 'Ollama ready' : 'start ollama serve'));
     v.appendChild(grid);
 
@@ -945,7 +952,7 @@ function projectCard(p) {
             <span>▤ ${p.chunk_count || 0} chunks</span>
          </div>
          <div class="pc-actions">
-            <button class="btn sm primary" data-tui title="Open OpenCode TUI in this project's directory">🖵 OpenCode</button>
+            <button class="btn sm primary" data-tui title="Run OpenCode in this project's directory">▶ Run</button>
             ${stopBtn}
             <button class="btn sm" data-open>Open</button>
             <button class="btn sm ghost" data-index>Index docs</button>
@@ -1546,10 +1553,18 @@ function projectConfigForm(p) {
     card.querySelector('#pc-agent-host').appendChild(mAgent);
     if (!state.agents.length) loadAgents().then(() => mAgent.refresh?.()).catch(() => {});
     card.querySelector('#pc-save').addEventListener('click', async () => {
-        await api(`/api/projects/${p.slug}`, { method: 'PATCH', body: {
+        const res = await api(`/api/projects/${p.slug}`, { method: 'PATCH', body: {
             name: $('#pc-name').value, description: $('#pc-desc').value,
             model: mModel.getValue(), agent: mAgent.getValue() } });
-        toast('Saved', 'ok'); await loadProjects(); viewProject(p.slug);
+        const cfg = res && res.opencode_config;
+        if (cfg && cfg.warning) {
+            toast('Saved — ' + cfg.warning, 'err');
+        } else if (cfg && (cfg.action === 'created' || cfg.action === 'updated')) {
+            toast('Saved — opencode.json updated', 'ok');
+        } else {
+            toast('Saved', 'ok');
+        }
+        await loadProjects(); viewProject(p.slug);
     });
     const del = card.querySelector('#pc-delete');
     if (del) del.addEventListener('click', () => {
@@ -1577,7 +1592,7 @@ function renderTasks(container, p, tasks) {
     container.innerHTML = '';
     const head = el('div', { class: 'card' },
         `<div class="card-head"><h4>Project tasks</h4><span class="badge gold">reusable prompts, skills & tool calls</span></div>
-         <p class="secondary">Tasks can be selected from the Agent Console and queued to run after a prompt. They are saved per project.</p>`);
+         <p class="secondary">Tasks can be selected from the Agent Console and queued to run after a prompt. Skill tasks are invoked as <code>/skillname</code> slash commands in the TUI. They are saved per project.</p>`);
     container.appendChild(head);
     const list = el('div', { class: 'card list' });
     const refresh = async () => {
@@ -1598,8 +1613,8 @@ function renderTasks(container, p, tasks) {
                 <option value="tool" ${task && task.kind === 'tool' ? 'selected' : ''}>Tool call</option>
                 <option value="combo" ${task && task.kind === 'combo' ? 'selected' : ''}>Combination</option>
              </select></label>
-             <label class="field"><span class="lab">Prompt / instruction</span><textarea id="pt-prompt-${id}" rows="4" placeholder="What should the agent do? For skills/tools, describe the inputs and expected output.">${esc(task ? task.prompt : '')}</textarea></label>
-             <label class="field"><span class="lab">Tools</span><span id="pt-tools-host-${id}"></span></label>
+             <label class="field"><span class="lab">Prompt / instruction</span><textarea id="pt-prompt-${id}" rows="4" placeholder="What should the agent do? For Skill tasks the selected skills are invoked as /skillname in the TUI; add any extra context here.">${esc(task ? task.prompt : '')}</textarea></label>
+             <label class="field" id="pt-tools-wrap-${id}"><span class="lab">Tools</span><span id="pt-tools-host-${id}"></span></label>
              <label class="field"><span class="lab">Skills</span><span id="pt-skills-host-${id}"></span></label>
              <label class="field"><span class="lab">Enabled</span><input type="checkbox" id="pt-enabled-${id}" ${!task || task.enabled ? 'checked' : ''}></label>
              <div class="form-actions">
@@ -1622,6 +1637,15 @@ function renderTasks(container, p, tasks) {
             items: (state.skills || []).map((s) => ({ value: s.name, label: s.name, description: s.description })),
         });
         body.querySelector(`#pt-skills-host-${id}`).appendChild(skillsSel);
+
+        const toolsWrap = body.querySelector(`#pt-tools-wrap-${id}`);
+        const kindSelect = body.querySelector(`#pt-kind-${id}`);
+        const updateToolsVisibility = () => {
+            // Tools are not applicable to slash-command skill tasks.
+            toolsWrap.style.display = kindSelect.value === 'skill' ? 'none' : '';
+        };
+        kindSelect.addEventListener('change', updateToolsVisibility);
+        updateToolsVisibility();
 
         body.querySelector(`#pt-save-${id}`).addEventListener('click', async () => {
             const payload = {
@@ -2289,14 +2313,15 @@ function mountConsole(host, initial) {
             <label class="field"><span class="lab">Terminal</span><select id="c-terminal"><option value="">${esc(state.terminals && state.terminals.configured_source === 'os' ? 'System default' : 'Custom...')}</option>${(state.terminals && state.terminals.terminals || []).map((t) => `<option value="${esc(t.id)}" ${t.id === (state.settings && state.settings.terminal || state.terminals && state.terminals.configured) ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
          </div>`);
 
-    const log = el('div', { class: 'console-chat', id: 'c-chat' });
+    const log = el('div', { class: 'console-chat', id: 'c-chat' },
+        '<div class="chat-placeholder muted">Agent output will appear here…</div>');
     const composer = el('div', { class: 'console-composer card' },
         `<div id="c-task-queue" class="task-queue"></div>
-         <label class="field"><span class="lab">Prompt</span><textarea id="c-prompt" rows="3" placeholder="What should the agent do? If empty, only queued tasks will run."></textarea></label>
+         <label class="field"><span class="lab">Prompt</span><textarea id="c-prompt" rows="3" placeholder="Optional prompt. Use ＋ Queue task to add reusable tasks (skills run as /slash commands), then click Run."></textarea></label>
          <div class="form-actions">
-            <button class="btn primary" id="c-run">🖵 OpenCode</button>
+            <button class="btn primary" id="c-run">▶ Run</button>
             <button class="btn danger" id="c-stop" disabled>■ Stop</button>
-            <button class="btn ghost" id="c-add-task" title="Add a project task to the queue">＋ Task</button>
+            <button class="btn ghost" id="c-add-task" title="Add a reusable project task to the queue">＋ Queue task</button>
             <button class="btn ghost" id="c-clear">Clear</button>
          </div>`);
     wrap.appendChild(header);
@@ -2321,11 +2346,15 @@ function mountConsole(host, initial) {
     };
 
     let dragIdx = null;
+    const updateRunLabel = () => {
+        runBtn.textContent = taskQueue.length ? `▶ Run ${taskQueue.length} task${taskQueue.length > 1 ? 's' : ''}` : '▶ Run';
+    };
     const updateQueue = () => {
         const el = queueEl();
         el.innerHTML = taskQueue.length
             ? taskQueue.map((t, i) => `<span class="chip" draggable="true" data-idx="${i}"><span class="grip">≡</span> ${esc(t.name)} <b data-rm="${i}">×</b></span>`).join('')
             : '<span class="muted">No tasks queued</span>';
+        updateRunLabel();
         el.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', (e) => {
             e.stopPropagation();
             taskQueue.splice(Number(b.dataset.rm), 1);
@@ -2410,25 +2439,12 @@ function mountConsole(host, initial) {
     $('#c-add-task').addEventListener('click', renderTaskPicker);
     $('#c-clear').addEventListener('click', () => { logEl().innerHTML = ''; promptEl().value = ''; taskQueue = []; updateQueue(); });
 
-    const buildPromptChain = () => {
-        const prompt = promptEl().value.trim();
-        const parts = [];
-        if (prompt) parts.push(prompt);
-        for (const t of taskQueue) {
-            let p = `[Task: ${t.name}]\n${t.prompt}`;
-            if (t.tools.length) p += `\n\nAllowed tools: ${t.tools.join(', ')}`;
-            if (t.skills.length) p += `\n\nSkills to use: ${t.skills.join(', ')}`;
-            parts.push(p);
-        }
-        return parts.join('\n\n---\n\n');
-    };
-
     runBtn.addEventListener('click', async () => {
         const slug = $('#c-project').value;
         if (!slug) { toast('Pick a project', 'err'); return; }
         const p = projectBySlug(slug);
         if (!p) { toast('Unknown project', 'err'); return; }
-        const prompt = buildPromptChain();
+        const prompt = buildPromptChain(taskQueue, promptEl().value.trim());
         if (!prompt) { toast('Enter a prompt or queue a task', 'err'); return; }
         logLine('› ' + (promptEl().value.trim() || 'Queued tasks only'));
         try {
@@ -2492,31 +2508,44 @@ async function viewMemory() {
     const results = el('div', { id: 'm-results' });
     v.appendChild(results);
 
-    const doSearch = async () => {
+    const loadData = async () => {
         const q = $('#m-q').value.trim();
-        if (!q) { toast('Enter a query', 'err'); return; }
         const project = $('#m-project').value || null;
-        results.innerHTML = '<div class="empty"><span class="spinner"></span> searching…</div>';
+        results.innerHTML = '<div class="empty"><span class="spinner"></span> loading…</div>';
         try {
-            const res = await api('/api/memory/search', { method: 'POST', body: { query: q, project, k: 8, all_projects: !project } });
-            renderResults(results, res.results || []);
+            if (q) {
+                const res = await api('/api/memory/search', {
+                    method: 'POST',
+                    body: { query: q, project, k: 8, all_projects: !project },
+                });
+                renderResults(results, res.results || []);
+            } else {
+                const params = project ? `?project=${encodeURIComponent(project)}&limit=40` : '?limit=40';
+                const [recent, stats] = await Promise.all([
+                    api('/api/memory/recent' + params),
+                    api('/api/memory/stats' + (project ? `?project=${encodeURIComponent(project)}` : '')),
+                ]);
+                results.innerHTML = '';
+                results.appendChild(el('div', { class: 'grid stats-grid mb' },
+                    `<div class="card stat"><div class="stat-label">Facts</div><div class="stat-value">${stats.stats.facts_total ?? 0}</div></div>
+                     <div class="card stat"><div class="stat-label">Doc chunks</div><div class="stat-value">${stats.stats.chunks_total ?? 0}</div></div>
+                     <div class="card stat"><div class="stat-label">Embedded</div><div class="stat-value">${stats.stats.facts_embedded ?? 0}</div></div>`));
+                results.appendChild(sectionTitle(project ? 'Recent facts for project' : 'Recent facts'));
+                results.appendChild(memoryList(recent.facts || []));
+            }
         } catch (e) { results.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
     };
-    $('#m-search').addEventListener('click', doSearch);
-    $('#m-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+
+    $('#m-search').addEventListener('click', loadData);
+    $('#m-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadData(); });
+    $('#m-project').addEventListener('change', loadData);
     $('#m-import').addEventListener('click', async () => {
         try { const r = await api('/api/memory/import-legacy', { method: 'POST', body: {} }); toast(`Imported ${r.imported || 0} fact(s)`, 'ok'); }
         catch (e) { toast(e.message, 'err'); }
     });
 
-    const recent = await api('/api/memory/recent?limit=40');
-    const stats = await api('/api/memory/stats');
-    v.appendChild(el('div', { class: 'grid stats-grid mb' },
-        `<div class="card stat"><div class="stat-label">Facts</div><div class="stat-value">${stats.stats.facts_total ?? 0}</div></div>
-         <div class="card stat"><div class="stat-label">Doc chunks</div><div class="stat-value">${stats.stats.chunks_total ?? 0}</div></div>
-         <div class="card stat"><div class="stat-label">Embedded</div><div class="stat-value">${stats.stats.facts_embedded ?? 0}</div></div>`));
-    v.appendChild(sectionTitle('Recent facts'));
-    v.appendChild(memoryList(recent.facts || []));
+    // Initial load uses the default “All scopes” selection.
+    await loadData();
 }
 
 function renderResults(container, results) {
@@ -2991,6 +3020,84 @@ function mountTelegram(host, status, reload) {
             const r = await api('/api/telegram/send', { method: 'POST', body: { text, chat_id: $('#tg-send-chat').value } });
             toast(r.sent ? 'Sent ✈' : 'Send failed', r.sent ? 'ok' : 'err');
         } catch (e) { toast(e.message, 'err'); }
+    });
+}
+
+/* ========================================================= PROVIDERS ==== */
+async function viewProviders(refresh = false) {
+    $('#topbar-title').textContent = 'Providers';
+    const v = $('#view');
+    v.innerHTML = '<div class="empty"><span class="spinner"></span> loading providers…</div>';
+    let data;
+    try {
+        data = await api('/api/providers' + (refresh ? '?refresh=true' : ''));
+    } catch (e) {
+        v.innerHTML = `<div class="empty">Could not load providers: ${esc(e.message)}</div>`;
+        return;
+    }
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow">LLM integrations</div><h1>Providers</h1>
+         <div class="sub">Connection status from OpenCode auth. A provider shown as “saved” has credentials stored by OpenCode; Perun never stores API keys.</div></div>
+         <div class="form-actions"><button class="btn ghost" id="pr-refresh">⟳ Refresh</button></div>`));
+
+    const providers = data.providers || [];
+    if (!providers.length) {
+        v.appendChild(el('div', { class: 'card empty' },
+            data.error ? esc(data.error) : 'No providers reported by OpenCode.'));
+        return;
+    }
+
+    const grid = el('div', { class: 'grid providers-grid' });
+    for (const p of providers) {
+        const connected = !!p.connected;
+        const statusClass = connected ? 'ok' : 'warn';
+        const statusText = connected ? 'Saved credential' : 'No credential';
+        const card = el('div', { class: 'card provider-card' },
+            `<div class="card-head"><h4>${esc(p.name || p.id)}</h4><span class="badge ${statusClass}">${statusText}</span></div>
+             <div class="provider-meta">
+                <span class="mono">${esc(p.id)}</span>
+                ${p.connections && p.connections.length ? `<span class="muted">${esc(p.connections.map((c) => c.label || c.method || c.type).join(', '))}</span>` : ''}
+             </div>
+             <div class="form-actions">
+                ${connected
+                    ? `<button class="btn ghost" data-action="logout" data-id="${esc(p.id)}">Disconnect</button>`
+                    : `<button class="btn primary" data-action="login" data-id="${esc(p.id)}">Connect…</button>`}
+             </div>`);
+        grid.appendChild(card);
+    }
+    v.appendChild(grid);
+
+    $('#pr-refresh').addEventListener('click', async () => {
+        await viewProviders(true);
+    });
+
+    v.querySelectorAll('button[data-action="login"]').forEach((b) => {
+        b.addEventListener('click', () => {
+            const id = b.dataset.id;
+            const cmd = `opencode auth login ${esc(id)}`;
+            confirmDialog('Connect provider', `Open a terminal to run <code>${cmd}</code>? Perun will not see your API key.`, async () => {
+                try {
+                    await api('/api/run-in-terminal', { method: 'POST', body: { command: cmd } });
+                    toast('Terminal opened — complete login there', 'ok');
+                } catch (e) {
+                    toast('Could not open terminal — command copied', 'ok');
+                    copyCommandToClipboard(cmd);
+                }
+            }, 'Open terminal');
+        });
+    });
+    v.querySelectorAll('button[data-action="logout"]').forEach((b) => {
+        b.addEventListener('click', async () => {
+            const id = b.dataset.id;
+            try {
+                await api('/api/providers/' + encodeURIComponent(id) + '/logout', { method: 'POST' });
+                toast('Disconnected', 'ok');
+                await viewProviders();
+            } catch (e) {
+                toast(e.message, 'err');
+            }
+        });
     });
 }
 

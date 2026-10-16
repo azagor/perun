@@ -29,8 +29,8 @@ them all — no matter which folder you happened to open.
   its sessions, its memory, and a live activity feed.
 * **Cross-project memory.** Facts you store and docs Perun indexes are
   searchable from any project — "which project handled the OAuth callback?".
-* **Start any agent from anywhere.** Kick off a task in `trading_bot` while
-  you're "in" `optimus`.
+* **Start any agent from anywhere.** Kick off a task in `project-a` while
+  you're "in" `project-b`.
 * **Phone access.** A single Telegram bot with per-chat project switching. Swap
   the bot for a different one from the dashboard (name, API key, chat ids) — the
   key is verified before it is saved, stays masked, and the bridge restarts in
@@ -79,14 +79,57 @@ a second start is refused rather than fighting with HTTP 409s.
 
 ## Install on a new machine
 
-```powershell
-# One command (Windows): finds Python, installs dependencies, wires the global
-# OpenCode integration, registers the PerunBridge Telegram task, and creates a
-# desktop shortcut to Perun.cmd.
-.\bootstrap.ps1
+### 1. Windows GUI installer (easiest for end users)
 
-# Equivalent, from a checkout whose Python can already import `perun`:
+Download `PerunSetup.exe` from the latest release and run it. The wizard
+installs any missing prerequisites (Python, git, OpenCode CLI, Ollama),
+installs Perun, registers the `PerunBridge` Telegram task, and creates a
+desktop shortcut.
+
+To build it from source:
+
+```powershell
+.\installer\build.ps1          # produces installer\Output\PerunSetup.exe
+.\installer\sign.ps1           # optional: self-sign (dev only)
+```
+
+### 2. Windows command-line installer
+
+Open PowerShell and run one command:
+
+```powershell
+powershell -c "iwr -useb https://raw.githubusercontent.com/azagor/perun/master/setup.ps1 | iex"
+```
+
+This clones the repo, installs Python dependencies, wires the global OpenCode
+integration, registers the `PerunBridge` task, and creates a desktop shortcut.
+
+If you already have a local copy of the repo:
+
+```powershell
+.\bootstrap.ps1
+```
+
+### 3. Linux / macOS command-line installer
+
+Open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/azagor/perun/master/setup.sh | bash
+```
+
+Then start the dashboard:
+
+```bash
+python3 -m perun serve
+```
+
+### 4. Manual install (any platform)
+
+```bash
+pip install -r requirements.txt
 python -m perun install --machine
+python -m perun serve
 ```
 
 `install --machine` is **idempotent** — re-run it any time to repair. Narrow the
@@ -95,10 +138,17 @@ scope with `--skip-deps`, `--skip-global`, `--skip-task`, or `--no-index`;
 `PerunBridge` task).
 
 A new machine needs **Python 3.10+**, **git**, and the **opencode** CLI on `PATH`
-(Ollama is optional). The `PerunBridge` task is registered with `IgnoreNew`, an
-unlimited execution limit, and restart-on-failure, so the Telegram poller stays
-singular; it is only *started* once a Telegram token is configured in
-`~/.perun/config.json`.
+(Ollama is optional). The GUI installer handles all of these automatically.
+The `PerunBridge` task is registered with `IgnoreNew`, an unlimited execution
+limit, and restart-on-failure, so the Telegram poller stays singular; it is only
+*started* once a Telegram token is configured in `~/.perun/config.json`.
+
+### Code signing for releases
+
+The installer can be signed with a trusted certificate. The GitHub Actions
+workflow in `.github/workflows/release.yml` supports signing via the
+`PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets. For
+details see `docs/TECHNICAL_DOCUMENTATION.md`.
 
 ## What you get
 
@@ -111,7 +161,7 @@ singular; it is only *started* once a Telegram token is configured in
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
-| **Installer** | `bootstrap.ps1` / `perun install --machine` | Prereqs + deps + global install + the `PerunBridge` task |
+| **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard) or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + the `PerunBridge` task |
 
 ## CLI
 
@@ -150,6 +200,12 @@ perun/                     the Python package
   installer.py             machine install: prerequisites, deps, PerunBridge task
 mcp/perun_mcp.py           the `perun` MCP server (stdio)
 web/                       the dashboard (index.html + css + js)
+installer/                 Windows installer source (Inno Setup)
+  PerunSetup.iss             installer definition
+  build.ps1                  compile PerunSetup.exe
+  Output/PerunSetup.exe      built Windows installer
+setup.ps1                  Windows web installer (clone + bootstrap.ps1)
+setup.sh                   Unix web installer (clone + deps + global install)
 bootstrap.ps1              Windows cold-start installer (delegates to install --machine)
 Perun.cmd                  Windows one-click launcher
 tools/make_icon.py         regenerates the app icon

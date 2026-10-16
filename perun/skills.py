@@ -20,6 +20,9 @@ except Exception:  # pragma: no cover - PyYAML is a declared dependency
 from . import config
 
 
+# OpenCode skill IDs are lowercase alphanumeric with dashes/underscores.
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
+
 # Built-in OpenCode skills provided by the runtime. These IDs are reserved and
 # must not be shadowed by user SKILL.md files, but they are always available for
 # selection in tasks and the TUI.
@@ -74,7 +77,7 @@ def _read_skill_manifest(md: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     name = str(data.get("name") or "").strip()
-    if not name:
+    if not name or not _SKILL_NAME_RE.match(name):
         return None
     return {
         "name": name,

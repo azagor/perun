@@ -1,0 +1,51 @@
+name: Build and sign Perun installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $iscc = Get-ChildItem -Path 'C:\Program Files (x86)','C:\Program Files', "$env:LOCALAPPDATA\Programs" -Filter 'ISCC.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          & $iscc.FullName "${{ github.workspace }}\installer\PerunSetup.iss"
+
+      - name: Sign installer
+        shell: powershell
+        env:
+          PERUN_SIGN_PFX_BASE64: ${{ secrets.PERUN_SIGN_PFX_BASE64 }}
+          PERUN_SIGN_PASSWORD: ${{ secrets.PERUN_SIGN_PASSWORD }}
+        run: |
+          # sign.ps1 uses the trusted PFX when these secrets are set;
+          # otherwise it falls back to a self-signed certificate.
+          & "${{ github.workspace }}\installer\sign.ps1"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PerunSetup
+          path: installer/Output/PerunSetup.exe
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/PerunSetup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -41,12 +41,12 @@ regardless of which folder this repository lives in:
 | `perun_telegram_send` | Send a message to the configured Telegram chat. |
 
 When a tool takes a `project`, omit it to use the project of the **current
-working directory**; pass a slug (e.g. `trading_bot`) or an absolute path to
+working directory**; pass a slug (e.g. `my-project`) or an absolute path to
 target another project.
 
 ## When to use Perun
 
-* **Cross-project questions** ("what did the optimus project decide about X?",
+* **Cross-project questions** ("what did the other project decide about X?",
   "which of my projects touch Kubernetes?") → `perun_memory_search` with
   `all_projects` enabled, or `perun_list_projects`.
 * **Remembering something durable** that should outlive this session →
