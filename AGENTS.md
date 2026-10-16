@@ -111,6 +111,48 @@ python tools/make_icon.py
 python -m perun discover --index
 ```
 
+## Git push credentials
+
+Pushing changes that include or modify `.github/workflows/*.yml` requires a
+GitHub personal access token with the **`workflow`** scope in addition to
+`repo`. On this machine the token is stored in **Git Credential Manager**
+(`git credential-manager`), so ordinary `git push origin <branch>` and
+`git push origin <tag>` work without re-entering credentials.
+
+If a push is rejected with:
+
+```text
+refusing to allow an OAuth App to create or update workflow `.github/workflows/...` without `workflow` scope
+```
+
+regenerate a classic token with **repo + workflow** scopes and re-store it:
+
+```powershell
+$token = '<TOKEN>'
+$cred = "protocol=https`nhost=github.com`nusername=azagor`npassword=$token`n"
+$cred | git credential-manager store
+```
+
+## Releasing
+
+1. Make sure `perun/__init__.py`, `pyproject.toml`, and
+   `installer/PerunSetup.iss` all agree on the new version.
+2. Move `## Unreleased` entries in `docs/CHANGELOG.md` into a new dated
+   `## vX.Y.Z` section and update the **Latest release** line in
+   `docs/TECHNICAL_DOCUMENTATION.md`.
+3. Commit, tag, and push:
+
+   ```bash
+   git add -A
+   git commit -m "Release vX.Y.Z: ..."
+   git tag vX.Y.Z
+   git push origin master vX.Y.Z
+   ```
+
+4. GitHub Actions builds `installer/Output/PerunSetup.exe`, signs it (trusted
+   cert if `PERUN_SIGN_PFX_BASE64`/`PERUN_SIGN_PASSWORD` secrets are set,
+   otherwise self-signed), and attaches it to the release page.
+
 ## Versioning
 
 There is a single source of truth for history: `docs/CHANGELOG.md`. When you
