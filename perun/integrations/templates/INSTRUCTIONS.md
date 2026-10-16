@@ -61,6 +61,17 @@ Prefer the local project's own memory framework when a question is purely about
 this repository; use Perun when the answer lives *across* projects or in
 Perun's own registry.
 
+## Global slash commands
+
+These commands are available in every OpenCode session because Perun registers
+them globally:
+
+| Command | Purpose |
+|---------|---------|
+| `/perun-projects` | List every registered project. |
+| `/perun-ask <project> <question>` | Ask another Perun-managed project a question. |
+| `/logwork <one-line summary>` | Save a short work summary to Perun memory. Called inside a project it stores a project-scoped fact; called from the orchestrator/global context it stores a global fact. |
+
 ## Dashboard
 
 If the per-project question is really about orchestration, the user can open

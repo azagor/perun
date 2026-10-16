@@ -2,6 +2,24 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## Unreleased
+
+### Added
+
+- **`/logwork` global slash command.** Saves a one-sentence work summary to
+  Perun memory via `perun_memory_store`. Called inside a project it stores a
+  project-scoped fact; called from the orchestrator / global context it stores a
+  global fact. Implemented as `perun/integrations/templates/command_logwork.md`
+  and registered by `install_global.py` in `~/.config/opencode/opencode.json`.
+- **Global slash-command reference.** `perun/integrations/templates/INSTRUCTIONS.md`
+  and the managed `~/.config/opencode/AGENTS.md` now list `/perun-projects`,
+  `/perun-ask`, and `/logwork`.
+
+### Changed
+
+- `install_global.py` now installs/removes `logwork.md` alongside the existing
+  `perun-projects.md` and `perun-ask.md` command files.
+
 ## v0.6.4 - 2026-10-16
 
 ### Added

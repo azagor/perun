@@ -549,7 +549,7 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 2. merges into `~/.config/opencode/opencode.json`:
    * `mcp.perun` = `{type: local, command: [python, <repo>/mcp/perun_mcp.py], enabled: true}`,
    * appends the instructions path to `instructions[]`,
-   * adds `command.perun-projects` / `command.perun-ask`;
+   * adds `command.perun-projects` / `command.perun-ask` / `command.logwork`;
 3. **backs up** the prior config to `opencode.json.perun-backup-<ts>`;
 4. seeds the registry (this repo + a discovery pass) and optionally indexes docs.
 
@@ -783,6 +783,19 @@ setting.
 * **Runtime configuration.** The local Perun instance was configured to use
   `pwsh` (PowerShell 7) as its explicit terminal, replacing the previous OS
   default resolution.
+
+### 2026-10-16 — `/logwork` global slash command
+
+* **New global command `/logwork`.** Added `perun/integrations/templates/command_logwork.md`
+  and registered it in `install_global.py` (and the live `~/.config/opencode/opencode.json`).
+  The command stores a one-sentence work summary via `perun_memory_store`; when
+  invoked inside a project it becomes a project-scoped fact, and when invoked from
+  the orchestrator / global context it becomes a global fact.
+* **Global instructions updated.** Both `perun/integrations/templates/INSTRUCTIONS.md`
+  and the managed `~/.config/opencode/AGENTS.md` now list the available global
+  slash commands (`/perun-projects`, `/perun-ask`, `/logwork`).
+* **Documentation updated.** The Global installation section (§10) now references
+  the `command.logwork` registry entry.
 
 ### 2026-10-14 — Agent Console & session-start improvements
 
