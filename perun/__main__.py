@@ -409,6 +409,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             skip_deps=args.skip_deps,
             skip_global=args.skip_global,
             skip_task=args.skip_task,
+            task=args.task,
             skip_index=args.no_index,
             force=args.force,
         )
@@ -517,14 +518,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--no-index", action="store_true")
     p.add_argument("--machine", action="store_true",
-                   help="full machine setup: prerequisites, dependencies, the global "
-                        "OpenCode install, and the PerunBridge logon task")
+                   help="full machine setup: prerequisites, dependencies, and the global "
+                        "OpenCode install (the PerunBridge logon task is opt-in via --task)")
     p.add_argument("--skip-deps", action="store_true",
                    help="with --machine: do not pip install requirements.txt")
     p.add_argument("--skip-global", action="store_true",
                    help="with --machine: do not touch the global OpenCode config")
     p.add_argument("--skip-task", action="store_true",
-                   help="with --machine: do not register the PerunBridge task")
+                   help="with --machine: do not register the PerunBridge task (default; kept for compatibility)")
+    p.add_argument("--task", action="store_true",
+                   help="with --machine: register the PerunBridge logon task (auto-start at logon)")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")

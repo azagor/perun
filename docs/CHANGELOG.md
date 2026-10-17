@@ -4,6 +4,27 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Changed
+
+- **Telegram bridge is no longer auto-started at logon.** The `PerunBridge`
+  scheduled task is now opt-in (`python -m perun install --machine --task` or
+  `bootstrap.ps1 -Task`). By default the bridge starts with the dashboard
+  (`Perun.cmd` / `python -m perun serve --bridge`) and stops when the dashboard
+  closes. Running the machine installer removes any previously registered
+  `PerunBridge` task unless `--task` is passed.
+
+### Added
+
+- **`/update-docs` global slash command.** Refreshes `docs/CODEMAP.md`,
+  `docs/CHANGELOG.md`, and `docs/TECHNICAL_DOCUMENTATION.md`, plus any docs
+  declared in the project's `perun.md` manifest (`docs` map or anchors with
+  `kind: doc`). Registered globally via
+  `perun/integrations/templates/command_update-docs.md`.
+
+- **Global slash-command reference now includes `/update-docs`.**
+  `perun/integrations/templates/INSTRUCTIONS.md` lists `/perun-projects`,
+  `/perun-ask`, `/logwork`, and `/update-docs`.
+
 ## v0.7.0 - 2026-10-16
 
 ### Added

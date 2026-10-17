@@ -208,6 +208,11 @@ def install(*, force: bool = False, index: bool = True) -> int:
         {"template": "Save a short work summary to Perun memory: $ARGUMENTS",
          "description": "Log a one-sentence work summary as a project or global fact"},
     )
+    commands.setdefault(
+        "update-docs",
+        {"template": "Update project docs from the current codebase: $ARGUMENTS",
+         "description": "Refresh CODEMAP, CHANGELOG, TECHNICAL_DOCUMENTATION and manifest docs"},
+    )
     data["command"] = commands
 
     _write_json(path, data)
@@ -298,7 +303,7 @@ def uninstall() -> int:
             print(f"[perun] removed {agents_path}")
 
     # Remove the copied instructions + commands we own.
-    for name in ("perun-projects.md", "perun-ask.md", "logwork.md"):
+    for name in ("perun-projects.md", "perun-ask.md", "logwork.md", "update-docs.md"):
         f = config_dir() / "commands" / name
         if f.is_file():
             f.unlink()

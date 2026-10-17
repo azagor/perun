@@ -54,7 +54,7 @@ Ollama instance for embeddings.
 | Telegram | a long-polling thread (`PerunTelegramBridge`) |
 | Global integration | stdio MCP server `mcp/perun_mcp.py` + `~/.config/opencode` merge |
 | One-click startup (Windows) | `Perun.cmd` — idempotent dashboard launcher; never starts a second Telegram bridge |
-| Machine install (Windows) | `PerunSetup.exe` (wizard), `setup.ps1` (web), or `bootstrap.ps1` (local) → `python -m perun install --machine` (`perun/installer.py`): prerequisites, deps, global install, and the `PerunBridge` task |
+| Machine install (Windows) | `PerunSetup.exe` (wizard), `setup.ps1` (web), or `bootstrap.ps1` (local) → `python -m perun install --machine` (`perun/installer.py`): prerequisites, deps, global install, and (opt-in) the `PerunBridge` task |
 
 ### Runtime layout (`~/.perun`, override with `PERUN_HOME`)
 
@@ -83,8 +83,9 @@ resolves the port from `~/.perun/config.json` (`PERUN_PORT` overrides it), then:
 (`python -m perun serve --bridge`). It first checks `perun status --json` to see
 whether the bridge mutex is already held by a live process; only then does it
 skip the in-process bridge. This makes the launcher resilient to a crashed or
-stale `PerunBridge` scheduled task. The separate `PerunBridge` logon task still
-exists for auto-start-at-logon (§10), but the dashboard no longer depends on it.
+stale `PerunBridge` scheduled task. By default there is no logon task; the
+bridge runs only while the dashboard is open. The optional `PerunBridge` logon
+task can be registered with `--task` (§10).
 
 The desktop shortcut's `.ico` is generated deterministically by
 `tools/make_icon.py`.
@@ -469,7 +470,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` + `platform` |
 | POST | `/api/telegram/bot` | `{name?,token?,chats?,password?}` — verifies a new token with `getMe` **before** saving; `password` encrypts the token; `token: ""` clears; `{restart_required}` |
 | POST | `/api/telegram/bot/change-password` | `{old_password,new_password}` — decrypt and re-encrypt the stored token with a new password; you still need to restart the bridge so it loads the re-encrypted token |
-| POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the standalone `PerunBridge` task re-reads the bot |
+| POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the optional `PerunBridge` task re-reads the bot |
 | POST | `/api/telegram/unlock` | `{password,remember?}` — decrypt and unlock an encrypted stored token, set `PERUN_PASSWORD` for the running process, optionally persist it (Windows DPAPI-encrypted in `<PERUN_HOME>/secret`), then start/reload the bridge; if another process owns the bridge lock and `remember` is false, `bridge.reason` explains why |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/` etc. | static dashboard from `web/` |
@@ -550,7 +551,7 @@ HTML; `chunk()` splits at 3900 chars.
 **Exactly one poller.** `getUpdates` allows a single consumer per bot token, so
 two bridges would fight with HTTP 409s. Single-instance is enforced machine-wide
 by `telegram.PidLock` (a named Windows mutex namespaced by `PERUN_HOME`; a POSIX
-pid-file) and honoured by both `run_bridge()` (the `bridge` CLI, and the
+pid-file) and honoured by both `run_bridge()` (the `bridge` CLI, and the optional
 `PerunBridge` logon task) and `_start_bridge_thread()` (`serve --bridge`, which now
 keeps the lock referenced for the process lifetime). A second attempt refuses
 instead of poller-fighting, and the `PerunBridge` task is registered with
@@ -567,7 +568,7 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 | **Verify before trusting** | A non-empty token is checked with Telegram's `getMe` **before** `Settings.save()`, so a typo can never silently replace a working bot. `token: ""` clears it (Disconnect). |
 | **Token never leaks** | `GET /api/settings` returns `telegram_token: ""` plus `telegram_token_set`; the UI's password field is only ever a placeholder. The bridge side keeps the token out of logs. |
 | **Env fallback** | `Settings.telegram()` prefers `config.json`, then `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN` (chats: `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`). Because of that, `Settings.telegram_sources()` reports which source is in force, and the dashboard warns + disables **Disconnect** when an env token would silently reappear. |
-| **Apply the change** | `POST /api/telegram/bridge/restart` reloads the in-process bridge token (no window close needed). If the standalone `PerunBridge` task owns the lock instead, the same endpoint falls back to `schtasks /End` + `/Run`. |
+| **Apply the change** | `POST /api/telegram/bridge/restart` reloads the in-process bridge token (no window close needed). If the optional `PerunBridge` task owns the lock instead, the same endpoint falls back to `schtasks /End` + `/Run`. |
 
 ---
 
@@ -580,7 +581,7 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 2. merges into `~/.config/opencode/opencode.json`:
    * `mcp.perun` = `{type: local, command: [python, <repo>/mcp/perun_mcp.py], enabled: true}`,
    * appends the instructions path to `instructions[]`,
-   * adds `command.perun-projects` / `command.perun-ask` / `command.logwork`;
+   * adds `command.perun-projects` / `command.perun-ask` / `command.logwork` / `command.update-docs`;
 3. **backs up** the prior config to `opencode.json.perun-backup-<ts>`;
 4. seeds the registry (this repo + a discovery pass) and optionally indexes docs.
 
@@ -622,7 +623,8 @@ For end-user distribution, the repo ships an **Inno Setup** project that builds
    execution.
 3. Runs `python -m pip install -r requirements.txt`.
 4. Runs `python -m perun install --machine` to wire the global OpenCode
-   integration and register the `PerunBridge` task.
+   integration. The `PerunBridge` task is not registered unless the installer
+   passes `--task`.
 5. Creates Start Menu and optional desktop shortcuts for `Perun.cmd`.
 
 Uninstall runs `python -m perun install --uninstall` and
@@ -674,14 +676,18 @@ and from `bootstrap.ps1`:
    dependency exists, because nothing imports `yaml`/`fastapi`/`httpx` at module
    load.
 3. **Global install** — delegates to `install_global.install()` above.
-4. **`PerunBridge` task** — `register_bridge_task()`.
+4. **`PerunBridge` task (opt-in)** — `register_bridge_task()` when `--task` is
+   passed; otherwise `remove_bridge_task()` cleans up any previously registered
+   task. The bridge is started by the dashboard by default.
 
 #### The `PerunBridge` task contract
 
 `bridge_task_xml()` builds the task from a template (UTF-16, as
 `schtasks /Create /XML` expects) and `register_bridge_task()` writes it to a temp
 file and runs `schtasks /Create /TN PerunBridge /XML <file> /F`. The `/F` makes it
-idempotent — re-running **repairs** rather than duplicates.
+idempotent — re-running **repairs** rather than duplicates. The task is only
+registered when explicitly requested (`--task`); by default the bridge starts
+with the dashboard and stops when the dashboard closes.
 
 | XML node | Value | Why |
 |---|---|---|
@@ -695,7 +701,7 @@ idempotent — re-running **repairs** rather than duplicates.
 The interpreter comes from `_python_exe()`, which honours `PERUN_PYTHON` — the
 same override `Perun.cmd` uses — so the launcher and the task can never disagree.
 The task is only **started** (`schtasks /Run`) when a Telegram token is
-configured; otherwise it is registered and idles harmlessly until a token exists.
+configured and `--task` was passed; otherwise no task is registered.
 `bridge_task_status()` reads the task back with `schtasks /Query /XML` and parses
 it (never locale-dependent `/V` text); `perun status` surfaces it as
 `bridge_task`.

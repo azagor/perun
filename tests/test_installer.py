@@ -345,7 +345,24 @@ def test_machine_install_aborts_on_required_failure(monkeypatch, capsys):
     assert "aborting" in capsys.readouterr().out
 
 
-def test_machine_install_registers_and_starts_with_token(monkeypatch, capsys):
+def test_machine_install_removes_task_by_default(monkeypatch, capsys):
+    monkeypatch.setattr(installer, "check_prerequisites", _ok_check)
+    removed: list[dict] = []
+    monkeypatch.setattr(installer, "remove_bridge_task",
+                        lambda: (removed.append({"ok": True, "removed": True}),
+                                 {"ok": True, "removed": True})[1])
+    registered: list[bool] = []
+    monkeypatch.setattr(installer, "register_bridge_task",
+                        lambda start=False: (registered.append(start), {"ok": True})[1])
+
+    rc = installer.machine_install(skip_deps=True, skip_global=True)
+    assert rc == 0
+    assert registered == []  # default does not register the task
+    assert len(removed) == 1  # default removes any existing task
+    assert "removed" in capsys.readouterr().out
+
+
+def test_machine_install_task_opt_in_registers_and_starts_with_token(monkeypatch, capsys):
     monkeypatch.setattr(installer, "check_prerequisites", _ok_check)
     monkeypatch.setattr(config.Settings, "load", classmethod(
         lambda cls: SimpleNamespace(telegram=lambda: ("123:abc", ["1"]), port=8760)))
@@ -355,13 +372,13 @@ def test_machine_install_registers_and_starts_with_token(monkeypatch, capsys):
         {"ok": True, "python": "py.exe", "workdir": "C:\\perun", "started": start},
     )[1])
 
-    rc = installer.machine_install(skip_deps=True, skip_global=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, task=True)
     assert rc == 0
     assert seen == [True]  # token configured -> start the bridge now
     assert "bridge  started" in capsys.readouterr().out
 
 
-def test_machine_install_registers_without_token(monkeypatch, capsys):
+def test_machine_install_task_opt_in_registers_without_token(monkeypatch, capsys):
     monkeypatch.setattr(installer, "check_prerequisites", _ok_check)
     monkeypatch.setattr(config.Settings, "load", classmethod(
         lambda cls: SimpleNamespace(telegram=lambda: ("", []), port=8760)))
@@ -371,7 +388,7 @@ def test_machine_install_registers_without_token(monkeypatch, capsys):
         {"ok": True, "python": "py.exe", "workdir": "C:\\perun", "started": False},
     )[1])
 
-    rc = installer.machine_install(skip_deps=True, skip_global=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, task=True)
     assert rc == 0
     assert seen == [False]  # no token -> do not start a poller
     assert "next logon" in capsys.readouterr().out
@@ -399,11 +416,12 @@ def test_cli_install_accepts_machine_flags():
     from perun.__main__ import build_parser
 
     args = build_parser().parse_args(
-        ["install", "--machine", "--skip-deps", "--skip-global", "--skip-task", "--no-index"])
+        ["install", "--machine", "--skip-deps", "--skip-global", "--skip-task", "--task", "--no-index"])
     assert args.machine is True
     assert args.skip_deps is True
     assert args.skip_global is True
     assert args.skip_task is True
+    assert args.task is True
     assert args.no_index is True
     assert args.func.__name__ == "cmd_install"
 

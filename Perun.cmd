@@ -8,7 +8,7 @@ rem ---------------------------------------------------------------------
 rem  Double-click this file to bring Perun up:
 rem    * starts the dashboard + API  (http://127.0.0.1:8760)
 rem    * opens it in your browser
-rem    * makes sure the Telegram bridge is running EXACTLY ONCE
+rem    * starts the Telegram bridge in-process (only while the dashboard runs)
 rem
 rem  Close this window (or press Ctrl+C) to stop the dashboard.
 rem
@@ -57,17 +57,18 @@ if not errorlevel 1 (
 
 rem -- Telegram: the bridge is a SINGLETON, never started more than once --
 rem  `getUpdates` allows one consumer per token, so two pollers would fight
-rem  with HTTP 409s. The dashboard process now owns the bridge by default
-rem  (`--bridge`), guarded by a machine-global named mutex (PidLock). The
-rem  separate PerunBridge logon task still exists for auto-start-at-logon,
-rem  but this launcher no longer depends on it being healthy.
+rem  with HTTP 409s. The dashboard process owns the bridge by default
+rem  (`--bridge`), guarded by a machine-global named mutex (PidLock). There is
+rem  no separate auto-start logon task by default; the bridge is only active
+rem  while the dashboard is running. Use `python -m perun install --machine --task`
+rem  to opt into a PerunBridge logon task.
 set "BRIDGE=in dashboard process"
 
 rem  Ask Perun itself whether the bridge mutex is currently held. This is the
 rem  definitive check: it is true only when a live process (the PerunBridge
-rem  task or another dashboard) is actually polling Telegram. A stale/crashed
-rem  task will report "bridge_running: false" even if schtasks claims it is
-rem  "Running", so we always fall back to starting the bridge in-process.
+rem  task, if registered, or another dashboard) is actually polling Telegram.
+rem  A stale/crashed task will report "bridge_running: false" even if schtasks
+rem  claims it is "Running", so we always fall back to starting the bridge in-process.
 set "BRIDGE_ALREADY_UP=0"
 if not defined PERUN_FORCE_BRIDGE (
     for /f "usebackq delims=" %%j in (`%PY% -m perun status --json 2^>nul ^| powershell -NoProfile -Command "$in=$input -join '\n'; if($in -match 'bridge_running\s*:\s*true'){ '1' } else { '0' }"`) do (

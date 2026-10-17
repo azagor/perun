@@ -64,9 +64,9 @@ python -m perun serve            # http://127.0.0.1:8760
 
 On Windows you can skip step 5 and just **double-click `Perun.cmd`**: it starts
 the dashboard (idempotently — a second click just opens the browser), opens the
-page, and leaves Telegram to the single-instance `PerunBridge` task.
+page, and starts the Telegram bridge in-process while the dashboard runs.
 
-Optionally run the Telegram bridge too:
+Optionally run the Telegram bridge separately:
 
 ```bash
 python -m perun serve --bridge   # dashboard + bridge in one process
@@ -83,8 +83,9 @@ a second start is refused rather than fighting with HTTP 409s.
 
 Download `PerunSetup.exe` from the latest release and run it. The wizard
 installs any missing prerequisites (Python, git, OpenCode CLI, Ollama),
-installs Perun, registers the `PerunBridge` Telegram task, and creates a
-desktop shortcut.
+installs Perun, wires the global OpenCode integration, and creates a desktop
+shortcut. The Telegram bridge starts with the dashboard; the optional
+`PerunBridge` logon task is not registered unless the installer opts in.
 
 To build it from source:
 
@@ -102,7 +103,8 @@ powershell -c "iwr -useb https://raw.githubusercontent.com/azagor/perun/master/s
 ```
 
 This clones the repo, installs Python dependencies, wires the global OpenCode
-integration, registers the `PerunBridge` task, and creates a desktop shortcut.
+integration, and creates a desktop shortcut. The Telegram bridge starts with the
+dashboard; add `-Task` to register the optional auto-start `PerunBridge` task.
 
 If you already have a local copy of the repo:
 
@@ -133,15 +135,16 @@ python -m perun serve
 ```
 
 `install --machine` is **idempotent** — re-run it any time to repair. Narrow the
-scope with `--skip-deps`, `--skip-global`, `--skip-task`, or `--no-index`;
+scope with `--skip-deps`, `--skip-global`, `--skip-task`, or `--no-index`; pass
+`--task` to register the optional `PerunBridge` logon task.
 `python -m perun install --machine --uninstall` reverses it (and removes the
-`PerunBridge` task).
+`PerunBridge` task if present).
 
 A new machine needs **Python 3.10+**, **git**, and the **opencode** CLI on `PATH`
 (Ollama is optional). The GUI installer handles all of these automatically.
-The `PerunBridge` task is registered with `IgnoreNew`, an unlimited execution
-limit, and restart-on-failure, so the Telegram poller stays singular; it is only
-*started* once a Telegram token is configured in `~/.perun/config.json`.
+The optional `PerunBridge` task is registered with `IgnoreNew`, an unlimited
+execution limit, and restart-on-failure, so the Telegram poller stays singular;
+it is only *started* once a Telegram token is configured in `~/.perun/config.json`.
 
 ### Code signing for releases
 
@@ -161,7 +164,7 @@ details see `docs/TECHNICAL_DOCUMENTATION.md`.
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
-| **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard) or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + the `PerunBridge` task |
+| **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard) or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + optional `PerunBridge` task |
 
 ## CLI
 
@@ -197,7 +200,7 @@ perun/                     the Python package
   server.py                FastAPI + SSE + static dashboard
   __main__.py              CLI
   integrations/            global install into ~/.config/opencode
-  installer.py             machine install: prerequisites, deps, PerunBridge task
+  installer.py             machine install: prerequisites, deps, optional PerunBridge task
 mcp/perun_mcp.py           the `perun` MCP server (stdio)
 web/                       the dashboard (index.html + css + js)
 installer/                 Windows installer source (Inno Setup)

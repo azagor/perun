@@ -134,8 +134,8 @@ Settings (they belong to the singleton, not to any user project).
 ### Start Perun (one click)
 On Windows, double-clicking **`Perun.cmd`** brings the whole thing up: it finds
 Python, resolves the port, starts the dashboard **idempotently** (a second click
-just opens the browser), and ensures the single Telegram bridge — the
-`PerunBridge` task — is running. It never starts a second poller.
+just opens the browser), and starts the single Telegram bridge in-process while
+the dashboard runs. It never starts a second poller.
 
 ## 7. Why these technical choices
 

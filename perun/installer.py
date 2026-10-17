@@ -10,8 +10,10 @@ OpenCode for *this user*. This module covers the parts that are specific to a
   freshly cloned/copied repo becomes runnable in one step. Perun's import graph
   is stdlib-only at module load (``yaml``/``fastapi``/``httpx`` are imported
   lazily), so this can safely run even before any dependency exists.
-* **The ``PerunBridge`` logon task** — on Windows this registers/repairs the
-  single-instance Telegram bridge so it starts at logon. The bridge is a
+* **The optional ``PerunBridge`` logon task** — on Windows this can register the
+  single-instance Telegram bridge so it starts at logon. By default the bridge is
+  *not* registered as a task; it starts with the dashboard (``serve --bridge``) or
+  can be launched by hand with ``python -m perun bridge``. The bridge is a
   *singleton* (``getUpdates`` allows one consumer per token), so the task is
   created with ``MultipleInstancesPolicy=IgnoreNew`` and delegates
   single-instance enforcement to the machine-global :class:`perun.telegram.PidLock`.
@@ -478,10 +480,16 @@ def machine_install(
     skip_deps: bool = False,
     skip_global: bool = False,
     skip_task: bool = False,
+    task: bool = False,
     skip_index: bool = False,
     force: bool = False,
 ) -> int:
-    """Full machine setup. Returns a process exit code."""
+    """Full machine setup. Returns a process exit code.
+
+    The Telegram bridge starts with the dashboard (``serve --bridge``) or can be
+    launched by hand with ``python -m perun bridge``. The optional
+    ``PerunBridge`` logon task is only registered when ``task=True``.
+    """
     from . import db
 
     print("=" * 68)
@@ -519,9 +527,7 @@ def machine_install(
 
         install_global.install(force=force, index=not skip_index)
 
-    if skip_task:
-        print("[perun] bridge  skipped (--skip-task)")
-    else:
+    if task:
         print("-" * 68)
         token, _ = config.Settings.load().telegram()
         result = register_bridge_task(start=bool(token))
@@ -543,6 +549,17 @@ def machine_install(
                 print(f"[perun]         {result['reason']}")
             print("[perun]         fix: run this from an elevated shell, or register "
                   "manually with schtasks /Create /TN PerunBridge /XML <file> /F")
+    elif skip_task:
+        print("[perun] bridge  skipped (--skip-task)")
+    else:
+        print("-" * 68)
+        result = remove_bridge_task()
+        if result.get("removed"):
+            print(f"[perun] bridge  removed the '{TASK_NAME}' logon task")
+        elif result.get("skipped"):
+            print(f"[perun] bridge  no logon task ({result.get('reason')})")
+        else:
+            print(f"[perun] bridge  logon task removal result: {result}")
 
     print("=" * 68)
     print("  Perun is installed.")

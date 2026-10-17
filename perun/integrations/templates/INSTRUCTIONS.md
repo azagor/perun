@@ -71,6 +71,7 @@ them globally:
 | `/perun-projects` | List every registered project. |
 | `/perun-ask <project> <question>` | Ask another Perun-managed project a question. |
 | `/logwork <one-line summary>` | Save a short work summary to Perun memory. Called inside a project it stores a project-scoped fact; called from the orchestrator/global context it stores a global fact. |
+| `/update-docs [project-slug]` | Refresh project docs (`docs/CODEMAP.md`, `docs/CHANGELOG.md`, `docs/TECHNICAL_DOCUMENTATION.md`) plus any docs declared in the project's `perun.md` manifest. |
 
 ## Dashboard
 
@@ -83,6 +84,8 @@ awake or working, and `#/orchestrator` is a chat with Perun itself.
 
 On a fresh Windows machine, run `bootstrap.ps1` in the Perun checkout (or
 `python -m perun install --machine`): it checks prerequisites, installs
-dependencies, wires this global OpenCode integration, and registers the single
-`PerunBridge` Telegram task. Re-run it any time to repair; add `--uninstall` to
-reverse it.
+dependencies, and wires this global OpenCode integration. The Telegram bridge
+starts with the dashboard (`Perun.cmd` or `python -m perun serve --bridge`) and
+is not registered as a logon task by default; add `--task` to `bootstrap.ps1` or
+to `python -m perun install --machine` to opt into auto-start-at-logon. Re-run
+it any time to repair; add `--uninstall` to reverse it.

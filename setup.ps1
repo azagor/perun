@@ -13,8 +13,10 @@
       1. check for git and Python 3.10+
       2. clone the Perun repo into a target directory (or reuse an existing clone)
       3. delegate to bootstrap.ps1, which installs dependencies, wires the global
-         OpenCode integration, registers the PerunBridge task, and creates a
-         desktop shortcut
+         OpenCode integration, and creates a desktop shortcut
+
+    By default the Telegram bridge starts with the dashboard and is not
+    registered as a logon task. Use -Task to opt into auto-start-at-logon.
 
     If you already have a local copy of the repo, you can also run setup.ps1
     from inside it; in that case it skips the clone step and just runs the
@@ -44,7 +46,10 @@
     Do not touch the global OpenCode config.
 
 .PARAMETER SkipTask
-    Do not register the PerunBridge scheduled task.
+    Do not register the PerunBridge scheduled task (default; kept for compatibility).
+
+.PARAMETER Task
+    Register the PerunBridge scheduled task (auto-start at logon).
 
 .PARAMETER NoIndex
     Do not (re)index project docs.
@@ -74,6 +79,7 @@ param(
     [switch]$SkipDeps,
     [switch]$SkipGlobal,
     [switch]$SkipTask,
+    [switch]$Task,
     [switch]$NoIndex,
     [switch]$NoShortcut
 )
@@ -194,6 +200,7 @@ $args = @('-File', $bootstrap, '-Python', $pyExe)
 if ($SkipDeps)   { $args += '-SkipDeps' }
 if ($SkipGlobal) { $args += '-SkipGlobal' }
 if ($SkipTask)   { $args += '-SkipTask' }
+if ($Task)       { $args += '-Task' }
 if ($NoIndex)    { $args += '-NoIndex' }
 if ($NoShortcut) { $args += '-NoShortcut' }
 

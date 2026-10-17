@@ -47,13 +47,14 @@ A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
   unrelated config keys, back up before writing, and be fully reversible.
 * **The Telegram bridge is a singleton.** `getUpdates` allows one consumer per
   bot token; keep `telegram.PidLock` (a machine-global named mutex) as the guard
-  and never start a second poller. `serve --bridge`, `perun bridge`, the
+  and never start a second poller. `serve --bridge`, `perun bridge`, the optional
   `PerunBridge` logon task, and `Perun.cmd` must all defer to that lock.
-* **The bridge task is installer-owned.** `PerunBridge` is created and repaired
-  by `perun/installer.py` (`bridge_task_xml()` → `schtasks /Create /XML /F`),
-  never by hand and never by `Perun.cmd` (which only `schtasks /run`s it). Keep
-  the `/F` idempotency and the `IgnoreNew` + `ExecutionTimeLimit=PT0S` settings —
-  they are what keep the poller singular and long-lived.
+* **The bridge task is opt-in and installer-owned.** `PerunBridge` is created
+  and repaired by `perun/installer.py` (`bridge_task_xml()` →
+  `schtasks /Create /XML /F`) only when `--task` is passed, never by hand and
+  never by `Perun.cmd`. Keep the `/F` idempotency and the `IgnoreNew` +
+  `ExecutionTimeLimit=PT0S` settings — they are what keep the poller singular
+  and long-lived.
 
 ## Adding a new source file
 
@@ -99,7 +100,7 @@ $env:PERUN_HOME="$env:TEMP\perun_dev"; python -m perun serve
 # one-click launcher (Windows; idempotent, opens the browser)
 .\Perun.cmd
 
-# install / repair the whole machine (prereqs + deps + global install + PerunBridge task)
+# install / repair the whole machine (prereqs + deps + global install; add --task for PerunBridge)
 .\bootstrap.ps1
 #   ... or directly, from a Python that can import `perun`:
 python -m perun install --machine

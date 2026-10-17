@@ -281,8 +281,9 @@ FastAPI app + SSE + static dashboard.
   never echoes `telegram_token`), global instruction files (`/api/instructions/*`),
   telegram (`/api/telegram/*`: `status` reports
   `token_source`/`chats_source`/`bridge_task`, `bot` verifies a new token with
-  `getMe` before saving, `bridge/restart` restarts the logon task, `unlock`
-  decrypts an encrypted token and starts/reloads the bridge, `send`).
+  `getMe` before saving, `bridge/restart` restarts the in-process bridge or the
+  optional logon task, `unlock` decrypts an encrypted token and starts/reloads
+  the bridge, `send`).
 * `_register_project()`, `_sync_manifest()`, `serve()` (uvicorn launcher).
 
 ### `perun/__main__.py`
@@ -291,8 +292,8 @@ CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
 `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_run`, `cmd_import_legacy`,
 `cmd_encrypt_config`, `cmd_global_instructions` (list / set / `--clear` the
 global Markdown instruction files), `cmd_install`
-(`--machine` / `--skip-deps` / `--skip-global` / `--skip-task` delegate to
-`installer.machine_install()`, `--machine --uninstall` to `installer`),
+(`--machine` / `--skip-deps` / `--skip-global` / `--skip-task` / `--task`
+delegate to `installer.machine_install()`, `--machine --uninstall` to `installer`),
 `cmd_mcp`, `build_parser()`, `main()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
   / `_IN_PROCESS_BRIDGE` — the `serve --bridge` path starts the bridge at most once
@@ -320,10 +321,12 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 * Dependencies: `requirements_file()`, `pip_install()`.
 * Bridge task: `_python_exe()` (honours `PERUN_PYTHON`), `_task_user()`,
   `bridge_task_xml()`, `_run_schtasks()`, `_decode_console()`,
-  `bridge_task_exists()`, `bridge_task_status()`, `register_bridge_task()`,
-  `remove_bridge_task()`, `restart_bridge_task()` (how a new Telegram bot takes
-  effect: `schtasks /End` then `/Run`, touching only the task's own process).
-* Orchestration: `machine_install()`, `uninstall_machine()`.
+  `bridge_task_exists()`, `bridge_task_status()`, `register_bridge_task()`
+  (opt-in via `--task`), `remove_bridge_task()`, `restart_bridge_task()` (how a
+  new Telegram bot takes effect: `schtasks /End` then `/Run`, touching only the
+  task's own process).
+* Orchestration: `machine_install()` (removes any existing task by default),
+  `uninstall_machine()`.
 
 ---
 

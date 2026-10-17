@@ -10,8 +10,11 @@
       2. install the Python dependencies     (requirements.txt)
       3. install Perun into the global OpenCode config
          (the 'perun' MCP server + the managed AGENTS.md block + slash-commands)
-      4. register the single-instance 'PerunBridge' logon task   (Telegram)
+      4. optionally register the single-instance 'PerunBridge' logon task (Telegram)
       5. create a desktop shortcut to Perun.cmd
+
+    By default the Telegram bridge starts with the dashboard (Perun.cmd) and is
+    not registered as a logon task. Use -Task to opt into auto-start-at-logon.
 
     Everything after step 1 is delegated to 'python -m perun install --machine',
     so this script never duplicates logic; it just finds Python and hands over.
@@ -48,6 +51,7 @@ param(
     [switch]$SkipDeps,
     [switch]$SkipGlobal,
     [switch]$SkipTask,
+    [switch]$Task,
     [switch]$NoIndex,
     [switch]$NoShortcut
 )
@@ -114,6 +118,7 @@ $installArgs = @('-m', 'perun', 'install', '--machine')
 if ($SkipDeps)   { $installArgs += '--skip-deps' }
 if ($SkipGlobal) { $installArgs += '--skip-global' }
 if ($SkipTask)   { $installArgs += '--skip-task' }
+if ($Task)       { $installArgs += '--task' }
 if ($NoIndex)    { $installArgs += '--no-index' }
 
 & $pyExe @installArgs

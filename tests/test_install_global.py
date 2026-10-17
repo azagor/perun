@@ -27,6 +27,14 @@ def test_install_creates_mcp_and_instructions(fake_xdg):
     assert install_global.instructions_target().is_file()
     # templates were copied into commands/
     assert (fake_xdg / "commands" / "perun-projects.md").is_file()
+    assert (fake_xdg / "commands" / "perun-ask.md").is_file()
+    assert (fake_xdg / "commands" / "logwork.md").is_file()
+    assert (fake_xdg / "commands" / "update-docs.md").is_file()
+    # commands registered in opencode.json
+    assert "perun-projects" in cfg["command"]
+    assert "perun-ask" in cfg["command"]
+    assert "logwork" in cfg["command"]
+    assert "update-docs" in cfg["command"]
 
 
 def test_install_preserves_unrelated_keys(fake_xdg):

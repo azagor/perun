@@ -2986,7 +2986,7 @@ function mountTelegram(host, status, reload) {
                  <strong>Restart bridge</strong> will reload the token without closing the window.</p>`
             : `<p class="muted mt">The bridge is not currently running. ${task.exists
                 ? 'You can restart the standalone <span class="mono">PerunBridge</span> logon task below.'
-                : 'No <span class="mono">PerunBridge</span> logon task found — run <span class="mono">python -m perun install --machine</span> to register it, or start it by hand: <span class="mono">python -m perun bridge</span>.'}</p>`}
+                : 'The bridge normally starts automatically with the dashboard. You can also start it by hand: <span class="mono">python -m perun bridge</span>. Use <span class="mono">python -m perun install --machine --task</span> to register an auto-start logon task.'}</p>`}
          <div class="form-actions">
             <button class="btn" id="tg-restart" ${(inProcess || task.exists) ? '' : 'disabled'}>⟳ Restart bridge</button>
          </div>
