@@ -108,3 +108,39 @@ def test_backfill_docs_cli_all_projects(monkeypatch, tmp_path, capsys):
     assert (proj_dir / "AGENTS.md").is_file()
     assert (proj_dir / "perun.md").is_file()
     assert (proj_dir / "docs" / "CHANGELOG.md").is_file()
+
+
+def test_validate_docs_cli_reports_issues(monkeypatch, tmp_path, capsys):
+    from perun import config, registry
+
+    db.init_db()
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    config.ensure_dirs()
+
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    registry.add_project("Proj", str(proj_dir))
+
+    rc = cli.main(["validate-docs", "proj"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "validation complete" in captured.out
+
+
+def test_refresh_deps_cli_records_facts(monkeypatch, tmp_path, capsys):
+    from perun import config, registry
+
+    db.init_db()
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    config.ensure_dirs()
+
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    p = registry.add_project("Proj", str(proj_dir))
+    (proj_dir / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+
+    rc = cli.main(["refresh-deps", "proj"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "refresh complete" in captured.out
+    assert "1 fact" in captured.out

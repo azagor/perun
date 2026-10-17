@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import manifest, orchestrator, registry
+from . import manifest, memory, orchestrator, registry, scaffold
 
 
 SKIP_DIRS = {
@@ -143,6 +143,50 @@ def scan(roots: list[str], *, max_depth: int = 1) -> list[dict[str, Any]]:
     return found
 
 
+def record_dependencies(project_id: int, path: str) -> None:
+    """Parse dependency files and store each dependency as a project-scoped fact."""
+    try:
+        deps = scaffold.parse_dependencies(path)
+    except Exception:  # pragma: no cover - defensive
+        return
+    for source_file, items in deps.items():
+        for name, version in items:
+            content = f"Dependency {name}" + (f" ({version})" if version else "")
+            content += f" from {source_file}"
+            try:
+                memory.remember(
+                    content, project_id=project_id, scope="project",
+                    topic="dependencies", source="discovery",
+                )
+            except Exception:  # pragma: no cover - memory is fail-open
+                pass
+
+
+_record_dependencies = record_dependencies
+
+
+def record_local_references(project: dict[str, Any],
+                            existing_by_path: dict[str, dict[str, Any]]) -> None:
+    """Store cross-project references as project-scoped facts."""
+    projects = list(existing_by_path.values())
+    try:
+        refs = scaffold.find_local_project_references(project["path"], projects)
+    except Exception:  # pragma: no cover - defensive
+        return
+    for ref in refs:
+        try:
+            memory.remember(
+                f"References local project {ref['target_name']} ({ref['target_slug']}) via {ref['via']}",
+                project_id=project["id"], scope="project",
+                topic="relationships", source="discovery",
+            )
+        except Exception:  # pragma: no cover - memory is fail-open
+            pass
+
+
+_record_local_references = record_local_references
+
+
 def register(info: dict[str, Any],
              existing_by_path: dict[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any], bool]:
     """Insert or update a discovered project. Returns (project, created).
@@ -150,6 +194,10 @@ def register(info: dict[str, Any],
     A ``perun.md``/``perun.json`` manifest, when present, is authoritative for
     the fields it declares (name, kind, description, tags, model, agent,
     instructions, git) and its snapshot is stored for the dashboard.
+
+    After registration, dependency files are parsed into project-scoped memory
+    facts, local project references are recorded, and missing dependency anchors
+    are appended to an existing ``perun.md``.
     """
     norm = os.path.normcase(os.path.abspath(info["path"]))
     existing = existing_by_path.get(norm) if existing_by_path else registry.get_project_by_path(info["path"])
@@ -181,31 +229,50 @@ def register(info: dict[str, Any],
         if man["found"]:
             registry.set_project_manifest(existing["slug"], manifest.snapshot(man),
                                           man["path"])
+        project = updated or existing
         registry.touch_project(existing["id"], seen=True)
-        return updated or existing, False
+    else:
+        created = registry.add_project(
+            name,
+            info["path"],
+            root=info.get("root", ""),
+            kind=kind,
+            description=description,
+            tags=tags,
+            model=declared.get("model", ""),
+            agent=declared.get("agent", ""),
+        )
+        orchestrator.write_project_instruction_file(
+            info["path"], instructions, overwrite=False)
+        if declared.get("git_remote") or declared.get("git_branch"):
+            registry.update_project(created["slug"],
+                                    git_remote=declared.get("git_remote", ""),
+                                    git_branch=declared.get("git_branch", ""))
+        if man["found"]:
+            registry.set_project_manifest(created["slug"], manifest.snapshot(man),
+                                          man["path"])
+        registry.log_activity(created["id"], "discover",
+                              f"Registered project ({created['kind']})")
+        project = registry.get_project(created["slug"]) or created
 
-    created = registry.add_project(
-        name,
-        info["path"],
-        root=info.get("root", ""),
-        kind=kind,
-        description=description,
-        tags=tags,
-        model=declared.get("model", ""),
-        agent=declared.get("agent", ""),
-    )
-    orchestrator.write_project_instruction_file(
-        info["path"], instructions, overwrite=False)
-    if declared.get("git_remote") or declared.get("git_branch"):
-        registry.update_project(created["slug"],
-                                git_remote=declared.get("git_remote", ""),
-                                git_branch=declared.get("git_branch", ""))
-    if man["found"]:
-        registry.set_project_manifest(created["slug"], manifest.snapshot(man),
-                                      man["path"])
-    registry.log_activity(created["id"], "discover",
-                          f"Registered project ({created['kind']})")
-    return (registry.get_project(created["slug"]) or created), True
+    # Refresh manifest anchors for new dependency files without clobbering edits.
+    try:
+        scaffold.update_manifest_anchors(info["path"])
+    except Exception:  # pragma: no cover - best effort
+        pass
+
+    # Re-load manifest snapshot if it changed.
+    refreshed = manifest.load(info["path"])
+    if refreshed["found"]:
+        registry.set_project_manifest(project["slug"], manifest.snapshot(refreshed),
+                                      refreshed["path"])
+
+    # Parse and remember dependencies / relationships.
+    record_dependencies(project["id"], info["path"])
+    if existing_by_path:
+        record_local_references(project, existing_by_path)
+
+    return project, existing is None
 
 
 def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]:

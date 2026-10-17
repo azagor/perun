@@ -229,29 +229,46 @@ build/
 
 
 def _suggest_commands(path: str | Path) -> dict[str, str]:
-    """Infer a few common commands from files present in the project."""
+    """Infer common commands from files present in the project.
+
+    Supports multi-language projects: commands are collected from every detected
+    stack instead of stopping at the first match.
+    """
     p = Path(path)
     commands: dict[str, str] = {}
-    if (p / "package.json").is_file():
-        commands["install"] = "npm install"
-        commands["dev"] = "npm run dev"
-        commands["build"] = "npm run build"
-        commands["test"] = "npm test"
-    if any((p / f).is_file() for f in ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile")):
+    has_python = any((p / f).is_file() for f in ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile"))
+    has_node = (p / "package.json").is_file()
+    has_rust = (p / "Cargo.toml").is_file()
+    has_go = (p / "go.mod").is_file()
+    has_java_gradle = any((p / f).is_file() for f in ("build.gradle", "build.gradle.kts"))
+    has_java_maven = (p / "pom.xml").is_file()
+
+    if has_node:
+        commands["npm-install"] = "npm install"
+        commands["npm-dev"] = "npm run dev"
+        commands["npm-build"] = "npm run build"
+        commands["npm-test"] = "npm test"
+    if has_python:
         if (p / "requirements.txt").is_file():
-            commands["install"] = "python -m pip install -r requirements.txt"
+            commands["pip-install"] = "python -m pip install -r requirements.txt"
         elif (p / "pyproject.toml").is_file():
-            commands["install"] = "python -m pip install -e ."
-        commands["test"] = commands.get("test") or "python -m pytest"
-    if (p / "Cargo.toml").is_file():
-        commands["build"] = commands.get("build") or "cargo build"
-        commands["test"] = commands.get("test") or "cargo test"
-    if (p / "go.mod").is_file():
-        commands["build"] = commands.get("build") or "go build ./..."
-        commands["test"] = commands.get("test") or "go test ./..."
+            commands["pip-install"] = "python -m pip install -e ."
+        commands["pytest"] = "python -m pytest"
+    if has_rust:
+        commands["cargo-build"] = "cargo build"
+        commands["cargo-test"] = "cargo test"
+    if has_go:
+        commands["go-build"] = "go build ./..."
+        commands["go-test"] = "go test ./..."
+    if has_java_gradle:
+        commands["gradle-build"] = "./gradlew build"
+        commands["gradle-test"] = "./gradlew test"
+    if has_java_maven:
+        commands["maven-build"] = "mvn package"
+        commands["maven-test"] = "mvn test"
     if (p / "Makefile").is_file():
         commands["make"] = "make"
-    commands["status"] = "git status"
+    commands["git-status"] = "git status"
     return commands
 
 
@@ -351,6 +368,292 @@ def backfill(path: str | Path, name: str = "") -> list[str]:
     if not opencode_dir.exists():
         opencode_dir.mkdir(parents=True, exist_ok=True)
     return created
+
+
+def _read_text_file(path: Path) -> str:
+    """Best-effort read of a text file; returns empty string on failure."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _parse_package_json(path: Path) -> list[tuple[str, str | None]]:
+    """Return (name, version_or_None) pairs from package.json."""
+    try:
+        data = json.loads(_read_text_file(path))
+    except (json.JSONDecodeError, OSError):
+        return []
+    deps: dict[str, Any] = {}
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        if isinstance(data.get(key), dict):
+            deps.update(data[key])
+    return sorted((name, str(v) if v else None) for name, v in deps.items())
+
+
+def _parse_requirements_txt(path: Path) -> list[tuple[str, str | None]]:
+    """Return (name, specifier_or_None) pairs from requirements.txt."""
+    out: list[tuple[str, str | None]] = []
+    for line in _read_text_file(path).splitlines():
+        line_stripped = line.strip()
+        if not line_stripped or line_stripped.startswith("#") or line_stripped.startswith("-"):
+            continue
+        # Handle extras and version specifiers: name[extra]>=1.0
+        name_part = line_stripped.split(";", 1)[0].strip()
+        name_part = name_part.split("[", 1)[0].strip()
+        spec = ""
+        for sep in ("==", ">=", "<=", "~=", "!=", ">", "<"):
+            if sep in name_part:
+                spec = name_part.split(sep, 1)[1].strip()
+                name_part = name_part.split(sep, 1)[0].strip()
+                break
+        if name_part:
+            out.append((name_part, spec or None))
+    return out
+
+
+def _parse_toml_section(text: str, section_header: str) -> dict[str, Any]:
+    """Tiny TOML parser for a single [section] table. Returns key/value dict."""
+    result: dict[str, Any] = {}
+    in_section = False
+    bracket_depth = 0
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if stripped == section_header or stripped.startswith(section_header + "."):
+                in_section = True
+                bracket_depth = stripped.count("[") - stripped.count("]")
+            elif in_section:
+                # Entered a different section at the same or lower depth.
+                if bracket_depth <= 1:
+                    in_section = False
+            continue
+        if not in_section:
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and not key.startswith("["):
+            result[key] = value
+    return result
+
+
+def _parse_pyproject_toml(path: Path) -> list[tuple[str, str | None]]:
+    """Return dependency names from pyproject.toml (PEP 621 + Poetry style)."""
+    text = _read_text_file(path)
+    deps: list[tuple[str, str | None]] = []
+    # PEP 621 project.dependencies
+    for name, spec in _parse_toml_section(text, "[project.dependencies]").items():
+        deps.append((name, str(spec) if spec else None))
+    for name, spec in _parse_toml_section(text, "[project.optional-dependencies]").items():
+        deps.append((name, str(spec) if spec else None))
+    # Poetry
+    for name, spec in _parse_toml_section(text, "[tool.poetry.dependencies").items():
+        if name == "python":
+            continue
+        deps.append((name, str(spec) if spec else None))
+    return deps
+
+
+def _parse_cargo_toml(path: Path) -> list[tuple[str, str | None]]:
+    """Return dependency names from Cargo.toml."""
+    text = _read_text_file(path)
+    deps: list[tuple[str, str | None]] = []
+    for section in ("[dependencies]", "[dev-dependencies]", "[build-dependencies]"):
+        for name, spec in _parse_toml_section(text, section).items():
+            deps.append((name, str(spec) if spec else None))
+    return deps
+
+
+def _parse_go_mod(path: Path) -> list[tuple[str, str | None]]:
+    """Return (module, version) pairs from go.mod require blocks."""
+    text = _read_text_file(path)
+    deps: list[tuple[str, str | None]] = []
+    in_require = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("require ("):
+            in_require = True
+            continue
+        if in_require and s == ")":
+            in_require = False
+            continue
+        if in_require or s.startswith("require "):
+            parts = s.strip("()").split()
+            if len(parts) >= 2 and not parts[0].startswith("//"):
+                deps.append((parts[0], parts[1]))
+    return deps
+
+
+# Mapping of anchor file name → parser function.
+DEPENDENCY_PARSERS: dict[str, Any] = {
+    "package.json": _parse_package_json,
+    "requirements.txt": _parse_requirements_txt,
+    "pyproject.toml": _parse_pyproject_toml,
+    "Cargo.toml": _parse_cargo_toml,
+    "go.mod": _parse_go_mod,
+}
+
+
+def parse_dependencies(path: str | Path) -> dict[str, list[tuple[str, str | None]]]:
+    """Parse known dependency files under *path* and return {file: [(name, version), ...]}."""
+    p = Path(path)
+    result: dict[str, list[tuple[str, str | None]]] = {}
+    for rel, parser in DEPENDENCY_PARSERS.items():
+        target = p / rel
+        if target.is_file():
+            try:
+                result[rel] = parser(target)
+            except Exception:  # pragma: no cover - defensive
+                result[rel] = []
+    return result
+
+
+def update_manifest_anchors(path: str | Path) -> dict[str, Any]:
+    """Append newly-detected dependency anchors to an existing ``perun.md``.
+
+    Returns a status dict. The manifest is only rewritten when at least one new
+    anchor is added; hand-written content and existing anchors are preserved.
+    """
+    p = Path(path)
+    target = p / manifest.MANIFEST_MD
+    if not target.is_file():
+        return {"updated": False, "reason": "no perun.md manifest"}
+
+    snap = manifest.load(p)
+    if not snap["found"]:
+        return {"updated": False, "reason": "could not parse manifest"}
+
+    existing_paths = {str(a.get("path", "")).replace("\\", "/") for a in snap["data"].get("anchors", [])}
+    new_anchors = detect_anchors(p)
+    to_add = [a for a in new_anchors if a["path"] not in existing_paths]
+
+    if not to_add:
+        return {"updated": False, "added": 0, "reason": "no new anchors"}
+
+    anchors = list(snap["data"].get("anchors", []))
+    anchors.extend(to_add)
+    snap["data"]["anchors"] = anchors
+
+    try:
+        target.write_text(manifest.dump(snap["data"], snap["body"]), encoding="utf-8")
+    except OSError as exc:
+        return {"updated": False, "reason": f"could not write manifest: {exc}"}
+
+    return {"updated": True, "added": len(to_add), "anchors": to_add}
+
+
+def validate_manifest(path: str | Path) -> dict[str, Any]:
+    """Check a ``perun.md`` manifest for stale doc paths and anchors.
+
+    Returns a dict with `ok`, `missing_docs`, and `missing_anchors` lists.
+    """
+    p = Path(path)
+    target = p / manifest.MANIFEST_MD
+    if not target.is_file():
+        return {"ok": False, "missing_docs": [], "missing_anchors": [], "reason": "no perun.md"}
+
+    snap = manifest.load(p)
+    if not snap["found"]:
+        return {"ok": False, "missing_docs": [], "missing_anchors": [], "reason": "could not parse manifest"}
+
+    missing_docs: list[str] = []
+    for label, rel in (snap["data"].get("docs") or {}).items():
+        if not (p / rel).exists():
+            missing_docs.append(f"docs.{label} -> {rel}")
+
+    missing_anchors: list[str] = []
+    for a in snap["data"].get("anchors", []):
+        if a.get("kind") in ("file", "doc", "symbol"):
+            rel = a.get("path", "")
+            if rel and not (p / rel).exists():
+                missing_anchors.append(f"{a.get('label')} -> {rel}")
+
+    return {
+        "ok": not missing_docs and not missing_anchors,
+        "missing_docs": missing_docs,
+        "missing_anchors": missing_anchors,
+    }
+
+
+def find_local_project_references(path: str | Path, projects: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Find references in *path* to other registered projects.
+
+    Currently detects:
+    - ``file:../<local-path>`` entries in ``package.json`` dependencies.
+    - Local path references in ``requirements.txt`` (``-e ../path`` or ``./path``).
+    """
+    p = Path(path)
+    refs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    import os
+
+    project_paths = {
+        os.path.normcase(os.path.abspath(pr.get("path", ""))): pr
+        for pr in projects
+        if pr.get("path")
+    }
+
+    package_json = p / "package.json"
+    if package_json.is_file():
+        try:
+            data = json.loads(_read_text_file(package_json))
+        except json.JSONDecodeError:
+            data = {}
+        for dep_type in ("dependencies", "devDependencies", "peerDependencies"):
+            for name, spec in (data.get(dep_type) or {}).items():
+                if not isinstance(spec, str) or not spec.startswith("file:"):
+                    continue
+                local = spec[5:].lstrip("/")
+                try:
+                    resolved = (p / local).resolve()
+                except Exception:
+                    continue
+                resolved_norm = os.path.normcase(str(resolved))
+                key = (resolved_norm, name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                for proj_path_norm, proj in project_paths.items():
+                    if resolved_norm == proj_path_norm:
+                        refs.append({
+                            "source": str(p),
+                            "target_slug": proj["slug"],
+                            "target_name": proj.get("name", proj["slug"]),
+                            "via": f"package.json:{dep_type}:{name}",
+                        })
+
+    req = p / "requirements.txt"
+    if req.is_file():
+        for line in _read_text_file(req).splitlines():
+            line = line.strip()
+            if not line.startswith("-e ") and not line.startswith("./") and not line.startswith("../"):
+                continue
+            local = line[3:].strip() if line.startswith("-e ") else line
+            try:
+                resolved = (p / local).resolve()
+            except Exception:
+                continue
+            resolved_norm = os.path.normcase(str(resolved))
+            for proj_path_norm, proj in project_paths.items():
+                if resolved_norm == proj_path_norm:
+                    key = (resolved_norm, proj["slug"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    refs.append({
+                        "source": str(p),
+                        "target_slug": proj["slug"],
+                        "target_name": proj.get("name", proj["slug"]),
+                        "via": f"requirements.txt:{line}",
+                    })
+
+    return refs
 
 
 def summary(path: str | Path) -> dict[str, Any]:

@@ -37,6 +37,25 @@ All notable changes are recorded here. Single source of truth for release notes.
   run across every registered project to bring older projects up to the new
   standard.
 
+- **Auto-refresh manifest anchors on discovery.** `perun discover` now appends
+  anchors for newly-detected dependency/build/CI files to existing `perun.md`
+  manifests without clobbering hand-edited content.
+
+- **Dependency parsing and cross-project references.** `perun discover` and
+  `python -m perun refresh-deps` read `package.json`, `requirements.txt`,
+  `pyproject.toml`, `Cargo.toml`, and `go.mod` and store each dependency as a
+  project-scoped memory fact. Local `file:` references in `package.json` and
+  `-e ./path` references in `requirements.txt` are recorded as relationship
+  facts, enabling queries like "which projects use React?" or "which projects
+  depend on X?".
+
+- **Multi-language command suggestions.** New and backfilled projects get
+  per-stack commands (e.g., `npm-install`, `pytest`, `cargo-build`, `go-test`,
+  `maven-build`) when multiple language stacks are present.
+
+- **Manifest validation.** `python -m perun validate-docs [slug] [--all]` checks
+  `perun.md` for docs or anchors that point to missing files.
+
 ## v0.7.0 - 2026-10-16
 
 ### Added

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+import json
+
 from perun import scaffold
 
 
@@ -98,3 +100,56 @@ def test_backfill_is_safe_on_empty_directory(tmp_path):
     assert "docs/CHANGELOG.md" in created
     assert "docs/TECHNICAL_DOCUMENTATION.md" in created
     assert "docs/CODEMAP.md" in created
+
+
+def test_update_manifest_anchors_appends_new_dependency_anchors(tmp_path):
+    p, _ = scaffold.create_dir(tmp_path / "proj")
+    scaffold.bootstrap(p, "Proj")
+    (p / "Dockerfile").write_text("FROM python:3.11", encoding="utf-8")
+    result = scaffold.update_manifest_anchors(p)
+    assert result["updated"] is True
+    assert result["added"] == 1
+    text = (p / "perun.md").read_text(encoding="utf-8")
+    assert "Dockerfile" in text
+
+    # A second call is idempotent.
+    result2 = scaffold.update_manifest_anchors(p)
+    assert result2["updated"] is False
+
+
+def test_parse_dependencies_reads_common_files(tmp_path):
+    p, _ = scaffold.create_dir(tmp_path / "proj")
+    (p / "package.json").write_text(
+        json.dumps({"dependencies": {"react": "^18.0.0"}}),
+        encoding="utf-8",
+    )
+    (p / "requirements.txt").write_text("pytest>=7.0\n", encoding="utf-8")
+    deps = scaffold.parse_dependencies(p)
+    assert "package.json" in deps
+    assert any(name == "react" for name, _ in deps["package.json"])
+    assert "requirements.txt" in deps
+    assert any(name == "pytest" for name, _ in deps["requirements.txt"])
+
+
+def test_validate_manifest_reports_missing_docs_and_anchors(tmp_path):
+    p, _ = scaffold.create_dir(tmp_path / "proj")
+    scaffold.bootstrap(p, "Proj")
+    (p / "docs" / "CHANGELOG.md").unlink()
+    result = scaffold.validate_manifest(p)
+    assert result["ok"] is False
+    assert any("CHANGELOG" in m for m in result["missing_docs"])
+
+
+def test_find_local_project_references_detects_file_dependency(tmp_path):
+    p, _ = scaffold.create_dir(tmp_path / "consumer")
+    other, _ = scaffold.create_dir(tmp_path / "other")
+    (p / "package.json").write_text(
+        json.dumps({"dependencies": {"other": f"file:../other"}}),
+        encoding="utf-8",
+    )
+    projects = [
+        {"slug": "other", "name": "Other", "path": str(other)},
+    ]
+    refs = scaffold.find_local_project_references(p, projects)
+    assert len(refs) == 1
+    assert refs[0]["target_slug"] == "other"

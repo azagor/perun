@@ -191,11 +191,26 @@ Optional steps: `git_init` (`scaffold`/`git.init`), `git_remote` + `git_branch`
 registration the manifest is merged (`_sync_manifest`) so the dashboard reflects
 it immediately.
 
+**Discovery keeps manifests alive.** `perun discover` / `register()` calls
+`scaffold.update_manifest_anchors()` to append anchors for newly-appeared
+dependency/build/CI files without clobbering hand-edited manifest content. It
+also parses `package.json`, `requirements.txt`, `pyproject.toml`, `Cargo.toml`,
+and `go.mod` and stores each dependency as a project-scoped memory fact, plus
+records local `file:` cross-project references.
+
 **Backfill docs for existing projects**
 (`python -m perun backfill-docs [slug] [--all]`). The `scaffold.backfill()`
 helper writes the same scaffold files but only where they are missing, so it is
-safe to run on existing projects. It is useful for bringing older projects up
-to the current documentation standard. A server-backed **folder browser** powers the path pickers:
+safe to run on existing projects.
+
+**Validate manifests**
+(`python -m perun validate-docs [slug] [--all]`). Reports `perun.md` docs and
+anchors that point to files which no longer exist.
+
+**Refresh dependencies**
+(`python -m perun refresh-deps [slug] [--all]`). Re-parses dependency files and
+stores them as project-scoped facts; useful for projects that existed before
+dependency tracking was added. A server-backed **folder browser** powers the path pickers:
 `GET /api/fs/list?path=&show_hidden=` returns `roots`, `home`, `parent`, `dirs`,
 `files`; `POST /api/fs/mkdir {path}` creates a directory.
 

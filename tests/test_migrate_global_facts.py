@@ -25,8 +25,12 @@ def test_migrate_moves_perun_facts_and_skips_non_perun(tmp_path):
         global_count = db.one(conn, "SELECT COUNT(*) c FROM memory WHERE scope='global' AND project_id=0")["c"]
         assert global_count == 1
         perun_id = control.ensure()["id"]
-        perun_count = db.one(conn, "SELECT COUNT(*) c FROM memory WHERE project_id=?", (perun_id,))["c"]
-        assert perun_count == 1
+        moved = db.one(
+            conn,
+            "SELECT COUNT(*) c FROM memory WHERE project_id=? AND content LIKE ?",
+            (perun_id, "%Perun v9.9.9 ships a new widget%"),
+        )["c"]
+        assert moved == 1
 
 
 def test_migrate_is_non_destructive_for_duplicates(tmp_path):

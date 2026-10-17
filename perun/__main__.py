@@ -15,6 +15,8 @@ Usage::
     python -m perun run <slug> [prompt] [--model M] [--agent A] [--title T] [--wait]
     python -m perun import-legacy-memory [--path P]
     python -m perun backfill-docs [slug] [--all]
+    python -m perun validate-docs [slug] [--all]
+    python -m perun refresh-deps [slug] [--all]
     python -m perun install [--uninstall] [--machine]
     python -m perun mcp
 """
@@ -401,26 +403,9 @@ def cmd_backfill_docs(args: argparse.Namespace) -> int:
     _ensure()
     from . import scaffold
 
-    targets: list[dict[str, Any]]
-    if args.all:
-        targets = registry.list_projects()
-        if not targets:
-            print("no projects registered")
-            return 0
-    else:
-        if not args.slug:
-            # Try to resolve from cwd.
-            proj = registry.get_project_by_path(os.getcwd())
-            if not proj:
-                print("no project specified and none found in the current directory")
-                return 1
-            targets = [proj]
-        else:
-            proj = registry.get_project(args.slug)
-            if not proj:
-                print(f"no such project: {args.slug}")
-                return 1
-            targets = [proj]
+    targets = _resolve_project_targets(args.slug, args.all)
+    if targets is None:
+        return 1
 
     total_created: list[str] = []
     for proj in targets:
@@ -442,6 +427,84 @@ def cmd_backfill_docs(args: argparse.Namespace) -> int:
         else:
             print(f"{proj['slug']}: nothing to create")
     print(f"backfill complete — {len(total_created)} file(s) created")
+    return 0
+
+
+def _resolve_project_targets(slug: str | None, all_projects: bool) -> list[dict[str, Any]] | None:
+    """Resolve a CLI project argument into a list of project dicts."""
+    if all_projects:
+        targets = registry.list_projects()
+        if not targets:
+            print("no projects registered")
+            return []
+        return targets
+    if not slug:
+        proj = registry.get_project_by_path(os.getcwd())
+        if not proj:
+            print("no project specified and none found in the current directory")
+            return None
+        return [proj]
+    proj = registry.get_project(slug)
+    if not proj:
+        print(f"no such project: {slug}")
+        return None
+    return [proj]
+
+
+def cmd_validate_docs(args: argparse.Namespace) -> int:
+    """Validate perun.md manifests for stale docs/anchors."""
+    _ensure()
+    from . import scaffold
+
+    targets = _resolve_project_targets(args.slug, args.all)
+    if targets is None:
+        return 1
+
+    issues = 0
+    for proj in targets:
+        try:
+            result = scaffold.validate_manifest(proj["path"])
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"{proj['slug']}: error — {exc}")
+            continue
+        if result.get("reason"):
+            print(f"{proj['slug']}: {result['reason']}")
+            issues += 1
+        elif result["missing_docs"] or result["missing_anchors"]:
+            print(f"{proj['slug']}:")
+            for m in result["missing_docs"]:
+                print(f"  missing doc: {m}")
+            for m in result["missing_anchors"]:
+                print(f"  missing anchor: {m}")
+            issues += len(result["missing_docs"]) + len(result["missing_anchors"])
+        else:
+            print(f"{proj['slug']}: ok")
+    print(f"\nvalidation complete — {issues} issue(s) found")
+    return 0 if issues == 0 else 1
+
+
+def cmd_refresh_deps(args: argparse.Namespace) -> int:
+    """Parse dependency files and store them as project-scoped memory facts."""
+    _ensure()
+    from . import discovery, scaffold
+
+    targets = _resolve_project_targets(args.slug, args.all)
+    if targets is None:
+        return 1
+
+    existing_by_path = {os.path.normcase(os.path.abspath(p["path"])): p for p in registry.list_projects()}
+    total_facts = 0
+    for proj in targets:
+        try:
+            discovery.record_dependencies(proj["id"], proj["path"])
+            discovery.record_local_references(proj, existing_by_path)
+            deps = scaffold.parse_dependencies(proj["path"])
+            count = sum(len(v) for v in deps.values())
+            print(f"{proj['slug']}: indexed {count} dependency/relationship fact(s)")
+            total_facts += count
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"{proj['slug']}: error — {exc}")
+    print(f"\nrefresh complete — {total_facts} fact(s) recorded")
     return 0
 
 
@@ -570,6 +633,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true",
                    help="backfill every registered project")
     p.set_defaults(func=cmd_backfill_docs)
+
+    p = sub.add_parser("validate-docs",
+                       help="check perun.md manifests for stale docs/anchors")
+    p.add_argument("slug", nargs="?", default=None,
+                   help="project slug (defaults to current directory's project)")
+    p.add_argument("--all", action="store_true",
+                   help="validate every registered project")
+    p.set_defaults(func=cmd_validate_docs)
+
+    p = sub.add_parser("refresh-deps",
+                       help="parse dependency files and store them as memory facts")
+    p.add_argument("slug", nargs="?", default=None,
+                   help="project slug (defaults to current directory's project)")
+    p.add_argument("--all", action="store_true",
+                   help="refresh dependencies for every registered project")
+    p.set_defaults(func=cmd_refresh_deps)
 
     p = sub.add_parser("install", help="install Perun globally into OpenCode")
     p.add_argument("--uninstall", action="store_true")

@@ -135,7 +135,9 @@ Unified facts + document vector store + search.
 Find & register OpenCode projects under roots.
 * `SKIP_DIRS`, `OPENCODE_MARKERS`, `DOC_MARKERS`.
 * `capabilities()`, `classify()`, `detect()`, `_candidate_dirs()`, `scan()`,
-  `register()` (merges any `perun.md`/`perun.json` manifest),
+  `register()` (merges any `perun.md`/`perun.json` manifest, refreshes anchors,
+  parses dependency files into memory facts, and records local project refs),
+  `_record_dependencies()`, `_record_local_references()`,
   `discover_and_sync()`, `register_self()`.
 
 ### `perun/agents.py`
@@ -145,12 +147,18 @@ Discover OpenCode agents available to a project.
 * `list_agents(project_path)` — built-ins + global + project-local agents.
 
 ### `perun/scaffold.py`
-Starter-project skeleton + directory creation + safe backfill for existing projects.
+Starter-project skeleton + directory creation + safe backfill + dependency parsing
++ manifest anchor refresh.
 * `ScaffoldError`, `create_dir()`, `bootstrap()` (writes `opencode.json`,
   `AGENTS.md`, `README.md`, `.gitignore`, `perun.md`, `docs/CHANGELOG.md`,
   `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CODEMAP.md`, and `.opencode/`),
   `backfill()` (creates only missing scaffold files),
   `detect_anchors()` (finds dependency/build/CI files),
+  `parse_dependencies()` (reads `package.json`, `requirements.txt`,
+  `pyproject.toml`, `Cargo.toml`, `go.mod`),
+  `update_manifest_anchors()` (appends newly-detected anchors without clobbering),
+  `validate_manifest()` (stale doc/anchor checker),
+  `find_local_project_references()` (cross-project refs via `file:` deps),
   `_manifest_md()`, `_agents_md()`, `_suggest_commands()`, `summary()`.
 
 ### `perun/git.py`
@@ -294,10 +302,12 @@ CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
 `cmd_status` (also reports `bridge_task` via `installer.bridge_task_status()`),
 `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_run`, `cmd_import_legacy`,
 `cmd_encrypt_config`, `cmd_global_instructions` (list / set / `--clear` the
-global Markdown instruction files), `cmd_install`, `cmd_backfill_docs`
+global Markdown instruction files), `cmd_install`, `cmd_backfill_docs`, `cmd_validate_docs`, `cmd_refresh_deps`
 (`--machine` / `--skip-deps` / `--skip-global` / `--skip-task` / `--task`
 delegate to `installer.machine_install()`; `backfill-docs [slug] [--all]`
-creates missing scaffold docs/manifest for existing projects),
+creates missing scaffold docs/manifest; `validate-docs [slug] [--all]` checks
+for stale docs/anchors; `refresh-deps [slug] [--all]` parses dependencies into
+memory facts),
 `cmd_mcp`, `build_parser()`, `main()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
   / `_IN_PROCESS_BRIDGE` — the `serve --bridge` path starts the bridge at most once
