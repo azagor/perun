@@ -172,7 +172,7 @@ details see `docs/TECHNICAL_DOCUMENTATION.md`.
 | **Dashboard** | `http://127.0.0.1:8760` | Gold/dark SPA styled after peruninthemachine.com |
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{id}/stream`, `/api/stream` | Server-Sent Events |
-| **MCP server** | stdio, tool namespace `perun` | 17 tools, installed globally |
+| **MCP server** | stdio, tool namespace `perun` | 23 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
@@ -230,6 +230,88 @@ tests/                     pytest suite
 
 Runtime state lives **outside** the repo, in `~/.perun/` (override with
 `PERUN_HOME`): `perun.db`, `config.json`, `logs/`, `runs/`.
+
+## Under the hood
+
+A cross-project overseer has to get three things right: knowing what is *in*
+each project, not burning your context window on boilerplate, and remembering
+across all of them without turning into a junk drawer.
+
+### Project awareness
+
+* **Projects describe themselves.** A `perun.md` manifest declares `name`,
+  `kind`, `description`, `tags`, `model`, `agent`, docs, commands, git links —
+  and **anchors** into `file`, `doc`, `symbol`, `url`, and `command` locations,
+  so "the trading pipeline" resolves to a real file or symbol instead of a
+  guess. `perun.json` is accepted as a fallback; unknown keys are preserved and
+  malformed input degrades to defaults with warnings rather than failing.
+* **Discovery, not configuration.** `python -m perun discover` classifies
+  directories with cheap marker stats and registers every `opencode`/`git`
+  project under the configured roots; the Perun repo registers itself.
+* **Docs are indexed, not pasted.** Each project's `docs/CODEMAP.md`,
+  `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CHANGELOG.md`, `README.md`, and
+  `AGENTS.md` are split at level-2 headings into `doc_chunks` tagged with
+  CODEMAP-style paths and identifiers, so a hit points you at the file, not just
+  the project.
+* **Awareness is injected where the work runs.** Agent runs start with `cwd` in
+  the target project and receive that project's own `.perun/instructions/*.md`,
+  so the session begins knowing the house rules — whether it was started from
+  the dashboard, another folder, or Telegram.
+* **Cross-project by default.** `perun_global_grep`, `perun_global_ast_grep`,
+  and `perun_unified_search` span every registered project at once, and the
+  per-project MCP tools resolve a slug from anywhere.
+
+### Token efficiency
+
+Nothing is re-sent that the session already knows, and every injection is
+budgeted.
+
+* **Instructions are injected once per session.** `compose_prompt()` prepends
+  the orchestrator persona (control plane only), the all-projects instruction
+  files, and the project's own instructions **only when a new session starts**;
+  continuations inherit them from session history instead of repeating them on
+  every turn.
+* **Hard budgets on that injection.** An instruction file over **32 KiB** is
+  skipped, and appending stops at **128 KiB** total
+  (`MAX_INSTRUCTION_BYTES` / `MAX_TOTAL_INSTRUCTION_BYTES`), so one runaway file
+  cannot flood a run.
+* **Retrieval, not stuffing.** `memory.unified_search()` scans at most 200
+  candidate rows per store, pools the top candidates from facts and doc chunks,
+  and returns only the best **k = 6** — you pay for the answer, not for whole
+  documents.
+* **Stale facts age out of the results.** Fact scores carry a 30-day freshness
+  half-life, so old memories drift down the ranking instead of being re-surfaced
+  and re-read forever.
+* **Incremental indexing.** `index_text()` upserts only the sections that
+  actually changed, and facts are deduped on insert by `content_hash` —
+  re-indexing a project re-embeds new content, not the whole doc set.
+* **Bounded run output.** A run stores at most **200,000** characters
+  (`MAX_STORED_OUTPUT`), keeps at most **4,000** events in memory
+  (`HISTORY_LIMIT`), and truncates stderr/error tails to 4,000 characters, so a
+  long agent cannot balloon the database or the dashboard.
+* **No wasted embedding calls.** With Ollama unreachable, search falls back to
+  keyword + recency rather than issuing calls that would fail.
+
+### Memory management
+
+* **Two stores, one search surface** (`memory.unified_search`): atomic
+  **facts** written with `remember()` — scoped `global` (visible everywhere) or
+  `project` — plus **doc chunks** from each project's own docs.
+* **Ranking that weighs both relevance and time.** Cosine similarity over Ollama
+  `nomic-embed-text` embeddings plus a keyword bonus, multiplied by freshness;
+  anything scoring **≤ 0.15** is dropped.
+* **Secrets never enter memory.** `memory.is_sensitive()` guards `remember()`,
+  and every new storage path keeps that guard.
+* **Deduplicated at write time.** Facts are keyed by `content_hash` with
+  `ON CONFLICT DO NOTHING`, so repeated recollections do not accumulate rows.
+* **Graceful degradation.** If Ollama is down, rows still store, search runs on
+  keyword + recency, and `stats()` reports `ollama_ok` so the dashboard can show
+  you the state.
+* **No extra services.** Facts, vectors, registry, and runs all live in a single
+  WAL-mode SQLite file (`~/.perun/perun.db`) — no external vector database to
+  run or keep in sync.
+* **It travels.** `python -m perun import-legacy-memory` migrates facts from the
+  old shared `~/.config/opencode/memory.db`.
 
 ## Design principles
 

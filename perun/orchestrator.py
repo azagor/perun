@@ -479,16 +479,26 @@ class Orchestrator:
         # override → (control plane only) the dedicated orchestrator model →
         # the global default.
         requested_model = (model or "").strip()
-        model_explicit = bool(requested_model)
-        model = requested_model or project.get("model")
+        # Every source is stripped so a blank/whitespace override can never be
+        # forwarded as an empty `--model` argument, and so a whitespace control-
+        # plane value still falls through to the next fallback.
+        model = requested_model or (project.get("model") or "").strip()
         if not model and control.is_control(project):
-            model = self.settings.orchestrator_model
+            model = (self.settings.orchestrator_model or "").strip()
         # The global default_model is intentionally NOT forced onto project runs;
         # it is only used for the control plane (orchestrator). This lets regular
         # projects fall back to OpenCode's own default model instead of being
         # overridden by a possibly incompatible Perun setting.
         if not model and control.is_control(project):
-            model = self.settings.default_model
+            model = (self.settings.default_model or "").strip()
+        # Whatever we resolved — the caller's argument, the project's own
+        # override, or a control-plane setting — must be forwarded to
+        # `opencode run` as `--model`. Otherwise OpenCode silently falls back to
+        # its own global default, so a project pinned to e.g.
+        # `opencode/big-pickle` would instead run on whatever machine-wide
+        # default OpenCode has (and fail on an unrelated, out-of-funds
+        # provider). Only an empty resolution leaves the model to OpenCode.
+        model_explicit = bool(model)
         agent = (agent or "").strip() or project.get("agent")
         if not agent and control.is_control(project):
             agent = self.settings.orchestrator_agent
@@ -569,10 +579,12 @@ class Orchestrator:
         prompt = compose_prompt(project, prompt, new_session=not oc_sid,
                                 settings=self.settings)
         argv = resolve_opencode("opencode") + ["run", "--format", "json", "--auto"]
-        # Only pass --model when the caller (or the project) explicitly set one.
-        # An empty/missing model lets OpenCode use its own default, which avoids
-        # surprising region/model errors from Perun's global fallback.
-        if run.get("model") and run.get("model_explicit"):
+        # Forward the resolved model whenever there is one — `start_run` resolves
+        # it from a call argument, a project override, or a control-plane setting
+        # and stores `model_explicit` for the record. Only an empty model lets
+        # OpenCode use its own default, which keeps ordinary projects free of
+        # Perun's machine-wide fallback.
+        if run.get("model"):
             argv += ["--model", run["model"]]
         if run.get("agent"):
             argv += ["--agent", run["agent"]]

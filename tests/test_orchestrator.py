@@ -142,6 +142,125 @@ def test_orchestrator_explicit_model_is_passed(monkeypatch):
     assert run["model_explicit"] == 1
 
 
+def test_orchestrator_project_model_is_explicit(monkeypatch):
+    """A project's own model override must be forwarded to `opencode run`.
+
+    Regression: the run recorded the project model but left ``model_explicit``
+    false, so ``--model`` was dropped and OpenCode fell back to its own global
+    default provider (e.g. an out-of-funds account, 402).
+    """
+    from perun import orchestrator, registry
+
+    registry.add_project("Pinned", r"C:\pinned", model="opencode/big-pickle")
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("pinned", "hi")
+    assert run["model"] == "opencode/big-pickle"
+    assert run["model_explicit"] == 1
+
+
+def test_orchestrator_control_plane_orchestrator_model_is_explicit(monkeypatch):
+    """The control plane's dedicated orchestrator model is forwarded too."""
+    from perun import orchestrator, config, control
+
+    control.ensure()
+    settings = config.Settings.load()
+    settings.orchestrator_model = "opencode/big-pickle"
+    o = orchestrator.Orchestrator(settings)
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("perun", "hi")
+    assert run["model"] == "opencode/big-pickle"
+    assert run["model_explicit"] == 1
+
+
+def test_orchestrator_control_plane_default_model_is_explicit(monkeypatch):
+    """With no orchestrator model, the control plane falls back to default_model."""
+    from perun import orchestrator, config, control
+
+    control.ensure()
+    settings = config.Settings.load()
+    settings.orchestrator_model = ""
+    settings.default_model = "opencode/big-pickle"
+    o = orchestrator.Orchestrator(settings)
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("perun", "hi")
+    assert run["model"] == "opencode/big-pickle"
+    assert run["model_explicit"] == 1
+
+
+def test_orchestrator_blank_project_model_is_ignored(monkeypatch):
+    """A whitespace-only model override is treated as unset, not forwarded."""
+    from perun import orchestrator, registry
+
+    registry.add_project("Blank", r"C:\blank", model="   ")
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("blank", "hi")
+    assert run["model"] == ""
+    assert run["model_explicit"] == 0
+
+
+def test_orchestrator_padded_project_model_is_trimmed(monkeypatch):
+    """Surrounding whitespace on a model override is trimmed, not forwarded."""
+    from perun import orchestrator, registry
+
+    registry.add_project("Padded", r"C:\padded", model="  opencode/big-pickle  ")
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("padded", "hi")
+    assert run["model"] == "opencode/big-pickle"
+    assert run["model_explicit"] == 1
+
+
+def _capture_argv(monkeypatch, tmp_path, name, model=""):
+    """Register a project and return a callable that runs it, exposing argv."""
+    import sys
+
+    from perun import orchestrator, registry
+
+    dirname = name.lower()
+    project = registry.add_project(name, str(tmp_path / dirname), model=model)
+    (tmp_path / dirname).mkdir()
+    argv_file = tmp_path / f"{project['slug']}-argv.json"
+    script = (
+        "import json,sys,os;"
+        "open(os.environ['PERUN_TEST_ARGV'],'w').write(json.dumps(sys.argv));"
+        "print(json.dumps({'type':'text','part':{'type':'text','text':'ok'}}))"
+    )
+    monkeypatch.setenv("PERUN_TEST_ARGV", str(argv_file))
+    monkeypatch.setattr(
+        orchestrator, "resolve_opencode",
+        lambda _name: [sys.executable, "-c", script],
+    )
+
+    def run_it():
+        o = orchestrator.Orchestrator()
+        res = o.run_and_wait(project["slug"], "hi", timeout=60)
+        argv = json.loads(argv_file.read_text(encoding="utf-8"))
+        return res["run"], argv
+
+    return run_it
+
+
+def test_execute_forwards_project_model(monkeypatch, tmp_path):
+    """The resolved project model reaches the real argv as ``--model``."""
+    run_it = _capture_argv(monkeypatch, tmp_path, "PinnedFwd",
+                           model="opencode/big-pickle")
+    run, argv = run_it()
+    assert run["model_explicit"] == 1
+    assert "--model" in argv
+    assert argv[argv.index("--model") + 1] == "opencode/big-pickle"
+
+
+def test_execute_omits_model_when_unresolved(monkeypatch, tmp_path):
+    """No model resolved ⇒ OpenCode's own default is left untouched."""
+    run_it = _capture_argv(monkeypatch, tmp_path, "NoModel")
+    run, argv = run_it()
+    assert run["model"] == ""
+    assert run["model_explicit"] == 0
+    assert "--model" not in argv
+
+
 def test_execute_persists_stdout_error_event(monkeypatch, tmp_path):
     """A provider error emitted only as a stdout event is captured on the run.
 

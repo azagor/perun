@@ -1,10 +1,11 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.0 (see §14). This release adds a Windows GUI installer
-(`PerunSetup.exe`), web installers (`setup.ps1` / `setup.sh`), a CI release
-workflow, model/agent overrides mirrored into project `opencode.json`, a new
-**Providers** tab with OpenCode auth status, slash-command skill tasks in the
-Agent Console, and skill-name validation. `perun.__version__` reports `0.7.0`.
+**Latest release:** v0.7.2 (see §14). This release fixes model forwarding so
+Telegram-triggered and other project runs execute on the configured model
+instead of silently falling back to OpenCode's own default. v0.7.1 added the
+`/update-docs` slash command, richer project scaffolding with auto-refreshed
+manifest anchors, dependency parsing with cross-project references, and made
+the Telegram bridge opt-in at logon. `perun.__version__` reports `0.7.2`.
 
 **Latest release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
@@ -102,7 +103,7 @@ can all write concurrently.
 |---|---|---|
 | `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch` |
 | `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `message_count`, `status` |
-| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 when `--model` was explicitly requested), `agent`, `output`, `error` |
+| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 whenever a model was resolved and is forwarded as `--model`), `agent`, `output`, `error` |
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
 | `memory` | facts | `scope` ∈ {global,project}; **`scope='global'` rows use `project_id=0`**; `UNIQUE(scope,project_id,content_hash)` |
 | `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)` |
@@ -270,8 +271,11 @@ user comments are not destroyed. `projects.sync_opencode_config()` returns an
 `default_model` / `default_agent` are no longer forced onto ordinary project runs.
 That lets OpenCode use its own project defaults when the Model/Agent fields are
 left empty, avoiding surprising provider errors from a machine-wide default. The
-run row records whether the model was explicit (`model_explicit=1`) so `_execute`
-knows whether to pass `--model` to `opencode run`.
+run row records whether a model was resolved (`model_explicit=1`) for the record,
+and `_execute` forwards `--model` to `opencode run` whenever a model was resolved
+— a project-level model is a deliberate choice and *is* forwarded, so the run
+never silently runs on OpenCode's own default instead of the configured one.
+Every source is stripped, so a blank/whitespace override is treated as unset.
 
 ### The control plane (always-available orchestrator)
 
@@ -363,8 +367,9 @@ Free-form notes rendered on the project page.
    `is_control`) `Settings.orchestrator_model` / `orchestrator_agent`. The global
    `default_model` / `default_agent` are used **only for the control plane**, not
    for ordinary projects, so an empty Model/Agent field lets OpenCode use its own
-   project defaults. The run records `model_explicit=1` when a model was
-   explicitly chosen.
+   project defaults. The run records `model_explicit=1` whenever a model was
+   resolved (call arg, project override, or control-plane setting), and
+   `_execute` forwards it as `--model`.
 2. writes a `runs` row (`status=queued`) and an activity entry,
 3. spawns a daemon thread running `_execute`, guarded by
    `threading.Semaphore(max_concurrent_runs)`.
@@ -372,7 +377,7 @@ Free-form notes rendered on the project page.
 `_execute` runs (Windows-aware via `resolve_opencode`):
 
 ```
-opencode run --format json --auto [--model M only if model_explicit] [--agent A only if explicit]
+opencode run --format json --auto [--model M when a model was resolved] [--agent A only if explicit]
              [--session <oc_id>] --title "Perun · …" -- <prompt>
 ```
 
@@ -384,8 +389,9 @@ passes only flags accepted by the TUI (`--prompt` and `--session`); `--model` an
 OpenCode's own project defaults (including the values mirrored into
 `opencode.json` by `sync_opencode_config()`).
 
-`--model` is passed only when `model_explicit=1`; `--agent` is passed only when
-an agent value is set. With `cwd` set to the **target project path** — no
+`--model` is passed whenever a non-empty model was resolved (so `model_explicit`
+is `1`); `--agent` is passed only when an agent value is set. With `cwd` set to the
+**target project path** — no
 positional directory argument. stdout is streamed line-by-line to
 `~/.perun/runs/<uid>.log`, parsed by `parse_event()`, and fanned out through
 `EventBus` as normalized events:
@@ -1032,7 +1038,8 @@ setting.
 * **Model/agent overrides are explicit only.** The global `default_model` /
   `default_agent` are no longer forced onto ordinary project runs; Perun only
   passes `--model` / `--agent` to OpenCode when explicitly requested. Added
-  `runs.model_explicit` column to track this.
+  `runs.model_explicit` column to track this. *(Superseded: `--model` is now
+  forwarded whenever a model was resolved — see §7.)*
 * **Provider errors keep sessions active.** If a session id is learned but the
   provider returns an error (`provider.quota`, `provider.invalid-request`, …), the
   run status is `provider_error` (not `failed`) and the session row stays active.

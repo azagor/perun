@@ -4,14 +4,36 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-### Changed
+## v0.7.2 - 2026-10-17
 
-- **Telegram bridge is no longer auto-started at logon.** The `PerunBridge`
-  scheduled task is now opt-in (`python -m perun install --machine --task` or
-  `bootstrap.ps1 -Task`). By default the bridge starts with the dashboard
-  (`Perun.cmd` / `python -m perun serve --bridge`) and stops when the dashboard
-  closes. Running the machine installer removes any previously registered
-  `PerunBridge` task unless `--task` is passed.
+### Added
+
+- **README "Under the hood" section.** Documents how Perun handles **project
+  awareness** (self-describing `perun.md` anchors, discovery, indexed docs,
+  injected project instructions), **token efficiency** (once-per-session
+  instruction injection under 32/128 KiB budgets, bounded top-k retrieval,
+  30-day freshness weighting, incremental indexing, capped run output), and
+  **memory management** (facts + doc chunks, dedup, graceful degradation, a
+  single WAL-mode store). Also corrects the MCP tool count to 23.
+
+### Fixed
+
+- **Project/orchestrator model is now actually forwarded to `opencode run`.**
+  The Telegram bridge (and any caller that did not pass an explicit model) used
+  to record the project's model on the run but never pass `--model`, because
+  `model_explicit` was set from the caller's argument only. OpenCode then
+  silently fell back to its own machine-wide default model — e.g. a project
+  pinned to `opencode/big-pickle` ran on another provider and failed with
+  `provider.quota` 402 "Insufficient account funds". `start_run` now resolves
+  and forwards the model for every source (call argument, project override, or
+  control-plane setting); only an empty resolution still lets OpenCode choose.
+  A whitespace-only override is treated as unset.
+
+  **Behavior change:** a project whose configured `model` is invalid/retired
+  will now fail loudly instead of silently running on OpenCode's own default —
+  the run record and the executed model are guaranteed to match.
+
+## v0.7.1 - 2026-10-17
 
 ### Added
 
@@ -55,6 +77,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 - **Manifest validation.** `python -m perun validate-docs [slug] [--all]` checks
   `perun.md` for docs or anchors that point to missing files.
+
+### Changed
+
+- **Telegram bridge is no longer auto-started at logon.** The `PerunBridge`
+  scheduled task is now opt-in (`python -m perun install --machine --task` or
+  `bootstrap.ps1 -Task`). By default the bridge starts with the dashboard
+  (`Perun.cmd` / `python -m perun serve --bridge`) and stops when the dashboard
+  closes. Running the machine installer removes any previously registered
+  `PerunBridge` task unless `--task` is passed.
 
 ## v0.7.0 - 2026-10-16
 

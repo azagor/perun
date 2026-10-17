@@ -195,7 +195,9 @@ Start / stream / cancel headless `opencode run`.
   `active()`, `_worker()`, `_execute()` (with wall-clock watchdog thread),
   `_finalize()`, `stream()`. Model/agent precedence: explicit arg → project
   override → (control only) `orchestrator_model`/`orchestrator_agent` → global
-  `default_model`/`default_agent`.
+  `default_model`/`default_agent`. Every source is stripped; `start_run` stores
+  `model_explicit=bool(model)` and `_execute` forwards `--model` whenever a
+  non-empty model was resolved (only an empty resolution defers to OpenCode).
 * Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `INSTRUCTION_OPEN`,
   `INSTRUCTION_CLOSE`.
 
