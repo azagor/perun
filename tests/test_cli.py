@@ -88,3 +88,23 @@ def test_global_instructions_clear_reseeds_default(monkeypatch, tmp_path):
     assert rc == 0
     files = {p.name for p in instr.glob("*.md")}
     assert files == {"default-agent-guidance.md"}
+
+
+def test_backfill_docs_cli_all_projects(monkeypatch, tmp_path, capsys):
+    from perun import config, registry, scaffold
+
+    db.init_db()
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    config.ensure_dirs()
+
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    registry.add_project("Proj", str(proj_dir))
+
+    rc = cli.main(["backfill-docs", "--all"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "backfill complete" in captured.out
+    assert (proj_dir / "AGENTS.md").is_file()
+    assert (proj_dir / "perun.md").is_file()
+    assert (proj_dir / "docs" / "CHANGELOG.md").is_file()

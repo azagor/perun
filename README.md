@@ -77,6 +77,18 @@ python -m perun bridge
 The bridge is a **singleton** — `getUpdates` allows one consumer per bot token, so
 a second start is refused rather than fighting with HTTP 409s.
 
+### Bring existing projects up to the new standard
+
+If you already have projects registered, run:
+
+```bash
+python -m perun backfill-docs --all
+```
+
+This creates the current scaffold files (`perun.md`, `AGENTS.md`,
+`docs/CHANGELOG.md`, `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CODEMAP.md`) only
+where they are missing, so it is safe to run on every project.
+
 ## Install on a new machine
 
 ### 1. Windows GUI installer (easiest for end users)

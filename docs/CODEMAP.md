@@ -145,10 +145,13 @@ Discover OpenCode agents available to a project.
 * `list_agents(project_path)` — built-ins + global + project-local agents.
 
 ### `perun/scaffold.py`
-Starter-project skeleton + directory creation.
+Starter-project skeleton + directory creation + safe backfill for existing projects.
 * `ScaffoldError`, `create_dir()`, `bootstrap()` (writes `opencode.json`,
-  `AGENTS.md`, `README.md`, `.gitignore`, and a starter `perun.md`),
-  `_manifest_md()`, `summary()`.
+  `AGENTS.md`, `README.md`, `.gitignore`, `perun.md`, `docs/CHANGELOG.md`,
+  `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CODEMAP.md`, and `.opencode/`),
+  `backfill()` (creates only missing scaffold files),
+  `detect_anchors()` (finds dependency/build/CI files),
+  `_manifest_md()`, `_agents_md()`, `_suggest_commands()`, `summary()`.
 
 ### `perun/git.py`
 Safe wrapper over the `git` CLI (per-project repositories).
@@ -291,9 +294,10 @@ CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
 `cmd_status` (also reports `bridge_task` via `installer.bridge_task_status()`),
 `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_run`, `cmd_import_legacy`,
 `cmd_encrypt_config`, `cmd_global_instructions` (list / set / `--clear` the
-global Markdown instruction files), `cmd_install`
+global Markdown instruction files), `cmd_install`, `cmd_backfill_docs`
 (`--machine` / `--skip-deps` / `--skip-global` / `--skip-task` / `--task`
-delegate to `installer.machine_install()`, `--machine --uninstall` to `installer`),
+delegate to `installer.machine_install()`; `backfill-docs [slug] [--all]`
+creates missing scaffold docs/manifest for existing projects),
 `cmd_mcp`, `build_parser()`, `main()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
   / `_IN_PROCESS_BRIDGE` — the `serve --bridge` path starts the bridge at most once

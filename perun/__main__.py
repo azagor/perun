@@ -14,6 +14,7 @@ Usage::
     python -m perun index <slug> [--all]
     python -m perun run <slug> [prompt] [--model M] [--agent A] [--title T] [--wait]
     python -m perun import-legacy-memory [--path P]
+    python -m perun backfill-docs [slug] [--all]
     python -m perun install [--uninstall] [--machine]
     python -m perun mcp
 """
@@ -395,6 +396,55 @@ def cmd_import_legacy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backfill_docs(args: argparse.Namespace) -> int:
+    """Create missing scaffold docs/manifest for one or all projects."""
+    _ensure()
+    from . import scaffold
+
+    targets: list[dict[str, Any]]
+    if args.all:
+        targets = registry.list_projects()
+        if not targets:
+            print("no projects registered")
+            return 0
+    else:
+        if not args.slug:
+            # Try to resolve from cwd.
+            proj = registry.get_project_by_path(os.getcwd())
+            if not proj:
+                print("no project specified and none found in the current directory")
+                return 1
+            targets = [proj]
+        else:
+            proj = registry.get_project(args.slug)
+            if not proj:
+                print(f"no such project: {args.slug}")
+                return 1
+            targets = [proj]
+
+    total_created: list[str] = []
+    for proj in targets:
+        try:
+            created = scaffold.backfill(proj["path"], proj.get("name") or "")
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"{proj['slug']}: error — {exc}")
+            continue
+        if created:
+            print(f"{proj['slug']}: created {', '.join(created)}")
+            total_created.extend(f"{proj['slug']}/{c}" for c in created)
+            # Re-sync manifest if perun.md was created.
+            if "perun.md" in created:
+                try:
+                    from . import projects as _projects
+                    _projects.sync_manifest(proj)
+                except Exception:  # pragma: no cover - best effort
+                    pass
+        else:
+            print(f"{proj['slug']}: nothing to create")
+    print(f"backfill complete — {len(total_created)} file(s) created")
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     _ensure()
     from . import installer
@@ -512,6 +562,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="migrate ~/.config/opencode/memory.db into Perun")
     p.add_argument("--path", default=None)
     p.set_defaults(func=cmd_import_legacy)
+
+    p = sub.add_parser("backfill-docs",
+                       help="create missing scaffold docs/manifest for project(s)")
+    p.add_argument("slug", nargs="?", default=None,
+                   help="project slug (defaults to current directory's project)")
+    p.add_argument("--all", action="store_true",
+                   help="backfill every registered project")
+    p.set_defaults(func=cmd_backfill_docs)
 
     p = sub.add_parser("install", help="install Perun globally into OpenCode")
     p.add_argument("--uninstall", action="store_true")

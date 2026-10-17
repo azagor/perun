@@ -25,6 +25,18 @@ All notable changes are recorded here. Single source of truth for release notes.
   `perun/integrations/templates/INSTRUCTIONS.md` lists `/perun-projects`,
   `/perun-ask`, `/logwork`, and `/update-docs`.
 
+- **Richer project scaffolding.** New projects now get `docs/CHANGELOG.md`,
+  `docs/TECHNICAL_DOCUMENTATION.md`, and `docs/CODEMAP.md` in addition to the
+  existing `perun.md`, `AGENTS.md`, `README.md`, and `.opencode/` skeleton.
+  The generated `AGENTS.md` points to `perun.md` as the primary source of truth
+  and anchors the generated docs plus detected dependency files
+  (`package.json`, `requirements.txt`, `Dockerfile`, CI configs, etc.).
+
+- **`python -m perun backfill-docs [slug] [--all]`.** Creates the same scaffold
+  files for existing projects, skipping any files that already exist. Safe to
+  run across every registered project to bring older projects up to the new
+  standard.
+
 ## v0.7.0 - 2026-10-16
 
 ### Added

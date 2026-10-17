@@ -61,6 +61,17 @@ Prefer the local project's own memory framework when a question is purely about
 this repository; use Perun when the answer lives *across* projects or in
 Perun's own registry.
 
+## Working inside a Perun-managed project
+
+* **Read `perun.md` first.** Each project's `perun.md` manifest is the primary
+  source of truth for its identity, docs map, commands, and anchors into
+  important files and dependencies. New projects bootstrapped by Perun include
+  `perun.md`, `AGENTS.md`, `README.md`, `docs/CHANGELOG.md`,
+  `docs/TECHNICAL_DOCUMENTATION.md`, and `docs/CODEMAP.md`.
+* **Use `/update-docs`** to refresh the project docs when the codebase changes.
+* **Add anchors** to `perun.md` for files, docs, symbols, commands, and external
+  URLs that future agents (and the dashboard) should know about.
+
 ## Global slash commands
 
 These commands are available in every OpenCode session because Perun registers

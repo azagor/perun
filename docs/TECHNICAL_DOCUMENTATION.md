@@ -180,13 +180,22 @@ lives in `perun/projects.py` and is shared with the MCP tools):
 * `existing` — register a path (may not exist yet; created lazily on first use);
 * `new` — create the directory and optionally **bootstrap** a starter project
   (`scaffold.bootstrap`: `opencode.json`, `AGENTS.md`, `README.md`, `.gitignore`,
-  `perun.md`);
+  `perun.md`, `docs/CHANGELOG.md`, `docs/TECHNICAL_DOCUMENTATION.md`,
+  `docs/CODEMAP.md`, and `.opencode/`). The generated `AGENTS.md` points to
+  `perun.md` as the primary source of truth; `perun.md` includes a `docs` map,
+  suggested commands, and anchors to dependency/build/CI files discovered on disk.
 * `clone` — `git.clone(url, path)` into the target.
 
 Optional steps: `git_init` (`scaffold`/`git.init`), `git_remote` + `git_branch`
 (`git.set_remote`), and `index_docs` (`memory.index_project_docs`). After
 registration the manifest is merged (`_sync_manifest`) so the dashboard reflects
-it immediately. A server-backed **folder browser** powers the path pickers:
+it immediately.
+
+**Backfill docs for existing projects**
+(`python -m perun backfill-docs [slug] [--all]`). The `scaffold.backfill()`
+helper writes the same scaffold files but only where they are missing, so it is
+safe to run on existing projects. It is useful for bringing older projects up
+to the current documentation standard. A server-backed **folder browser** powers the path pickers:
 `GET /api/fs/list?path=&show_hidden=` returns `roots`, `home`, `parent`, `dirs`,
 `files`; `POST /api/fs/mkdir {path}` creates a directory.
 
