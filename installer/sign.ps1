@@ -84,7 +84,10 @@ if ($PfxPath -and (Test-Path -LiteralPath $PfxPath)) {
     Write-Host "No external PFX provided; falling back to self-signed certificate."
 }
 
-if (-not (Test-Path -LiteralPath $PfxPath)) {
+# An external PFX must exist on disk; the self-signed path creates its PFX
+# below (see the $usingSelfSigned block), so checking it here would abort
+# before the fallback ever runs.
+if (-not $usingSelfSigned -and -not (Test-Path -LiteralPath $PfxPath)) {
     Write-Host "PFX not found: $PfxPath" -ForegroundColor Red
     exit 1
 }

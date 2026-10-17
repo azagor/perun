@@ -18,6 +18,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **Release builds can sign without a checked-in certificate.** `installer/sign.ps1`
+  aborted with `PFX not found` whenever `installer/certs/PerunSelfSign.pfx` was
+  absent (it is never tracked), even though the self-signed fallback — which
+  creates the certificate on demand — was supposed to handle exactly that case.
+  The existence check now applies only to externally supplied PFXs, so GitHub
+  Actions releases produce a signed installer when `PERUN_SIGN_PFX_BASE64` /
+  `PERUN_SIGN_PASSWORD` secrets are not set.
+
 - **Project/orchestrator model is now actually forwarded to `opencode run`.**
   The Telegram bridge (and any caller that did not pass an explicit model) used
   to record the project's model on the run but never pass `--model`, because
