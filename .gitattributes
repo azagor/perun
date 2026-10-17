@@ -1,0 +1,39 @@
+# Normalize line endings for all text files to LF in the repository and working
+# tree. This keeps exact-string edits reliable across Windows, macOS, and Linux.
+# Windows-specific scripts keep CRLF so they work correctly when executed.
+
+* text=auto
+
+*.py       text eol=lf
+*.pyi      text eol=lf
+*.md       text eol=lf
+*.js       text eol=lf
+*.css      text eol=lf
+*.html     text eol=lf
+*.json     text eol=lf
+*.jsonc    text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.toml     text eol=lf
+*.sh       text eol=lf
+*.txt      text eol=lf
+
+*.cmd      text eol=crlf
+*.ps1      text eol=crlf
+*.bat      text eol=crlf
+*.iss      text eol=crlf
+
+# Treat binary files as binary (never convert line endings).
+*.ico      binary
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.svg      binary
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.eot      binary
+*.db       binary
+*.sqlite   binary
+*.sqlite3  binary
