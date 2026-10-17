@@ -56,6 +56,24 @@ A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
   `ExecutionTimeLimit=PT0S` settings — they are what keep the poller singular
   and long-lived.
 
+## Editing files safely
+
+All text files in this repo are normalized to **LF** line endings (see
+`.gitattributes`). The OpenCode `edit` tool requires an exact byte match; edits
+against a CRLF working tree often fail with:
+
+    Could not find oldString in <file>. It must match exactly...
+
+Before a tricky edit, re-read the exact lines. If you suspect CRLF in the
+working tree, run:
+
+```bash
+python tools/normalize_line_endings.py
+```
+
+It rewrites tracked text files to LF while leaving Windows scripts (`.cmd`,
+`.ps1`, `.bat`, `.iss`) as CRLF.
+
 ## Adding a new source file
 
 Any new module under `perun/` is picked up automatically (the package is
