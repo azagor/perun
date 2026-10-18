@@ -267,7 +267,7 @@ const launchInTerminal = async ({ cwd, model, agent, sessionId, prompt, tui, run
         toast(tui ? `Opened ${r.shell} (TUI)` : `Opened ${r.shell}`, 'ok');
         return r;
     } catch (e) {
-        toast('Could not open a terminal', 'err');
+        toast(`Could not open terminal: ${e.message || 'unknown error'}`, 'err');
         return null;
     }
 };
@@ -924,6 +924,10 @@ function projectCard(p) {
 
 async function openProjectTui(p) {
     try {
+        if (!p || !p.path) {
+            toast('This project has no folder path. Re-register or rediscover it.', 'err');
+            return;
+        }
         // Project-card launch behaves like running `opencode` in the project
         // directory: no forced prompt, so OpenCode uses its own session/model
         // resolution instead of starting a fresh chat.
@@ -932,7 +936,8 @@ async function openProjectTui(p) {
             body: { project: p.slug, model: p.model, agent: p.agent },
         });
         const runUid = res.run && res.run.run_uid;
-        await launchInTerminal({ cwd: p.path, model: p.model, agent: p.agent, tui: true, runUid });
+        if (!runUid) { throw new Error('Perun did not return a run id'); }
+        await launchInTerminal({ project: p.slug, cwd: p.path, model: p.model, agent: p.agent, tui: true, runUid });
         await refreshPresence();
         if (runUid) {
             // Optimistically show working state so the card lights up immediately.
@@ -2409,11 +2414,12 @@ function mountConsole(host, initial) {
             perunFx.flash($('#perun-sigil'));
             const sessionOpt = $('#c-session').selectedOptions[0];
             const sessionId = sessionOpt ? (sessionOpt.dataset.oc || '') : '';
-            await launchInTerminal({ cwd: p.path, model: p.model, agent: p.agent, prompt, tui: true, runUid: currentRun, sessionId });
-            logLine(`[TUI session ${currentRun}] opened in ${slug}`);
+            if (!p.path) { toast('Selected project has no folder path.', 'err'); return; }
+            await launchInTerminal({ project: p.slug, cwd: p.path, model: p.model, agent: p.agent, prompt, tui: true, runUid: currentRun, sessionId });
             promptEl().value = '';
             taskQueue = [];
             updateQueue();
+            logLine(`[TUI session ${currentRun}] opened in ${slug}`);
         } catch (e) { logLine('error: ' + e.message); toast(e.message, 'err'); runBtn.disabled = false; stopBtn.disabled = true; currentRun = null; }
     });
 

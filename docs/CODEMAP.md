@@ -50,6 +50,13 @@ Filesystem layout + persisted settings.
 * `ensure_dirs()`, `_quarantine_config()`, `api_token()` (create/read the local
   API token, `O_CREAT|O_EXCL` + `0600`, `PERUN_API_TOKEN` override), `settings()`.
 
+### `perun/daemon.py`
+Server lifecycle helpers: PID file, running-check, graceful stop, restart.
+* `PID_PATH`, `write_pid()`, `read_pid()`, `clear_pid()`, `is_running()`,
+  `is_another_perun_running()`, `stop()`, `kill()`, `start_detached()`.
+* Used by ``perun serve`` to avoid double-starts and by ``perun stop`` /
+  ``perun restart`` for graceful replacement.
+
 ### `perun/db.py`
 SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 `activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`, `tasks`.

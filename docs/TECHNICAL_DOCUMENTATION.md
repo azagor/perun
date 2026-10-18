@@ -1,6 +1,7 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.3 (see §14). This hardening pass adds mandatory local
+**Latest release:** v0.7.4 (see §14). This maintenance release fixes dashboard
+terminal-launch failures and adds `perun stop`/`perun restart` lifecycle commands.
 API-token auth, Telegram pairing codes, server-built terminal commands,
 installer/config data safety, orchestration + portability fixes, and
 state-of-the-art follow-ups for agent secret handling and embedding repair.
@@ -83,6 +84,11 @@ resolves the port from `~/.perun/config.json` (`PERUN_PORT` overrides it), then:
 * otherwise prints a banner, opens the browser, and runs
   `python -m perun serve --port <N>` in the foreground (close the window or
   Ctrl+C to stop).
+
+For headless or scripted use, `python -m perun stop` and `python -m perun restart`
+manage the server via a PID file in `<PERUN_HOME>/perun.pid`. `perun serve` now
+refuses to start if another instance is already running; `perun restart` sends a
+graceful shutdown signal, waits for exit, and starts the replacement.
 
 `Perun.cmd` starts the dashboard and the Telegram bridge **in-process**
 (`python -m perun serve --bridge`). It first checks `perun status --json` to see
@@ -934,7 +940,20 @@ setting.
 
 ## 14. Revision history
 
-### 2026-10-18 — Unreleased: audit hardening (security, orchestration, portability)
+### 2026-10-19 — v0.7.4: dashboard terminal launch + lifecycle commands
+
+* **Dashboard terminal launch fixes.** `/api/run-in-terminal` now normalizes a
+  configured terminal path to its basename so full Windows paths (e.g.
+  `C:\...\wt.exe`) are recognized as `wt`/`cmd`/`pwsh`. The frontend surfaces
+  the server's actual error message instead of a generic toast, and both the
+  project card and Agent Console pass the project slug as a fallback so a
+  missing `cwd` resolves from the registry.
+* **`perun stop` / `perun restart`.** New `perun.daemon` module tracks the server
+  PID in `PERUN_HOME/perun.pid`. `perun serve` refuses double-starts;
+  `perun restart` gracefully stops the old server and starts a replacement;
+  `perun stop` clears a stale PID file and stops the live process.
+
+### 2026-10-18 — v0.7.3: audit hardening (security, orchestration, portability)
 
 A response to an external audit of v0.7.0. Findings that no longer reproduced
 against v0.7.2 (MCP tool count, the endpoint-table rows) were left alone.

@@ -1095,6 +1095,46 @@ def test_run_in_terminal_wt_keeps_raw_quotes(client, tmp_path, monkeypatch):
     assert popen_args[0].endswith(f' cmd /k cd /d "{wt_dir}" && opencode')
 
 
+def test_run_in_terminal_full_path_terminal_is_recognized(client, tmp_path, monkeypatch):
+    """A configured terminal with a full Windows path must still be recognized."""
+    from perun import process_tracker, config
+
+    fresh = process_tracker.ProcessTracker()
+    monkeypatch.setattr(process_tracker, "TRACKER", fresh)
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "FullPathTerm", "path": str(tmp_path / "fpt"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    captured: list[tuple[object, ...]] = []
+
+    class FakeProc:
+        pid = 33333
+        def poll(self): return None
+
+    def fake_popen(*args, **kwargs):
+        captured.append((args, kwargs))
+        return FakeProc()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    # Simulate a user who configured an absolute path to Windows Terminal.
+    monkeypatch.setattr(config.Settings, "terminal_cmd",
+                        lambda self, shell_hint="": [r"C:\Users\x\AppData\Local\Microsoft\WindowsApps\wt.exe", "-d", "."])
+
+    r = client.post("/api/run-in-terminal", json={
+        "project": slug, "shell": r"C:\Users\x\AppData\Local\Microsoft\WindowsApps\wt.exe", "tui": True,
+    })
+    assert r.status_code == 200
+    (popen_args, _) = captured[-1]
+    assert isinstance(popen_args[0], str)
+    # Must route through the Windows Terminal branch (cmd /k ...) not the POSIX -c branch.
+    assert ' cmd /k ' in popen_args[0]
+    assert 'wt.exe -d ' in popen_args[0]
+    assert '\\"' not in popen_args[0]
+
+
 def test_run_in_terminal_auth_login_quotes_provider(client, monkeypatch):
     from perun import config
 

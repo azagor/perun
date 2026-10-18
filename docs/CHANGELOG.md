@@ -4,6 +4,27 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.4 - 2026-10-19
+
+### Fixed
+
+- **Dashboard terminal launch diagnostics.** The frontend no longer replaces the
+  server error with a generic “Could not open a terminal” toast; the actual
+  message (e.g. missing executable) is now surfaced.
+- **Configured terminal paths with directories.** A terminal setting given as a
+  full Windows path (e.g. `C:\...\wt.exe`) is now recognized as `wt`/`cmd`/`pwsh`
+  both when resolving the executable and when choosing the command-line syntax,
+  instead of falling through to the POSIX `-c` branch and failing to open.
+- **Dashboard TUI launch falls back to project slug.** Both the project card and
+  Agent Console now pass the project slug to `/api/run-in-terminal` so a missing
+  `cwd` can be resolved from the registry instead of failing with
+  “cwd (or a project with a path) is required”.
+- **`perun stop` / `perun restart` lifecycle commands.** A new `perun.daemon`
+  module tracks the server PID in `<PERUN_HOME>/perun.pid`. `perun serve` now
+  refuses to start if another instance is already running and suggests the
+  proper command; `perun restart` gracefully terminates the old server and
+  starts a replacement, avoiding the previous blind kill-and-pray approach.
+
 ## v0.7.3 - 2026-10-18
 
 ### Security

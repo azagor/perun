@@ -248,15 +248,16 @@ class Settings:
                 return [configured, "-NoExit", "-Command"]
             return [configured]
         if os.name == "nt":
-            if hint in ("cmd", "cmd.exe"):
+            hint_base = os.path.basename(hint)
+            if hint_base in ("cmd", "cmd.exe"):
                 path = shutil.which("cmd") or shutil.which("cmd.exe")
                 return [path] if path else ["cmd.exe"]
-            if hint in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
+            if hint_base in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
                 for candidate in ("pwsh", "pwsh.exe", "powershell", "powershell.exe"):
                     path = shutil.which(candidate)
                     if path:
                         return [path, "-NoExit", "-Command"]
-            if hint in ("wt", "wt.exe"):
+            if hint_base in ("wt", "wt.exe"):
                 path = shutil.which("wt") or shutil.which("wt.exe")
                 if path:
                     return [path, "-d", "."]

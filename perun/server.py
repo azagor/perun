@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import queue
 import re
@@ -731,15 +732,19 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if cwd and not Path(cwd).is_dir():
         raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
     if action == "session" and not cwd:
+        logging.getLogger("perun.server").warning(
+            "run-in-terminal rejected: no cwd or resolvable project (project=%r cwd=%r)",
+            project_ref, cwd)
         raise HTTPException(status_code=400,
                             detail="cwd (or a project with a path) is required")
 
     shell = str(payload.get("shell") or SETTINGS.terminal.strip() or "")
     argv = SETTINGS.terminal_cmd(shell_hint=shell)
     # Derive the shell class from the resolved executable so an empty/default
-    # shell still gets the right command-line syntax.
+    # shell still gets the right command-line syntax. Normalize to the basename
+    # so a configured full path (e.g. C:\...\wt.exe) still matches cmd/pwsh/wt.
     exe = os.path.basename(argv[0]).lower().replace(".exe", "")
-    shell_cls = shell.lower().replace(".exe", "") or exe
+    shell_cls = os.path.basename(shell.lower().replace(".exe", "")) or exe
     # cmd.exe cannot carry a newline in its command line; flatten them.
     if shell_cls in ("cmd", "wt"):
         prompt = " ".join(prompt.splitlines())

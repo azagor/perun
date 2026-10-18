@@ -3,6 +3,8 @@
 Usage::
 
     python -m perun serve [--host H] [--port P] [--reload] [--bridge]
+    python -m perun stop [--timeout S] [--force]
+    python -m perun restart [--host H] [--port P] [--bridge] [--detach] [--timeout S] [--force]
     python -m perun bridge
     python -m perun discover [--roots a;b] [--index]
     python -m perun projects
@@ -31,7 +33,7 @@ import threading
 import time
 from typing import Any
 
-from . import config, db, discovery, memory, registry
+from . import config, daemon, db, discovery, memory, registry
 
 
 # --------------------------------------------------------------------------- #
@@ -76,12 +78,84 @@ def _roots(arg: str | None) -> list[str]:
 def cmd_serve(args: argparse.Namespace) -> int:
     _ensure()
     settings = config.Settings.load()
-    if args.bridge:
-        _start_bridge_thread()
-    from .server import serve
+    existing = daemon.is_another_perun_running(settings)
+    if existing:
+        print(f"[perun] already running on PID {existing} (http://{settings.host}:{settings.port})")
+        print("[perun] use 'perun restart' to replace it or 'perun stop' to stop it")
+        return 1
+    daemon.write_pid()
+    try:
+        if args.bridge:
+            _start_bridge_thread()
+        from .server import serve
 
-    serve(host=args.host, port=args.port, reload=args.reload)
+        serve(host=args.host, port=args.port, reload=args.reload)
+    except Exception as exc:
+        # If the server fails to bind (or crashes on startup), clear the PID
+        # file so it doesn't falsely claim we are running.
+        daemon.clear_pid()
+        raise
+    finally:
+        daemon.clear_pid()
     return 0
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    """Stop the running Perun server."""
+    settings = config.Settings.load()
+    existing = daemon.is_another_perun_running(settings)
+    if existing is None:
+        print("[perun] not running")
+        return 0
+    print(f"[perun] stopping PID {existing}...")
+    if daemon.stop(existing, timeout=args.timeout):
+        daemon.clear_pid()
+        print("[perun] stopped")
+        return 0
+    if args.force:
+        if daemon.kill(existing):
+            daemon.clear_pid()
+            print("[perun] killed")
+            return 0
+    print("[perun] failed to stop gracefully; use --force")
+    return 1
+
+
+def cmd_restart(args: argparse.Namespace) -> int:
+    """Gracefully stop the running server, then start a new one."""
+    settings = config.Settings.load()
+    existing = daemon.is_another_perun_running(settings)
+    if existing:
+        print(f"[perun] stopping existing server (PID {existing})...")
+        if not daemon.stop(existing, timeout=args.timeout):
+            if args.force:
+                if not daemon.kill(existing):
+                    print(f"[perun] could not kill PID {existing}; check permissions")
+                    return 1
+            else:
+                print("[perun] failed to stop gracefully; use --force")
+                return 1
+        daemon.clear_pid()
+        print("[perun] stopped")
+
+    if args.detach:
+        # Start a detached server and exit; useful for services/scripts.
+        argv = [sys.executable, "-m", "perun", "serve"]
+        if args.host:
+            argv.extend(["--host", args.host])
+        if args.port:
+            argv.extend(["--port", str(args.port)])
+        if args.bridge:
+            argv.append("--bridge")
+        if args.reload:
+            argv.append("--reload")
+        new_pid = daemon.start_detached(argv)
+        daemon.write_pid_for(new_pid)
+        print(f"[perun] started detached server (PID {new_pid})")
+        return 0
+
+    print("[perun] starting server...")
+    return cmd_serve(args)
 
 
 # Process-lifetime references for the in-process Telegram bridge. The lock must
@@ -553,6 +627,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reload", action="store_true")
     p.add_argument("--bridge", action="store_true", help="also start the Telegram bridge")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("stop", help="stop the running Perun server")
+    p.add_argument("--timeout", type=float, default=30,
+                   help="seconds to wait for graceful shutdown")
+    p.add_argument("--force", action="store_true",
+                   help="force-kill if graceful shutdown fails")
+    p.set_defaults(func=cmd_stop)
+
+    p = sub.add_parser("restart", help="gracefully restart the Perun server")
+    p.add_argument("--host", default=None)
+    p.add_argument("--port", type=int, default=None)
+    p.add_argument("--reload", action="store_true")
+    p.add_argument("--bridge", action="store_true", help="also start the Telegram bridge")
+    p.add_argument("--detach", action="store_true",
+                   help="start the new server in the background and exit")
+    p.add_argument("--timeout", type=float, default=30,
+                   help="seconds to wait for the old server to shut down")
+    p.add_argument("--force", action="store_true",
+                   help="force-kill the old server if graceful shutdown fails")
+    p.set_defaults(func=cmd_restart)
 
     p = sub.add_parser("bridge", help="run the shared Telegram bridge")
     p.set_defaults(func=cmd_bridge)
