@@ -128,6 +128,10 @@ python tools/make_icon.py
 
 # discover + index everything
 python -m perun discover --index
+
+# report manifest docs/anchors pointing at missing files (and /update-docs
+# refreshes the three default docs — see the global slash commands)
+python -m perun validate-docs --all
 ```
 
 ## Git push credentials

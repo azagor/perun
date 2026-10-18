@@ -68,12 +68,21 @@ def _search_memory(
     ``"memory"`` on success or ``None`` on failure/empty results.
     """
     raw: list[dict[str, Any]]
+    # Embed the query once and share it across every per-project search —
+    # otherwise one unified search costs 2N transport round-trips
+    # (facts + docs per project; audit 2026-10-18).
+    q_emb = None
+    try:
+        q_emb = memory.embed_texts([query.strip()], prefix=memory.QUERY_PREFIX)[0]
+    except Exception:
+        q_emb = None
     if not project_list:
         raw = memory.unified_search(
             query,
             project_id=0,
             all_projects=True,
             k=max_memory,
+            q_emb=q_emb,
         )
     else:
         raw = []
@@ -87,6 +96,7 @@ def _search_memory(
                         project_id=0,
                         all_projects=True,
                         k=max_memory,
+                        q_emb=q_emb,
                     )
                 )
             else:
@@ -96,10 +106,22 @@ def _search_memory(
                         project_id=pid,
                         all_projects=False,
                         k=max_memory,
+                        q_emb=q_emb,
                     )
                 )
         raw.sort(key=lambda r: r.get("score", 0.0), reverse=True)
-        raw = raw[:max_memory]
+        # Global rows come back from every per-project query — keep the best-
+        # scoring occurrence of each source row only (audit: duplicated
+        # global results).
+        seen: set[tuple[Any, Any]] = set()
+        deduped: list[dict[str, Any]] = []
+        for r in raw:
+            key = (r.get("source_type"), r.get("id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+        raw = deduped[:max_memory]
 
     if not raw:
         return [], "memory"
@@ -192,17 +214,21 @@ def _rrf_fuse(
     Accepts either raw search response dicts (with ``matches`` and ``tool``)
     or already-extracted lists of matches.
     """
+    if not isinstance(max_code, int) or isinstance(max_code, bool) or max_code <= 0:
+        # A non-positive limit must yield nothing — ``fused[:negative]`` would
+        # otherwise drop only the last N entries (audit 2026-10-18, e05).
+        return []
     scores: dict[tuple[Any, ...], float] = {}
     best: dict[tuple[Any, ...], dict[str, Any]] = {}
     best_rank: dict[tuple[Any, ...], int] = {}
 
     def _key(m: dict[str, Any]) -> tuple[Any, ...]:
+        # Key by (project, file, line) only: rg counts the match column while
+        # ast-grep reports 0, so keying on column would return the same line
+        # twice when both engines hit it (audit 2026-10-18, e02).
         project = str(m.get("project", ""))
         file = str(m.get("file", ""))
         line = int(m.get("line", 0) or 0)
-        column = m.get("column")
-        if column is not None:
-            return (project, file, line, int(column or 0))
         return (project, file, line)
 
     def _extract(resp: dict[str, Any] | list[dict[str, Any]], default_source: str) -> tuple[list[dict[str, Any]], str]:
@@ -294,6 +320,17 @@ def unified_search(
     will_search_memory = use_memory and query.strip()
     will_search_grep = use_grep and pattern.strip()
     will_search_ast = use_ast_grep and rule.strip()
+
+    # Clamp result limits before they reach any backend: SQL treats
+    # ``LIMIT -1`` as "no limit" (audit 2026-10-18, e12).
+    try:
+        max_memory = max(0, int(max_memory))
+    except (TypeError, ValueError):
+        max_memory = 6
+    try:
+        max_code = max(0, int(max_code))
+    except (TypeError, ValueError):
+        max_code = 20
 
     if not (will_search_memory or will_search_grep or will_search_ast):
         return {

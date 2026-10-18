@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from perun import memory, registry
 
 
@@ -127,3 +129,52 @@ def test_prune_removes_old_project_facts():
         conn.execute("UPDATE memory SET ts=? WHERE project_id=?", (old, p["id"]))
     removed = memory.prune(project_id=p["id"], keep=0, min_age_days=30)
     assert removed == 1
+
+
+def test_search_facts_casefolds_german_eszett():
+    """casefold() maps 'ß' to 'ss', unlike lower()."""
+    p = registry.add_project("Casefold", r"C:\cf")
+    memory.remember("Meissner rule about strasse", project_id=p["id"], scope="project")
+    results = memory.search_facts("Meißner straße", p["id"])
+    assert results
+
+
+def test_index_project_docs_reports_skipped_sensitive(workdir):
+    (workdir / "README.md").write_text(
+        "# Readme\n\nghp_deadbeefdeadbeefdeadbeefdeadbeefdead\n",
+        encoding="utf-8")
+    p = registry.add_project("SkipSec", str(workdir))
+    res = memory.index_project_docs(p["id"])
+    assert res["ok"]
+    assert res["skipped_sensitive"] >= 1
+
+
+def test_reembed_missing_repairs_fact_embedding(monkeypatch):
+    from perun import config, db, embeddings
+
+    # Insert a fact with a missing embedding by bypassing remember().
+    p = registry.add_project("Reembed", r"C:\re")
+    content = "repair me"
+    with db.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO memory (project_id, scope, content, content_hash, ts, embedding) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (p["id"], "project", content, memory.content_hash(content),
+             registry.now_iso(), None),
+        )
+        fact_id = cur.lastrowid
+
+    fake_vec = [0.1] * config.Settings().embed_dim
+    monkeypatch.setattr(
+        memory, "embed_texts",
+        lambda texts, prefix="": [fake_vec for _ in texts])
+
+    result = memory.reembed_missing(limit=8)
+    assert result["facts_embedded"] == 1
+    assert result["chunks_embedded"] == 0
+
+    with db.db() as conn:
+        row = db.one(conn, "SELECT embedding FROM memory WHERE id=?", (fact_id,))
+    assert row["embedding"] is not None
+    unpacked = embeddings.unpack_vector(row["embedding"])
+    assert unpacked == pytest.approx(fake_vec)

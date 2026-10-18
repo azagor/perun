@@ -133,6 +133,9 @@ def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
     Returns ``(project, created)``. Only non-empty fields overwrite an existing
     record, so a partial update never clears configured values.
     """
+    # ``~/projects/app`` is what users type; ``Popen(cwd=...)`` will not expand
+    # it, so resolve it once, here, for every caller.
+    path = os.path.expanduser((path or "").strip())
     existing = registry.get_project_by_path(path)
     if existing:
         project = registry.update_project(
@@ -145,7 +148,10 @@ def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
             tags=tags or existing.get("tags", ""),
             color=color or existing.get("color", ""),
         )
-        _write_default_instructions(path, instructions)
+        # Write into the *project's* path, not the possibly-nested path the
+        # caller passed (registering ``<project>/src`` must not drop
+        # instructions into a subdirectory of the project).
+        _write_default_instructions(existing["path"], instructions)
         project = project or existing
         if model or agent:
             sync_opencode_config(project)

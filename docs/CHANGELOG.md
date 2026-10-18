@@ -4,6 +4,141 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.3 - 2026-10-18
+
+### Security
+
+- **Mandatory local API token.** Every state-changing `/api/*` request (any
+  method other than `GET`/`HEAD`/`OPTIONS`) now requires
+  `X-Perun-Token: <token>` (or `Authorization: Bearer <token>`), compared with
+  `hmac.compare_digest`, and is rejected with **401** otherwise. The token is
+  `PERUN_HOME/api-token`, created atomically (`O_CREAT|O_EXCL`) with `0600`
+  permissions and overridable per process with `PERUN_API_TOKEN`. The dashboard
+  receives it injected into `index.html` as `window.PERUN_TOKEN` by `GET /` (and
+  the frontend attaches it automatically); `GET /api/settings` never returns it.
+  Read-only `GET`/SSE flows are unchanged.
+- **Origin check compares the effective port.** `_origin_guard`
+  (`_origin_parts`/`_origin_ok`) now requires the `Origin` scheme *and* effective
+  port (80/443 when absent) to match the request host, closing a default-port
+  bypass. Middleware order is Host → Origin → token.
+- **Telegram allow-list is no longer first-come-first-served.** An empty
+  `telegram_allowed_chats` grants nobody; pairing uses a persisted one-time code
+  (`Settings.telegram_pair_code`, generated with `os.urandom(4).hex()`,
+  `hmac.compare_digest`-checked, handled *before* the auth gate) via `/pair <code>`.
+  The code is exposed only to loopback callers through `/api/telegram/status` and
+  is blanked in `GET /api/settings`. `/stop` is now per-chat.
+- **`POST /api/run-in-terminal` builds the command server-side.** It accepts
+  structured fields (`cwd`/`project`, `prompt`, `model`, `agent`, `session`,
+  `run_uid`, `tui`, `shell`) or `{action:"auth-login", provider}`; a free-text
+  `command` is refused, and every value is quoted for the target shell
+  (`_ps_quote`/`_posix_quote`/`_cmd_quote`) so a prompt containing PowerShell
+  `$(...)` can no longer execute. Newlines/NUL are rejected.
+- **`git push` validates the remote and branch.** The remote must appear in
+  `git remote` output (blocking `--receive-pack=` option injection); branch names
+  reject empty/`-`-prefixed/control/space/`:` values; `--` precedes positionals.
+- **`perun_telegram_send` refuses chats outside the allow-list** (exfiltration
+  guard), and the destructive/durable MCP tools gained the same `confirm` gate as
+  `perun_delete_project` (`perun_set_instructions`, `perun_set_manifest`,
+  `perun_discover` with `roots`, `perun_create_project` for clones).
+- **Instruction-file writes are contained.**
+  `orchestrator._safe_instruction_filename()` reduces a manifest-supplied name to
+  a plain `*.md` basename, and `write_project_instruction_file()` refuses paths
+  that escape the project root (symlinked `.perun`/file) instead of following
+  them.
+- **Orchestrator children no longer inherit raw secrets.** `_child_env()` strips
+  `TELEGRAM_BOT_TOKEN`, `TG_BOT_TOKEN`, `PERUN_API_TOKEN`, `PERUN_PASSWORD`,
+  sets `PERUN_DEPTH`, and injects the resolved Telegram token as
+  `PERUN_TELEGRAM_TOKEN` so agent MCP servers can still use `perun_telegram_send`.
+  `MAX_AGENT_DEPTH = 2` stops unbounded agent recursion.
+
+### Fixed
+
+- **Orchestrator.** Cancelling a *queued* run deadlocked (the slot limiter is now
+  a mutable `_SlotLimiter`); the terminal `end` event is single-shot (`_ended` +
+  `_emit_end`); POSIX runs lead a new session so `terminate_tree()` signals the
+  whole process group (`killpg`); a restart marks still-active runs `interrupted`
+  (not `done`) and shutdown cancels active runs and terminates tracked terminals;
+  subscriber queues are bounded (`SUB_QUEUE_LIMIT = 4096`, drop-oldest); run
+  history is dropped on a 300 s timer; `stream()` polls every 15 s with an
+  `is_final` short-circuit; `cancel()` is idempotent and handles queued runs; run
+  logs are line-buffered so they update during a run.
+- **Memory/search.** Secret filtering keys off the raw score (freshness affects
+  ordering only); `GLOBAL_FRESHNESS_HALF_LIFE_DAYS = 365`; `prune(keep=...)`
+  guards negatives; `chunk_markdown` dedupes repeated titles; `_rrf_fuse` dedupes
+  by `(project, file, line)`; the query embedding is computed once and threaded
+  through `unified_search`/`search_facts`/`search_docs`; global facts/docs are
+  deduped by `(source_type, id)` at best score; `max_code<=0` returns `[]`.
+- **grep/search.** Fail-closed root gate (`_is_project_path_safe`),
+  `..`-stripping `_sanitize_root`, pattern validation (empty/NUL/`MAX_PATTERN_LEN
+  = 512`), nested-quantifier rejection (`_looks_catastrophic`), `max_results<0` →
+  `invalid_input` and `==0` → empty ok, keeping parsed stdout when ripgrep exits
+  `2` (with a `warnings` field), `--crlf`, whole-word `(?:)` wrapping in the
+  Python fallback, root + nested `.gitignore` handling, symlink-escape skipping,
+  and an 8 MB per-file cap in the fallback (ripgrep stays uncapped).
+  `_looks_catastrophic()` now catches nested forms like `((a+)+)` thanks to a
+  recursive parser.
+- **Memory search.** `search_facts()` and `search_docs()` use `casefold()`
+  consistently, so queries like `straße` match stored `strasse`.
+- **Indexing.** `index_project_docs()` returns and logs `skipped_sensitive`, the
+  count of document chunks that contained secrets and were not persisted.
+- **Server shutdown.** The blocking run-cancel + terminal-terminate cleanup now
+  runs in `asyncio.to_thread()` so the event loop is not stalled during shutdown.
+- **Registry/config/discovery.** `slugify` transliterates diacritics (including
+  `ł`), falls back to a hash for alphanumeric-less names, and never returns an
+  empty slug; `add_project("")` raises `ValueError`; duplicate paths raise
+  `ValueError`; slugs are capped at 60 chars with an unbounded `-N` suffix loop;
+  `get_project` is slug-first with an id fallback; `get_project_by_path` does four
+  passes (exact/real/case/ancestor); `discovery.register()` stores the realpath and
+  `discover_and_sync` reports a `missing` list; `projects.register_or_update`
+  `expanduser()`s the path; `Settings.load()` quarantines an unparseable
+  `config.json` (`.corrupt-<stamp>`) instead of letting the next `save()` overwrite
+  it, and `save()` is atomic with `0600` set before writing; `config` honours
+  `XDG_CONFIG_HOME` like the installer; `_seed_default_instructions()` runs from
+  `Orchestrator.__init__` instead of at import; `list_projects()` reads one
+  activity row per project; the agent scan covers `agent/` as well as `agents/`.
+- **Server.** `_str_field` rejects wrong JSON types with **400**;
+  `_resolve_project` returns **404** for an unknown *non-empty* slug instead of
+  silently falling back to global scope; `POST /api/memory/prune` requires
+  `keep >= 1`; instruction filenames reject NUL and names longer than 120 chars
+  with **400**; `GET /api/runs/{uid}/stream` returns **404** for an unknown run.
+- **Installer.** `_read_json` tolerates JSONC but **aborts** (exit code 2) on an
+  unparseable target config instead of silently replacing it; `OPENCODE_CONFIG` is
+  honoured; the MCP entry pins `environment.PERUN_HOME`; `opencode.json` is backed
+  up and rewritten only when it actually changes (no more backup pile-up).
+- **Telegram.** POSIX `PidLock` creates its pid file with `O_EXCL`, removing the
+  check-then-write race that let two bridges both "acquire".
+- **`Settings.telegram()` honours `PERUN_TELEGRAM_TOKEN`** (injected by the
+  orchestrator) ahead of config and raw environment variables;
+  `telegram_sources()` reports `"orchestrator"` when it is in use.
+- **Embeddings are repaired automatically.** `memory.reembed_missing()` runs on a
+  background thread (5 s startup delay, then every 60 s) and is exposed as
+  `POST /api/memory/reembed`, so facts/doc chunks written while Ollama was down
+  are re-embedded without manual intervention.
+- **Terminal (Linux).** `config.POSIX_TERMINALS` + `terminal_cmd()` launch a real
+  emulator (kitty/wezterm/ghostty/alacritty/foot/konsole/gnome-terminal/
+  xfce4-terminal/xterm) instead of a TTY-less `bash -c`, and the POSIX fallback
+  drops into an interactive shell so the window stays open.
+- **Portability.** `test_get_project_by_path_is_normcase` is guarded to Windows,
+  and the MCP "no project context" test uses a portable temp directory, so the
+  suite passes on Linux as well as Windows.
+
+### Changed
+
+- **Documentation audit against the codebase.** `docs/CODEMAP.md`: corrected
+  `__version__` (`0.7.2`), spelled out that the global
+  `default_model`/`default_agent` fallbacks apply only to the control plane,
+  added the missing providers/skills/tools/MCP/search endpoint groups, the
+  on-demand self-signed behavior of `installer/sign.ps1`, both missing `tools/`
+  scripts, and entries for the nine test files absent from the test map.
+  `docs/TECHNICAL_DOCUMENTATION.md`: added the missing endpoint-table rows
+  (`GET /api/terminals` and the project `instruction-files` CRUD), removed a
+  stray blank line that split the table, removed a duplicated heading, fixed the
+  stale "Latest release details (v0.6.4)" label and the leftover
+  `perun.__version__ reports 0.7.0` claim, and added §14 revision entries for
+  v0.7.1/v0.7.2. `README.md`: full CLI reference (all 18 subcommands), a note
+  that releases self-sign when the cert secrets are unset, and the complete
+  `tools/` layout line. `AGENTS.md`: added the `validate-docs` check to Commands.
+
 ## v0.7.2 - 2026-10-17
 
 ### Added

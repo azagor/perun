@@ -63,20 +63,27 @@ def test_set_instructions_rejects_bad_filename(mcp_project, filename):
 
 def test_set_instructions_allows_dotdot_stem(mcp_project):
     """A filename whose basename legitimately contains '..' as a substring is OK."""
-    result = mcp_mod.perun_set_instructions("hello", filename="name..md")
+    result = mcp_mod.perun_set_instructions("hello", filename="name..md", confirm=True)
     assert "Wrote instruction file" in result
     assert (Path(mcp_project["path"]) / ".perun" / "instructions" / "name..md").is_file()
 
 
+def test_set_instructions_requires_confirm(mcp_project):
+    """Durable instructions are not written as a side effect."""
+    result = mcp_mod.perun_set_instructions("hello", filename="default.md")
+    assert "confirm=True" in result
+    assert not (Path(mcp_project["path"]) / ".perun" / "instructions" / "default.md").exists()
+
+
 def test_get_instructions_allows_dotdot_stem(mcp_project):
-    mcp_mod.perun_set_instructions("hello", filename="name..md")
+    mcp_mod.perun_set_instructions("hello", filename="name..md", confirm=True)
     result = mcp_mod.perun_get_instructions(filename="name..md")
     assert "Instruction file name..md" in result
     assert "hello" in result
 
 
 def test_get_instructions_resolves_path_inside_project(mcp_project):
-    mcp_mod.perun_set_instructions("hello", filename="default.md")
+    mcp_mod.perun_set_instructions("hello", filename="default.md", confirm=True)
     result = mcp_mod.perun_get_instructions(filename="default.md")
     assert "Instruction file default.md" in result
     assert "hello" in result
@@ -84,14 +91,14 @@ def test_get_instructions_resolves_path_inside_project(mcp_project):
 
 def test_set_instructions_empty_filename_defaults_to_default_md(mcp_project):
     """Empty filename for set defaults to default.md, which is allowed."""
-    result = mcp_mod.perun_set_instructions("hello", filename="")
+    result = mcp_mod.perun_set_instructions("hello", filename="", confirm=True)
     assert "Wrote instruction file default.md" in result
     assert (Path(mcp_project["path"]) / ".perun" / "instructions" / "default.md").is_file()
 
 
 def test_set_instructions_frontmatter_is_yaml_safe(mcp_project):
     """A filename with YAML-special characters must not corrupt the front matter."""
-    result = mcp_mod.perun_set_instructions("body text", filename="weird: name.md")
+    result = mcp_mod.perun_set_instructions("body text", filename="weird: name.md", confirm=True)
     assert "Wrote instruction file" in result
     target = Path(mcp_project["path"]) / ".perun" / "instructions" / "weird: name.md"
     assert target.is_file()
@@ -121,6 +128,7 @@ def test_set_manifest_routes_instructions_to_file(mcp_project):
     result = mcp_mod.perun_set_manifest(
         {"version": 1, "name": "mcpsec", "instructions": "MCP MANIFEST RULE"},
         project=mcp_project["slug"],
+        confirm=True,
     )
     assert "Wrote manifest" in result
     target = Path(mcp_project["path"]) / ".perun" / "instructions" / "default.md"
@@ -211,3 +219,74 @@ def test_perun_memory_search_rejects_bad_k():
     result = mcp_mod.perun_memory_search("test", k="not-an-int")
     assert result.startswith("[perun]")
     assert "k" in result
+
+
+# --------------------------------------------------------------------------- #
+# Telegram send allow-list
+# ---------------------------------------------------------------------------#
+class _FakeHttpx:
+    def __init__(self, token: str, want_chat: str):
+        self.token = token
+        self.want_chat = want_chat
+        self.calls: list[dict] = []
+
+    class Client:
+        def __init__(self, outer, timeout: float = 30.0):
+            self._outer = outer
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url: str, json: dict):
+            self._outer.calls.append({"url": url, "json": json})
+            return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: {"ok": True, "result": {"message_id": 1}}})()
+
+
+def _patch_telegram(monkeypatch, token: str, chats: list[str]):
+    class FakeSettings:
+        def telegram(self):
+            return token, list(chats)
+
+    monkeypatch.setattr(mcp_mod.config.Settings, "load", lambda: FakeSettings())
+
+
+def test_perun_telegram_send_rejects_when_no_chats_configured(monkeypatch):
+    fake = _FakeHttpx("tok", "")
+    monkeypatch.setattr("httpx.Client", lambda timeout=30.0: fake.Client(fake, timeout))
+    _patch_telegram(monkeypatch, "tok", [])
+    result = mcp_mod.perun_telegram_send("hello", chat_id="12345")
+    assert "pair" in result.lower() or "configured" in result.lower()
+    assert not fake.calls
+
+
+def test_perun_telegram_send_rejects_unknown_chat(monkeypatch):
+    fake = _FakeHttpx("tok", "")
+    monkeypatch.setattr("httpx.Client", lambda timeout=30.0: fake.Client(fake, timeout))
+    _patch_telegram(monkeypatch, "tok", ["111", "222"])
+    result = mcp_mod.perun_telegram_send("hello", chat_id="99999")
+    assert "Refused" in result
+    assert "allow-list" in result
+    assert not fake.calls
+
+
+def test_perun_telegram_send_uses_allowed_chat(monkeypatch):
+    fake = _FakeHttpx("tok", "")
+    monkeypatch.setattr("httpx.Client", lambda timeout=30.0: fake.Client(fake, timeout))
+    _patch_telegram(monkeypatch, "tok", ["111", "222"])
+    result = mcp_mod.perun_telegram_send("hello", chat_id="222")
+    assert "sent" in result.lower()
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["json"]["chat_id"] == "222"
+
+
+def test_perun_telegram_send_defaults_to_first_allowed_chat(monkeypatch):
+    fake = _FakeHttpx("tok", "")
+    monkeypatch.setattr("httpx.Client", lambda timeout=30.0: fake.Client(fake, timeout))
+    _patch_telegram(monkeypatch, "tok", ["111", "222"])
+    result = mcp_mod.perun_telegram_send("hello")
+    assert "sent" in result.lower()
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["json"]["chat_id"] == "111"

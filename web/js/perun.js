@@ -42,6 +42,9 @@ const state = {
 async function api(path, opts = {}) {
     const init = { headers: {} };
     if (opts.method) init.method = opts.method;
+    // State-changing API calls require the local token, injected into
+    // index.html by the server (window.PERUN_TOKEN).
+    if (window.PERUN_TOKEN) init.headers['X-Perun-Token'] = window.PERUN_TOKEN;
     if (opts.body !== undefined) {
         init.headers['Content-Type'] = 'application/json';
         init.body = JSON.stringify(opts.body);
@@ -243,84 +246,30 @@ const terminalId = () => {
     const first = (t.terminals || [])[0];
     return first ? first.id : (navigator.platform.toLowerCase().startsWith('win') ? 'cmd' : 'sh');
 };
-const buildCommand = ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => {
-    const tid = terminalId();
-    const escPs = (s) => String(s || '').replace(/"/g, '`"');
-    const escBash = (s) => String(s || '').replace(/'/g, "'\\''");
-    const marker = runUid ? `PERUN_RUN_UID=${runUid}` : '';
-    const psTuiCmd = () => {
-        let cmd = marker ? `$env:${escPs(marker)}; ` : '';
-        cmd += `cd "${escPs(cwd)}"; opencode`;
-        if (prompt) cmd += ` --prompt "${escPs(prompt)}"`;
-        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
-        return cmd;
-    };
-    const bashTuiCmd = () => {
-        let cmd = `cd '${escBash(cwd)}' && `;
-        // Set the marker on the opencode process itself so the process tracker
-        // can resolve the TUI tab even if bash only inherited it for a subshell.
-        if (marker) cmd += `${escBash(marker)} `;
-        cmd += `opencode`;
-        if (prompt) cmd += ` --prompt '${escBash(prompt)}'`;
-        if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
-        return cmd;
-    };
-    const cmdTuiCmd = () => {
-        let cmd = marker ? `set "${escPs(marker)}" && ` : '';
-        cmd += `cd /d "${escPs(cwd)}" && opencode`;
-        if (prompt) cmd += ` --prompt "${escPs(prompt)}"`;
-        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
-        return cmd;
-    };
-    const psRunCmd = () => {
-        let cmd = marker ? `$env:${escPs(marker)}; ` : '';
-        cmd += `cd "${escPs(cwd)}"; opencode run`;
-        if (model) cmd += ` --model "${escPs(model)}"`;
-        if (agent) cmd += ` --agent "${escPs(agent)}"`;
-        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
-        cmd += ` -- "${escPs(prompt || 'Working session in progress.')}"`;
-        return cmd;
-    };
-    const bashRunCmd = () => {
-        let cmd = `cd '${escBash(cwd)}' && `;
-        if (marker) cmd += `${escBash(marker)} `;
-        cmd += `opencode run`;
-        if (model) cmd += ` --model '${escBash(model)}'`;
-        if (agent) cmd += ` --agent '${escBash(agent)}'`;
-        if (sessionId) cmd += ` --session '${escBash(sessionId)}'`;
-        cmd += ` -- '${escBash(prompt || 'Working session in progress.')}'`;
-        return cmd;
-    };
-    const cmdRunCmd = () => {
-        let cmd = marker ? `set "${escPs(marker)}" && ` : '';
-        cmd += `cd /d "${escPs(cwd)}" && opencode run`;
-        if (model) cmd += ` --model "${escPs(model)}"`;
-        if (agent) cmd += ` --agent "${escPs(agent)}"`;
-        if (sessionId) cmd += ` --session "${escPs(sessionId)}"`;
-        cmd += ` -- "${escPs(prompt || 'Working session in progress.')}"`;
-        return cmd;
-    };
-    if (tid === 'cmd') {
-        return { text: tui ? cmdTuiCmd() : cmdRunCmd(), shell: tid, tui };
-    }
-    if (tid === 'powershell' || tid === 'pwsh' || tid.toLowerCase().includes('powershell')) {
-        return { text: tui ? psTuiCmd() : psRunCmd(), shell: tid, tui };
-    }
-    return { text: tui ? bashTuiCmd() : bashRunCmd(), shell: tid, tui };
-};
-const launchInTerminal = async ({ cwd, model, agent, sessionId, prompt, tui, runUid }) => {
-    const cmd = buildCommand({ cwd, model, agent, sessionId, prompt, tui });
+// Commands are assembled server-side from these fields: the server quotes each
+// value for the target shell, so a prompt can never be executed as shell code.
+const launchInTerminal = async ({ cwd, model, agent, sessionId, prompt, tui, runUid, project }) => {
     try {
-        await api('/api/run-in-terminal', {
+        const r = await api('/api/run-in-terminal', {
             method: 'POST',
-            body: { cwd, command: cmd.text, shell: cmd.shell, run_uid: runUid },
+            body: {
+                project,
+                cwd,
+                prompt: prompt || '',
+                model: model || '',
+                agent: agent || '',
+                session: sessionId || '',
+                run_uid: runUid || '',
+                tui: !!tui,
+                shell: terminalId(),
+            },
         });
-        toast(tui ? `Opened ${cmd.shell} (TUI)` : `Opened ${cmd.shell}`, 'ok');
+        toast(tui ? `Opened ${r.shell} (TUI)` : `Opened ${r.shell}`, 'ok');
+        return r;
     } catch (e) {
-        toast('Could not open terminal — command copied instead', 'ok');
-        copyCommandToClipboard(cmd.text);
+        toast('Could not open a terminal', 'err');
+        return null;
     }
-    return cmd;
 };
 const copyCommandToClipboard = (cmd) => {
     const showModal = () => {
@@ -2872,8 +2821,9 @@ function mountTelegram(host, status, reload) {
             ${task.exists ? '<span class="badge muted">logon task registered</span>' : ''}
             <span class="secondary">${esc(botLabel)}</span>
             <span class="secondary">${bot.username ? '@' + esc(bot.username) : 'no bot'}</span>
-            <span class="secondary">chats: ${(status.allowed_chats || []).map(esc).join(', ') || 'pair-on-first-message'}</span>
+            <span class="secondary">chats: ${(status.allowed_chats || []).map(esc).join(', ') || 'none — pairing required'}</span>
          </div>
+         ${(status.allowed_chats && status.allowed_chats.length) ? '' : `<p class="mt">🔑 <b>Pairing code:</b> <span class="mono">${esc(status.pair_code || '(not generated yet — restart the bridge)')}</span> — send <span class="mono">/pair &lt;code&gt;</span> from the Telegram chat you want to authorise. The code is one-time and is cleared once used.</p>`}
          <p class="muted mt">The bot is project-agnostic. Use <span class="mono">/projects</span> to list them, <span class="mono">/project &lt;slug&gt;</span> to pick one, then just chat — Perun routes each message to the selected project's agent session and remembers the routing per chat.</p>`));
 
     // ---- Bot settings (single source of truth for the Telegram bot) --------
@@ -2908,7 +2858,7 @@ function mountTelegram(host, status, reload) {
             <span class="mono">@BotFather</span> and save it here again.</p>
          <label class="field"><span class="lab">Allowed chat ids <span class="muted">(comma separated${status.chats_source === 'env' ? ' — currently from the environment' : ''})</span></span>
             <input type="text" id="tg-chats" value="${esc((status.allowed_chats || []).join(', '))}"
-                   placeholder="blank = pair on the first incoming message"></label>
+                   placeholder="blank = no chat has access until it pairs with the code above"></label>
          <div class="form-actions">
             <button class="btn primary" id="tg-save">Save bot settings</button>
             ${status.token_source === 'settings-encrypted'
@@ -3078,11 +3028,14 @@ async function viewProviders(refresh = false) {
             const cmd = `opencode auth login ${esc(id)}`;
             confirmDialog('Connect provider', `Open a terminal to run <code>${cmd}</code>? Perun will not see your API key.`, async () => {
                 try {
-                    await api('/api/run-in-terminal', { method: 'POST', body: { command: cmd } });
+                    await api('/api/run-in-terminal', {
+                        method: 'POST',
+                        body: { action: 'auth-login', provider: id, shell: terminalId() },
+                    });
                     toast('Terminal opened — complete login there', 'ok');
                 } catch (e) {
                     toast('Could not open terminal — command copied', 'ok');
-                    copyCommandToClipboard(cmd);
+                    copyCommandToClipboard(`opencode auth login ${id}`);
                 }
             }, 'Open terminal');
         });

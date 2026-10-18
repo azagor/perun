@@ -43,9 +43,13 @@ def test_memory_store_with_global_scope_is_global(mcp_project):
     assert "global scope" in result
 
 
-def test_memory_store_without_project_or_cwd_is_global(monkeypatch):
+def test_memory_store_without_project_or_cwd_is_global(monkeypatch, tmp_path):
     """Orchestrator-style calls with no project context are global by design."""
-    monkeypatch.chdir("C:\\")
+    # A directory that is no project and has no project ancestor, on any OS
+    # (``C:\\`` is not a thing on POSIX).
+    outside = tmp_path / "not-a-project"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
     before = memory.stats(None)["facts_global"]
     result = mcp_mod.perun_memory_store("cross-project convention")
     assert "global scope" in result

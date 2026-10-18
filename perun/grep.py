@@ -15,6 +15,7 @@ endpoints, or other Perun modules) can consume them uniformly.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -26,9 +27,20 @@ from typing import Any, Iterable, Iterator
 
 MAX_RESULTS = 200
 MAX_LINE_LEN = 160
-MAX_FILE_BYTES = 5 * 1024 * 1024
+# The Python fallback reads files whole/line-by-line; rg streams and needs no
+# cap (it must keep up with e.g. 50 MB logs). 8 MB keeps the fallback useful
+# while bounding worst-case memory.
+MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_RG_BYTES = 16 * 1024 * 1024
-_BINARY_HINT_RE = re.compile(rb"[\x00-\x08\x0e-\x1f\x7f-\x9f]")
+MAX_PATTERN_LEN = 512
+# rg -g exclusions shared with the Python fallback's SKIP_DIRS so both
+# engines return the same result set (audit 2026-10-18, d02/d03/d06).
+_RG_IGNORE_GLOBS = [
+    "-g", "!node_modules/", "-g", "!venv/", "-g", "!__pycache__/",
+    "-g", "!.venv/", "-g", "!.git/", "-g", "!.perun/",
+]
+# Directories both engines always skip.
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".perun"}
 
 
 def _is_windows() -> bool:
@@ -40,17 +52,18 @@ def _which(name: str) -> str | None:
 
 
 def _is_binary(path: Path) -> bool:
-    """Read the first 8 KB and check for null/control bytes."""
+    """Heuristic binary check: a NUL byte in the first 8 KB.
+
+    Deliberately NOT a control-byte range check — UTF-8 continuation bytes
+    (e.g. 0x82 in „ł") live in \\x7f-\\x9f and would mark every non-English
+    text file as binary. ripgrep uses the same NUL heuristic.
+    """
     try:
         with open(path, "rb") as fh:
             chunk = fh.read(8192)
     except Exception:
         return True
-    if not chunk:
-        return False
-    if b"\x00" in chunk:
-        return True
-    return bool(_BINARY_HINT_RE.search(chunk))
+    return b"\x00" in chunk
 
 
 def _glob_to_regex(glob: str) -> str:
@@ -93,11 +106,183 @@ def _safe_compile_regex(pattern: str, flags: int = 0) -> re.Pattern | None:
 
 
 def _resolve_abs(path: str | Path) -> Path:
-    """Safe resolve that catches OSError."""
+    """Safe resolve that catches OSError/ValueError (e.g. embedded NUL)."""
     try:
         return Path(path).resolve()
+    except (OSError, ValueError):
+        try:
+            return Path(path).absolute()
+        except (OSError, ValueError):
+            return Path(".")
+
+
+def _sanitize_root(root: str | Path) -> Path | None:
+    """Normalise a search root.
+
+    ``..`` components are *dropped*, not resolved: a root of ``proj/..`` must
+    not widen the search beyond the directory it points at (audit 2026-10-18,
+    a01/a02).  Returns ``None`` for unusable paths (embedded NUL, ..) so the
+    caller can report ``invalid_input`` instead of crashing.
+    """
+    try:
+        raw = str(root)
+        if "\x00" in raw:
+            return None
+        parts = Path(raw).parts
+        kept = tuple(p for p in parts if p != "..") or (".",)
+        return Path(*kept).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def _validate_pattern(pattern: str) -> str | None:
+    """Return an error reason when *pattern* is unusable by both engines."""
+    if not isinstance(pattern, str) or not pattern.strip():
+        return "empty pattern"
+    if "\x00" in pattern:
+        return "pattern contains a NUL byte"
+    if len(pattern) > MAX_PATTERN_LEN:
+        return f"pattern too long ({len(pattern)} > {MAX_PATTERN_LEN} chars)"
+    return None
+
+
+def _looks_catastrophic(pattern: str) -> bool:
+    """Detect the classic ReDoS shape: a quantifier applied to a group whose
+    body contains another quantifier — ``(a+)+``, ``((a+)+)*``, ``(\\d+)*``.
+
+    Python's backtracking engine takes exponential time on such patterns
+    (ripgrep's automaton does not), so the pure-Python fallback refuses them
+    instead of hanging (audit 2026-10-18, b01).
+    """
+
+    def _parse(i: int) -> tuple[int, bool, bool]:
+        """Parse a sequence starting at *i*.
+
+        Returns ``(next_index, has_quantifier, is_catastrophic)``.
+        Stops at an unmatched closing parenthesis or end of string.
+        """
+        has_qt = False
+        while i < len(pattern):
+            c = pattern[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "[":
+                j = i + 1
+                while j < len(pattern) and pattern[j] != "]":
+                    if pattern[j] == "\\":
+                        j += 1
+                    j += 1
+                i = j + 1
+                continue
+            if c == "(":
+                j, body_has_qt, body_cat = _parse(i + 1)
+                if j >= len(pattern) or pattern[j] != ")":
+                    return j, has_qt, False
+                i = j + 1
+                group_quantified = i < len(pattern) and pattern[i] in "*+{"
+                if group_quantified:
+                    i += 1
+                    has_qt = True
+                    if body_has_qt:
+                        return i, True, True
+                else:
+                    if body_has_qt:
+                        has_qt = True
+                if body_cat:
+                    return i, True, True
+                continue
+            if c == ")":
+                return i, has_qt, False
+            if c in "*+":
+                has_qt = True
+            i += 1
+        return i, has_qt, False
+
+    _, _, catastrophic = _parse(0)
+    return catastrophic
+
+
+# --------------------------------------------------------------------------- #
+# .gitignore support for the Python fallback (so both engines agree)
+# --------------------------------------------------------------------------- #
+def _glob_match_simple(pat: str, text: str) -> bool:
+    """gitignore-style glob: ``*`` stays inside a path segment, ``**`` spans."""
+    out: list[str] = []
+    i, n = 0, len(pat)
+    while i < n:
+        c = pat[i]
+        if c == "*":
+            if i + 1 < n and pat[i + 1] == "*":
+                out.append(".*")
+                i += 2
+                if i < n and pat[i] == "/":
+                    i += 1
+            else:
+                out.append("[^/]*")
+                i += 1
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        elif c == "[":
+            j = pat.find("]", i + 1)
+            if j == -1:
+                out.append(re.escape(c))
+                i += 1
+            else:
+                out.append(pat[i:j + 1])
+                i = j + 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    try:
+        return re.fullmatch("".join(out), text) is not None
+    except re.error:  # pragma: no cover - defensive (odd character classes)
+        return False
+
+
+def _gitignore_rule_matches(rule: str, rel: str) -> bool:
+    """Does a single (already de-negated) gitignore rule match *rel*?"""
+    is_dir_rule = rule.endswith("/")
+    rule = rule.rstrip("/")
+    if not rule:
+        return False
+    anchored = rule.startswith("/") or "/" in rule
+    rule = rule.lstrip("/")
+    if anchored:
+        if _glob_match_simple(rule, rel):
+            return True
+        return bool(is_dir_rule) and (rel == rule or rel.startswith(rule + "/"))
+    return any(_glob_match_simple(rule, seg) for seg in rel.split("/"))
+
+
+def _gitignored(rel: str, rules: list[tuple[str, str]]) -> bool:
+    """Ordered-rule evaluation; the last matching rule wins (incl. ``!``)."""
+    rel = rel.replace("\\", "/").strip("/")
+    ignored = False
+    for base, rule in rules:
+        if base:
+            if not (rel == base or rel.startswith(base + "/")):
+                continue
+            sub = rel[len(base):].lstrip("/")
+        else:
+            sub = rel
+        negated = rule.startswith("!")
+        pat = rule[1:] if negated else rule
+        if not pat:
+            continue
+        if _gitignore_rule_matches(pat, sub):
+            ignored = not negated
+    return ignored
+
+
+def _read_gitignore(path: Path) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return [line.strip() for line in fh
+                    if line.strip() and not line.lstrip().startswith("#")]
     except OSError:
-        return Path(path).absolute()
+        return []
 
 
 def _run(argv: list[str], cwd: str | Path | None = None,
@@ -230,9 +415,10 @@ def _is_project_path_safe(project: dict[str, Any],
                           configured_roots: list[str] | None = None) -> bool:
     """Check whether a project path lives under one of the configured roots.
 
-    For now this is a no-op safety gate: it logs nothing and only refuses paths
-    that are blatantly outside the configured roots.  A future hardening pass can
-    tighten the policy without changing callers.
+    Fail-closed: a missing/empty root list (or an unusable path) refuses the
+    path — with no roots configured there is nothing to be safe *within*, so
+    "everything is allowed" would turn the gate into a no-op (audit 2026-10-18,
+    a04).
     """
     if configured_roots is None:
         try:
@@ -241,11 +427,11 @@ def _is_project_path_safe(project: dict[str, Any],
         except Exception:
             configured_roots = []
     ppath = _project_path(project)
-    if not ppath:
+    if not ppath or "\x00" in str(ppath):
         return False
     target = _resolve_abs(ppath)
     if not configured_roots:
-        return True
+        return False
     for root in configured_roots:
         try:
             root_path = _resolve_abs(root)
@@ -267,53 +453,98 @@ def _python_grep(pattern: str, root: Path, *, case_sensitive: bool = True,
                  whole_word: bool = False, include: str | None = None,
                  max_results: int = MAX_RESULTS) -> list[dict[str, Any]]:
     """Pure-Python regex fallback when ripgrep is not installed."""
+    if max_results <= 0:
+        return []
     flags = 0 if case_sensitive else re.IGNORECASE
     if whole_word:
-        pattern = r"\b" + pattern + r"\b"
+        # Group the WHOLE pattern so alternation stays inside the boundary
+        # (\bfoo|bar\b would let "foobar" match — audit b09).
+        pattern = r"\b(?:" + pattern + r")\b"
     regex = _safe_compile_regex(pattern, flags)
     if regex is None:
         return []
 
+    # include is a glob first (ripgrep -g semantics). The regex reading of the
+    # file name is only a fallback for patterns that match nothing as a glob,
+    # so "a.py" cannot match "axpy" (audit b10) while the legacy ".*\\.py"
+    # regex form keeps working.
+    include_glob: str | None = None
     include_re: re.Pattern | None = None
     if include:
-        # Prefer treating *include* as a regex (legacy Python-fallback
-        # behaviour); if it is not a valid regex, treat it as a glob.
+        include_glob = include
         include_re = _safe_compile_regex(include, flags)
         if include_re is None:
             include_re = _safe_compile_regex(_glob_to_regex(include), flags)
 
     results: list[dict[str, Any]] = []
-    skip_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", ".perun"}
+    gitignore_rules: list[tuple[str, str]] = []
+    root_abs = _resolve_abs(root)
+    candidates: list[tuple[str, Path]] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir
+        # Collect this directory's .gitignore so nested files/dirs are pruned
+        # the same way ripgrep would (audit d05).
+        gitignore_path = Path(dirpath) / ".gitignore"
+        if gitignore_path.is_file():
+            for rule in _read_gitignore(gitignore_path):
+                gitignore_rules.append((rel_dir, rule))
+        if gitignore_rules:
+            dirnames[:] = [d for d in dirnames
+                           if not _gitignored(f"{rel_dir}/{d}" if rel_dir else d,
+                                              gitignore_rules)]
         for fname in filenames:
-            if include_re is not None and not include_re.search(fname):
+            rel = f"{rel_dir}/{fname}" if rel_dir else fname
+            if gitignore_rules and _gitignored(rel, gitignore_rules):
                 continue
-            path = Path(dirpath) / fname
+            candidates.append((rel.replace(os.sep, "/"), Path(dirpath) / fname))
+
+    if include_glob is not None:
+        glob_hits = {rel for rel, _ in candidates
+                     if fnmatch.fnmatchcase(rel.rsplit("/", 1)[-1], include_glob)
+                     or fnmatch.fnmatchcase(rel, include_glob)}
+        if glob_hits:
+            candidates = [(rel, p) for rel, p in candidates if rel in glob_hits]
+        elif include_re is not None:
+            candidates = [(rel, p) for rel, p in candidates
+                          if include_re.search(rel.rsplit("/", 1)[-1])]
+        else:
+            candidates = []
+
+    for rel, path in candidates:
+        # Never read through a symlink that leaves the search root
+        # (ripgrep does not follow symlinks — audit a06).
+        if path.is_symlink():
             try:
-                if path.stat().st_size > MAX_FILE_BYTES:
-                    continue
-            except Exception:
+                resolved = path.resolve()
+                resolved.relative_to(root_abs)
+            except (OSError, ValueError, RuntimeError):
                 continue
-            if _is_binary(path):
+        try:
+            if path.stat().st_size > MAX_FILE_BYTES:
                 continue
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    for i, line in enumerate(fh, 1):
-                        m = regex.search(line)
-                        if m:
-                            results.append({
-                                "file": str(path.relative_to(root)),
-                                "line": i,
-                                "column": m.start(),
-                                "text": line.rstrip(),
-                                "match": m.group(0),
-                                "source": "python-grep",
-                            })
-                            if len(results) >= max_results:
-                                return results
-            except Exception:
-                continue
+        except Exception:
+            continue
+        if _is_binary(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh, 1):
+                    m = regex.search(line)
+                    if m:
+                        results.append({
+                            "file": rel,
+                            "line": i,
+                            "column": m.start(),
+                            "text": line.rstrip(),
+                            "match": m.group(0),
+                            "source": "python-grep",
+                        })
+                        if len(results) >= max_results:
+                            return results
+        except Exception:
+            continue
     return results
 
 
@@ -324,26 +555,49 @@ def rg_search(pattern: str, root: str | Path, *, case_sensitive: bool = True,
 
     Args:
         pattern: POSIX/ripgrep regex.
-        root: directory to search.
+        root: directory to search (``..`` components never widen the scope).
         case_sensitive: ripgrep ``--case-sensitive`` / ``--ignore-case``.
         whole_word: ripgrep ``--word-regexp``.
-        include: optional glob-like ripgrep ``-g`` include pattern, or a regex
-            applied to the file name in the Python fallback.
+        include: ripgrep ``-g`` glob (a regex reading is the Python fallback's
+            last resort when the glob matches nothing).
         max_results: cap on returned matches (hard-capped at ``MAX_RESULTS``).
 
     Returns:
         ``{"ok": true, "matches": [...], "tool": "rg"|"python-grep"}`` or
-        ``{"ok": false, "error": "..."}``.
+        ``{"ok": false, "error_kind": "invalid_input", "error": "..."}``.
+        ``warnings`` is present when ripgrep hit errors or the Python fallback
+        was used after an rg failure (audit 2026-10-18, c10).
     """
-    root_path = Path(root)
-    if not root_path.is_dir():
+    root_path = _sanitize_root(root)
+    if root_path is None or not root_path.is_dir():
         return {"ok": False, "error_kind": "invalid_input",
                 "error": f"not a directory: {root}"}
-
+    if not _is_project_path_safe({"path": str(root_path)}):
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": f"path outside the configured Perun roots: {root_path} "
+                         "(add it to roots in Settings to search it)"}
+    bad = _validate_pattern(pattern)
+    if bad is not None:
+        return {"ok": False, "error_kind": "invalid_input", "error": bad}
+    if isinstance(max_results, bool) or not isinstance(max_results, int):
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            return {"ok": False, "error_kind": "invalid_input",
+                    "error": "max_results must be an integer"}
+    if max_results < 0:
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": "max_results must not be negative"}
+    if max_results == 0:
+        return {"ok": True, "matches": [],
+                "tool": "rg" if rg_available() else "python-grep"}
     max_results = min(max_results, MAX_RESULTS)
 
+    warnings: list[str] = []
+    rg_failed = False
     if rg_available():
-        argv = ["rg", "--json", "-n", "--max-columns", "500"]
+        argv = ["rg", "--json", "-n", "--max-columns", "500", "--crlf",
+                *_RG_IGNORE_GLOBS]
         if not case_sensitive:
             argv.append("--ignore-case")
         if whole_word:
@@ -360,19 +614,38 @@ def rg_search(pattern: str, root: str | Path, *, case_sensitive: bool = True,
         if returncode == 1:
             # ripgrep exit code 1 means "no matches" — a successful empty result.
             return {"ok": True, "matches": [], "tool": "rg"}
-        # Any other non-zero code (e.g. 2 = error) falls through to the Python
-        # fallback below.
+        # Exit code 2 (e.g. one unreadable file): rg still produced usable
+        # matches for the rest — keep the engine instead of silently falling
+        # back to a different one (audit c10).
+        if stdout:
+            matches = _parse_rg_json(stdout.splitlines(), root_path,
+                                     max_results=max_results)
+            if matches:
+                matches = _dedupe_matches(matches, max_total=max_results,
+                                          max_text_len=MAX_LINE_LEN)
+                return {"ok": True, "matches": matches, "tool": "rg",
+                        "warnings": [f"rg reported errors (exit {returncode}); "
+                                     "results may be incomplete"]}
+        rg_failed = True
+        warnings.append(f"rg failed (exit {returncode}); used python-grep fallback")
 
     # Validate the regex before running the Python fallback.
     if _safe_compile_regex(pattern) is None:
         return {"ok": False, "error_kind": "invalid_input", "error": "invalid regex"}
+    if _looks_catastrophic(pattern):
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": "refusing catastrophic regex (nested quantifier like "
+                         "(a+)+) — rewrite with a linear pattern"}
 
     matches = _python_grep(
         pattern, root_path, case_sensitive=case_sensitive,
         whole_word=whole_word, include=include, max_results=max_results,
     )
     matches = _dedupe_matches(matches, max_total=max_results, max_text_len=MAX_LINE_LEN)
-    return {"ok": True, "matches": matches, "tool": "python-grep"}
+    resp: dict[str, Any] = {"ok": True, "matches": matches, "tool": "python-grep"}
+    if rg_failed:
+        resp["warnings"] = warnings
+    return resp
 
 
 def _parse_rg_json(lines: Iterable[str] | str, root: Path | None = None,
@@ -446,13 +719,12 @@ def _python_ast_search(pattern: str, root: Path, max_results: int = MAX_RESULTS)
     import ast
 
     regex = _safe_compile_regex(pattern)
-    if regex is None:
+    if regex is None or max_results <= 0:
         return []
 
     results: list[dict[str, Any]] = []
-    skip_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", ".perun"}
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for fname in filenames:
             if not fname.endswith(".py"):
                 continue
@@ -504,12 +776,21 @@ def ast_grep_search(rule: str, root: str | Path,
         ``{"ok": true, "matches": [...], "tool": "ast-grep"|"python-ast"}`` or
         ``{"ok": false, "error": "..."}``.
     """
-    root_path = Path(root)
-    if not root_path.is_dir():
+    root_path = _sanitize_root(root)
+    if root_path is None or not root_path.is_dir():
         return {"ok": False, "error_kind": "invalid_input",
                 "error": f"not a directory: {root}"}
+    if not _is_project_path_safe({"path": str(root_path)}):
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": f"path outside the configured Perun roots: {root_path} "
+                         "(add it to roots in Settings to search it)"}
+    if not str(rule or "").strip():
+        return {"ok": False, "error_kind": "invalid_input", "error": "empty rule"}
 
-    max_results = min(max_results, MAX_RESULTS)
+    max_results = min(max(0, max_results), MAX_RESULTS)
+    if max_results == 0:
+        return {"ok": True, "matches": [],
+                "tool": "ast-grep" if ast_grep_available() else "python-ast"}
 
     if ast_grep_available():
         cmd = _ast_grep_cmd()
@@ -523,9 +804,11 @@ def ast_grep_search(rule: str, root: str | Path,
                 str(root_path),
             ]
         else:
+            # No --lang: let ast-grep auto-detect per file, so non-Python
+            # projects are searchable too (audit 2026-10-18, drobne).
             argv = [
                 cmd, "run", "--pattern", rule,
-                "--lang", "py", "--json=stream",
+                "--json=stream",
                 str(root_path),
             ]
         ok, stdout, returncode = _run(argv, timeout=60.0)
@@ -680,6 +963,22 @@ def rg_search_global(pattern: str, projects: list[dict], *, case_sensitive: bool
     except Exception:
         roots = []
 
+    bad = _validate_pattern(pattern)
+    if bad is not None:
+        return {"ok": False, "error_kind": "invalid_input", "error": bad}
+    if not isinstance(max_results, int) or isinstance(max_results, bool):
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            return {"ok": False, "error_kind": "invalid_input",
+                    "error": "max_results must be an integer"}
+    if max_results < 0:
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": "max_results must not be negative"}
+    if max_results == 0:
+        return {"ok": True, "matches": [], "tool": "rg-global",
+                "projects_searched": 0}
+
     paths: list[str] = []
     projects_searched = 0
     for p in projects:
@@ -698,8 +997,11 @@ def rg_search_global(pattern: str, projects: list[dict], *, case_sensitive: bool
 
     max_results = min(max_results, MAX_RESULTS)
 
+    warnings: list[str] = []
+    rg_failed = False
     if rg_available():
-        argv = ["rg", "--json", "-n", "--max-columns", "500"]
+        argv = ["rg", "--json", "-n", "--max-columns", "500", "--crlf",
+                *_RG_IGNORE_GLOBS]
         if not case_sensitive:
             argv.append("--ignore-case")
         if whole_word:
@@ -721,12 +1023,31 @@ def rg_search_global(pattern: str, projects: list[dict], *, case_sensitive: bool
             # ripgrep exit code 1 means "no matches" — a successful empty result.
             return {"ok": True, "matches": [], "tool": "rg-global",
                     "projects_searched": projects_searched}
-        # Any other non-zero code (e.g. 2 = error, or a command line so long that
-        # Popen refused it) falls through to the Python fallback below.
+        # Exit code 2 with usable output (e.g. one unreadable file): keep rg's
+        # results instead of silently switching engine (audit c10).
+        if stdout:
+            matches = _parse_rg_json(stdout.splitlines(), root=None,
+                                     max_results=max_results)
+            if matches:
+                matches = _tag_matches_with_project(matches, projects)
+                matches = _dedupe_matches(matches, max_total=max_results,
+                                          max_text_len=MAX_LINE_LEN)
+                return {"ok": True, "matches": matches, "tool": "rg-global",
+                        "projects_searched": projects_searched,
+                        "warnings": [f"rg reported errors (exit {returncode}); "
+                                     "results may be incomplete"]}
+        rg_failed = True
+        warnings.append(f"rg failed (exit {returncode}); used python-grep fallback")
+        # fall through to the Python fallback below (e.g. a command line so
+        # long that Popen refused it).
 
     # Validate regex before Python fallback.
     if _safe_compile_regex(pattern) is None:
         return {"ok": False, "error_kind": "invalid_input", "error": "invalid regex"}
+    if _looks_catastrophic(pattern):
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": "refusing catastrophic regex (nested quantifier like "
+                         "(a+)+) — rewrite with a linear pattern"}
 
     all_matches: list[dict[str, Any]] = []
     for p in projects:
@@ -744,8 +1065,12 @@ def rg_search_global(pattern: str, projects: list[dict], *, case_sensitive: bool
             m["project"] = p.get("slug") or p.get("name") or ppath
         all_matches.extend(submatches)
     matches = _dedupe_matches(all_matches, max_total=max_results, max_text_len=MAX_LINE_LEN)
-    return {"ok": True, "matches": matches, "tool": "python-grep-global",
-            "projects_searched": projects_searched}
+    resp: dict[str, Any] = {"ok": True, "matches": matches,
+                            "tool": "python-grep-global",
+                            "projects_searched": projects_searched}
+    if rg_failed:
+        resp["warnings"] = warnings
+    return resp
 
 
 def ast_grep_search_global(rule: str, projects: list[dict], *, max_results: int = 20) -> dict[str, Any]:
@@ -756,6 +1081,20 @@ def ast_grep_search_global(rule: str, projects: list[dict], *, max_results: int 
     """
     if not projects:
         return {"ok": True, "matches": [], "tool": "ast-grep-global", "projects_searched": 0}
+
+    if not str(rule or "").strip():
+        return {"ok": False, "error_kind": "invalid_input", "error": "empty rule"}
+    try:
+        max_results = int(max_results)
+    except (TypeError, ValueError):
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": "max_results must be an integer"}
+    if max_results < 0:
+        return {"ok": False, "error_kind": "invalid_input",
+                "error": "max_results must not be negative"}
+    if max_results == 0:
+        return {"ok": True, "matches": [], "tool": "ast-grep-global",
+                "projects_searched": 0}
 
     roots = []
     try:
@@ -794,9 +1133,10 @@ def ast_grep_search_global(rule: str, projects: list[dict], *, max_results: int 
                 "--inline-rules", rule,
             ]
         else:
+            # No --lang: ast-grep auto-detects per file (any project language).
             argv = [
                 cmd, "run", "--pattern", rule,
-                "--lang", "py", "--json=stream",
+                "--json=stream",
             ]
 
         argv.extend(paths)

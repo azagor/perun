@@ -578,3 +578,56 @@ def test_execute_injects_project_instructions(monkeypatch, tmp_path):
     default = tmp_path / orchestrator.PROJECT_INSTRUCTIONS_DIR / "default.md"
     assert default.is_file()
     assert "PROJECT RULE 42" in default.read_text(encoding="utf-8")
+
+
+def test_child_env_strips_raw_secrets_and_injects_resolved_token(monkeypatch):
+    """Agents see the resolved Telegram token, never the raw bot token or password."""
+    from perun import config
+
+    class FakeSettings:
+        def telegram(self):
+            return "resolved-token", ["123"]
+
+    monkeypatch.setattr(config.Settings, "load", lambda: FakeSettings())
+    for var in ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN", "PERUN_PASSWORD",
+                "PERUN_API_TOKEN", "PERUN_TELEGRAM_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "raw-bot-token")
+    monkeypatch.setenv("TG_BOT_TOKEN", "raw-bot-token-2")
+    monkeypatch.setenv("PERUN_PASSWORD", "secret-password")
+    monkeypatch.setenv("PERUN_API_TOKEN", "api-secret")
+    env = orch._child_env(2)
+    assert env.get("PERUN_TELEGRAM_TOKEN") == "resolved-token"
+    assert env.get("PERUN_DEPTH") == "2"
+    assert "TELEGRAM_BOT_TOKEN" not in env
+    assert "TG_BOT_TOKEN" not in env
+    assert "PERUN_PASSWORD" not in env
+    assert "PERUN_API_TOKEN" not in env
+
+
+def test_child_env_omits_telegram_token_when_unconfigured(monkeypatch):
+    """When no Telegram token is configured, PERUN_TELEGRAM_TOKEN is absent."""
+    from perun import config
+
+    class FakeSettings:
+        def telegram(self):
+            return "", []
+
+    monkeypatch.setattr(config.Settings, "load", lambda: FakeSettings())
+    monkeypatch.delenv("PERUN_TELEGRAM_TOKEN", raising=False)
+    env = orch._child_env(1)
+    assert "PERUN_TELEGRAM_TOKEN" not in env
+
+
+def test_child_env_injects_decrypted_telegram_token(monkeypatch):
+    """An encrypted config token is decrypted in the parent and injected resolved."""
+    from perun import config, secrets
+
+    class FakeSettings:
+        def telegram(self):
+            return "decrypted-token", ["123"]
+
+    monkeypatch.setattr(config.Settings, "load", lambda: FakeSettings())
+    monkeypatch.delenv("PERUN_TELEGRAM_TOKEN", raising=False)
+    env = orch._child_env(1)
+    assert env.get("PERUN_TELEGRAM_TOKEN") == "decrypted-token"

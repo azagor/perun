@@ -86,6 +86,33 @@ class ProcessTracker:
         self.finalize(run_uid)
         return True
 
+    def terminate_all(self) -> int:
+        """Kill every tracked terminal process (used on server shutdown).
+
+        The run rows are left to the caller: the lifespan marks them
+        ``interrupted`` rather than pretending the runs completed.
+        """
+        with self._lock:
+            entries = list(self._entries.items())
+        killed = 0
+        for run_uid, entry in entries:
+            pid = self._resolve_child_pid(entry) or entry.get("pid")
+            if pid:
+                try:
+                    self._kill_tree(pid)
+                    killed += 1
+                except Exception:  # pragma: no cover - best effort
+                    pass
+            proc = entry.get("proc")
+            if proc and proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:  # pragma: no cover - best effort
+                    pass
+            with self._lock:
+                self._entries.pop(run_uid, None)
+        return killed
+
     def finalize(self, run_uid: str) -> None:
         """Stop tracking and mark the run record as done if it is still active."""
         with self._lock:

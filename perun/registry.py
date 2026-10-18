@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,9 +18,35 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Latin letters that carry no canonical decomposition, so NFD alone would drop
+# them (``ł`` is the one Polish letter in this set). Everything else —
+# ``ż ó ć ę ś ź ń ą`` — is handled by decomposition + stripping combining marks.
+_TRANSLITERATE = str.maketrans({
+    "ł": "l", "Ł": "l", "đ": "d", "ð": "d", "ø": "o", "þ": "th",
+    "ß": "ss", "æ": "ae", "œ": "oe", "ĳ": "ij",
+})
+
+
 def slugify(value: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
-    return s or "project"
+    """URL-safe slug of *value*.
+
+    Diacritics are transliterated (``Zażółć`` → ``zazolc``) rather than dropped,
+    so Polish project names keep readable, collision-resistant slugs. A name
+    with no alphanumerics at all (e.g. emoji-only) gets a stable hash-derived
+    slug so it stays distinguishable from the ``project`` placeholder used for
+    an empty name.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return "project"
+    s = raw.lower().translate(_TRANSLITERATE)
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    if not s:
+        digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:8]
+        return f"proj-{digest}"
+    return s
 
 
 # --------------------------------------------------------------------------- #
@@ -35,29 +64,64 @@ def add_project(
     agent: str = "",
     color: str = "",
 ) -> dict[str, Any]:
-    base_slug = slugify(name)
+    if not (name or "").strip():
+        raise ValueError("project name is required")
+    # ``projects.path`` is UNIQUE, but its collision message says nothing about
+    # *which* constraint failed — report duplicate paths as a path error up
+    # front instead of burning every slug candidate and blaming the slug.
+    # Comparison is case-sensitive (Windows folds case in lookups, but two
+    # projects registered under differently-cased paths are distinct entries)
+    # and ignores trailing separators. Nesting is allowed: registering a path
+    # inside another project creates a legitimate sub-project.
+    try:
+        norm = os.path.normpath(os.path.abspath(str(path)))
+    except (OSError, ValueError):
+        norm = os.path.normpath(str(path))
+    clash = None
+    with db.db() as conn:
+        for row in db.rows(conn, "SELECT slug, path FROM projects"):
+            if row["path"] == path:
+                clash = row
+                break
+            try:
+                other = os.path.normpath(os.path.abspath(str(row["path"])))
+            except (OSError, ValueError):
+                continue
+            if other == norm:
+                clash = row
+                break
+    if clash is not None:
+        raise ValueError(
+            f"path already registered: {path} (project '{clash['slug']}')"
+        )
+    # Keep the slug short enough that numeric suffixes still fit in 60 chars.
+    base_slug = slugify(name)[:54].strip("-") or "project"
     ts = now_iso()
     # Suffixes start at 2 to match the historical behavior (same → same-2).
-    candidates = [base_slug] + [f"{base_slug}-{n}" for n in range(2, 22)]
-    for slug in candidates:
+    # The counter is unbounded: 22 projects sharing one name must all succeed.
+    slug = base_slug
+    suffix = 1
+    while suffix <= 10000:
         try:
             with db.db() as conn:
                 existing = db.one(conn, "SELECT 1 FROM projects WHERE slug=?", (slug,))
-                if existing:
-                    continue
-                conn.execute(
-                    """INSERT INTO projects
-                       (slug,name,path,root,kind,description,tags,model,agent,color,
-                        created_at,updated_at,last_seen_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (slug, name, path, root, kind, description, tags, model, agent,
-                     color, ts, ts, ts),
-                )
-                row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
-                return project_dict(conn, row)
+                if not existing:
+                    conn.execute(
+                        """INSERT INTO projects
+                           (slug,name,path,root,kind,description,tags,model,agent,color,
+                            created_at,updated_at,last_seen_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (slug, name, path, root, kind, description, tags, model, agent,
+                         color, ts, ts, ts),
+                    )
+                    row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
+                    return project_dict(conn, row)
         except sqlite3.IntegrityError:
-            # Another transaction won the race for this slug; try the next candidate.
-            continue
+            # Lost the race for this slug (or hit path UNIQUE in a race); the
+            # path check above covers sequential duplicates — try next slug.
+            pass
+        suffix += 1
+        slug = f"{base_slug}-{suffix}"
     raise ValueError("could not generate a unique project slug")
 
 
@@ -96,20 +160,74 @@ def get_project(ref: str | int | None) -> dict[str, Any] | None:
     if ref is None:
         return None
     with db.db() as conn:
-        if isinstance(ref, int) or (isinstance(ref, str) and ref.isdigit()):
-            row = db.one(conn, "SELECT * FROM projects WHERE id=?", (int(ref),))
-        else:
+        # A slug always wins: a project named ``123`` gets slug ``123`` and
+        # must stay reachable. Row ids remain the fallback for numeric refs.
+        row = None
+        if not isinstance(ref, int):
             row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (ref,))
+        if row is None and (isinstance(ref, int) or str(ref).isdigit()):
+            row = db.one(conn, "SELECT * FROM projects WHERE id=?", (int(ref),))
         return project_dict(conn, row) if row else None
 
 
 def get_project_by_path(path: str) -> dict[str, Any] | None:
-    import os
-    norm = os.path.normcase(os.path.abspath(path))
+    """Resolve *path* to a registered project.
+
+    Resolution order:
+
+    1. case-sensitive exact match (so two projects registered under
+       differently-cased paths each resolve to themselves),
+    2. ``normcase`` exact match (Windows case-insensitive lookup, trailing
+       separators ignored),
+    3. realpath exact match (a path reached through a symlink resolves to the
+       project stored under its real location),
+    4. closest registered **ancestor** — a session started inside a project
+       subdirectory resolves to the enclosing project.
+    """
+    try:
+        raw = os.path.normpath(os.path.abspath(str(path)))
+    except (OSError, ValueError):
+        raw = os.path.normpath(str(path))
+    folded = os.path.normcase(raw)
+    try:
+        real = os.path.normcase(os.path.realpath(str(path)))
+    except (OSError, ValueError):
+        real = folded
     with db.db() as conn:
-        for row in db.rows(conn, "SELECT * FROM projects"):
-            if os.path.normcase(os.path.abspath(row["path"])) == norm:
+        rows = list(db.rows(conn, "SELECT * FROM projects"))
+
+        def _raw_of(row: sqlite3.Row) -> str:
+            try:
+                return os.path.normpath(os.path.abspath(str(row["path"])))
+            except (OSError, ValueError):
+                return os.path.normpath(str(row["path"]))
+
+        for row in rows:  # 1) exact, case-sensitive
+            if _raw_of(row) == raw:
                 return project_dict(conn, row)
+        for row in rows:  # 2) exact, case-folded
+            if os.path.normcase(_raw_of(row)) == folded:
+                return project_dict(conn, row)
+        for row in rows:  # 3) exact, symlinks resolved
+            try:
+                stored_real = os.path.normcase(os.path.realpath(str(row["path"])))
+            except (OSError, ValueError):
+                continue
+            if stored_real == real:
+                return project_dict(conn, row)
+        best: sqlite3.Row | None = None  # 4) closest ancestor
+        best_len = -1
+        for row in rows:
+            try:
+                stored_real = os.path.normcase(os.path.realpath(str(row["path"])))
+            except (OSError, ValueError):
+                continue
+            prefix = stored_real.rstrip(os.sep) + os.sep
+            if len(stored_real) > best_len and real.startswith(prefix):
+                best = row
+                best_len = len(stored_real)
+        if best is not None:
+            return project_dict(conn, best)
     return None
 
 
@@ -177,12 +295,15 @@ def list_projects() -> list[dict[str, Any]]:
             pids,
         ))
         last_activities: dict[int, dict[str, Any]] = {}
+        # Only the newest activity row per project: the table grows without
+        # bound, and this runs on every /api/health hit.
         for r in conn.execute(
-            f"SELECT project_id, ts, kind, message FROM activity WHERE project_id IN ({placeholders}) ORDER BY id DESC",
+            f"SELECT project_id, ts, kind, message FROM activity "
+            f"WHERE id IN (SELECT MAX(id) FROM activity "
+            f"WHERE project_id IN ({placeholders}) GROUP BY project_id)",
             pids,
         ):
-            if r["project_id"] not in last_activities:
-                last_activities[r["project_id"]] = dict(r)
+            last_activities[r["project_id"]] = dict(r)
         return [
             project_dict(
                 conn, r,

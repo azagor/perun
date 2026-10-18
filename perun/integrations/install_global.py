@@ -47,13 +47,32 @@ AGENTS_END = "<!-- END perun (managed) -->"
 # --------------------------------------------------------------------------- #
 # Paths
 # --------------------------------------------------------------------------- #
+def _env_config_file() -> Path | None:
+    """``OPENCODE_CONFIG`` points OpenCode itself at a specific config file."""
+    env = (os.environ.get("OPENCODE_CONFIG") or "").strip()
+    return Path(env).expanduser() if env else None
+
+
 def config_dir() -> Path:
+    env_file = _env_config_file()
+    if env_file is not None:
+        return env_file.parent
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else (Path.home() / ".config")
     return base / "opencode"
 
 
 def opencode_json() -> Path:
+    """The OpenCode config file Perun merges into.
+
+    Honours ``OPENCODE_CONFIG`` (the same variable OpenCode itself reads) so the
+    installer and the running instance can never disagree about which file is
+    the real one — and so a per-instance config is possible without touching the
+    user's global tree.
+    """
+    env_file = _env_config_file()
+    if env_file is not None:
+        return env_file
     return config_dir() / "opencode.json"
 
 
@@ -109,14 +128,37 @@ def _sync_agents_block() -> Path:
 # --------------------------------------------------------------------------- #
 # JSON merge helpers
 # --------------------------------------------------------------------------- #
+class ConfigParseError(RuntimeError):
+    """Raised when the target OpenCode config cannot be parsed."""
+
+
 def _read_json(path: Path) -> dict[str, Any]:
+    """Parse the OpenCode config, tolerating JSONC.
+
+    Raises :class:`ConfigParseError` when the file exists but cannot be parsed:
+    rewriting it would silently drop the user's agents and providers, so the
+    installer must stop instead.
+    """
     if not path.is_file():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigParseError(f"cannot read {path}: {exc}") from exc
+    from ..mcp_servers import _strip_jsonc
+
+    last: Exception | None = None
+    for candidate in (text, _strip_jsonc(text)):
+        try:
+            data = json.loads(candidate)
+        except Exception as exc:  # noqa: BLE001 - reported verbatim below
+            last = exc
+            continue
         return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    raise ConfigParseError(
+        f"{path} is not valid JSON/JSONC ({last}). Perun will not rewrite it — "
+        "fix or move the file, or point OPENCODE_CONFIG at a Perun-managed one."
+    ) from last
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -129,6 +171,12 @@ def _backup(path: Path) -> Path | None:
         return None
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = path.with_suffix(path.suffix + f".perun-backup-{stamp}")
+    # A second-resolution stamp collides when two installs run in the same
+    # second; keep the copies distinct rather than overwriting one.
+    counter = 2
+    while dest.exists():
+        dest = path.with_suffix(path.suffix + f".perun-backup-{stamp}-{counter}")
+        counter += 1
     shutil.copy2(path, dest)
     return dest
 
@@ -169,8 +217,13 @@ def install(*, force: bool = False, index: bool = True) -> int:
 
     # 2. Merge into opencode.json.
     path = opencode_json()
-    data = _read_json(path)
-    backup = _backup(path) if path.exists() else None
+    try:
+        data = _read_json(path)
+    except ConfigParseError as exc:
+        print(f"[perun] ERROR: {exc}")
+        return 2
+    original = path.read_text(encoding="utf-8") if path.is_file() else None
+    backup = None
 
     mcp = data.setdefault("mcp", {})
     if not isinstance(mcp, dict):
@@ -180,6 +233,10 @@ def install(*, force: bool = False, index: bool = True) -> int:
         "type": "local",
         "command": _python_cmd(),
         "enabled": True,
+        # Pin the state directory: a session with a non-default PERUN_HOME (or a
+        # different one in its environment) would otherwise talk to whichever
+        # database the MCP process happened to pick up, not the running server's.
+        "environment": {"PERUN_HOME": str(config.HOME)},
     }
 
     instruction_ref = _relative_to_config(instructions_target())
@@ -215,7 +272,15 @@ def install(*, force: bool = False, index: bool = True) -> int:
     )
     data["command"] = commands
 
-    _write_json(path, data)
+    # Back up (and rewrite) only when something actually changes: re-running the
+    # installer used to pile up a timestamped copy every single time.
+    merged = json.dumps(data, indent=2) + "\n"
+    if original == merged:
+        backup = None
+    else:
+        if path.exists():
+            backup = _backup(path)
+        _write_json(path, data)
 
     # 2b. Global ambient instructions — OpenCode V2 loads ~/.config/opencode/
     #     AGENTS.md, so this is what actually reaches the model (the
@@ -258,7 +323,11 @@ def install(*, force: bool = False, index: bool = True) -> int:
 
 def uninstall() -> int:
     path = opencode_json()
-    data = _read_json(path)
+    try:
+        data = _read_json(path)
+    except ConfigParseError as exc:
+        print(f"[perun] ERROR: {exc}")
+        return 2
     changed = False
 
     mcp = data.get("mcp")
@@ -320,7 +389,11 @@ def uninstall() -> int:
 
 
 def status() -> dict[str, Any]:
-    data = _read_json(opencode_json())
+    try:
+        data = _read_json(opencode_json())
+        config_error = ""
+    except ConfigParseError as exc:
+        data, config_error = {}, str(exc)
     mcp = (data.get("mcp") or {}).get(MCP_NAME)
     agents_path = agents_target()
     agents_block = False
@@ -330,6 +403,7 @@ def status() -> dict[str, Any]:
         "config": str(opencode_json()),
         "installed": bool(mcp),
         "mcp": mcp,
+        "config_error": config_error,
         "instructions_present": instructions_target().is_file(),
         "agents_path": str(agents_path),
         "agents_block": agents_block,

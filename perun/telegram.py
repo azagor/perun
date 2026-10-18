@@ -7,6 +7,7 @@ session started through the Perun orchestrator.
 Commands
 --------
 ``/start`` ``/help``     Help.
+``/pair <code>``         Authorise this chat with the dashboard's one-time code.
 ``/orchestrator``        Talk to Perun itself (the machine-wide orchestrator).
 ``/projects``            List registered projects (numbered).
 ``/project <name|#>``    Select the project to talk to.
@@ -30,6 +31,7 @@ persisted in Perun's database, not a side file.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import logging.handlers
 import os
@@ -191,19 +193,32 @@ class PidLock:
             except OSError:
                 pass
             return True
-        if self.path.exists():
+        # POSIX: create the pid file *atomically*. A check-then-write race let
+        # two bridges both believe they had acquired the lock; O_EXCL means
+        # exactly one creator wins.
+        for _ in range(2):
             try:
-                pid = int(self.path.read_text().strip())
-            except Exception:
-                pid = 0
-            if pid and _pid_alive(pid):
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                try:
+                    pid = int(self.path.read_text().strip())
+                except Exception:
+                    pid = 0
+                if pid and _pid_alive(pid):
+                    return False
+                # Stale lock left by a dead process: drop it and retry once.
+                try:
+                    os.unlink(self.path)
+                except OSError:
+                    return False
+                continue
+            except OSError:
                 return False
-        try:
-            self.path.write_text(str(os.getpid()), "utf-8")
-        except OSError:
-            return False
-        self.acquired = True
-        return True
+            with os.fdopen(fd, "w") as fh:
+                fh.write(str(os.getpid()))
+            self.acquired = True
+            return True
+        return False
 
     def release(self) -> None:
         if os.name == "nt" and self._mutex:
@@ -232,10 +247,14 @@ class PerunTelegramBridge:
         self.stop_event = threading.Event()
         self.work: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self.cancel_event = threading.Event()
-        self.current_run: Optional[str] = None
-        self.current_chat: Optional[str] = None
+        # chat_id -> run_uid of that chat's in-flight run, so ``/stop`` cancels
+        # only the caller's run (the old single ``current_run`` was shared by the
+        # whole bridge, so one chat could kill another's run).
+        self._runs: Dict[str, str] = {}
+        self._runs_lock = threading.Lock()
         self.started_at = time.time()
         self._allowed_runtime: List[str] = []
+        self._pair_lock = threading.Lock()
         self.offset: Optional[int] = None
         self._state_lock = threading.Lock()
         # Bounded deduplication set for Telegram message IDs. Telegram can
@@ -246,6 +265,15 @@ class PerunTelegramBridge:
     def update_token(self, token: str) -> None:
         """Update the bot token used by this bridge instance."""
         self.token = token
+
+    def active_runs(self) -> List[str]:
+        """Run uids currently tracked for any chat (used on shutdown)."""
+        with self._runs_lock:
+            return list(self._runs.values())
+
+    def run_for(self, chat_id: str) -> Optional[str]:
+        with self._runs_lock:
+            return self._runs.get(chat_id)
 
     @property
     def api_base(self) -> str:
@@ -397,10 +425,11 @@ class PerunTelegramBridge:
                       "`/project <name|#>` — switch project\n"
                       "`/status` — current project + session\n"
                       "`/new` — fresh session\n"
-                      "`/stop` — cancel the running reply\n"
+                      "`/stop` — cancel *your* running reply\n"
                       "`/remember <fact>` — store to memory\n"
                       "`/recall <query>` — search memory\n"
-                      "`/index` — re-index project docs\n\n"
+                      "`/index` — re-index project docs\n"
+                      "`/pair <code>` — authorise this chat (code from the dashboard)\n\n"
                       "With no project selected, messages go to the orchestrator.",
                       reply_to=message_id)
             return True
@@ -472,7 +501,7 @@ class PerunTelegramBridge:
                       reply_to=message_id)
             return True
         if root in ("/stop", "/cancel"):
-            uid = self.current_run
+            uid = self.run_for(chat_id)
             if uid and self.orch.cancel(uid):
                 self.send(chat_id, "🛑 Cancelling…", reply_to=message_id)
             else:
@@ -561,8 +590,8 @@ class PerunTelegramBridge:
             self.send(chat_id, f"❌ Could not start run: {exc}", reply_to=message_id)
             return
         uid = run["run_uid"]
-        self.current_run = uid
-        self.current_chat = chat_id
+        with self._runs_lock:
+            self._runs[chat_id] = uid
         try:
             while not self.orch.is_final(uid):
                 if self.stop_event.is_set():
@@ -570,7 +599,8 @@ class PerunTelegramBridge:
                 time.sleep(1.0)
         finally:
             typing_done.set()
-            self.current_run = None
+            with self._runs_lock:
+                self._runs.pop(chat_id, None)
         final = registry.get_run(uid) or run
         reply = (final.get("output") or "").strip()
         new_session_pk = final.get("session_pk")
@@ -601,15 +631,69 @@ class PerunTelegramBridge:
                 self.work.task_done()
 
     def authorised(self, chat_id: str) -> bool:
-        if self.allowed:
-            return chat_id in self.allowed
-        if chat_id in self._allowed_runtime:
+        """True only for chats that were explicitly granted access.
+
+        Access comes from the allow-list (``config.json``
+        ``telegram_allowed_chats``, ``TELEGRAM_CHAT_ID``) or from a completed
+        ``/pair <code>`` handshake. An **empty** allow-list grants nobody: the
+        old behaviour ("the first chat that writes wins") handed full ``--auto``
+        agent access to whoever found the bot's public name first, and was
+        forgotten on every restart.
+        """
+        if chat_id in self.allowed:
             return True
-        if not self._allowed_runtime:
-            self._allowed_runtime.append(chat_id)
-            LOG.info("paired new chat %s", chat_id)
-            return True
+        if not self.allowed:
+            with self._pair_lock:
+                return chat_id in self._allowed_runtime
         return False
+
+    def pair_code(self) -> str:
+        """The persisted one-time pairing code, or ``""`` when not needed."""
+        if self.allowed:
+            return ""
+        try:
+            return (config.Settings.load().telegram_pair_code or "").strip()
+        except Exception:  # pragma: no cover - defensive
+            return ""
+
+    def _handle_pair(self, chat_id: str, text: str, message_id: int) -> None:
+        """``/pair <code>``: the only way an unknown chat gains access."""
+        parts = text.split(" ", 1)
+        provided = parts[1].strip() if len(parts) > 1 else ""
+        if chat_id in self.allowed:
+            self.send(chat_id, "✅ This chat is already paired.", reply_to=message_id)
+            return
+        expected = self.pair_code()
+        if not expected:
+            self.send(chat_id, "⛔ Pairing is off: this bridge has a configured "
+                               "chat allow-list.", reply_to=message_id)
+            return
+        # Compare in constant time; the code is short and remote-guessable.
+        if not provided or not hmac.compare_digest(provided, expected):
+            LOG.warning("telegram pairing attempt from chat %s with a wrong code", chat_id)
+            self.send(chat_id, "⛔ Wrong pairing code. Read it from the dashboard "
+                               "(Telegram → Bot settings).", reply_to=message_id)
+            return
+        if chat_id not in self.allowed:
+            self.allowed.append(chat_id)
+        with self._pair_lock:
+            if chat_id not in self._allowed_runtime:
+                self._allowed_runtime.append(chat_id)
+        # Persist + consume the code so it is truly one-time, even across a
+        # bridge restart.
+        try:
+            st = config.Settings.load()
+            chats = list(st.telegram_allowed_chats)
+            if chat_id not in chats:
+                chats.append(chat_id)
+            st.telegram_allowed_chats = chats
+            st.telegram_pair_code = ""
+            st.save()
+        except Exception:  # pragma: no cover - defensive
+            LOG.exception("could not persist the paired Telegram chat")
+        LOG.info("telegram chat %s paired via one-time code", chat_id)
+        self.send(chat_id, "✅ Paired. You now have access to Perun — send "
+                           "`/help` to see the commands.", reply_to=message_id)
 
     def _handle_update(self, update: Dict[str, Any]) -> None:
         if update.get("callback_query"):
@@ -625,10 +709,17 @@ class PerunTelegramBridge:
         chat_id = str((msg.get("chat") or {}).get("id"))
         if not chat_id:
             return
-        if not self.authorised(chat_id):
-            self.send(chat_id, "⛔ Not authorised.")
-            return
         message_id = int(msg.get("message_id") or 0)
+        # ``/pair`` must run *before* the authorisation gate: its whole purpose
+        # is to authorise a chat that is not on the list yet.
+        root = text.strip().split()[0].split("@", 1)[0].lower()
+        if root == "/pair":
+            self._handle_pair(chat_id, text.strip(), message_id)
+            return
+        if not self.authorised(chat_id):
+            self.send(chat_id, "⛔ Not authorised. Send `/pair <code>` with the code "
+                               "shown in the Perun dashboard to request access.")
+            return
         dedup_key = (chat_id, message_id)
         with self._seen_ids_lock:
             if dedup_key in self._seen_ids:
@@ -717,13 +808,25 @@ def run_bridge(orch: Orchestrator) -> int:
         control.ensure()
     except Exception:  # pragma: no cover - best-effort
         LOG.exception("could not ensure the orchestrator project")
+    # Without an allow-list the bridge pairs *nobody* automatically: it mints a
+    # one-time code, shows it in the dashboard, and only ``/pair <code>`` from
+    # Telegram grants access (persisted to config.json).
+    if allowed:
+        if settings.telegram_pair_code:
+            settings.telegram_pair_code = ""
+            settings.save()
+    elif not settings.telegram_pair_code:
+        settings.telegram_pair_code = os.urandom(4).hex()
+        settings.save()
+        LOG.warning("no allowed chats configured — pair with /pair %s "
+                    "(also shown in the dashboard under Telegram)",
+                    settings.telegram_pair_code)
     bridge = PerunTelegramBridge(orch, token=token, allowed=allowed)
 
     def _shutdown(signum, _frame):
         LOG.info("shutting down (signal %s)", signum)
         bridge.stop_event.set()
-        uid = bridge.current_run
-        if uid:
+        for uid in bridge.active_runs():
             orch.cancel(uid)
 
     for sig in (signal.SIGINT, signal.SIGTERM):

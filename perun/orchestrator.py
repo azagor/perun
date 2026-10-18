@@ -15,18 +15,35 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Any, Iterator
 
 from . import config, control, registry
 
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
+# Subscriber queues are bounded: a slow/disconnected SSE client must never grow
+# memory without limit nor block the publisher.
+SUB_QUEUE_LIMIT = 4096
+# How long a finished run's replay history stays available to late subscribers.
+HISTORY_TTL_SECONDS = 300.0
+# Blocking workshop timeout for a run stream; short enough to notice a
+# disconnect quickly without busy-waiting.
+STREAM_POLL_SECONDS = 15.0
+# Environment variables that must not leak into the agent's own subprocesses
+# (the agent runs ``opencode`` with ``--auto`` and could echo its environment).
+# The resolved Telegram token is injected separately as PERUN_TELEGRAM_TOKEN.
+_SECRET_ENV = ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN", "PERUN_API_TOKEN",
+               "PERUN_PASSWORD")
+# Maximum nesting of Perun-spawned agents (A → B → C); beyond this a run is
+# refused so two agents cannot ask each other in a loop.
+MAX_AGENT_DEPTH = 2
 
 PROJECT_INSTRUCTIONS_DIR = ".perun/instructions"
 
@@ -177,6 +194,20 @@ def _seed_default_instructions() -> None:
     )
 
 
+def _safe_instruction_filename(filename: str) -> str:
+    """Reduce *filename* to a plain ``*.md`` basename.
+
+    The value can come from a project manifest, so ``../../x`` or an absolute
+    path must not let a repository write anywhere on disk.
+    """
+    name = str(filename or "").strip().replace("\\", "/").split("/")[-1].strip()
+    if name in ("", ".", ".."):
+        name = "default.md"
+    if not name.lower().endswith(".md"):
+        name += ".md"
+    return name
+
+
 def write_project_instruction_file(
     project_path: str,
     text: str,
@@ -189,17 +220,29 @@ def write_project_instruction_file(
 
     This is the single writer for project instruction files, shared by the
     project API, MCP tools, discovery, and manifest sync. Returns the path
-    written, or ``None`` when *text* is blank or the target already exists and
+    written, or ``None`` when *text* is blank, the target already exists and
     *overwrite* is ``False`` (used for manifest-declared instructions so later
-    dashboard edits are never clobbered).
+    dashboard edits are never clobbered), or the resolved target would escape
+    the project directory (a symlinked ``.perun`` or instruction file).
     """
     if not text.strip():
         return None
-    d = Path(project_path) / PROJECT_INSTRUCTIONS_DIR
-    target = d / filename
+    root = Path(project_path).resolve()
+    d = root / PROJECT_INSTRUCTIONS_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    target = d / _safe_instruction_filename(filename)
+    # Containment: resolve both sides so a symlinked ``.perun/instructions`` (or
+    # a symlinked instruction file) cannot be used to write outside the project.
+    try:
+        real_dir = d.resolve(strict=True)
+    except OSError:
+        return None
+    if real_dir != root and root not in real_dir.parents:
+        return None
     if target.exists() and not overwrite:
         return None
-    d.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink():
+        return None
     target.write_text(
         _build_frontmatter({"name": name, "enabled": True}) + text.strip() + "\n",
         encoding="utf-8",
@@ -284,8 +327,8 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
     All are injected only when a **new** session starts; continuations inherit
     them from the session history, so they are never repeated on every turn.
 
-    This function is read-only: default global guidance is seeded once at
-    module import time.
+    This function is read-only: default global guidance is seeded once by
+    :class:`Orchestrator` when it is first constructed.
     """
     if not new_session:
         return prompt
@@ -314,6 +357,64 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
 # --------------------------------------------------------------------------- #
 # Event bus (in-memory pub/sub for run streams)
 # --------------------------------------------------------------------------- #
+def _offer(q: Queue, event: dict[str, Any]) -> None:
+    """Non-blocking delivery that drops the oldest event when a queue is full.
+
+    A stalled SSE consumer must not block ``publish`` (which holds the bus lock)
+    nor make the queue grow without bound.
+    """
+    try:
+        q.put_nowait(event)
+        return
+    except Full:
+        pass
+    try:
+        q.get_nowait()
+    except Empty:
+        pass
+    try:
+        q.put_nowait(event)
+    except Full:
+        pass
+
+
+class _SlotLimiter:
+    """Counting limiter whose ceiling can change while runs are waiting.
+
+    ``threading.Semaphore`` fixes its value at construction, so changing
+    ``max_concurrent_runs`` at runtime used to have no effect. This keeps the
+    in-use count under a Condition and lets ``set_max`` raise/lower the ceiling
+    and wake waiters.
+    """
+
+    def __init__(self, max_slots: int) -> None:
+        self._cond = threading.Condition()
+        self._max = max(1, int(max_slots))
+        self._in_use = 0
+
+    def set_max(self, max_slots: int) -> None:
+        with self._cond:
+            self._max = max(1, int(max_slots))
+            self._cond.notify_all()
+
+    def acquire(self, timeout: float | None = None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._cond:
+            while self._in_use >= self._max:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._cond.wait(remaining)
+            self._in_use += 1
+            return True
+
+    def release(self) -> None:
+        with self._cond:
+            if self._in_use > 0:
+                self._in_use -= 1
+            self._cond.notify()
+
+
 class EventBus:
     def __init__(self) -> None:
         self._subs: dict[str, list[Queue]] = {}
@@ -322,11 +423,11 @@ class EventBus:
         self._global_subs: list[Queue] = []
 
     def subscribe(self, channel: str, *, replay: bool = True) -> Queue:
-        q: Queue = Queue()
+        q: Queue = Queue(maxsize=SUB_QUEUE_LIMIT)
         with self._lock:
             if replay:
                 for ev in self._history.get(channel, []):
-                    q.put(ev)
+                    _offer(q, ev)
             self._subs.setdefault(channel, []).append(q)
         return q
 
@@ -346,13 +447,10 @@ class EventBus:
             if channel != "activity":
                 targets += list(self._global_subs)
         for q in targets:
-            try:
-                q.put(event)
-            except Exception:
-                pass
+            _offer(q, event)
 
     def subscribe_all(self) -> Queue:
-        q: Queue = Queue()
+        q: Queue = Queue(maxsize=SUB_QUEUE_LIMIT)
         with self._lock:
             self._global_subs.append(q)
         return q
@@ -368,12 +466,14 @@ class EventBus:
             global_subs = list(self._global_subs)
         eof = {"type": "__eof__", "run": channel}
         for q in subs:
-            q.put(eof)
+            _offer(q, eof)
         for q in global_subs:
-            try:
-                q.put(eof)
-            except Exception:
-                pass
+            _offer(q, eof)
+
+    def drop_history(self, channel: str) -> None:
+        """Forget a finished run's replay history (called on a timer)."""
+        with self._lock:
+            self._history.pop(channel, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -389,6 +489,13 @@ def resolve_opencode(bin_name: str) -> list[str]:
 
 
 def terminate_tree(proc: subprocess.Popen) -> None:
+    """Kill *proc* and its whole process tree (best effort, cross-platform).
+
+    On Windows ``taskkill /T`` walks the tree. On POSIX the child is started in
+    its own session (``start_new_session=True``), so signalling its process
+    group reaches MCP servers, language servers and tool subprocesses too — a
+    bare ``proc.kill()`` left them orphaned and running.
+    """
     if os.name == "nt":
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
@@ -397,10 +504,63 @@ def terminate_tree(proc: subprocess.Popen) -> None:
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             pass
+    else:
+        pgid: int | None
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, PermissionError, OSError):
+            pgid = None
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+            # Give the group a moment to exit cleanly, then insist.
+            deadline = time.time() + 2.0
+            while time.time() < deadline and proc.poll() is None:
+                time.sleep(0.1)
+            if proc.poll() is None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
     try:
         proc.kill()
     except Exception:
         pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        pass
+
+
+def _trim_parts(parts: list[str], limit: int) -> None:
+    """Bound the joined length of *parts* in place, dropping from the front."""
+    total = sum(len(p) for p in parts)
+    while parts and total > limit:
+        total -= len(parts.pop(0))
+
+
+def _child_env(depth: int) -> dict[str, str]:
+    """Environment for a spawned agent: no raw Perun secrets, explicit depth.
+
+    Without this the agent's subprocesses inherit Perun's whole environment,
+    including ``TELEGRAM_BOT_TOKEN`` and ``PERUN_PASSWORD``, and any
+    ``opencode run`` it starts inherits no recursion marker.
+
+    The *resolved* Telegram token is injected as ``PERUN_TELEGRAM_TOKEN`` so the
+    agent's MCP server can still use ``perun_telegram_send`` without seeing raw
+    credentials.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _SECRET_ENV}
+    env["PERUN_DEPTH"] = str(depth)
+    try:
+        token, _ = config.Settings.load().telegram()
+        if token:
+            env["PERUN_TELEGRAM_TOKEN"] = token
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return env
 
 
 def parse_event(line: str) -> dict[str, Any] | None:
@@ -460,7 +620,21 @@ class Orchestrator:
         self._done: dict[str, threading.Event] = {}
         self._replies: dict[str, str] = {}
         self._lock = threading.Lock()
-        self._sem = threading.Semaphore(max(1, self.settings.max_concurrent_runs))
+        self._sem = _SlotLimiter(self.settings.max_concurrent_runs)
+        # Runs that already published a terminal "end" event (so cancel() and
+        # _finalize() cannot both emit one).
+        self._ended: set[str] = set()
+        # Seed the default global guidance file once, when an orchestrator is
+        # actually being used — never on mere import (tests and tooling import
+        # this module constantly and must not write to ~/.config/opencode).
+        try:
+            _seed_default_instructions()
+        except OSError:  # pragma: no cover - read-only home, best effort
+            pass
+
+    def set_max_concurrent(self, max_slots: int) -> None:
+        """Apply a new ``max_concurrent_runs`` value to a live orchestrator."""
+        self._sem.set_max(max_slots)
 
     # -- public API -------------------------------------------------------- #
     def start_run(self, project_ref: str, prompt: str, *,
@@ -531,16 +705,34 @@ class Orchestrator:
         return {"run": final, "reply": self._replies.get(uid, final.get("output", ""))}
 
     def cancel(self, run_uid: str) -> bool:
+        run = registry.get_run(run_uid)
+        if run is None:
+            return False
+        if run["status"] in ("done", "failed", "cancelled", "timeout", "provider_error"):
+            # Already final: cancelling again would resurrect a finished run and
+            # emit a second "end". Report it as a no-op.
+            return False
         with self._lock:
             proc = self._procs.get(run_uid)
             self._cancelled.add(run_uid)
         if proc and proc.poll() is None:
             terminate_tree(proc)
         # Even if the process already exited, force the run to a final state so
-        # the dashboard never shows a zombie run.
-        registry.update_run(run_uid, status="cancelled", ended_at=registry.now_iso(), error="cancelled by user")
-        self.bus.publish(run_uid, {"type": "end", "run": run_uid, "status": "cancelled"})
+        # the dashboard never shows a zombie run. The worker's _finalize may run
+        # later for a run that was still queued; _emit_end keeps "end"
+        # single-shot per run.
+        registry.update_run(run_uid, status="cancelled", ended_at=registry.now_iso(),
+                            error="cancelled by user")
+        self._emit_end(run_uid, {"type": "end", "run": run_uid, "status": "cancelled"})
         return True
+
+    def _emit_end(self, run_uid: str, event: dict[str, Any]) -> None:
+        """Publish a terminal event at most once per run."""
+        with self._lock:
+            if run_uid in self._ended:
+                return
+            self._ended.add(run_uid)
+        self.bus.publish(run_uid, event)
 
     def is_final(self, run_uid: str) -> bool:
         run = registry.get_run(run_uid)
@@ -557,13 +749,16 @@ class Orchestrator:
         if not acquired:
             self._finalize(run_uid, "failed", None, "queue timeout", cancelled=False)
             return
-        # A cancel() issued while we were waiting in the semaphore should win.
-        with self._lock:
-            if run_uid in self._cancelled:
-                self._sem.release()
-                self._finalize(run_uid, "cancelled", None, "cancelled by user", cancelled=True)
-                return
         try:
+            # A cancel() issued while we were waiting in the queue wins. The
+            # flag is read under the lock but _finalize is called *outside* it:
+            # threading.Lock is not reentrant and _finalize takes the same lock.
+            with self._lock:
+                cancelled = run_uid in self._cancelled
+            if cancelled:
+                self._finalize(run_uid, "cancelled", None, "cancelled by user",
+                               cancelled=True)
+                return
             self._execute(run_uid, project, prompt, run)
         except Exception as exc:  # pragma: no cover - defensive
             self._publish_text(run_uid, f"\n[perun] internal error: {exc}\n")
@@ -575,6 +770,19 @@ class Orchestrator:
                  run: dict[str, Any]) -> None:
         cwd = project["path"]
         oc_sid = run.get("opencode_session_id") or ""
+        # Refuse to nest agents without bound: an agent spawned by Perun inherits
+        # PERUN_DEPTH, so A → B → C works but C → D is rejected (two agents could
+        # otherwise ask each other in a loop).
+        try:
+            depth = int(os.environ.get("PERUN_DEPTH", "0") or "0")
+        except ValueError:
+            depth = 0
+        if depth >= MAX_AGENT_DEPTH:
+            self._finalize(
+                run_uid, "failed", None,
+                f"agent recursion depth exceeded (PERUN_DEPTH={depth} >= {MAX_AGENT_DEPTH})",
+                cancelled=False)
+            return
         # Project-scoped custom instructions ride along with a new session.
         prompt = compose_prompt(project, prompt, new_session=not oc_sid,
                                 settings=self.settings)
@@ -604,9 +812,14 @@ class Orchestrator:
         try:
             proc = subprocess.Popen(
                 argv, cwd=cwd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                # POSIX: lead a new session so terminate_tree() can signal the
+                # whole process group (MCP servers, LSPs, tool children).
+                start_new_session=(os.name != "nt"),
+                env=_child_env(depth + 1),
             )
         except FileNotFoundError as exc:
             self._finalize(run_uid, "failed", None, f"cannot launch opencode: {exc}",
@@ -615,6 +828,12 @@ class Orchestrator:
 
         with self._lock:
             self._procs[run_uid] = proc
+            # Closes the race where cancel() ran between the pre-launch flag
+            # check and this registration: the process existed but was not yet
+            # known, so nothing got killed.
+            cancelled_before_register = run_uid in self._cancelled
+        if cancelled_before_register:
+            terminate_tree(proc)
 
         stderr_chunks: list[str] = []
 
@@ -623,6 +842,7 @@ class Orchestrator:
                 assert proc.stderr is not None
                 for line in proc.stderr:
                     stderr_chunks.append(line)
+                    _trim_parts(stderr_chunks, MAX_STORED_OUTPUT)
             except Exception:
                 pass
 
@@ -652,7 +872,8 @@ class Orchestrator:
 
         try:
             assert proc.stdout is not None
-            with log_path.open("w", encoding="utf-8", errors="replace") as logf:
+            with log_path.open("w", encoding="utf-8", errors="replace",
+                               buffering=1) as logf:
                 for line in proc.stdout:
                     logf.write(line)
                     if timed_out or run_uid in self._cancelled:
@@ -672,6 +893,7 @@ class Orchestrator:
                         text = evt.get("text", "")
                         if text:
                             reply_parts.append(text)
+                            _trim_parts(reply_parts, MAX_STORED_OUTPUT)
                             self.bus.publish(run_uid, {"type": "text", "run": run_uid,
                                                        "text": text})
                     elif kind == "tool":
@@ -682,6 +904,7 @@ class Orchestrator:
                         err_text = evt.get("text", "")
                         if err_text:
                             error_parts.append(err_text)
+                            _trim_parts(error_parts, MAX_STORED_OUTPUT)
                         if evt.get("provider_error"):
                             provider_error_seen = True
                         self.bus.publish(run_uid, {"type": "error", "run": run_uid,
@@ -780,9 +1003,9 @@ class Orchestrator:
                 run["project_id"], "run",
                 f"Run {run_uid} {status}", {"status": status, "exit_code": exit_code})
 
-        self.bus.publish(run_uid, {"type": "end", "run": run_uid, "status": status,
-                                   "exit_code": exit_code, "reply": reply,
-                                   "error": "" if not fatal else error[:1000]})
+        self._emit_end(run_uid, {"type": "end", "run": run_uid, "status": status,
+                                 "exit_code": exit_code, "reply": reply,
+                                 "error": "" if not fatal else error[:1000]})
         done = self._done.get(run_uid)
         if done:
             done.set()
@@ -793,6 +1016,14 @@ class Orchestrator:
             self._replies.pop(run_uid, None)
             self._cancelled.discard(run_uid)
             self._procs.pop(run_uid, None)
+            self._ended.discard(run_uid)
+        # Replay history is kept briefly for late dashboard clients, then freed:
+        # otherwise every run ever executed stays in memory for the process's
+        # lifetime.
+        timer = threading.Timer(HISTORY_TTL_SECONDS, self.bus.drop_history,
+                                args=(run_uid,))
+        timer.daemon = True
+        timer.start()
 
     def stream(self, run_uid: str) -> Iterator[dict[str, Any]]:
         """Blocking generator of events for a run (used by SSE endpoints)."""
@@ -800,11 +1031,11 @@ class Orchestrator:
         try:
             while True:
                 try:
-                    ev = q.get(timeout=60)
+                    ev = q.get(timeout=STREAM_POLL_SECONDS)
                 except Empty:
-                    yield {"type": "ping", "run": run_uid}
                     if self.is_final(run_uid):
                         break
+                    yield {"type": "ping", "run": run_uid}
                     continue
                 yield ev
                 if ev.get("type") in ("end", "__eof__"):
@@ -813,6 +1044,6 @@ class Orchestrator:
             self.bus.unsubscribe(run_uid, q)
 
 
-# One-time setup: seed the default global guidance file if none exists.
-# Idempotent and safe to repeat from the server lifespan.
-_seed_default_instructions()
+# One-time setup happens in ``Orchestrator.__init__`` — never at import time.
+# Importing this module (as tests, MCP and tooling routinely do) must not write
+# into the user's ``~/.config/opencode`` tree.

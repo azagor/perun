@@ -83,9 +83,53 @@ def test_memory_sensitive_rejected(client):
     assert r.status_code == 400
 
 
+def test_memory_remember_unknown_project_is_404(client):
+    """A typo'd slug must not silently write a *global* fact."""
+    r = client.post("/api/memory/remember",
+                    json={"content": "should not be stored", "project": "no-such-project"})
+    assert r.status_code == 404
+
+
+def test_memory_prune_rejects_non_positive_keep(client):
+    assert client.post("/api/memory/prune", json={"keep": 0}).status_code == 400
+    assert client.post("/api/memory/prune", json={"keep": -5}).status_code == 400
+    assert client.post("/api/memory/prune", json={"keep": "abc"}).status_code == 400
+
+
+def test_memory_prune_keeps_positive_count(client):
+    client.post("/api/memory/remember", json={"content": "prunable fact"})
+    r = client.post("/api/memory/prune", json={"keep": 50, "min_age_days": 0})
+    assert r.status_code == 200
+    assert "removed" in r.json()
+
+
 def test_memory_stats(client):
     r = client.get("/api/memory/stats")
     assert "facts_total" in r.json()["stats"]
+
+
+def test_memory_reembed_endpoint(client):
+    r = client.post("/api/memory/reembed", json={"limit": 8})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert "facts_embedded" in body
+    assert "chunks_embedded" in body
+
+
+def test_memory_reembed_rejects_invalid_limit(client):
+    assert client.post("/api/memory/reembed", json={"limit": 0}).status_code == 400
+    assert client.post("/api/memory/reembed", json={"limit": -1}).status_code == 400
+    assert client.post("/api/memory/reembed", json={"limit": "abc"}).status_code == 400
+
+
+def test_reembed_thread_is_idle_under_pytest(monkeypatch):
+    """The background re-embed thread must not start during tests."""
+    from perun import server
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_reembed_thread_is_idle_under_pytest")
+    stop = server._start_reembed_thread()
+    assert stop is None
 
 
 def test_memory_recent_and_stats_filtered_by_project(client, tmp_path):
@@ -638,6 +682,27 @@ def test_project_instruction_files_path_traversal(client, tmp_path):
     assert res.status_code in (404, 405)
 
 
+def test_project_instruction_filename_length_and_nul_rejected(client, tmp_path):
+    """A 10 000-char or NUL-bearing name must be a 400, not a filesystem 500."""
+    from urllib.parse import quote
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "LongName", "path": str(tmp_path / "ln"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    too_long = "a" * 10_000 + ".md"
+    res = client.post(
+        f"/api/projects/{slug}/instruction-files/{too_long}", json={"body": "x"})
+    assert res.status_code == 400
+
+    with_nul = quote("bad\x00name.md", safe="")
+    res = client.post(
+        f"/api/projects/{slug}/instruction-files/{with_nul}", json={"body": "x"})
+    assert res.status_code == 400
+
+
 def test_manifest_export_and_read(client, tmp_path):
     target = tmp_path / "manifestproj"
     r = client.post("/api/projects", json={
@@ -866,7 +931,7 @@ def test_run_in_terminal_starts_tracked_process(client, tmp_path, monkeypatch):
     monkeypatch.setattr("subprocess.Popen", fake_popen)
 
     r = client.post("/api/run-in-terminal", json={
-        "project": slug, "command": "opencode", "run_uid": run_uid,
+        "project": slug, "tui": True, "run_uid": run_uid,
         "shell": "cmd",
     })
     assert r.status_code == 200
@@ -874,8 +939,8 @@ def test_run_in_terminal_starts_tracked_process(client, tmp_path, monkeypatch):
     assert fresh.get(run_uid) is not None
     assert fresh.get(run_uid)["pid"] == 12345
 
-    # missing command rejected
-    assert client.post("/api/run-in-terminal", json={"project": slug}).status_code == 400
+    # Neither a cwd nor a project to take one from is rejected.
+    assert client.post("/api/run-in-terminal", json={"shell": "cmd"}).status_code == 400
 
 
 def test_run_in_terminal_powershell_no_duplicate_flags(client, tmp_path, monkeypatch):
@@ -906,14 +971,47 @@ def test_run_in_terminal_powershell_no_duplicate_flags(client, tmp_path, monkeyp
                         lambda self, shell_hint="": ["pwsh", "-NoExit", "-Command"])
 
     r = client.post("/api/run-in-terminal", json={
-        "project": slug, "command": "cd \"C:\\\\x\"; opencode", "shell": "pwsh",
+        "project": slug, "shell": "pwsh", "tui": True, "prompt": "hi there",
     })
     assert r.status_code == 200
     argv = captured[-1]
     # Must not duplicate -NoExit/-Command flags.
     assert argv.count("-NoExit") == 1
     assert argv.count("-Command") == 1
-    assert argv[-1] == "cd \"C:\\\\x\"; opencode"
+    # The command is assembled server-side, with the prompt quoted for PowerShell.
+    assert "opencode" in argv[-1]
+    assert "--prompt 'hi there'" in argv[-1]
+    assert str(tmp_path / "pwsh") in argv[-1]
+
+
+def test_run_in_terminal_prompt_cannot_inject_powershell(client, tmp_path, monkeypatch):
+    """A prompt containing ``$(...)`` must stay data, never PowerShell code."""
+    from perun import config
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "PsInj", "path": str(tmp_path / "psinj"),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+    captured: list[list[str]] = []
+
+    class FakeProc:
+        pid = 1
+        def poll(self): return None
+
+    monkeypatch.setattr("subprocess.Popen",
+                        lambda *a, **kw: (captured.append(list(a[0])), FakeProc())[1])
+    monkeypatch.setattr(config.Settings, "terminal_cmd",
+                        lambda self, shell_hint="": ["pwsh", "-NoExit", "-Command"])
+    evil = "$(calc.exe); rm -rf ~"
+    r = client.post("/api/run-in-terminal", json={
+        "project": slug, "shell": "pwsh", "tui": True, "prompt": evil,
+    })
+    assert r.status_code == 200
+    text = captured[-1][-1]
+    # Single-quoted literal: ``$`` is inert and no doubled quote is introduced.
+    assert f"--prompt '{evil}'" in text
+    assert "''" not in text
 
 
 def test_run_in_terminal_cmd_uses_string_command_line(client, tmp_path, monkeypatch):
@@ -943,9 +1041,7 @@ def test_run_in_terminal_cmd_uses_string_command_line(client, tmp_path, monkeypa
                         lambda self, shell_hint="": ["cmd.exe"])
 
     r = client.post("/api/run-in-terminal", json={
-        "project": slug,
-        "command": 'cd /d "C:\\\\x" && opencode --prompt "hi"',
-        "shell": "cmd",
+        "project": slug, "shell": "cmd", "tui": True, "prompt": "hi",
     })
     assert r.status_code == 200
     (popen_args, popen_kwargs) = captured[-1]
@@ -956,8 +1052,9 @@ def test_run_in_terminal_cmd_uses_string_command_line(client, tmp_path, monkeypa
     assert isinstance(popen_args[0], str)
     assert popen_args[0].startswith("cmd.exe /k ")
     assert '\\"' not in popen_args[0]
-    assert popen_args[0].endswith('cd /d "C:\\\\x" && opencode --prompt "hi"')
-    assert popen_kwargs.get("cwd") == str(tmp_path / "cmd")
+    cmd_dir = str(tmp_path / "cmd")
+    assert popen_args[0].endswith(f'cd /d "{cmd_dir}" && opencode --prompt "hi"')
+    assert popen_kwargs.get("cwd") == cmd_dir
 
 
 def test_run_in_terminal_wt_keeps_raw_quotes(client, tmp_path, monkeypatch):
@@ -987,16 +1084,40 @@ def test_run_in_terminal_wt_keeps_raw_quotes(client, tmp_path, monkeypatch):
                         lambda self, shell_hint="": ["wt.exe", "-d", "."])
 
     r = client.post("/api/run-in-terminal", json={
-        "project": slug,
-        "command": 'cd /d "C:\\\\x" && opencode',
-        "shell": "wt",
+        "project": slug, "shell": "wt", "tui": True,
     })
     assert r.status_code == 200
     (popen_args, _) = captured[-1]
     assert isinstance(popen_args[0], str)
     assert popen_args[0].startswith("wt.exe -d ")
     assert '\\"' not in popen_args[0]
-    assert popen_args[0].endswith(' cmd /k cd /d "C:\\\\x" && opencode')
+    wt_dir = str(tmp_path / "wt")
+    assert popen_args[0].endswith(f' cmd /k cd /d "{wt_dir}" && opencode')
+
+
+def test_run_in_terminal_auth_login_quotes_provider(client, monkeypatch):
+    from perun import config
+
+    captured: list[list[str]] = []
+
+    class FakeProc:
+        pid = 7
+        def poll(self): return None
+
+    monkeypatch.setattr("subprocess.Popen",
+                        lambda *a, **kw: (captured.append(list(a[0])), FakeProc())[1])
+    monkeypatch.setattr(config.Settings, "terminal_cmd",
+                        lambda self, shell_hint="": ["pwsh", "-NoExit", "-Command"])
+    r = client.post("/api/run-in-terminal", json={
+        "action": "auth-login", "provider": "openai", "shell": "pwsh",
+    })
+    assert r.status_code == 200
+    assert captured[-1][-1].endswith("opencode auth login 'openai'")
+    # A provider id that is not a plain slug is refused.
+    bad = client.post("/api/run-in-terminal", json={
+        "action": "auth-login", "provider": "x; calc", "shell": "pwsh",
+    })
+    assert bad.status_code == 400
 
 
 def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):

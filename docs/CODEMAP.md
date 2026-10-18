@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.6.2"`).
+Package docstring + `__version__` (`"0.7.3"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -21,24 +21,34 @@ Optional password-based encryption for sensitive config values.
 ### `perun/config.py`
 Filesystem layout + persisted settings.
 * Constants: `PACKAGE_DIR`, `REPO_ROOT`, `HOME`, `DB_PATH`, `CONFIG_PATH`,
-  `LOGS_DIR`, `RUNS_DIR`, `WEB_DIR`, `MCP_SERVER`, `TEMPLATES_DIR`,
-  `OPENCODE_CONFIG_DIR`.
-* `_resolve_home()`, `_default_roots()`, `is_control_path()` (True when a path is
-  the Perun repo root — identifies the control-plane project, so it can never be
-  confused with a user project).
+  `API_TOKEN_PATH` (`<PERUN_HOME>/api-token`), `LOGS_DIR`, `RUNS_DIR`, `WEB_DIR`,
+  `MCP_SERVER`, `TEMPLATES_DIR`, `OPENCODE_CONFIG_DIR` (honours
+  `XDG_CONFIG_HOME`), `POSIX_TERMINALS` (known Linux/macOS emulators + launch
+  flags).
+* `_resolve_home()`, `_resolve_opencode_config_dir()`, `_default_roots()`,
+  `is_control_path()` (True when a path is the Perun repo root — identifies the
+  control-plane project, so it can never be confused with a user project),
+  `posix_terminal_flags()`, `posix_shell()`.
 * `Settings` (dataclass): `roots host port default_model default_agent
   orchestrator_model orchestrator_agent max_concurrent_runs run_timeout
   ollama_host embed_model embed_dim telegram_token telegram_bot_name
-  telegram_allowed_chats auto_discover_on_start index_docs_on_discover terminal`.
-  * `Settings.load()`, `Settings.save()`, `Settings.to_dict()`,
-    `Settings.telegram()` (config first, then `TELEGRAM_BOT_TOKEN` /
-    `TELEGRAM_CHAT_ID`), `Settings.telegram_sources()` (which of the two is in
-    force: `settings` | `env` | `""`, surfaced by the dashboard).
+  telegram_allowed_chats telegram_pair_code auto_discover_on_start
+  index_docs_on_discover terminal`.
+  * `Settings.load()` (quarantines an unparseable `config.json` to
+    `.corrupt-<stamp>` before falling back to defaults), `Settings.save()`
+    (atomic temp+rename, `0600` before writing), `Settings.to_dict()`,
+    `Settings.telegram()` (`PERUN_TELEGRAM_TOKEN` orchestrator-injected token
+    first, then config, then `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN`;
+    `TELEGRAM_CHAT_ID` / `TG_CHAT_ID` chat fallback), `Settings.telegram_sources()`
+    (which source is in force: `orchestrator` | `settings` | `settings-encrypted` |
+    `env` | `""`, surfaced by the dashboard).
   * `Settings.terminal_cmd(shell_hint=…)` returns the argv to launch the
-    configured/default terminal emulator.
+    configured/default terminal emulator (on POSIX it prefers a real emulator and
+    returns an argv ending in the shell).
   * `Settings.terminal_sources()` reports where the effective terminal comes from
     (`settings` | `os` | `""`).
-* `ensure_dirs()`, `settings()`.
+* `ensure_dirs()`, `_quarantine_config()`, `api_token()` (create/read the local
+  API token, `O_CREAT|O_EXCL` + `0600`, `PERUN_API_TOKEN` override), `settings()`.
 
 ### `perun/db.py`
 SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
@@ -106,8 +116,12 @@ servers.
   structural/AST search.
 * `_python_grep()`, `_python_ast_search()` — pure-Python fallbacks.
 * `search_capabilities()` — reports which CLI backends are installed.
-* `_run_streamed()`, `_is_project_path_safe()`, `_safe_compile_regex()` —
-  streaming, path-safety, and defensive regex helpers.
+* `_run_streamed()`, `_is_project_path_safe()`, `_safe_compile_regex()`,
+  `_sanitize_root()`, `_validate_pattern()`, `_looks_catastrophic()` —
+  streaming, path-safety, pattern validation, and nested-quantifier/ReDoS
+  rejection helpers.
+* `_gitignored()`, `_read_gitignore()`, `_glob_match_simple()` — `.gitignore`
+  support for the Python fallback.
 
 ### `perun/search.py`
 State-of-the-art unified search orchestrator. Fuses vector memory, global
@@ -124,9 +138,10 @@ Unified facts + document vector store + search.
   `_embed()`.
 * Facts: `remember()`, `search_facts()`, `_fact_rows()`, `recent_facts()`,
   `prune()`.
-* Docs: `chunk_markdown()`, `index_text()`, `index_project_docs()`,
-  `search_docs()`.
-* Unified: `unified_search()`, `stats()`.
+* Docs: `chunk_markdown()`, `_index_text_impl()`, `index_text()`,
+  `index_project_docs()`, `search_docs()`.
+* Unified / maintenance: `unified_search()`, `stats()`, `reembed_missing()`
+  (re-embeds facts/doc chunks whose vectors are missing or stale).
 * Migration: `import_legacy_memory()`.
 * `DOC_CANDIDATES` (files indexed per project).
 * `MAX_CHUNK_CHARS`, `MAX_SEARCH_CANDIDATES` (safety/performance bounds).
@@ -184,22 +199,32 @@ Start / stream / cancel headless `opencode run`.
   `compose_prompt(project, prompt, settings=…)` (prepends global + project
   instructions to a new session).
 * Global instruction files: `_instruction_files()`, `_load_instruction_file()`,
-  `_parse_frontmatter()`, `instruction_blocks(scope)`, `_seed_default_instructions()`.
+  `_parse_frontmatter()`, `instruction_blocks(scope)`, `_seed_default_instructions()`
+  (called from `Orchestrator.__init__`, never at import time).
 * Project-local instruction files: `PROJECT_INSTRUCTIONS_DIR`,
   `_project_instruction_dir(project, create=…)`, `_project_instruction_files(project)`,
-  `_load_project_instruction_file(path)`, `_project_instruction_blocks(project)`, and
-  `write_project_instruction_file(project_path, text, …)` — the single writer shared by
-  the project API, MCP tools, discovery, and manifest sync (instruction text is never
-  stored in the database).
-* `Orchestrator`: `start_run()`, `run_and_wait()`, `cancel()`, `is_final()`,
-  `active()`, `_worker()`, `_execute()` (with wall-clock watchdog thread),
+  `_load_project_instruction_file(path)`, `_project_instruction_blocks(project)`,
+  `_safe_instruction_filename(filename)` (reduces a manifest-supplied name to a plain
+  `*.md` basename), and `write_project_instruction_file(project_path, text, …)` — the
+  single writer shared by the project API, MCP tools, discovery, and manifest sync
+  (instruction text is never stored in the database); it refuses paths that escape the
+  project root.
+* `_SlotLimiter` (mutable, `Condition`-based concurrency limiter; `set_max()`),
+  `_child_env(depth)` (strips raw secret env vars, sets `PERUN_DEPTH`, injects the
+  resolved Telegram token as `PERUN_TELEGRAM_TOKEN`).
+* `Orchestrator`: `start_run()`, `run_and_wait()`, `cancel()` (idempotent; also
+  cancels queued runs), `is_final()`, `set_max_concurrent()`, `active()`,
+  `_worker()`, `_execute()` (with wall-clock watchdog thread), `_emit_end()`,
   `_finalize()`, `stream()`. Model/agent precedence: explicit arg → project
-  override → (control only) `orchestrator_model`/`orchestrator_agent` → global
-  `default_model`/`default_agent`. Every source is stripped; `start_run` stores
+  override → (control only) `orchestrator_model`/`orchestrator_agent` →
+  (control only) the global `default_model`/`default_agent`. The global default
+  is never forced onto ordinary project runs — with no override they defer to
+  OpenCode's own default model. Every source is stripped; `start_run` stores
   `model_explicit=bool(model)` and `_execute` forwards `--model` whenever a
   non-empty model was resolved (only an empty resolution defers to OpenCode).
-* Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `INSTRUCTION_OPEN`,
-  `INSTRUCTION_CLOSE`.
+* Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `SUB_QUEUE_LIMIT`,
+  `HISTORY_TTL_SECONDS`, `STREAM_POLL_SECONDS`, `MAX_AGENT_DEPTH`, `_SECRET_ENV`,
+  `INSTRUCTION_OPEN`, `INSTRUCTION_CLOSE`.
 
 ### `perun/skills.py`
 Discovery of OpenCode agent skills and tools available to a project.
@@ -244,8 +269,8 @@ entry); probing never happens automatically.
 ### `perun/process_tracker.py`
 Lifecycle tracking for externally-launched TUI/terminal sessions.
 * `ProcessTracker`: `register()`, `get()`, `is_alive()`, `terminate()`,
-  `finalize()`, `_resolve_child_pid()` (descendant-first marker scan with full-system
-  fallback), `_kill_tree()`, `_watch_loop()`.
+  `terminate_all()`, `finalize()`, `_resolve_child_pid()` (descendant-first marker
+  scan with full-system fallback), `_kill_tree()`, `_watch_loop()`.
 * Uses `psutil` to walk process trees and resolve Windows Terminal child
   processes. The frontend injects a `PERUN_RUN_UID` environment marker into the
   shell command so the tracker can find the TUI process even when the launcher has
@@ -259,27 +284,46 @@ Shared Telegram ⇄ Perun bridge.
 * `PidLock` (single-instance; `acquire()`, `release()`, side-effect-free
   `is_held()`, `_default_mutex_name()` namespaces the mutex by `PERUN_HOME`),
   `_pid_alive()`. One poller machine-wide (`getUpdates` allows a single consumer);
-  a second start is refused rather than fighting with HTTP 409s.
+  a second start is refused rather than fighting with HTTP 409s. On POSIX the pid
+  file is created with `O_CREAT|O_EXCL` so two bridges cannot both acquire.
 * `PerunTelegramBridge`: `api()`, `send()` (supports optional `reply_markup`),
   `handle_command()`, `_handle_text_command()`, `_project_keyboard()`,
   `_handle_callback()` (inline-keyboard project selection; falls back to numeric
   ids for slugs that exceed Telegram's 64-byte `callback_data` limit),
   `_current_project()` (single-user-project auto-select, else the control plane),
   `_handle_update()` (deduplicates redelivered messages by chat + message id),
-  `run_message()`, `worker()`, `authorised()`, `run()`. Commands include
-  `/orchestrator` (`/perun`, `/overseer`); `/projects` sends an inline keyboard.
-* Entry: `run_bridge()`, `_setup_logging()`.
+  `run_message()`, `worker()`, `authorised()` (strict: an empty allow-list grants
+  nobody), `_handle_pair()` (`/pair <code>`, `hmac.compare_digest`, dispatched
+  *before* the auth gate), `pair_code()`, `active_runs()`, `run_for()`, `run()`.
+  Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
+  Commands include `/orchestrator` (`/perun`, `/overseer`) and `/pair`.
+* Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
+  are configured; cancels all active runs on shutdown), `_setup_logging()`.
 
 ### `perun/server.py`
 FastAPI app + SSE + static dashboard.
-* Globals: `SETTINGS`, `ORCH`, `app`, `STARTED_AT`, `_SSE_HEADERS`.
+* Globals: `SETTINGS`, `ORCH`, `app`, `STARTED_AT`, `_SSE_HEADERS`,
+  `MAX_INSTRUCTION_FILENAME`.
 * Guard: `_origin_guard` middleware + `_hostname()`, `_host_allowed()`,
-  `_origin_ok()` — anti-CSRF / anti-DNS-rebinding, applied to `/api/*` only.
-  All responses receive baseline security headers (CSP, X-Frame-Options, etc.).
-* Helpers: `_project_or_404()`, `_resolve_project()`, `_control_project()`,
-  `_control_slug()`, `_ok()`, `_sse()`, `_max_activity_id()`, `_new_activity()`.
+  `_origin_parts()`, `_origin_ok()` — anti-CSRF / anti-DNS-rebinding (Origin
+  scheme + effective port must match), applied to `/api/*` only. A **token
+  middleware** then requires `X-Perun-Token`/`Authorization: Bearer` on every
+  state-changing `/api/*` method (`_API_SAFE_METHODS` = GET/HEAD/OPTIONS), compared
+  with `hmac.compare_digest`; order is Host → Origin → token. All responses receive
+  baseline security headers (CSP, X-Frame-Options, etc.).
+* Helpers: `_project_or_404()`, `_resolve_project()` (404 on an unknown non-empty
+  slug), `_control_project()`, `_control_slug()`, `_ok()`, `_sse()`,
+  `_max_activity_id()`, `_new_activity()`, `_str_field()` (wrong JSON types → 400),
+  `_clamp()`, `_normalize_instruction_filename()`, `_project_instruction_path()`,
+  `_ps_quote()`/`_posix_quote()`/`_cmd_quote()`, `_terminal_command()`
+  (server-side command construction), `_dashboard_index()` (injects
+  `window.PERUN_TOKEN` into `index.html`).
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
-  structured `/api/models`), terminals (`/api/terminals`), projects
+  structured `/api/models`), providers (`/api/providers…` — read-only
+  `opencode auth` status + logout), skills/tools (`/api/skills`, `/api/tools`),
+  terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
+  snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
+  unified), projects
   (`/api/projects…` incl. the creation wizard, `/api/projects/{slug}/instructions`
   (legacy inline or project-local Markdown file), `/api/projects/{slug}/instruction-files`
   (multi-file project-local instructions with CRUD + toggle), `/api/projects/{slug}/manifest…`,
@@ -288,12 +332,17 @@ FastAPI app + SSE + static dashboard.
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
   `/api/runs/{uid}/kill` — declared before `/api/runs/{uid}` —
-  `/api/runs/{uid}/stream`, `/api/stream`; `POST /api/runs` defaults to the
-  orchestrator), run-in-terminal (`/api/run-in-terminal`), memory
-  (`/api/memory/*`), activity (`/api/activity`), settings (`/api/settings` — GET
-  never echoes `telegram_token`), global instruction files (`/api/instructions/*`),
+  `/api/runs/{uid}/stream` (404 for an unknown run), `/api/stream`; `POST /api/runs`
+  defaults to the orchestrator), run-in-terminal (`/api/run-in-terminal` — command
+  built server-side from structured fields), memory
+  (`/api/memory/*`, including `POST /api/memory/reembed` for on-demand embedding
+  repair; a background thread also repairs missing/stale embeddings at startup),
+  activity (`/api/activity`), settings (`/api/settings` — GET
+  never echoes `telegram_token` or the pairing code), global instruction files
+  (`/api/instructions/*`),
   telegram (`/api/telegram/*`: `status` reports
-  `token_source`/`chats_source`/`bridge_task`, `bot` verifies a new token with
+  `token_source`/`chats_source`/`bridge_task` and (loopback only) `pair_code`,
+  `bot` verifies a new token with
   `getMe` before saving, `bridge/restart` restarts the in-process bridge or the
   optional logon task, `unlock` decrypts an encrypted token and starts/reloads
   the bridge, `send`).
@@ -320,11 +369,15 @@ memory facts),
   bridge when it was not started due to a missing password.
 
 ### `perun/integrations/install_global.py`
-Idempotent global install into `~/.config/opencode`.
+Idempotent, additive global install into `~/.config/opencode` (honours
+`XDG_CONFIG_HOME` and `OPENCODE_CONFIG`).
 * `config_dir()`, `opencode_json()`, `perun_dir()`, `instructions_target()`.
-* `_read_json()`, `_write_json()`, `_backup()`, `_python_cmd()`,
-  `_relative_to_config()`.
-* `install()`, `uninstall()`, `status()`.
+* `_read_json()` (JSONC-tolerant; raises `ConfigParseError` rather than silently
+  discarding an unparseable config), `_write_json()`, `_backup()` (uniquely named
+  within a second), `_python_cmd()`, `_relative_to_config()`, `ConfigParseError`.
+* `install()`, `uninstall()`, `status()`. The Perun MCP entry pins
+  `environment.PERUN_HOME`, and `opencode.json` is rewritten (with a backup) only
+  when its content actually changes.
 * Templates under `perun/integrations/templates/`.
 
 ### `perun/installer.py`
@@ -405,8 +458,9 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
   * `build.ps1` — compiles `installer\Output\PerunSetup.exe`.
   * `sign.ps1` — signs `PerunSetup.exe` with `signtool`. Supports an external
     PFX via parameters or the `PERUN_SIGN_PFX` / `PERUN_SIGN_PFX_BASE64` /
-    `PERUN_SIGN_PASSWORD` environment variables; falls back to a self-signed
-    certificate when none is provided.
+    `PERUN_SIGN_PASSWORD` environment variables; when none is provided it
+    creates a self-signed certificate on demand (`New-SelfSignedCertificate` →
+    export → sign), so no `.pfx` needs to exist in the repo for CI to pass.
 * `.github/workflows/release.yml` — GitHub Actions workflow that builds and
   signs `PerunSetup.exe` on `v*` tags and attaches it to the release.
 * `setup.ps1` — Windows web installer: clones (or reuses) the repo and
@@ -423,6 +477,10 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
 * `tools/make_icon.py` — regenerates `web/assets/perun.ico` / `perun.png`.
+* `tools/normalize_line_endings.py` — rewrites tracked text files to LF (leaves
+  `.cmd`/`.ps1`/`.bat`/`.iss` CRLF); run before tricky edits (see AGENTS.md).
+* `tools/check_line_endings.py` — reports line-ending violations without
+  rewriting.
 * `tools/migrate_global_facts.py` — one-off helper that moves Perun-related
   global facts onto the `perun` control-plane project.
 * `opencode.json` — repo-local OpenCode config (perun MCP + AGENTS.md).
@@ -455,7 +513,9 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
 * `test_scaffold.py` — directory creation, bootstrap, starter `perun.md`.
 * `test_git.py` — the `git` CLI wrapper against a temp repository.
 * `test_orchestrator.py` — `parse_event`, `resolve_opencode`, `EventBus`,
-  `compose_prompt` instructions injection, end-to-end stdout-error capture.
+  `compose_prompt` instructions injection, model resolution/forwarding
+  (`model_explicit`, the `--model` argv rule for every source), and end-to-end
+  stdout-error capture.
 * `test_process_tracker.py` — `ProcessTracker` registration, lifecycle, marker
   resolution, watcher auto-finalization, and run-record cleanup.
 * `test_agents.py` — OpenCode agent discovery (`perun/agents.py`).
@@ -468,3 +528,29 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
   the delete guard, and "a run with no project targets the orchestrator".
 * `test_server_security.py` — the origin/host guard (`_origin_guard`) on `/api/*`.
 * `test_cli.py` — UTF-8 stdio hardening and non-ASCII recall output.
+* `test_secrets.py` — password precedence (env → DPAPI file) and
+  `persist_password()` (no-op off Windows).
+* `test_providers.py` — provider discovery: `opencode auth list` parsing,
+  `connected`/`status` enrichment, logout validation.
+* `test_search.py` — unified search: RRF fusion, project resolution,
+  capabilities, and graceful source failure/timeout handling.
+* `test_grep.py` — the bundled search layer: ripgrep/ast-grep JSON parsing,
+  Python fallbacks, `search_capabilities()`.
+* `test_mcp_servers.py` — MCP config snapshot (global + project scopes, status
+  derivation) and the on-demand live probe against a spawned throwaway server.
+* `test_mcp_security.py` — MCP input validation: filename/path safety for
+  instruction tools, pattern/max-results rejection in the search tools (loads
+  `mcp/perun_mcp.py` directly, dodging the installed `mcp` package shadowing).
+* `test_setup_scripts.py` — smoke tests for the `setup.ps1` / `setup.sh` web
+  installers.
+* `test_js_prompt_chain.py` — runs the Node.js unit test for
+  `web/js/prompt_chain.js`.
+* `conftest.py` — shared fixtures: `_fresh_db` (autouse per-test database),
+  `workdir`, `control_repo`, and `_api_token_header` (autouse: teaches
+  `TestClient` to send `X-Perun-Token`, since state-changing `/api/*` calls now
+  require it).
+* `adv_memory.py`, `adv_grep_search.py`, `adv_registry.py`, `adv_server_api.py` —
+  the external audit's adversarial suite (security/robustness regressions fixed in
+  the Unreleased hardening pass). `pyproject.toml` collects `adv_*.py` alongside
+  `test_*.py`; platform-specific cases skip themselves (Windows symlink privilege,
+  POSIX-only permission bits).

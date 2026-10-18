@@ -32,20 +32,66 @@ def _resolve_home() -> Path:
     return (Path.home() / ".perun").resolve()
 
 
+def _resolve_opencode_config_dir() -> Path:
+    """The OpenCode config directory, honouring ``XDG_CONFIG_HOME``.
+
+    The global installer already respects ``XDG_CONFIG_HOME``; the runtime must
+    agree with it or installation and discovery would look at different trees.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg).expanduser() if xdg and xdg.strip() else (Path.home() / ".config")
+    return (base / "opencode").resolve()
+
+
 HOME: Path = _resolve_home()
 DB_PATH: Path = HOME / "perun.db"
 CONFIG_PATH: Path = HOME / "config.json"
+API_TOKEN_PATH: Path = HOME / "api-token"
 LOGS_DIR: Path = HOME / "logs"
 RUNS_DIR: Path = HOME / "runs"
 WEB_DIR: Path = REPO_ROOT / "web"
 MCP_SERVER: Path = REPO_ROOT / "mcp" / "perun_mcp.py"
 TEMPLATES_DIR: Path = PACKAGE_DIR / "integrations" / "templates"
-OPENCODE_CONFIG_DIR: Path = Path.home() / ".config" / "opencode"
+OPENCODE_CONFIG_DIR: Path = _resolve_opencode_config_dir()
 GLOBAL_SKILLS_DIR: Path = OPENCODE_CONFIG_DIR / "skills"
 PROJECT_SKILLS_DIR: Path = Path(".opencode") / "skills"
 # Global instruction Markdown files ride alongside the OpenCode config so they
 # are visible to OpenCode V2's ambient instruction loading and easy to edit by hand.
 INSTRUCTIONS_DIR: Path = OPENCODE_CONFIG_DIR / "perun" / "instructions"
+
+# POSIX terminal emulators, in preference order, with the flags that precede the
+# program to run. Append the shell and ``-c <command>`` and every emulator below
+# launches it in a real TTY (a bare ``bash -c`` has no terminal at all).
+POSIX_TERMINALS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("kitty", ("--",)),
+    ("wezterm", ("start", "--")),
+    ("ghostty", ("-e",)),
+    ("alacritty", ("-e",)),
+    ("foot", ()),
+    ("konsole", ("-e",)),
+    ("gnome-terminal", ("--",)),
+    ("xfce4-terminal", ("-e",)),
+    ("xterm", ("-e",)),
+)
+
+
+def posix_terminal_flags(name: str) -> tuple[str, ...] | None:
+    """Flags for a known POSIX terminal emulator, else ``None``."""
+    base = os.path.basename((name or "").strip()).lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
+    for emu, flags in POSIX_TERMINALS:
+        if base == emu:
+            return flags
+    return None
+
+
+def posix_shell() -> str:
+    """The user's login shell (``$SHELL``) or the first one that exists."""
+    for candidate in (os.environ.get("SHELL", ""), "bash", "zsh", "sh"):
+        if candidate and shutil.which(candidate):
+            return candidate
+    return "sh"
 
 
 def is_control_path(path: "str | Path | None") -> bool:
@@ -96,6 +142,11 @@ class Settings:
     telegram_token: str = ""
     telegram_bot_name: str = ""
     telegram_allowed_chats: list[str] = field(default_factory=list)
+    # One-time pairing code used when ``telegram_allowed_chats`` is empty. The
+    # bridge generates it at startup, shows it in the dashboard, and consumes it
+    # (clears it) as soon as a chat completes ``/pair <code>``. An empty
+    # allow-list therefore grants *nobody* access by default.
+    telegram_pair_code: str = ""
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
     # Dedicated terminal / command shell. On Windows the value can be a path to
@@ -111,14 +162,34 @@ class Settings:
             try:
                 data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             except Exception:
+                # Never let a later save() silently destroy a hand-edited or
+                # corrupted config: move it aside first, then carry on with
+                # defaults. The leftover file is the user's data.
+                _quarantine_config()
                 data = {}
+        if not isinstance(data, dict):
+            _quarantine_config()
+            data = {}
         known = set(cls.__dataclass_fields__)
         clean = {k: v for k, v in data.items() if k in known}
         return cls(**clean)
 
     def save(self) -> None:
         ensure_dirs()
-        CONFIG_PATH.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        payload = json.dumps(asdict(self), indent=2)
+        tmp = CONFIG_PATH.with_suffix(".json.tmp")
+        # Create the temporary file owner-only *before* the token is written, so
+        # there is never a window where the secret is world-readable, then swap
+        # it in atomically (a crash mid-write cannot truncate the real file).
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        except OSError:  # pragma: no cover - unusual filesystem, best effort
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, CONFIG_PATH)
+            return
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, CONFIG_PATH)
         # Restrict read access to the owner on POSIX systems.
         if os.name != "nt":
             try:
@@ -134,13 +205,20 @@ class Settings:
 
     def telegram(self) -> tuple[str, list[str]]:
         from . import secrets
-        config_token = (self.telegram_token or "").strip()
-        # Decrypt only a config-stored token, never an environment fallback.
-        if config_token and secrets.is_encrypted(config_token):
-            token = secrets.decrypt_value(config_token) or ""
+        # The orchestrator injects the already-resolved token into agent
+        # subprocesses so the MCP server can send messages without inheriting
+        # raw secrets (TELEGRAM_BOT_TOKEN / TG_BOT_TOKEN / PERUN_PASSWORD).
+        env_token = (os.environ.get("PERUN_TELEGRAM_TOKEN") or "").strip()
+        if env_token:
+            token = env_token
         else:
-            token = config_token or os.environ.get("TELEGRAM_BOT_TOKEN") \
-                    or os.environ.get("TG_BOT_TOKEN") or ""
+            config_token = (self.telegram_token or "").strip()
+            # Decrypt only a config-stored token, never an environment fallback.
+            if config_token and secrets.is_encrypted(config_token):
+                token = secrets.decrypt_value(config_token) or ""
+            else:
+                token = config_token or os.environ.get("TELEGRAM_BOT_TOKEN") \
+                        or os.environ.get("TG_BOT_TOKEN") or ""
         chats = list(self.telegram_allowed_chats)
         if not chats:
             env_chats = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TG_CHAT_ID") or ""
@@ -160,10 +238,9 @@ class Settings:
         """
         configured = (self.terminal or "").strip()
         hint = (shell_hint or configured).lower()
-        if configured and not shell_hint:
-            low = configured.lower()
+        if configured and not shell_hint and os.name == "nt":
             base = os.path.basename(configured).lower()
-            if low.endswith("wt.exe") or base == "wt.exe":
+            if base == "wt.exe":
                 return [configured, "-d", "."]
             if base in ("cmd", "cmd.exe"):
                 return [configured]
@@ -192,10 +269,24 @@ class Settings:
             if path:
                 return [path]
             return ["cmd.exe"]
-        for candidate in (os.environ.get("SHELL", ""), "bash", "zsh", "sh"):
-            if candidate and shutil.which(candidate):
-                return [candidate]
-        return ["sh"]
+        # POSIX (Linux/macOS). A bare shell has no TTY, so prefer a real
+        # terminal emulator; the returned argv ends with the shell, ready for
+        # callers that append ``["-c", command]``.
+        shell = posix_shell()
+        requested = (configured or hint).strip()
+        if requested:
+            flags = posix_terminal_flags(requested)
+            if flags is not None:
+                return [requested, *flags, shell]
+            if shutil.which(requested) or os.path.sep in requested:
+                # An explicit shell/shell-like program.
+                return [requested]
+        if os.name != "nt":
+            for emu, flags in POSIX_TERMINALS:
+                path = shutil.which(emu)
+                if path:
+                    return [path, *flags, shell]
+        return [shell]
 
     def terminal_sources(self) -> dict[str, str]:
         """Where the effective terminal comes from: ``settings`` | ``os`` | ``""``."""
@@ -203,6 +294,10 @@ class Settings:
             return {"source": "settings", "path": self.terminal.strip()}
         if os.name == "nt":
             return {"source": "os", "path": shutil.which("pwsh") or shutil.which("pwsh.exe") or shutil.which("powershell") or shutil.which("powershell.exe") or shutil.which("cmd") or shutil.which("cmd.exe") or ""}
+        for emu, _flags in POSIX_TERMINALS:
+            path = shutil.which(emu)
+            if path:
+                return {"source": "os", "path": path}
         return {"source": "os", "path": os.environ.get("SHELL", shutil.which("bash") or shutil.which("sh") or "")}
 
     def telegram_sources(self) -> dict[str, str]:
@@ -214,7 +309,9 @@ class Settings:
         is shadowing it from the environment.
         """
         from . import secrets
-        if (self.telegram_token or "").strip():
+        if (os.environ.get("PERUN_TELEGRAM_TOKEN") or "").strip():
+            token_src = "orchestrator"
+        elif (self.telegram_token or "").strip():
             if secrets.is_encrypted(self.telegram_token):
                 token_src = "settings-encrypted"
             else:
@@ -236,6 +333,63 @@ class Settings:
 def ensure_dirs() -> None:
     for d in (HOME, LOGS_DIR, RUNS_DIR, INSTRUCTIONS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def _quarantine_config() -> Path | None:
+    """Rename an unreadable ``config.json`` aside so it is never overwritten.
+
+    ``Settings.load()`` falls back to defaults on a parse error; without this the
+    next ``save()`` would silently replace the user's file (and its Telegram
+    token) with a minimal one.
+    """
+    try:
+        import time
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = CONFIG_PATH.with_suffix(f".json.corrupt-{stamp}")
+        os.replace(CONFIG_PATH, dest)
+        return dest
+    except OSError:  # pragma: no cover - defensive
+        return None
+
+
+def api_token() -> str:
+    """Return the local API token, creating it on first use.
+
+    The dashboard has no user accounts, so the token is what stands between
+    "any local process / any script" and *running arbitrary agent commands*.
+    It is created atomically with owner-only permissions (``0600``) and lives in
+    ``PERUN_HOME``; the dashboard receives it injected into ``index.html`` and
+    CLI clients read the file (the same pattern Jupyter uses). Setting
+    ``PERUN_API_TOKEN`` in the environment overrides the file, which keeps
+    headless clients (CI, scripts) stable without touching disk.
+    """
+    env = (os.environ.get("PERUN_API_TOKEN") or "").strip()
+    if env:
+        return env
+    path = API_TOKEN_PATH
+    try:
+        if path.exists():
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+    except OSError:  # pragma: no cover - defensive
+        pass
+    token = os.urandom(32).hex()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # O_EXCL makes creation atomic: a second process (MCP server, Telegram
+        # bridge) that loses the race reads the winner's token instead.
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except OSError:  # pragma: no cover - defensive
+            return token
+    except OSError:  # pragma: no cover - defensive
+        return token
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token)
+    return token
 
 
 def settings() -> Settings:

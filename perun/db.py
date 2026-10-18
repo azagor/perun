@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
     content       TEXT NOT NULL,
     embedding     BLOB,
     content_hash  TEXT NOT NULL,
+    embedded_hash TEXT DEFAULT '',
     updated_at    TEXT NOT NULL,
     UNIQUE(project_id, source_file, section)
 );
@@ -192,6 +193,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "runs": [
         ("model_explicit", "INTEGER DEFAULT 0"),
     ],
+    # ``embedded_hash`` records which content the stored vector was computed
+    # from, so a chunk whose content changed while Ollama was down can be
+    # re-embedded instead of silently keeping a stale vector (COALESCE).
+    "doc_chunks": [
+        ("embedded_hash", "TEXT DEFAULT ''"),
+    ],
 }
 
 # Columns retired after project instructions moved fully to files on disk
@@ -206,9 +213,22 @@ _REMOVED_COLUMNS: dict[str, list[str]] = {
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in _ADDED_COLUMNS.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            # A missing table yields no PRAGMA rows (an old database may predate
+            # it entirely): skip it — CREATE TABLE IF NOT EXISTS in SCHEMA
+            # creates it with the columns already in place.
+            continue
         for name, ddl in columns:
             if name not in existing:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+                    # Another process (second Perun startup, MCP server) added
+                    # the column between our PRAGMA and the ALTER — SQLite has
+                    # no ADD COLUMN IF NOT EXISTS. Same tolerance as DROP.
+                    pass
     for table, columns in _REMOVED_COLUMNS.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         for name in columns:
@@ -222,11 +242,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
                     pass
 
 
+# Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
+# startup can tell "migrations already ran" from "fresh upgrade needed" without
+# guessing from table introspection alone.
+SCHEMA_VERSION = 1
+
+
 def init_db() -> None:
     global _initialized
     with db() as conn:
         conn.executescript(SCHEMA)
+        # Always reconcile columns (introspection-driven, idempotent); the
+        # version marker below exists so *future* non-additive migrations can
+        # tell what already ran, and so tooling can read the schema age.
         _migrate(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     _initialized = True
 
 

@@ -18,18 +18,18 @@ regardless of which folder this repository lives in:
 |------|---------|
 | `perun_list_projects` | List every registered project (slug, name, path, kind). |
 | `perun_project_info` | Details for one project (counts, recent activity, model/agent). |
-| `perun_create_project` | Create / register / clone a project (shared with the dashboard wizard). |
+| `perun_create_project` | Create / register / clone a project (shared with the dashboard wizard). Requires `confirm=true` only for `method="clone"`/`clone_url` (it fetches remote code). |
 | `perun_update_project` | Rename, re-describe, or re-tag a project. |
 | `perun_delete_project` | Unregister a project (requires `confirm=true`; refuses the orchestrator). |
-| `perun_discover` | Scan the discovery roots and register new projects. |
+| `perun_discover` | Scan the discovery roots and register new projects. Requires `confirm=true` when an explicit `roots` list is given (scanning outside the configured roots). |
 | `perun_memory_search` | Semantic + keyword search across facts and indexed docs. |
 | `perun_memory_store` | Store a durable fact (global or project scope). |
 | `perun_docs_index` | (Re)index a project's `docs/*` into the vector store. |
 | `perun_get_instructions` | Read a project's custom instructions. |
-| `perun_set_instructions` | Write a project's custom instructions. |
+| `perun_set_instructions` | Write a project's custom instructions (requires `confirm=true` — they are injected into every new session). |
 | `perun_list_instruction_files` | List a project's `.perun/instructions/*.md` files. |
 | `perun_get_manifest` | Read a project's `perun.md` manifest (front matter + body). |
-| `perun_set_manifest` | Write a project's `perun.md` manifest. |
+| `perun_set_manifest` | Write a project's `perun.md` manifest (requires `confirm=true` — a manifest can seed durable instructions/anchors). |
 | `perun_grep` | Fast regex content search across the current project (ripgrep + fallback). |
 | `perun_ast_grep` | Structural code search across the current project (ast-grep + fallback). |
 | `perun_global_grep` | Fast regex content search across *all* registered projects (or a subset). |
@@ -38,7 +38,7 @@ regardless of which folder this repository lives in:
 | `perun_start_session` | Start an agent run in a project; returns a run id. |
 | `perun_ask` | Run a prompt in a project and wait for the reply. |
 | `perun_run_status` | Status / output of a previously started run. |
-| `perun_telegram_send` | Send a message to the configured Telegram chat. |
+| `perun_telegram_send` | Send a message to the configured Telegram chat (a `chat_id` outside the allow-list is refused). |
 
 When a tool takes a `project`, omit it to use the project of the **current
 working directory**; pass a slug (e.g. `my-project`) or an absolute path to

@@ -1,13 +1,17 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.2 (see §14). This release fixes model forwarding so
-Telegram-triggered and other project runs execute on the configured model
-instead of silently falling back to OpenCode's own default. v0.7.1 added the
-`/update-docs` slash command, richer project scaffolding with auto-refreshed
-manifest anchors, dependency parsing with cross-project references, and made
-the Telegram bridge opt-in at logon. `perun.__version__` reports `0.7.2`.
+**Latest release:** v0.7.3 (see §14). This hardening pass adds mandatory local
+API-token auth, Telegram pairing codes, server-built terminal commands,
+installer/config data safety, orchestration + portability fixes, and
+state-of-the-art follow-ups for agent secret handling and embedding repair.
+v0.7.2 fixed model forwarding so Telegram-triggered and other project runs
+execute on the configured model instead of silently falling back to OpenCode's
+own default. v0.7.1 added the `/update-docs` slash command, richer project
+scaffolding with auto-refreshed manifest anchors, dependency parsing with
+cross-project references, and made the Telegram bridge opt-in at logon.
+`perun.__version__` reports `0.7.3`.
 
-**Latest release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
+**Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
 (`name`, `enabled`); enabled files are injected into new agent sessions in sorted filename
 order. The legacy `projects.instructions` / `projects.instructions_path` columns and both
@@ -32,7 +36,7 @@ instead of plaintext in the user environment. Builds on v0.6.2 (bundled `perun_g
 v0.6.3 (multi-file instruction system). v0.6.4 also hardens the bundled code-search layer: a
 ripgrep/ast-grep "no matches" exit code (`1`) is now a successful empty result instead of
 triggering the pure-Python fallback, and the unsupported `--files-from` flag is gone (global
-searches pass project paths positionally). `perun.__version__` reports `0.7.0`.
+searches pass project paths positionally).
 
 ---
 
@@ -279,8 +283,6 @@ Every source is stripped, so a blank/whitespace override is treated as unset.
 
 ### The control plane (always-available orchestrator)
 
-### The control plane (always-available orchestrator)
-
 A machine with **nothing registered** must still be reachable, so Perun registers
 *itself* as a protected, always-present project — the **control plane**
 (`perun/control.py`). It is identified by its path (`config.is_control_path()` ==
@@ -434,6 +436,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/agents` | OpenCode agents: built-ins (`build`,`plan`,`general`,`explore`) + user-defined agents on disk (+ `count`) |
 | GET | `/api/skills` | OpenCode skills: global `~/.config/opencode/skills/` + project-local `.opencode/skills/` + runtime built-ins (`code-audit`, `android-design-guidelines`, `find-skills`) (+ `count`) |
 | GET | `/api/tools` | OpenCode tools: built-ins + custom `.ts/.js/.mjs` under `~/.config/opencode/tools/` and project-local `.opencode/tools/` (+ `count`) |
+| GET | `/api/terminals` | terminals/shells detected on this machine (PowerShell 7+/Windows PowerShell/cmd/Windows Terminal on Windows; current shell + bash/… elsewhere) plus the configured preference — drives the dashboard's command-launch picker |
 | GET | `/api/mcp/servers` | every MCP server OpenCode loads (global `~/.config/opencode/opencode.json[c]` + per-project `opencode.json[c]`) with a config-derived `status`, transport, resolved executable, and `shadowed_by` (+ `count`, `counts`); duplicate names across config-file variants collapse to one and unparseable files appear in `parse_errors`; config only, nothing is spawned |
 | POST | `/api/mcp/servers/probe` | live-probe one configured MCP server `{name,scope:"global"\|"project",project?}` — spawns a local server (or calls a remote URL) and runs the MCP `initialize` + `tools/list` handshake, returning `status`, `tools`, `latency_ms`, and any `stderr`; the command is read from disk, never the request. Gated and timeout-capped, so a probe may return `status:"busy"` when too many run at once |
 | GET | `/api/projects` | list projects |
@@ -448,6 +451,11 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/projects/{slug}/activity` | project activity |
 | GET | `/api/projects/{slug}/memory` | project facts + stats |
 | GET/PUT | `/api/projects/{slug}/instructions` | project-scoped instructions; GET returns the effective combined text; PUT writes `{instructions}` to `.perun/instructions/default.md` (or `{filename}`) with YAML front matter |
+| GET | `/api/projects/{slug}/instruction-files` | list project-local instruction files (`filename`, `name`, `enabled`, `size`) |
+| GET | `/api/projects/{slug}/instruction-files/{filename}` | read one file (`name`, `enabled`, `body`) |
+| POST | `/api/projects/{slug}/instruction-files/{filename}` | create/update one file `{body, name?, enabled?}` — writes YAML front matter + body; the filename must be safe |
+| PATCH | `/api/projects/{slug}/instruction-files/{filename}/toggle` | set `enabled` on one file |
+| DELETE | `/api/projects/{slug}/instruction-files/{filename}` | delete one file (`{deleted}`) |
 | GET | `/api/instructions` | list global instruction Markdown files (name, scope, enabled) |
 | GET | `/api/instructions/dir` | absolute path to the global instructions directory |
 | GET | `/api/instructions/{filename}` | read one global instruction file body + metadata |
@@ -471,10 +479,9 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/projects/{slug}/git/push` | push branch |
 | GET | `/api/fs/list` | folder browser listing |
 | POST | `/api/fs/mkdir` | create a directory |
-| POST | `/api/run-in-terminal` | open the configured terminal/shell with a command `{cwd,command,shell?,run_uid?}` (or pass `project` instead of `cwd`); `run_uid` links the terminal to a TUI run record for lifecycle tracking |
+| POST | `/api/run-in-terminal` | open the configured terminal/shell with a **server-built** command. Body is structured — `{cwd | project, prompt?, model?, agent?, session?, run_uid?, tui?, shell?}` or `{action:"auth-login", provider}`; a free-text `command` is no longer accepted, and every interpolated value is quoted for the target shell (PowerShell single quotes, POSIX single quotes, `cmd` double quotes). `run_uid` links the terminal to a TUI run record for lifecycle tracking. Newlines/NUL in `cwd`/`model`/`agent`/`session`/`run_uid` are rejected (400), as is an unknown `action` or an invalid `provider` id |
 | GET | `/api/projects/{slug}/tasks` | list reusable project tasks |
 | POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}`. `kind` is one of `prompt`, `skill`, `tool`, `combo`. Skill tasks are emitted as `/<skillname>` slash commands by `web/js/prompt_chain.js` |
-
 | PATCH | `/api/projects/{slug}/tasks/{task_id}` | update a task |
 | DELETE | `/api/projects/{slug}/tasks/{task_id}` | delete a task |
 | POST | `/api/discover` | scan roots & register |
@@ -495,9 +502,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/memory/recent` | recent facts |
 | POST | `/api/memory/import-legacy` | migrate legacy facts |
 | POST | `/api/memory/prune` | drop old non-global facts |
+| POST | `/api/memory/reembed` | repair facts/doc chunks with missing/stale embeddings (also runs automatically in the background) |
 | GET | `/api/activity` | global feed |
-| GET/PATCH | `/api/settings` | read/update `Settings` (GET returns `telegram_token: ""` — never the value — plus `telegram_token_set`) |
-| GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` + `platform` |
+| GET/PATCH | `/api/settings` | read/update `Settings` (GET returns `telegram_token: ""` — never the value — plus `telegram_token_set`; the Telegram pairing code is blanked here and only surfaced to loopback callers via `/api/telegram/status`) |
+| GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` + `platform`; loopback callers additionally get `pair_code` (the one-time pairing code, empty once a chat is configured) |
 | POST | `/api/telegram/bot` | `{name?,token?,chats?,password?}` — verifies a new token with `getMe` **before** saving; `password` encrypts the token; `token: ""` clears; `{restart_required}` |
 | POST | `/api/telegram/bot/change-password` | `{old_password,new_password}` — decrypt and re-encrypt the stored token with a new password; you still need to restart the bridge so it loads the re-encrypted token |
 | POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the optional `PerunBridge` task re-reads the bot |
@@ -550,12 +558,26 @@ buffering.
 
 ### Access control
 
-The API is **local and unauthenticated by design**. Because it can start agent
-runs (`POST /api/runs`, executed with `--auto`) and browse the filesystem, an
-`_origin_guard` middleware (added in v0.2.1) rejects any `/api/*` request whose
+The dashboard has no user accounts, so a **mandatory local API token** stands
+between any local process/script and the ability to *run arbitrary agent
+commands*. Every state-changing request (any `/api/*` method other than
+`GET`/`HEAD`/`OPTIONS`) must carry the token as `X-Perun-Token: <token>` (or
+`Authorization: Bearer <token>`); a missing or wrong token is rejected with
+**401**. The token is `PERUN_HOME/api-token`, created atomically with owner-only
+permissions (`0600`) on first use, and overridable per process with the
+`PERUN_API_TOKEN` environment variable (which keeps headless clients and CI
+stable without touching disk). Comparison uses `hmac.compare_digest`. Read-only
+`GET`/SSE flows stay token-free, so the live dashboard keeps working. The
+dashboard itself receives the token injected into `index.html` as
+`window.PERUN_TOKEN` (`GET /`), and the frontend attaches it automatically; CLI
+clients read the file.
+
+On top of that, an `_origin_guard` middleware rejects any `/api/*` request whose
 `Host` header does not address this machine (loopback, or the configured bind
 address) — defeating DNS rebinding — and rejects a request whose browser-supplied
-`Origin` does not resolve to the same host. Static dashboard assets are not
+`Origin` does not match the effective scheme and port of the request host.
+Middleware order is Host → Origin → token, so a cross-origin or rebound request
+is refused before the token is even examined. Static dashboard assets are not
 guarded. Binding to a non-loopback address still works but logs a warning; expose
 it only on a trusted network.
 
@@ -573,19 +595,29 @@ nothing registered.
 Commands: `/start` `/help`, `/projects` (lists the orchestrator first),
 `/project <name|#>`, `/orchestrator` (`/perun`, `/overseer`) to switch to the
 control plane in place, `/new` `/reset`, `/status`, `/stop` `/cancel`,
-`/remember <fact>`, `/recall <query>`, `/index`. Anything else is treated as a
-prompt and answered by a Perun-orchestrated run, with a typing indicator and
-reply threading. `format_html()` renders a safe subset of Markdown into Telegram
-HTML; `chunk()` splits at 3900 chars.
+`/remember <fact>`, `/recall <query>`, `/index`, `/pair <code>`. Anything else is
+treated as a prompt and answered by a Perun-orchestrated run, with a typing
+indicator and reply threading. `format_html()` renders a safe subset of Markdown
+into Telegram HTML; `chunk()` splits at 3900 chars.
+
+**Pairing / allow-list.** An empty `telegram_allowed_chats` grants **nobody** —
+the old "first chat to write wins" behaviour let anyone who found the bot drive
+the machine. Pairing is a persisted one-time code
+(`Settings.telegram_pair_code`): `run_bridge()` generates it
+(`os.urandom(4).hex()`) when no chats are configured and shows it in the
+dashboard; sending `/pair <code>` (compared with `hmac.compare_digest`, handled
+*before* the auth gate) appends that chat to the allow-list, clears the code, and
+grants access. `/stop` cancels only the *caller's* run (`self._runs`, keyed by
+chat) so one chat can no longer kill another's.
 
 **Exactly one poller.** `getUpdates` allows a single consumer per bot token, so
 two bridges would fight with HTTP 409s. Single-instance is enforced machine-wide
-by `telegram.PidLock` (a named Windows mutex namespaced by `PERUN_HOME`; a POSIX
-pid-file) and honoured by both `run_bridge()` (the `bridge` CLI, and the optional
-`PerunBridge` logon task) and `_start_bridge_thread()` (`serve --bridge`, which now
-keeps the lock referenced for the process lifetime). A second attempt refuses
-instead of poller-fighting, and the `PerunBridge` task is registered with
-`IgnoreNew`.
+by `telegram.PidLock` (a named Windows mutex namespaced by `PERUN_HOME`; on POSIX
+an `O_EXCL` pid file so two bridges cannot both "acquire") and honoured by both
+`run_bridge()` (the `bridge` CLI, and the optional `PerunBridge` logon task) and
+`_start_bridge_thread()` (`serve --bridge`, which now keeps the lock referenced
+for the process lifetime). A second attempt refuses instead of poller-fighting,
+and the `PerunBridge` task is registered with `IgnoreNew`.
 
 ### Switching to a different bot
 
@@ -597,7 +629,7 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 | **Edit name / API key / chat ids** | `POST /api/telegram/bot` — the Telegram page's "Bot settings" card. The name is a **local label** (`Settings.telegram_bot_name`) used to tell bots apart; it is not pushed to Telegram. |
 | **Verify before trusting** | A non-empty token is checked with Telegram's `getMe` **before** `Settings.save()`, so a typo can never silently replace a working bot. `token: ""` clears it (Disconnect). |
 | **Token never leaks** | `GET /api/settings` returns `telegram_token: ""` plus `telegram_token_set`; the UI's password field is only ever a placeholder. The bridge side keeps the token out of logs. |
-| **Env fallback** | `Settings.telegram()` prefers `config.json`, then `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN` (chats: `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`). Because of that, `Settings.telegram_sources()` reports which source is in force, and the dashboard warns + disables **Disconnect** when an env token would silently reappear. |
+| **Env fallback** | `Settings.telegram()` prefers `config.json`, then `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN` (chats: `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`). Agent subprocesses receive the resolved token as `PERUN_TELEGRAM_TOKEN` instead of the raw secrets. `Settings.telegram_sources()` reports which source is in force, and the dashboard warns + disables **Disconnect** when an env token would silently reappear. |
 | **Apply the change** | `POST /api/telegram/bridge/restart` reloads the in-process bridge token (no window close needed). If the optional `PerunBridge` task owns the lock instead, the same endpoint falls back to `schtasks /End` + `/Run`. |
 
 ---
@@ -609,14 +641,21 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 1. copies `templates/INSTRUCTIONS.md` → `~/.config/opencode/perun/INSTRUCTIONS.md`
    and `templates/command_*.md` → `~/.config/opencode/commands/`;
 2. merges into `~/.config/opencode/opencode.json`:
-   * `mcp.perun` = `{type: local, command: [python, <repo>/mcp/perun_mcp.py], enabled: true}`,
+   * `mcp.perun` = `{type: local, command: [python, <repo>/mcp/perun_mcp.py], enabled: true,
+     environment: {PERUN_HOME: ~/.perun}}` (the pinned home keeps the MCP server
+     pointed at the running server's database even if a session overrides the env),
    * appends the instructions path to `instructions[]`,
    * adds `command.perun-projects` / `command.perun-ask` / `command.logwork` / `command.update-docs`;
-3. **backs up** the prior config to `opencode.json.perun-backup-<ts>`;
+3. **backs up** the prior config to `opencode.json.perun-backup-<ts>` — but only
+   when the merge actually changes the file, so re-running the installer no longer
+   piles up identical backups. A config that is not valid JSON/JSONC aborts the
+   install (exit 2) instead of being silently replaced;
 4. seeds the registry (this repo + a discovery pass) and optionally indexes docs.
 
-Unrelated keys are preserved (JSON load → edit → dump). `uninstall()` removes
-exactly the Perun keys/files; runtime data in `~/.perun` is kept.
+Unrelated keys are preserved (JSON load → edit → dump). `config_dir()` honours
+`XDG_CONFIG_HOME`, and `OPENCODE_CONFIG` (a full path to the config *file*)
+overrides the target entirely, exactly as OpenCode itself reads it. `uninstall()`
+removes exactly the Perun keys/files; runtime data in `~/.perun` is kept.
 
 ### Web installer (`setup.ps1` / `setup.sh`)
 
@@ -873,9 +912,11 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `terminal` | `""` | preferred terminal emulator for `Run in Terminal` / TUI launches. Empty = OS default (`pwsh`/`powershell` on Windows, `$SHELL` elsewhere). Accepts an alias (`cmd`, `pwsh`, `wt`) or a full path. The dashboard Settings page edits this value; it only affects future launches. |
 
 Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_CHAT_ID`. A config.json value wins over the environment;
-`Settings.telegram_sources()` reports which is actually in force (surfaced as
-`token_source` / `chats_source` so the dashboard can explain it).
+`TELEGRAM_CHAT_ID`, and `PERUN_TELEGRAM_TOKEN` (injected by the orchestrator into
+agent subprocesses so the MCP server can send Telegram messages without seeing
+the raw bot token). `Settings.telegram_sources()` reports which source is
+actually in force (surfaced as `token_source` / `chats_source` so the dashboard
+can explain it).
 
 ### Terminal selection and duplicate TUI windows
 
@@ -892,6 +933,77 @@ setting.
 ---
 
 ## 14. Revision history
+
+### 2026-10-18 — Unreleased: audit hardening (security, orchestration, portability)
+
+A response to an external audit of v0.7.0. Findings that no longer reproduced
+against v0.7.2 (MCP tool count, the endpoint-table rows) were left alone.
+
+* **API token auth.** State-changing `/api/*` requests require
+  `X-Perun-Token`/`Authorization: Bearer`, compared with `hmac.compare_digest`;
+  the token lives in `PERUN_HOME/api-token` (`0600`, `O_CREAT|O_EXCL`) and is
+  overridable with `PERUN_API_TOKEN`. `GET /` injects it as
+  `window.PERUN_TOKEN`. (See §8 "Access control".)
+* **Origin check** compares scheme and effective port (80/443 defaults).
+* **Telegram pairing.** Empty allow-list grants nobody; `/pair <code>` consumes a
+  persisted one-time code (`os.urandom(4).hex()`), surfaced to loopback only.
+  `/stop` is per-chat.
+* **`/api/run-in-terminal`** builds its command from structured fields; a
+  free-text `command` is refused and every value is shell-quoted.
+* **`git push`** validates the remote against `git remote` and the branch name,
+  and inserts `--`.
+* **MCP** `confirm` gates extended; `perun_telegram_send` enforces the allow-list.
+* **Orchestrator** queued-cancel deadlock, POSIX process-group kill, single-shot
+  `end`, bounded subscriber queues, restart=`interrupted`, bounded stream history.
+* **Config/registry/installer** portability and data-safety fixes: JSONC-tolerant
+  but non-destructive `opencode.json` merge (`OPENCODE_CONFIG`, `PERUN_HOME`
+  pinned), corrupt-config quarantine + atomic save, `XDG_CONFIG_HOME`, no
+  import-time writes, `slugify` transliteration, `add_project` validation.
+* **Linux**: real terminal emulators, `O_EXCL` pid lock, `agent/` scan, and two
+  tests guarded to the platform they actually target.
+
+### 2026-10-17 — v0.7.2: model forwarding + release signing
+
+* **Model actually forwarded to `opencode run`.** `start_run` resolves and
+  strips every model source (call argument, project override, control-plane
+  settings), stores `model_explicit=bool(model)`, and `_execute` forwards
+  `--model` whenever a non-empty model was resolved — a project pinned to e.g.
+  `opencode/big-pickle` can no longer silently run on OpenCode's own
+  machine-wide default and fail with 402 on an out-of-funds provider. Only an
+  empty resolution defers to OpenCode, so the global `default_model` still
+  never forces itself onto ordinary project runs; an invalid configured model
+  now fails loudly instead of silently substituting. (See §7.)
+* **Release signing unblocked.** `installer/sign.ps1` checked that its PFX
+  existed *before* the self-signed fallback could create it, so CI builds
+  aborted with `PFX not found` (v0.7.0 and the first v0.7.2 run failed this
+  way). The existence check now applies only to externally supplied PFXs; the
+  self-signed path creates the certificate on demand (`New-SelfSignedCertificate`
+  → export → sign), so tag builds publish a signed `PerunSetup.exe`.
+* **Docs.** README gained an "Under the hood" section covering project
+  awareness, token efficiency, and memory management; the MCP tool count was
+  corrected to 23. Version reports `0.7.2`.
+
+### 2026-10-17 — v0.7.1: docs tooling, dependency discovery, opt-in bridge task
+
+* **`/update-docs` global slash command** refreshes `docs/CODEMAP.md`,
+  `docs/CHANGELOG.md`, and `docs/TECHNICAL_DOCUMENTATION.md` plus any docs
+  declared in a project's manifest; listed in the global command reference.
+* **Richer scaffolding.** New projects get `docs/CHANGELOG.md`,
+  `docs/TECHNICAL_DOCUMENTATION.md`, and `docs/CODEMAP.md` too;
+  `python -m perun backfill-docs [slug] [--all]` brings existing projects up to
+  the standard; `validate-docs [slug] [--all]` reports manifest docs/anchors
+  that point at missing files.
+* **Dependency parsing & cross-project references.** `perun discover` and
+  `refresh-deps` read `package.json`, `requirements.txt`, `pyproject.toml`,
+  `Cargo.toml`, and `go.mod` into project-scoped memory facts, recording local
+  `file:` / `-e` references as relationship facts ("which projects use React?");
+  discovery auto-appends anchors for newly detected dependency/build/CI files
+  without clobbering hand edits. New/backfilled projects get multi-language
+  command suggestions (`pytest`, `npm-install`, `cargo-build`, …).
+* **Telegram bridge opt-in at logon.** The `PerunBridge` scheduled task is only
+  created with `install --machine --task` (or `bootstrap.ps1 -Task`); by
+  default the bridge starts with the dashboard and stops with it, and the
+  machine installer removes a stale task unless `--task` is passed.
 
 ### 2026-10-16 — v0.7.0 released: installer, providers, model/agent sync, slash-command tasks
 

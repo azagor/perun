@@ -162,8 +162,11 @@ it is only *started* once a Telegram token is configured in `~/.perun/config.jso
 
 The installer can be signed with a trusted certificate. The GitHub Actions
 workflow in `.github/workflows/release.yml` supports signing via the
-`PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets. For
-details see `docs/TECHNICAL_DOCUMENTATION.md`.
+`PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets; when
+those are not set, `installer/sign.ps1` creates a self-signed certificate on
+dev machines and in CI instead, so every tag build publishes a signed
+`PerunSetup.exe` (self-signed signatures are not trusted by default elsewhere).
+For details see `docs/TECHNICAL_DOCUMENTATION.md`.
 
 ## What you get
 
@@ -190,8 +193,14 @@ python -m perun status
 python -m perun remember <text> [--project SLUG] [--global] [--topic T]
 python -m perun recall <query> [--project SLUG] [--k N] [--all]
 python -m perun index <slug> | --all
+python -m perun run <slug> [prompt] [--model M] [--agent A] [--wait]
+python -m perun encrypt-config [--password P]
+python -m perun global-instructions [text] [--clear]
 python -m perun import-legacy-memory [--path P]
-python -m perun install [--uninstall] [--machine]
+python -m perun backfill-docs [slug] [--all]
+python -m perun validate-docs [slug] [--all]
+python -m perun refresh-deps [slug] [--all]
+python -m perun install [--uninstall] [--machine] [--task]
 python -m perun mcp
 ```
 
@@ -223,7 +232,7 @@ setup.ps1                  Windows web installer (clone + bootstrap.ps1)
 setup.sh                   Unix web installer (clone + deps + global install)
 bootstrap.ps1              Windows cold-start installer (delegates to install --machine)
 Perun.cmd                  Windows one-click launcher
-tools/make_icon.py         regenerates the app icon
+tools/                     make_icon · normalize_line_endings · check_line_endings · migrate_global_facts
 docs/                      CODEMAP · TECHNICAL · CHANGELOG · DESIGN
 tests/                     pytest suite
 ```

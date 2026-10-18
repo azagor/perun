@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
+import pytest
+
 from perun import db, registry
 
 
@@ -103,6 +107,8 @@ def test_slug_uniqueness():
     assert second["slug"] == "same-2"
 
 
+@pytest.mark.skipif(os.name != "nt",
+                    reason="os.path.normcase folds case only on Windows")
 def test_get_project_by_path_is_normcase():
     registry.add_project("Proj", r"C:\Apps\Proj")
     found = registry.get_project_by_path(r"c:\apps\proj")

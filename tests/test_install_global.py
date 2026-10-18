@@ -136,3 +136,65 @@ def test_uninstall_deletes_agents_file_when_only_perun(fake_xdg):
     assert install_global.agents_target().is_file()
     install_global.uninstall()
     assert not install_global.agents_target().exists()
+
+
+def test_install_pins_perun_home_in_mcp_entry(fake_xdg):
+    from perun import config
+
+    install_global.install(index=False)
+    cfg = json.loads(install_global.opencode_json().read_text(encoding="utf-8"))
+    env = cfg["mcp"]["perun"].get("environment") or {}
+    assert env.get("PERUN_HOME") == str(config.HOME)
+
+
+def test_install_tolerates_jsonc_and_keeps_comments_keys(fake_xdg):
+    cfg_path = install_global.opencode_json()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        "{\n"
+        '  // the user\'s model\n'
+        '  "model": "opencode/big-pickle",\n'
+        '  "mcp": {"other": {"type": "local", "command": ["x"]}},\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    assert install_global.install(index=False) == 0
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg["model"] == "opencode/big-pickle"
+    assert "other" in cfg["mcp"]
+    assert "perun" in cfg["mcp"]
+
+
+def test_install_aborts_on_unparseable_config(fake_xdg):
+    cfg_path = install_global.opencode_json()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    original = "{ this is not json at all ::: "
+    cfg_path.write_text(original, encoding="utf-8")
+
+    assert install_global.install(index=False) == 2
+    # The user's file is left exactly as it was (no silent replacement).
+    assert cfg_path.read_text(encoding="utf-8") == original
+    assert not list(cfg_path.parent.glob("opencode.json.perun-backup-*"))
+
+
+def test_install_honours_opencode_config_env(fake_xdg, monkeypatch, tmp_path):
+    target = tmp_path / "elsewhere" / "my-opencode.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("OPENCODE_CONFIG", str(target))
+
+    assert install_global.opencode_json() == target
+    assert install_global.install(index=False) == 0
+    cfg = json.loads(target.read_text(encoding="utf-8"))
+    assert "perun" in cfg["mcp"]
+
+
+def test_reinstall_does_not_pile_up_backups(fake_xdg):
+    cfg_path = install_global.opencode_json()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text("{}", encoding="utf-8")
+
+    install_global.install(index=False)
+    install_global.install(index=False)
+    install_global.install(index=False)
+    backups = list(cfg_path.parent.glob("opencode.json.perun-backup-*"))
+    assert len(backups) == 1, f"expected a single backup, got {len(backups)}"

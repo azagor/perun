@@ -229,16 +229,30 @@ def push(path: str | Path, branch: str = "", remote: str = "origin",
     p = Path(path)
     if not is_repo(p):
         raise GitError("not a git repository — initialise it first")
-    if not _clean(_run(p, ["remote"]).stdout):
+    remotes = _clean(_run(p, ["remote"]).stdout).split()
+    if not remotes:
         raise GitError("no remote configured — set one first")
+    # The remote must be one of the names git actually knows: a value like
+    # ``--receive-pack=...`` would otherwise be consumed as a *push option* and
+    # execute an arbitrary command on the receiving side.
+    remote = (remote or "origin").strip()
+    if remote not in remotes:
+        raise GitError(f"unknown remote: {remote!r} (configured: {', '.join(remotes)})")
     if not _run(p, ["rev-parse", "--verify", "HEAD"]).returncode == 0:
         raise GitError("nothing to push — commit first")
     if not branch:
         branch = _clean(_run(p, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout) or "main"
+    branch = branch.strip()
+    # Reject option-like and refspec-like branch names (``:`` creates/updates a
+    # *different* remote ref than the one shown to the user).
+    if (not branch or branch.startswith("-")
+            or any(c in branch for c in "\r\n\t :")):
+        raise GitError("invalid branch name")
     args = ["push"]
     if set_upstream:
         args.append("-u")
-    args += [remote, branch]
+    # ``--`` ends option parsing so neither argument can be taken as a flag.
+    args += ["--", remote, branch]
     proc = _run(p, args, timeout=600)
     if proc.returncode != 0:
         raise GitError(_clean(proc.stderr) or _clean(proc.stdout) or "git push failed")

@@ -85,6 +85,28 @@ def test_bot_rejects_an_invalid_token(client, monkeypatch):
     assert server.SETTINGS.telegram_token == ""
 
 
+def test_telegram_prefers_orchestrator_env_var(client, monkeypatch):
+    """PERUN_TELEGRAM_TOKEN (injected by the orchestrator) beats raw env/config."""
+    from perun import config
+
+    monkeypatch.setenv("PERUN_TELEGRAM_TOKEN", "orchestrator-token")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "raw-token")
+    s = config.Settings()
+    s.telegram_token = "settings-token"
+    token, _ = s.telegram()
+    assert token == "orchestrator-token"
+
+
+def test_telegram_sources_reports_orchestrator_env(client, monkeypatch):
+    from perun import config
+
+    monkeypatch.setenv("PERUN_TELEGRAM_TOKEN", "orchestrator-token")
+    s = config.Settings()
+    s.telegram_token = "settings-token"
+    src = s.telegram_sources()
+    assert src["token"] == "orchestrator"
+
+
 def test_bot_verifies_then_persists_a_new_token(client, monkeypatch):
     from perun import server
 

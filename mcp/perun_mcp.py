@@ -241,7 +241,8 @@ def perun_create_project(name: str = "", path: str = "", method: str = "existing
                          description: str = "", tags: str = "", model: str = "",
                          agent: str = "", instructions: str = "",
                          git_init: bool = False, git_remote: str = "",
-                         git_branch: str = "", index_docs: bool = False) -> str:
+                         git_branch: str = "", index_docs: bool = False,
+                         confirm: bool = False) -> str:
     """Create, scaffold, or clone a project and register it with Perun.
 
     Args:
@@ -258,7 +259,13 @@ def perun_create_project(name: str = "", path: str = "", method: str = "existing
             ``instructions`` is written to ``.perun/instructions/default.md``.
         git_init/git_remote/git_branch: Optional git configuration.
         index_docs: Index the project's docs into Perun's memory immediately.
+        confirm: Required for ``method="clone"``: cloning fetches code from an
+            arbitrary remote onto this machine.
     """
+    if (method or "").strip().lower() == "clone" or (clone_url or "").strip():
+        if not confirm:
+            return ("[perun] Refused: pass confirm=True to clone a remote "
+                    "repository onto this machine.")
     try:
         result = projects.create(
             method=method, name=name, path=path, clone_url=clone_url, root=root,
@@ -343,15 +350,21 @@ def perun_delete_project(slug: str, confirm: bool = False) -> str:
 
 
 @mcp.tool
-def perun_discover(roots: str = "", max_depth: int = 1, index: bool = False) -> str:
+def perun_discover(roots: str = "", max_depth: int = 1, index: bool = False,
+                   confirm: bool = False) -> str:
     """Rescan the configured project roots and register anything found.
 
     Args:
         roots: Comma-separated roots to scan. Omit for the configured roots.
         max_depth: How deep to recurse (default 1).
         index: Also index each discovered project's docs.
+        confirm: Required when ``roots`` is given, since scanning outside the
+            configured roots registers arbitrary directories as projects.
     """
     root_list = [r.strip() for r in roots.split(",") if r.strip()] or None
+    if root_list and not confirm:
+        return ("[perun] Refused: pass confirm=True to scan roots outside the "
+                "configured list (they would be registered as projects).")
     settings = config.Settings.load()
     result = discovery.discover_and_sync(root_list or list(settings.roots),
                                          max_depth=max_depth)
@@ -482,7 +495,8 @@ def perun_get_instructions(project: str | None = None, filename: str = "") -> st
 def perun_set_instructions(instructions: str,
                            filename: str = "",
                            enabled: bool = True,
-                           project: str | None = None) -> str:
+                           project: str | None = None,
+                           confirm: bool = False) -> str:
     """Set the custom instructions for a project.
 
     Writes ``instructions`` to ``.perun/instructions/<filename>`` (default
@@ -494,6 +508,9 @@ def perun_set_instructions(instructions: str,
         filename: Optional ``.perun/instructions/<filename>`` file to write.
         enabled: Front-matter enabled flag when writing by filename (default True).
         project: Project slug/path. Omit for the current project.
+        confirm: Must be ``True``. Instructions are durable and are injected into
+            every *new* session of the project, so this deliberately cannot
+            happen as a side effect of reading file content.
     """
     from perun import orchestrator
 
@@ -506,6 +523,10 @@ def perun_set_instructions(instructions: str,
     path, error = _project_instruction_file_path(p, filename)
     if error:
         return error
+    if not confirm:
+        return ("[perun] Refused: pass confirm=True to change "
+                f"`.perun/instructions/{path.name}` — instructions apply to every "
+                "new session of this project.")
     name = path.stem
     text = orchestrator._build_frontmatter({"name": name, "enabled": enabled}) + f"{instructions}\n"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -772,18 +793,26 @@ def perun_get_manifest(project: str | None = None) -> str:
 
 
 @mcp.tool
-def perun_set_manifest(data: dict, body: str = "", project: str | None = None) -> str:
+def perun_set_manifest(data: dict, body: str = "", project: str | None = None,
+                       confirm: bool = False) -> str:
     """Write a project's Perun manifest (perun.md).
 
     Args:
         data: The front-matter mapping (name, tags, docs, commands, anchors, …).
         body: Optional Markdown body shown as the project overview.
         project: Project slug/path. Omit for the current project.
+        confirm: Must be ``True``. A manifest can seed durable instructions that
+            are injected into every new session, so writing one cannot happen as
+            a side effect.
     """
     from perun import manifest, projects, registry
     p = _resolve_project(project)
     if not p:
         return "[perun] No project resolved; pass `project`."
+    if not confirm:
+        return ("[perun] Refused: pass confirm=True to write "
+                f"`{p['path']}/perun.md` — a manifest can carry instructions that "
+                "apply to every new session.")
     try:
         target = manifest.save(p["path"], data or {}, body or "")
     except manifest.ManifestError as exc:
@@ -876,20 +905,29 @@ def perun_run_status(run_id: str) -> str:
 
 @mcp.tool
 def perun_telegram_send(text: str, chat_id: str = "") -> str:
-    """Send a Telegram message to the configured Perun chat.
+    """Send a Telegram message to a chat allowed by Perun's configuration.
+
+    The target must be one of the configured chats (``config.json``
+    ``telegram_allowed_chats`` / ``TELEGRAM_CHAT_ID``). An arbitrary ``chat_id``
+    is rejected: otherwise an agent tricked by file content could use this as an
+    exfiltration channel to any Telegram user.
 
     Args:
         text: Message body (Markdown allowed).
-        chat_id: Optional override; defaults to the configured chat.
+        chat_id: Optional override; must be on the allowed list.
     """
     import httpx
     settings = config.Settings.load()
     token, chats = settings.telegram()
     if not token:
         return "[perun] No Telegram token configured (settings or TELEGRAM_BOT_TOKEN)."
-    target = chat_id or (chats[0] if chats else "")
-    if not target:
-        return "[perun] No chat id configured (settings or TELEGRAM_CHAT_ID)."
+    if not chats:
+        return ("[perun] No chat id configured — pair a chat with the bridge "
+                "(dashboard → Telegram) before sending messages.")
+    if chat_id and chat_id not in chats:
+        return ("[perun] Refused: chat_id is not in the configured allow-list "
+                f"({', '.join(chats)}). Add it in the dashboard under Telegram.")
+    target = chat_id or chats[0]
     try:
         with httpx.Client(timeout=30.0) as client:
             res = client.post(

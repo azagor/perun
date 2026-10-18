@@ -95,7 +95,11 @@ def list_agents(project_path: str | Path | None = None) -> list[dict[str, Any]]:
             out.append(a)
 
     add(BUILTIN_AGENTS)
+    # OpenCode historically used ``agent/`` (singular); newer versions also
+    # accept ``agents/``. Scan both so custom agents show up either way.
     add(_scan_agent_dir(config.OPENCODE_CONFIG_DIR / "agents"))
+    add(_scan_agent_dir(config.OPENCODE_CONFIG_DIR / "agent"))
     if project_path:
         add(_scan_agent_dir(Path(project_path) / ".opencode" / "agents"))
+        add(_scan_agent_dir(Path(project_path) / ".opencode" / "agent"))
     return out

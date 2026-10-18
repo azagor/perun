@@ -105,11 +105,15 @@ def test_projects_command_sends_inline_keyboard(bridge):
     callbacks = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
     assert "project:alpha" in callbacks
     assert "project:beta" in callbacks
-    # slugs that would exceed Telegram's 64-byte callback_data limit are encoded by id
-    long = _add("a" * 80, r"C:\long")
+    # Slugs that would exceed Telegram's 64-byte callback_data limit are
+    # encoded by id.  Base slugs are capped at 54 chars; the "-10" suffix
+    # (57-char slug) pushes "project:<slug>" to 65 bytes, which triggers it.
+    last = None
+    for i in range(10):
+        last = _add("a" * 80, rf"C:\long-{i}")
     bridge.handle_command("1", "/projects", 1)
     callbacks = [btn["callback_data"] for row in bridge.markups[-1]["inline_keyboard"] for btn in row]
-    assert any(c == f"project:id:{long['id']}" for c in callbacks)
+    assert any(c == f"project:id:{last['id']}" for c in callbacks)
 
 
 def test_projects_keyboard_marks_current_project(bridge):
@@ -150,7 +154,10 @@ def test_callback_query_selects_project_by_id_for_long_slugs(bridge):
         },
     }
     bridge._handle_update(update)
-    assert bridge._current_project("1")["slug"] == long_slug
+    # The slug is bounded (see registry.add_project), but the callback must
+    # still resolve the intended project by its id.
+    assert bridge._current_project("1")["id"] == proj["id"]
+    assert bridge._current_project("1")["slug"] == proj["slug"]
 
 
 def test_callback_query_rejects_unauthorised_chat(bridge):

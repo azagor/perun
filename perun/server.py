@@ -15,11 +15,15 @@ background thread, so slow clients never stall a run.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import queue
+import re
+import shlex
 import sys
 import subprocess
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -29,7 +33,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
@@ -66,6 +70,30 @@ def _control_slug() -> str:
     return _control_project().get("slug", "")
 
 
+_REEMBED_INITIAL_DELAY_SECONDS = 5.0
+_REEMBED_INTERVAL_SECONDS = 60.0
+
+
+def _start_reembed_thread() -> threading.Event | None:
+    """Background repair of facts/doc chunks whose embeddings are missing/stale."""
+    # Tests frequently recreate the DB mid-run; a background thread that touches
+    # the same store would be a source of races, so stay idle under pytest.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    stop = threading.Event()
+    def _loop() -> None:
+        delay = _REEMBED_INITIAL_DELAY_SECONDS
+        while not stop.wait(delay):
+            try:
+                memory.reembed_missing(limit=32)
+            except Exception:  # pragma: no cover - best effort
+                pass
+            delay = _REEMBED_INTERVAL_SECONDS
+    t = threading.Thread(target=_loop, daemon=True, name="perun-reembed")
+    t.start()
+    return stop
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_db()
@@ -73,16 +101,45 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _control_project()
     # Seed the default global guidance file once on startup.
     orchestrator._seed_default_instructions()
-    # After a restart we lose all in-memory process tracking; any run still marked
-    # running is effectively stale. Finalize them so cards don't stay lit forever.
+    # After a restart we lose all in-memory process tracking; any run still
+    # marked running/queued is effectively dead. Mark it ``interrupted`` — NOT
+    # ``done``: OpenCode may have been killed mid-write, and a finished status
+    # would make the history claim the run succeeded.
     for run in registry.list_active_runs():
-        registry.update_run(run["run_uid"], status="done", ended_at=registry.now_iso())
+        registry.update_run(run["run_uid"], status="interrupted",
+                            ended_at=registry.now_iso(),
+                            error=run.get("error") or "interrupted by a Perun restart")
     if SETTINGS.auto_discover_on_start:
         try:
             discovery.discover_and_sync(SETTINGS.roots, max_depth=1)
         except Exception:  # pragma: no cover - discovery is best-effort
             pass
-    yield
+    # Start a background thread that repairs embeddings written while Ollama
+    # was down. It is daemonic and signalled on shutdown.
+    reembed_stop = _start_reembed_thread()
+    try:
+        yield
+    finally:
+        if reembed_stop is not None:
+            reembed_stop.set()
+    # Shutdown: stop what we started so a restart does not orphan interactive
+    # terminals or leave agent processes writing into a database nobody watches.
+    # Run the blocking cleanup in a thread so the event loop is not stalled.
+    def _shutdown_sync() -> None:
+        try:
+            for uid in ORCH.active():
+                ORCH.cancel(uid)
+        except Exception:  # pragma: no cover - best effort
+            pass
+        try:
+            from . import process_tracker
+            process_tracker.TRACKER.terminate_all()
+        except Exception:  # pragma: no cover - best effort
+            pass
+    try:
+        await asyncio.to_thread(_shutdown_sync)
+    except Exception:  # pragma: no cover - best effort
+        pass
 
 
 app = FastAPI(title="Perun", version=__version__, docs_url="/api/docs",
@@ -105,8 +162,33 @@ app = FastAPI(title="Perun", version=__version__, docs_url="/api/docs",
 # accepted; a deliberately non-loopback bind (a concrete address or a wildcard)
 # is also accepted so the operator can expose it on a trusted network.
 # --------------------------------------------------------------------------- #
+_API_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+# Longest accepted instruction filename (the OS would otherwise raise OSError).
+MAX_INSTRUCTION_FILENAME = 120
 _WILDCARD_BINDS = {"", "*", "0.0.0.0", "::", "[::]"}
+
+
+def _bearer(header: str) -> str:
+    value = (header or "").strip()
+    if value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return value
+
+
+def _token_ok(request: Request) -> bool:
+    """Validate the local API token for a state-changing request.
+
+    Reads the token from disk on every call so the dashboard (which gets it
+    injected into ``index.html``) and CLIs that read the file always agree, even
+    when another Perun process created it first.
+    """
+    expected = config.api_token()
+    if not expected:
+        return True
+    supplied = (request.headers.get("x-perun-token")
+                or _bearer(request.headers.get("authorization", "")))
+    return bool(supplied) and hmac.compare_digest(supplied, expected)
 
 
 def _hostname(value: str) -> str:
@@ -158,15 +240,34 @@ def _split_host_port(value: str) -> tuple[str, int]:
     return v.lower(), 0
 
 
-def _origin_ok(origin: str, host_header: str) -> bool:
-    """True when a browser ``Origin`` matches the request host including port."""
-    o_host, o_port = _split_host_port(origin)
+def _origin_parts(origin: str) -> tuple[str, str, int]:
+    """Return ``(scheme, host, effective_port)`` for an ``Origin`` value.
+
+    A URL with no explicit port uses the scheme's default (80 for http, 443 for
+    https) — comparing only "both sides have a port" let
+    ``Origin: http://localhost`` (port 0) pass for ``Host: localhost:8760``.
+    """
+    scheme = (urlsplit(origin).scheme or "").lower()
+    host, port = _split_host_port(origin)
+    if not port:
+        port = 443 if scheme == "https" else 80
+    return scheme, host, port
+
+
+def _origin_ok(origin: str, host_header: str, request_scheme: str = "http") -> bool:
+    """True when a browser ``Origin`` matches the request host + port + scheme."""
+    o_scheme, o_host, o_port = _origin_parts(origin)
     h_host, h_port = _split_host_port(host_header)
     if not o_host:
         return False
-    # Ports must match. If the Host header omits an explicit port, treat it as
-    # unknown rather than matching every origin port.
-    if o_port and h_port and o_port != h_port:
+    # The Origin's scheme must be the scheme this request arrived over: an
+    # ``https`` origin can never be a page served by the plain-HTTP dashboard.
+    if o_scheme and o_scheme != (request_scheme or "http").lower():
+        return False
+    # A Host header without an explicit port is the server's own configured port.
+    if not h_port:
+        h_port = int(SETTINGS.port or 80)
+    if o_port != h_port:
         return False
     if o_host == h_host:
         return True
@@ -185,10 +286,19 @@ async def _origin_guard(request: Request, call_next):
                 {"detail": "blocked: unexpected Host header (possible DNS rebinding)"},
                 status_code=403)
         origin = request.headers.get("origin")
-        if origin and not _origin_ok(origin, host_header):
+        if origin and not _origin_ok(origin, host_header, request.url.scheme):
             return JSONResponse(
                 {"detail": "blocked: cross-origin request"},
                 status_code=403)
+        # State-changing calls need the local API token. The Origin check above
+        # only stops a *browser* on another site; any local process (curl, a
+        # script, another agent) sends no Origin at all, so without a token it
+        # could drive `POST /api/run-in-terminal` or start agent runs.
+        if request.method not in _API_SAFE_METHODS and not _token_ok(request):
+            return JSONResponse(
+                {"detail": "invalid or missing API token "
+                           "(send X-Perun-Token; see <PERUN_HOME>/api-token)"},
+                status_code=401)
     response = await call_next(request)
     # Harden the dashboard with baseline security headers.
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -216,9 +326,35 @@ def _project_or_404(slug: str) -> dict[str, Any]:
 
 
 def _resolve_project(ref: str | int | None) -> dict[str, Any] | None:
+    """Resolve a project reference, treating blank/absent as "no project".
+
+    A *non-empty* reference that matches nothing is a client error rather than
+    "global scope": a typo'd slug used to write a project fact into every
+    project's memory (or prune all of them).
+    """
     if ref is None:
         return None
-    return registry.get_project(ref)
+    if isinstance(ref, str) and not ref.strip():
+        return None
+    project = registry.get_project(ref)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"no such project: {ref}")
+    return project
+
+
+def _str_field(payload: dict[str, Any], key: str, default: str = "") -> str:
+    """Return a string body field, rejecting wrong JSON types with **400**.
+
+    ``payload.get(key) or ""`` silently passes an int/bool/list through to code
+    that calls ``.strip()``/``Path()`` on it, turning a bad request into a 500.
+    """
+    value = payload.get(key, default)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=400, detail=f"{key} must be a string")
+    return value
 
 
 def _ok(**kw: Any) -> dict[str, Any]:
@@ -228,16 +364,21 @@ def _ok(**kw: Any) -> dict[str, Any]:
 def _normalize_instruction_filename(filename: str) -> str:
     """Validate and normalize an instruction filename.
 
-    Rejects path separators, parent-directory references, and empty names;
-    ensures the file has a ``.md`` suffix.
+    Rejects path separators, parent-directory references, NUL bytes, over-long
+    names, and empty names; ensures the file has a ``.md`` suffix. All of these
+    would otherwise surface as a 500 from the filesystem layer.
     """
     filename = (filename or "").strip()
     if not filename:
         raise HTTPException(status_code=400, detail="filename is required")
-    if ".." in filename or "/" in filename or "\\" in filename:
+    if ".." in filename or "/" in filename or "\\" in filename or "\x00" in filename:
         raise HTTPException(status_code=400, detail="invalid filename")
     if not filename.lower().endswith(".md"):
         filename += ".md"
+    if len(filename) > MAX_INSTRUCTION_FILENAME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"filename is too long (max {MAX_INSTRUCTION_FILENAME} characters)")
     return filename
 
 
@@ -470,32 +611,155 @@ def api_terminals() -> dict[str, Any]:
     )
 
 
+_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _ps_quote(value: str) -> str:
+    """Single-quoted PowerShell literal — ``$`` interpolation cannot happen."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _posix_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def _cmd_quote(value: str) -> str:
+    """Double-quoted ``cmd.exe`` argument (embedded quotes doubled)."""
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _terminal_command(*, shell_cls: str, cwd: str, prompt: str = "", model: str = "",
+                      agent: str = "", session: str = "", run_uid: str = "",
+                      tui: bool = False) -> str:
+    """Build the terminal command line, quoting every value for *shell_cls*.
+
+    Values never reach the shell unquoted (PowerShell single quotes, POSIX
+    single quotes, ``cmd`` double quotes), so a prompt is passed as data — not
+    parsed as PowerShell/``cmd`` code — whichever terminal is configured.
+    """
+    if shell_cls in ("powershell", "pwsh"):
+        q = _ps_quote
+        head = f"$env:PERUN_RUN_UID={q(run_uid)}; " if run_uid else ""
+        cmd = f"{head}Set-Location -LiteralPath {q(cwd)}; opencode"
+        if tui:
+            if prompt:
+                cmd += f" --prompt {q(prompt)}"
+            if session:
+                cmd += f" --session {q(session)}"
+            return cmd
+        cmd += " run"
+        if model:
+            cmd += f" --model {q(model)}"
+        if agent:
+            cmd += f" --agent {q(agent)}"
+        if session:
+            cmd += f" --session {q(session)}"
+        cmd += f" -- {q(prompt or 'Working session in progress.')}"
+        return cmd
+
+    if shell_cls in ("cmd", "wt"):
+        q = _cmd_quote
+        head = f'set "PERUN_RUN_UID={run_uid}" && ' if run_uid else ""
+        cmd = f"{head}cd /d {q(cwd)} && opencode"
+        if tui:
+            if prompt:
+                cmd += f" --prompt {q(prompt)}"
+            if session:
+                cmd += f" --session {q(session)}"
+            return cmd
+        cmd += " run"
+        if model:
+            cmd += f" --model {q(model)}"
+        if agent:
+            cmd += f" --agent {q(agent)}"
+        if session:
+            cmd += f" --session {q(session)}"
+        cmd += f" -- {q(prompt or 'Working session in progress.')}"
+        return cmd
+
+    q = _posix_quote
+    head = f"PERUN_RUN_UID={q(run_uid)} " if run_uid else ""
+    cmd = f"cd {q(cwd)} && {head}opencode"
+    if tui:
+        if prompt:
+            cmd += f" --prompt {q(prompt)}"
+        if session:
+            cmd += f" --session {q(session)}"
+        return cmd
+    cmd += " run"
+    if model:
+        cmd += f" --model {q(model)}"
+    if agent:
+        cmd += f" --agent {q(agent)}"
+    if session:
+        cmd += f" --session {q(session)}"
+    cmd += f" -- {q(prompt or 'Working session in progress.')}"
+    return cmd
+
+
 @app.post("/api/run-in-terminal")
 def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Open the user's preferred terminal with the equivalent opencode command.
+    """Open the user's preferred terminal for an ``opencode`` command.
 
-    The frontend computes the command text; Perun only starts the configured
-    shell/terminal with that command. This keeps shell-quoting decisions next to
-    the UI that produced them.
+    The command line is built **here** from structured fields, and every
+    interpolated value is quoted for the target shell. It used to be assembled
+    in the dashboard and POSTed as free text; a prompt containing PowerShell
+    ``$(...)`` then executed as soon as the terminal opened.
     """
-    project_ref = payload.get("project") or ""
-    cwd = (payload.get("cwd") or "").strip()
-    cmd_text = (payload.get("command") or "").strip()
-    if not cmd_text:
-        raise HTTPException(status_code=400, detail="command is required")
+    project_ref = str(payload.get("project") or "").strip()
+    cwd = str(payload.get("cwd") or "").strip()
     if project_ref and not cwd:
         project = registry.get_project(project_ref)
         if project:
             cwd = project["path"]
+
+    action = str(payload.get("action") or "session").strip().lower()
+    if action not in ("session", "auth-login"):
+        raise HTTPException(status_code=400, detail=f"unknown action: {action}")
+
+    prompt = str(payload.get("prompt") or "")
+    model = str(payload.get("model") or "").strip()
+    agent = str(payload.get("agent") or "").strip()
+    session = str(payload.get("session") or "").strip()
+    run_uid = str(payload.get("run_uid") or "").strip()
+    tui = bool(payload.get("tui"))
+    # These are single-line values; newlines/NUL would break the command line.
+    for label, value in (("cwd", cwd), ("model", model), ("agent", agent),
+                         ("session", session), ("run_uid", run_uid)):
+        if "\r" in value or "\n" in value or "\x00" in value:
+            raise HTTPException(status_code=400, detail=f"{label} must be a single line")
     if cwd and not Path(cwd).is_dir():
         raise HTTPException(status_code=400, detail=f"cwd does not exist: {cwd}")
+    if action == "session" and not cwd:
+        raise HTTPException(status_code=400,
+                            detail="cwd (or a project with a path) is required")
 
-    shell = payload.get("shell") or SETTINGS.terminal.strip() or ""
+    shell = str(payload.get("shell") or SETTINGS.terminal.strip() or "")
     argv = SETTINGS.terminal_cmd(shell_hint=shell)
     # Derive the shell class from the resolved executable so an empty/default
     # shell still gets the right command-line syntax.
     exe = os.path.basename(argv[0]).lower().replace(".exe", "")
     shell_cls = shell.lower().replace(".exe", "") or exe
+    # cmd.exe cannot carry a newline in its command line; flatten them.
+    if shell_cls in ("cmd", "wt"):
+        prompt = " ".join(prompt.splitlines())
+
+    if action == "auth-login":
+        provider = str(payload.get("provider") or "").strip()
+        if not _PROVIDER_ID_RE.match(provider):
+            raise HTTPException(status_code=400, detail="provider id is invalid")
+        if shell_cls in ("cmd", "wt"):
+            quote = _cmd_quote
+        elif shell_cls in ("powershell", "pwsh"):
+            quote = _ps_quote
+        else:
+            quote = _posix_quote
+        cmd_text = f"opencode auth login {quote(provider)}"
+    else:
+        cmd_text = _terminal_command(
+            shell_cls=shell_cls, cwd=cwd, prompt=prompt, model=model, agent=agent,
+            session=session, run_uid=run_uid, tui=tui)
+
     use_cmdline = False
     # Windows Terminal needs the starting directory; then it should run the
     # provided command. PowerShell/cmd are launched with a single command line.
@@ -516,10 +780,9 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         use_cmdline = True
     elif shell_cls in ("cmd",):
         # /k keeps the console window alive after opencode exits. Same rule as
-        # above: cmd_text is authored (and quoted) by the frontend for cmd.exe
-        # itself, so hand it over verbatim. Passing [argv[0], "/k", cmd_text]
-        # through list2cmdline escapes the inner quotes as \" which cmd.exe
-        # cannot parse.
+        # above: cmd_text is authored (and quoted) for cmd.exe itself, so hand it
+        # over verbatim. Passing [argv[0], "/k", cmd_text] through list2cmdline
+        # escapes the inner quotes as \" which cmd.exe cannot parse.
         cmdline = subprocess.list2cmdline([argv[0]]) + " /k " + cmd_text
         use_cmdline = True
     elif shell_cls in ("powershell", "pwsh"):
@@ -532,8 +795,15 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         else:
             argv = [argv[0], "-NoExit", "-Command", cmd_text]
     else:
-        # Generic fallback: pass the command through the shell.
-        argv = argv + ["-c", cmd_text]
+        # Generic fallback: hand the command to the shell. On POSIX the argv
+        # already ends with the shell (a terminal emulator was detected and
+        # prepended), so also keep the window open afterwards — a terminal that
+        # vanishes the instant opencode exits shows the user nothing.
+        text = cmd_text
+        if os.name != "nt" and argv:
+            shell_exe = argv[-1] if len(argv) > 1 else argv[0]
+            text = f"{cmd_text}; exec {shlex.quote(shell_exe)} -i"
+        argv = argv + ["-c", text]
 
     try:
         if os.name == "nt":
@@ -552,13 +822,13 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 cwd=cwd or None,
                 creationflags=creationflags,
             )
-        run_uid = (payload.get("run_uid") or "").strip()
         if run_uid:
             from . import process_tracker
             process_tracker.TRACKER.register(run_uid, proc, shell=shell)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"could not open terminal: {exc}")
-    return _ok(launched=True, shell=shell, command=cmd_text, pid=proc.pid if 'proc' in locals() else None)
+    return _ok(launched=True, shell=shell, command=cmd_text,
+               pid=proc.pid if 'proc' in locals() else None)
 
 
 # --------------------------------------------------------------------------- #
@@ -631,22 +901,22 @@ def api_add_project(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """
     try:
         result = projects.create(
-            method=payload.get("method") or "existing",
-            name=(payload.get("name") or "").strip(),
-            path=(payload.get("path") or "").strip(),
-            clone_url=(payload.get("clone_url") or "").strip(),
-            root=(payload.get("root") or "").strip(),
+            method=_str_field(payload, "method") or "existing",
+            name=_str_field(payload, "name").strip(),
+            path=_str_field(payload, "path").strip(),
+            clone_url=_str_field(payload, "clone_url").strip(),
+            root=_str_field(payload, "root").strip(),
             bootstrap=payload.get("bootstrap", True),
-            description=payload.get("description") or "",
-            kind=payload.get("kind") or "",
-            tags=payload.get("tags") or "",
-            model=payload.get("model") or "",
-            agent=payload.get("agent") or "",
-            color=payload.get("color") or "",
-            instructions=payload.get("instructions") or "",
+            description=_str_field(payload, "description"),
+            kind=_str_field(payload, "kind"),
+            tags=_str_field(payload, "tags"),
+            model=_str_field(payload, "model"),
+            agent=_str_field(payload, "agent"),
+            color=_str_field(payload, "color"),
+            instructions=_str_field(payload, "instructions"),
             git_init=bool(payload.get("git_init")),
-            git_remote=(payload.get("git_remote") or "").strip(),
-            git_branch=(payload.get("git_branch") or "").strip(),
+            git_remote=_str_field(payload, "git_remote").strip(),
+            git_branch=_str_field(payload, "git_branch").strip(),
             index_docs=bool(payload.get("index_docs")),
         )
     except projects.ProjectError as exc:
@@ -1005,7 +1275,7 @@ def api_fs_list(path: str = "", show_hidden: bool = False) -> dict[str, Any]:
 
 @app.post("/api/fs/mkdir")
 def api_fs_mkdir(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    path = (payload.get("path") or "").strip()
+    path = _str_field(payload, "path").strip()
     if not path:
         raise HTTPException(status_code=400, detail="path is required")
     try:
@@ -1312,6 +1582,12 @@ def api_kill_tui_run(run_uid: str) -> dict[str, Any]:
 
 @app.get("/api/runs/{run_uid}/stream")
 async def api_stream_run(run_uid: str, request: Request) -> StreamingResponse:
+    # A run row is created before the uid is ever handed to a client, so an
+    # unknown uid is a bad request — refuse it instead of opening an SSE
+    # stream that never ends (stream() would just emit pings forever).
+    if registry.get_run(run_uid) is None:
+        raise HTTPException(status_code=404, detail=f"no such run: {run_uid}")
+
     async def gen() -> AsyncIterator[str]:
         yield _sse({"type": "open", "run": run_uid})
         iterator: Iterator[dict[str, Any]] = ORCH.stream(run_uid)
@@ -1360,7 +1636,7 @@ async def api_global_stream(request: Request) -> StreamingResponse:
 # --------------------------------------------------------------------------- #
 @app.post("/api/memory/remember")
 def api_remember(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    content = (payload.get("content") or "").strip()
+    content = _str_field(payload, "content").strip()
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
     project = _resolve_project(payload.get("project"))
@@ -1369,8 +1645,8 @@ def api_remember(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if scope not in (None, "global", "project"):
         scope = None
     result = memory.remember(content, project_id=pid, scope=scope,
-                             topic=payload.get("topic", "general"),
-                             source=payload.get("source", "api"))
+                             topic=_str_field(payload, "topic") or "general",
+                             source=_str_field(payload, "source") or "api")
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("reason", "rejected"))
     return _ok(**result)
@@ -1412,12 +1688,36 @@ def api_memory_import(payload: dict[str, Any] = Body(default={})) -> dict[str, A
 
 @app.post("/api/memory/prune")
 def api_memory_prune(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    try:
+        keep = int(payload.get("keep", 200))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="keep must be an integer")
+    # ``keep=0`` would delete every fact; make the caller be explicit about a
+    # positive number of facts to preserve.
+    keep = _clamp(keep, 1, 1_000_000, "keep")
+    try:
+        min_age_days = float(payload.get("min_age_days", 30.0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="min_age_days must be a number")
     removed = memory.prune(
         project_id=(_resolve_project(payload.get("project")) or {}).get("id"),
-        keep=int(payload.get("keep", 200)),
-        min_age_days=float(payload.get("min_age_days", 30.0)),
+        keep=keep,
+        min_age_days=min_age_days,
     )
     return _ok(removed=removed)
+
+
+@app.post("/api/memory/reembed")
+def api_memory_reembed(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """On-demand repair of facts/doc chunks whose embeddings are missing or stale."""
+    try:
+        limit = int(payload.get("limit", 64))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="limit must be an integer")
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be positive")
+    result = memory.reembed_missing(limit=limit)
+    return _ok(**result)
 
 
 # --------------------------------------------------------------------------- #
@@ -1439,6 +1739,9 @@ def api_get_settings() -> dict[str, Any]:
     data["telegram_token_set"] = bool(token)
     # Never echo the token — the dashboard shows a "set" badge instead.
     data["telegram_token"] = ""
+    # The pairing code is a short-lived secret; it is only revealed to loopback
+    # clients via /api/telegram/status.
+    data["telegram_pair_code"] = ""
     data["telegram_chat_count"] = len(chats)
     return _ok(settings=data)
 
@@ -1740,6 +2043,7 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # Keep the orchestrator in sync so run_timeout, default_model, etc. apply
     # immediately instead of requiring a server restart.
     ORCH.settings = SETTINGS
+    ORCH.set_max_concurrent(SETTINGS.max_concurrent_runs)
     data = SETTINGS.to_dict()
     data["telegram_token"] = ""
     data["telegram_token_set"] = bool(SETTINGS.telegram()[0])
@@ -1773,9 +2077,13 @@ def _telegram_getme(token: str) -> dict[str, Any]:
 
 
 @app.get("/api/telegram/status")
-def api_telegram_status() -> dict[str, Any]:
+def api_telegram_status(request: Request) -> dict[str, Any]:
     token, chats = SETTINGS.telegram()
     data = _telegram_api("getMe") if token else {"ok": False}
+    # The pairing code grants full agent access once, so reveal it only to a
+    # loopback caller — not to another machine that can reach a wildcard bind.
+    client_host = (request.client.host if request.client else "") or ""
+    loopback = client_host in _LOOPBACK_NAMES
     bridge_running: bool | None
     try:
         from .telegram import PidLock
@@ -1791,6 +2099,9 @@ def api_telegram_status() -> dict[str, Any]:
         configured=bool(token),
         bot_name=SETTINGS.telegram_bot_name,
         allowed_chats=chats,
+        # Only surfaced while nobody is allowed: the one-time code a chat must
+        # send via ``/pair`` to gain access (loopback callers only).
+        pair_code="" if (chats or not loopback) else SETTINGS.telegram_pair_code,
         token_source=SETTINGS.telegram_sources()["token"],
         chats_source=SETTINGS.telegram_sources()["chats"],
         bridge_running=bridge_running,
@@ -1820,6 +2131,10 @@ def api_telegram_bot(payload: dict[str, Any] = Body(default={})) -> dict[str, An
         if isinstance(raw, str):
             raw = [c.strip() for c in raw.split(",")]
         SETTINGS.telegram_allowed_chats = [str(c).strip() for c in raw if str(c).strip()]
+        # A configured allow-list makes the pairing code unnecessary (and a
+        # lingering code would be a second, overlooked door).
+        if SETTINGS.telegram_allowed_chats:
+            SETTINGS.telegram_pair_code = ""
         changed.append("chats")
 
     if "token" in payload:
@@ -2036,6 +2351,25 @@ def _new_activity(after_id: int, limit: int = 50) -> list[dict[str, Any]]:
 # Static dashboard (mounted last so /api/* always wins)
 # --------------------------------------------------------------------------- #
 if config.WEB_DIR.is_dir():
+    @app.get("/", include_in_schema=False)
+    def _dashboard_index() -> HTMLResponse:
+        """Serve the SPA shell with the local API token injected.
+
+        A state-changing API call needs ``X-Perun-Token`` (see the middleware);
+        the dashboard is same-origin as the server, so handing it the token here
+        is equivalent to Jupyter embedding its token in the page it serves.
+        """
+        page = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
+        snippet = (
+            "<script>window.PERUN_TOKEN = "
+            f"{json.dumps(config.api_token())};</script>"
+        )
+        if "</head>" in page:
+            page = page.replace("</head>", f"    {snippet}\n</head>", 1)
+        else:  # pragma: no cover - defensive
+            page = snippet + page
+        return HTMLResponse(page)
+
     app.mount("/", StaticFiles(directory=str(config.WEB_DIR), html=True),
               name="web")
 else:  # pragma: no cover

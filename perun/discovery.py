@@ -33,7 +33,11 @@ DOC_MARKERS = [
 def _read_description(path: Path) -> str:
     for rel in ("AGENTS.md", "README.md", "docs/README.md"):
         f = path / rel
-        if not f.is_file():
+        try:
+            if not f.is_file():
+                continue
+        except OSError:
+            # Unreadable parent directory (PermissionError) — not a candidate.
             continue
         try:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -48,22 +52,35 @@ def _read_description(path: Path) -> str:
 
 
 def capabilities(path: Path) -> dict[str, Any]:
+    """Probe *path* for framework markers.
+
+    Every probe is guarded: ``Path.exists``/``is_file``/``is_dir`` propagate
+    ``PermissionError`` for an unreadable directory, which would otherwise
+    abort the whole scan (``detect`` → ``classify`` → ``capabilities``).
+    """
+
+    def _safe(probe: Any, default: bool = False) -> bool:
+        try:
+            return bool(probe())
+        except OSError:
+            return default
+
     def has(*rels: str) -> bool:
-        return any((path / r).exists() for r in rels)
+        return any(_safe(lambda r=r: (path / r).exists()) for r in rels)
 
     return {
-        "git": (path / ".git").exists(),
+        "git": _safe(lambda: (path / ".git").exists()),
         "opencode": has(*OPENCODE_MARKERS),
-        "agents_md": (path / "AGENTS.md").is_file(),
+        "agents_md": _safe(lambda: (path / "AGENTS.md").is_file()),
         "manifest": has(*manifest.MANIFEST_NAMES),
         "docs": has(*DOC_MARKERS),
-        "codemap": (path / "docs" / "CODEMAP.md").is_file(),
-        "memory_scripts": (path / "scripts" / "memory.py").is_file(),
-        "telegram_bridge": (path / "scripts" / "telegram_bridge.py").is_file(),
-        "mcp_memory": (path / "scripts" / "mcp_memory_server.py").is_file(),
-        "build_ps1": (path / "scripts" / "build.ps1").is_file(),
-        "package_json": (path / "package.json").is_file(),
-        "tests": (path / "tests").is_dir(),
+        "codemap": _safe(lambda: (path / "docs" / "CODEMAP.md").is_file()),
+        "memory_scripts": _safe(lambda: (path / "scripts" / "memory.py").is_file()),
+        "telegram_bridge": _safe(lambda: (path / "scripts" / "telegram_bridge.py").is_file()),
+        "mcp_memory": _safe(lambda: (path / "scripts" / "mcp_memory_server.py").is_file()),
+        "build_ps1": _safe(lambda: (path / "scripts" / "build.ps1").is_file()),
+        "package_json": _safe(lambda: (path / "package.json").is_file()),
+        "tests": _safe(lambda: (path / "tests").is_dir()),
     }
 
 
@@ -199,7 +216,7 @@ def register(info: dict[str, Any],
     facts, local project references are recorded, and missing dependency anchors
     are appended to an existing ``perun.md``.
     """
-    norm = os.path.normcase(os.path.abspath(info["path"]))
+    norm = os.path.normcase(os.path.realpath(os.path.abspath(info["path"])))
     existing = existing_by_path.get(norm) if existing_by_path else registry.get_project_by_path(info["path"])
     caps = info.get("capabilities", {})
     cap_tags = ",".join(sorted(k for k, v in caps.items() if v))
@@ -232,9 +249,16 @@ def register(info: dict[str, Any],
         project = updated or existing
         registry.touch_project(existing["id"], seen=True)
     else:
+        # Store the resolved path, not the spelling reached through a symlink:
+        # the link can be recreated/renamed, and the same project would otherwise
+        # be registered twice (once per spelling).
+        try:
+            real_path = os.path.realpath(os.path.abspath(info["path"]))
+        except (OSError, ValueError):
+            real_path = info["path"]
         created = registry.add_project(
             name,
-            info["path"],
+            real_path,
             root=info.get("root", ""),
             kind=kind,
             description=description,
@@ -279,19 +303,45 @@ def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]
     found = scan(roots, max_depth=max_depth)
     created, updated = [], []
     # Build a path lookup once so registration is O(1) per candidate.
+    # Keys use realpath so a path reached through a symlink maps onto the
+    # project stored under its resolved location.
     existing_by_path: dict[str, dict[str, Any]] = {}
     for p in registry.list_projects():
-        existing_by_path[os.path.normcase(os.path.abspath(p["path"]))] = p
+        try:
+            key = os.path.normcase(os.path.realpath(os.path.abspath(p["path"])))
+        except (OSError, ValueError):
+            key = os.path.normcase(os.path.abspath(p["path"]))
+        existing_by_path[key] = p
     for info in found:
         if info["kind"] == "dir":
             # Do not auto-register anonymous plain directories.
             continue
         proj, is_new = register(info, existing_by_path=existing_by_path)
         (created if is_new else updated).append(proj["slug"])
+    # Registered projects under the scanned roots whose directory vanished —
+    # surfaced so callers can mark/prune them instead of offering dead targets.
+    resolved_roots: list[str] = []
+    for r in roots:
+        try:
+            resolved_roots.append(
+                os.path.normcase(os.path.realpath(os.path.abspath(str(r)))))
+        except (OSError, ValueError):
+            continue
+    missing: list[str] = []
+    for p in registry.list_projects():
+        try:
+            pnorm = os.path.normcase(os.path.realpath(os.path.abspath(p["path"])))
+        except (OSError, ValueError):
+            continue
+        under = any(pnorm == root or pnorm.startswith(root + os.sep)
+                    for root in resolved_roots)
+        if under and not os.path.isdir(p["path"]):
+            missing.append(p["slug"])
     return {
         "scanned": len(found),
         "created": created,
         "updated": updated,
+        "missing": missing,
         "found": found,
     }
 

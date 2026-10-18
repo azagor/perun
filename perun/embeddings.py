@@ -65,8 +65,10 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
     if _np is not None:
-        va = _np.asarray(a, dtype=_np.float32)
-        vb = _np.asarray(b, dtype=_np.float32)
+        # float64: cosine is scale-invariant, but float32 overflows to inf/inf
+        # -> NaN for large (or adversarial) magnitudes.
+        va = _np.asarray(a, dtype=_np.float64)
+        vb = _np.asarray(b, dtype=_np.float64)
         denom = float(_np.linalg.norm(va) * _np.linalg.norm(vb))
         return float(_np.dot(va, vb) / denom) if denom else 0.0
     dot = sum(x * y for x, y in zip(a, b))
@@ -102,11 +104,20 @@ def embed_texts(texts: list[str], prefix: str = "") -> list[list[float]]:
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise EmbeddingError(
             f"Cannot reach Ollama at {cfg.ollama_host} ({exc}). "
             f"Start it with `ollama serve`, then `ollama pull {cfg.embed_model}`."
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        # A proxy or captive portal can answer 200 with HTML; that is a
+        # transport failure, not a caller bug, so surface the same error type
+        # every caller already catches.
+        raise EmbeddingError(
+            f"Ollama at {cfg.ollama_host} returned a non-JSON response ({exc})."
         ) from exc
     embeddings = data.get("embeddings")
     if not embeddings or len(embeddings) != len(texts):

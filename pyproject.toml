@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "perun"
-version = "0.7.2"
+version = "0.7.3"
 description = "Perun — a local overseer & orchestrator for all your OpenCode projects."
 requires-python = ">=3.10"
 dependencies = [
@@ -30,4 +30,7 @@ packages = ["perun", "perun.integrations"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The audit package's adversarial tests are named adv_*.py — collect them
+# alongside the repo's own test_*.py files.
+python_files = ["test_*.py", "adv_*.py"]
 addopts = "-q"

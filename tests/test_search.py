@@ -270,7 +270,7 @@ def test_memory_filtered_by_project(monkeypatch) -> None:
         {"id": 2, "slug": "b", "path": "/x/b"},
     ]
 
-    def fake_memory(query, project_id, all_projects, k):
+    def fake_memory(query, project_id, all_projects, k, **kwargs):
         if project_id == 1:
             return [{"project_id": 1, "source_file": "a.md", "section": "s", "content": "hello a", "score": 0.8, "source_type": "doc"}]
         if project_id == 2:
