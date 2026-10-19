@@ -3325,16 +3325,34 @@ async function viewPerunChat() {
             }
             return;
         }
-        try {
-            const [friends, incoming, outgoing, fstatus, blocked, trusted] = await Promise.all([
-                api('/api/perunchat/social/friends'),
-                api('/api/perunchat/social/friends/requests?direction=incoming'),
-                api('/api/perunchat/social/friends/requests?direction=outgoing'),
-                api('/api/perunchat/social/friends/status'),
-                api('/api/perunchat/social/blocked'),
-                api('/api/perunchat/trusted'),
-            ]);
-            const onlineMap = Object.fromEntries((fstatus.friends || []).map(f => [f.agent_id, f.status]));
+
+        // Fetch each social endpoint independently so one failure does not blank
+        // the entire social tab.
+        const endpoints = [
+            { key: 'friends', url: '/api/perunchat/social/friends', default: { friends: [] } },
+            { key: 'incoming', url: '/api/perunchat/social/friends/requests?direction=incoming', default: { requests: [] } },
+            { key: 'outgoing', url: '/api/perunchat/social/friends/requests?direction=outgoing', default: { requests: [] } },
+            { key: 'fstatus', url: '/api/perunchat/social/friends/status', default: { friends: [] } },
+            { key: 'blocked', url: '/api/perunchat/social/blocked', default: { blocked: [] } },
+            { key: 'trusted', url: '/api/perunchat/trusted', default: { trusted: [] } },
+        ];
+        const results = {};
+        await Promise.all(endpoints.map(async (ep) => {
+            try {
+                results[ep.key] = await api(ep.url);
+            } catch (e) {
+                results[ep.key] = ep.default;
+                // Only surface a quiet toast for the trust list; friends/block
+                // may be unavailable when the gateway is down and the page still
+                // needs to load.
+                if (ep.key === 'trusted') {
+                    toast('Could not load trust list: ' + e.message, 'err');
+                }
+            }
+        }));
+
+        const { friends, incoming, outgoing, fstatus, blocked, trusted } = results;
+        const onlineMap = Object.fromEntries((fstatus.friends || []).map(f => [f.agent_id, f.status]));
 
             const fList = $('#pc-friends-list');
             const fItems = friends.friends || [];
@@ -3409,7 +3427,6 @@ async function viewPerunChat() {
                 });
                 tList.appendChild(row);
             }
-        } catch (e) { toast(e.message, 'err'); }
     }
 
     $('#pc-request-btn').addEventListener('click', async () => {
@@ -3572,6 +3589,11 @@ async function viewPerunChat() {
         try {
             wsExplicitClose = false;
             wsReconnectDelay = 1000;
+            // Reset sequence to a fresh monotonic base for this session. The gateway
+            // enforces monotonic sequences per (agent_id, runtime); using a timestamp
+            // base avoids stale localStorage values causing non_monotonic_sequence
+            // errors after a page refresh or reconnect.
+            seq = Math.max(seq, Date.now());
             ws = new WebSocket(endpoint);
             ws.onopen = () => {
                 setWsStatus('connected', 'green');
@@ -3586,7 +3608,10 @@ async function viewPerunChat() {
                 ws = null;
                 scheduleReconnect();
             };
-            ws.onerror = (e) => { log('<span style="color:var(--danger)">WebSocket error.</span>'); };
+            ws.onerror = (e) => {
+                const detail = e && (e.message || e.type || '') ? ` (${e.message || e.type})` : '';
+                log(`<span style="color:var(--danger)">WebSocket error${detail}. readyState=${ws ? ws.readyState : 'n/a'}</span>`);
+            };
             ws.onmessage = (ev) => {
                 try {
                     const msg = JSON.parse(ev.data);
