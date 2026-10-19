@@ -180,7 +180,7 @@ def test_reply_uses_model_fallback_chain(settings):
     bridge._reply(frame, None)
     call = mock_orchestrator.run_and_wait.call_args
     assert call.kwargs.get("model") == "opencode/orchestrator"
-    assert call.kwargs.get("skip_instructions") is True
+    assert call.kwargs.get("skip_instructions") is False
 
 
 def test_chat_system_prompt_loads_from_file():

@@ -481,7 +481,7 @@ class PerunChatBridge:
                 model=model,
                 agent=agent,
                 timeout=120,
-                skip_instructions=True,
+                skip_instructions=False,
             )
             reply = (result.get("reply", "") or "").strip()
             # The Orchestrator may inject project-instruction wrappers into the
