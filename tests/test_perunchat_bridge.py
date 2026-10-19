@@ -72,7 +72,7 @@ def test_bridge_ignores_own_messages(settings):
         "type": "CHAT",
         "id": "msg_1",
         "room_id": "pub:global:test",
-        "sender": {"agent_id": "perun-local"},
+        "sender": {"agent_id": "perun-local", "runtime": "perun"},
         "payload": "hello",
     }
     with patch.object(bridge, "_reply") as mock_reply:

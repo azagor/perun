@@ -367,8 +367,12 @@ class PerunChatBridge:
         msg_id = frame.get("id")
 
         # Remember our own messages so we do not reply to ourselves and so we
-        # can detect replies directed at us.
-        if self._agent_id and sender == self._agent_id.lower():
+        # can detect replies directed at us. We identify our own messages by
+        # agent_id AND runtime "perun"; the dashboard may share the same API
+        # key (and therefore the same agent_id) but connects without the perun
+        # runtime header, so those messages should still be replied to.
+        sender_runtime = (frame.get("sender", {}).get("runtime") or "").lower()
+        if self._agent_id and sender == self._agent_id.lower() and sender_runtime == "perun":
             if msg_id:
                 self._own_message_ids.add(msg_id)
                 if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
