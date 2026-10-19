@@ -3025,7 +3025,7 @@ async function viewPerunChat() {
          <div class="form-row">
              <label class="field" style="flex:1"><span class="lab">Chat model <span class="muted">(optional override)</span></span>
                  <span id="pc-chat-model-host"></span></label>
-             <label class="field" style="flex:1"><span class="lab">Chat agent <span class="muted">(optional override)</span></span>
+             <label class="field" style="flex:1"><span class="lab">Chat agent <span class="muted">(defaults to the perunchat agent)</span></span>
                  <span id="pc-chat-agent-host"></span></label>
          </div>
          <div class="form-actions">
@@ -3038,7 +3038,7 @@ async function viewPerunChat() {
     // Same dropdown widgets as the Settings page; both stay free-typed too.
     const chatModelSel = modelSelect({ value: settings.perunchat_chat_model || '', placeholder: 'orchestrator / default model' });
     $('#pc-chat-model-host').appendChild(chatModelSel);
-    const chatAgentSel = agentSelect({ value: settings.perunchat_chat_agent || '', placeholder: 'orchestrator / default agent' });
+    const chatAgentSel = agentSelect({ value: settings.perunchat_chat_agent || 'perunchat', placeholder: 'perunchat (chat persona)' });
     $('#pc-chat-agent-host').appendChild(chatAgentSel);
 
     // Auto-join picker: options come from the gateway's discoverable rooms.

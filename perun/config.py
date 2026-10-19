@@ -156,7 +156,14 @@ class Settings:
     perunchat_auto_reply: bool = False
     perunchat_auto_join: list[str] = field(default_factory=lambda: ["pub:global:general"])
     perunchat_chat_model: str = ""
-    perunchat_chat_agent: str = ""
+    # OpenCode agent used for room replies. Defaults to the dedicated
+    # "perunchat" agent (a chat participant persona with no tools) instead of
+    # the coding-orchestrator persona.
+    perunchat_chat_agent: str = "perunchat"
+    # Trusted PerunChat participants. Perun may reveal internal/private context
+    # (project names, file paths, tools) only in private/group rooms with agents
+    # on this list. Public rooms never receive internal context regardless of trust.
+    perunchat_trusted: list[str] = field(default_factory=list)
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
     # Dedicated terminal / command shell. On Windows the value can be a path to

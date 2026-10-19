@@ -180,7 +180,65 @@ def test_reply_uses_model_fallback_chain(settings):
     bridge._reply(frame, None)
     call = mock_orchestrator.run_and_wait.call_args
     assert call.kwargs.get("model") == "opencode/orchestrator"
-    assert call.kwargs.get("skip_instructions") is False
+    assert call.kwargs.get("skip_instructions") is True
+
+
+def test_reply_defaults_to_perunchat_agent(settings):
+    """With no explicit chat agent the dedicated perunchat agent is used."""
+    settings.perunchat_chat_agent = ""
+    settings.perunchat_chat_model = "opencode/chat"
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_6",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "text/plain",
+        "payload": "hi",
+    }
+    bridge._reply(frame, None)
+    call = mock_orchestrator.run_and_wait.call_args
+    assert call.kwargs.get("agent") == "perunchat"
+
+
+def test_reply_explicit_agent_overrides_default(settings):
+    """An explicit perunchat_chat_agent setting wins over the default."""
+    settings.perunchat_chat_agent = "my-custom-agent"
+    settings.perunchat_chat_model = "opencode/chat"
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_7",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "text/plain",
+        "payload": "hi",
+    }
+    bridge._reply(frame, None)
+    call = mock_orchestrator.run_and_wait.call_args
+    assert call.kwargs.get("agent") == "my-custom-agent"
+
+
+def test_public_reply_redacts_internal_details(settings):
+    """Public replies must not leak local paths or internal references."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    text = "I live in C:\\my_apps\\perun and use MCP tools there."
+    out = bridge._redact_internal_info(text, "pub:global:general")
+    assert "C:\\my_apps\\perun" not in out
+    assert "MCP tools" not in out
+    assert "[redacted]" in out
+
+
+def test_trusted_private_reply_keeps_context(settings):
+    """Trusted private replies may keep non-path context."""
+    settings.perunchat_trusted = ["frambo"]
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    assert bridge._is_trusted("frambo") is True
+    assert bridge._is_trusted("stranger") is False
 
 
 def test_chat_system_prompt_loads_from_file():

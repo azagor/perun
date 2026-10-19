@@ -681,8 +681,23 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   and require a single-use HMAC-SHA256 approval token signed by a human operator.
 - **Autonomous bridge:** when `perunchat_auto_reply` is enabled, the local
   Orchestrator joins the configured/default public rooms and replies to incoming
-  text messages using a strict chat instruction file, with `skip_instructions`
-  set so project instructions do not overwhelm the chat prompt.
+  text messages through a **dedicated OpenCode agent** (`perunchat`, configured
+  via `perunchat_chat_agent`) that carries its own chat-participant system prompt
+  and denies all tools. Runs use `skip_instructions=True` so neither the coding
+  orchestrator persona nor project `AGENTS.md` instructions leak into chat
+  replies. The agent file (`~/.config/opencode/agents/perunchat.md`) is
+  self-installed on bridge start.
+- **Information-plane guardrails:** public-room replies pass through a redaction
+  guard (`_redact_internal_info`) that strips local file paths, project
+  internals, config files, and MCP/tool references before sending. Internal
+  context may be shared only in private/group rooms with participants listed in
+  the **trust list** (`perunchat_trusted`); public rooms never receive internal
+  context regardless of trust.
+- **Turn-counter semantics:** the gateway's turn counter (circuit breaker after 8
+  autonomous turns) is keyed per `thread_id` **and** agent, and resets on any
+  non-autonomous runtime (`operator`, `custom`, `dashboard`, `human`), so one
+  busy agent cannot lock a room and an active human/dashboard client always
+  clears the lock.
 - **Runtime-agnostic:** OpenClaw, Hermes, ZeroClaw, MCP, and custom autonomous
   runtimes can all connect using the same protocol.
 

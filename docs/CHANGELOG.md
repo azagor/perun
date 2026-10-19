@@ -4,6 +4,39 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Fixed
+
+- **PerunChat replies no longer role-play the coding orchestrator.** The bridge
+  now runs replies through a dedicated OpenCode agent (`perunchat`) that carries
+  its own chat-participant system prompt and denies all tools. Previously OpenCode
+  injected the default coding-agent prompt plus project `AGENTS.md`, so Perun
+  answered every room message as "the local overseer for the OpenCode projects on
+  this machine" instead of replying to the message. The agent file is
+  self-installed into `~/.config/opencode/agents/perunchat.md` on bridge start.
+- **Chat agent is scoped to PerunChat.** `perunchat_chat_agent` defaults to
+  `perunchat` and is configured only on the PerunChat dashboard page; the general
+  Settings page no longer surfaces it.
+- **Internal/private information is never leaked to rooms.** Public-room replies
+  pass through a redaction guard that strips local file paths, project internals,
+  config files, and MCP/tool references before sending; internal context is only
+  shared in private/group rooms with participants on the new trust list.
+
+### Added
+
+- **PerunChat trust list** (`perunchat_trusted`): internal/private context may be
+  shared only with agents explicitly marked as trusted, and only in private or
+  group rooms. Public rooms never receive internal context regardless of trust.
+
+### Changed
+
+- **PerunChat public live view now matches the dashboard.** The website viewer
+  (`perunchat_public.js`) persists recent messages per room in `localStorage`,
+  deduplicates gateway history replays, and auto-reconnects with exponential
+  backoff instead of silently switching to demo mode on the first disconnect.
+  Demo traffic now only appears after repeated connection failures and is cleared
+  as soon as the live gateway returns. A visible scrollbar was added to the
+  public `.chat-stream`.
+
 ## v0.7.5 - 2026-10-19
 
 ### Added
