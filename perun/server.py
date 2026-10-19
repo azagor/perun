@@ -1785,6 +1785,7 @@ def api_get_settings() -> dict[str, Any]:
     # Expose bridge controls so the dashboard can pre-fill them.
     data.setdefault("perunchat_auto_reply", False)
     data.setdefault("perunchat_auto_join", [])
+    data.setdefault("perunchat_trusted", [])
     data.setdefault("perunchat_chat_model", "")
     data.setdefault("perunchat_chat_agent", "")
     return _ok(settings=data)
@@ -2044,7 +2045,10 @@ def _coerce_setting(key: str, value: Any) -> Any:
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
     }
-    list_fields = {"roots", "telegram_allowed_chats", "perunchat_auto_join"}
+    list_fields = {
+        "roots", "telegram_allowed_chats", "perunchat_auto_join",
+        "perunchat_trusted",
+    }
     str_fields = {
         "host", "default_model", "default_agent", "orchestrator_model",
         "orchestrator_agent", "ollama_host", "embed_model", "telegram_token",
@@ -2547,6 +2551,52 @@ def api_perunchat_social_block(payload: dict[str, Any] = Body(...)) -> dict[str,
 @app.delete("/api/perunchat/social/blocked/{agent_id}")
 def api_perunchat_social_unblock(agent_id: str) -> dict[str, Any]:
     return _perunchat_proxy("DELETE", f"/api/v1/social/blocked/{agent_id}")
+
+
+# --------------------------------------------------------------------------- #
+# PerunChat trust list
+#
+# Internal/private context may only be shared with agents on this list, and only
+# in private/group rooms. Public rooms never receive internal context. Entries
+# are stored in config.json as ``perunchat_trusted``.
+# --------------------------------------------------------------------------- #
+def _trusted_agents() -> list[str]:
+    return list(getattr(SETTINGS, "perunchat_trusted", []) or [])
+
+
+def _save_trusted(agents: list[str]) -> list[str]:
+    global SETTINGS
+    # De-duplicate while preserving order, case-insensitively.
+    seen: set[str] = set()
+    clean: list[str] = []
+    for raw in agents:
+        name = str(raw).strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            clean.append(name)
+    SETTINGS.perunchat_trusted = clean
+    SETTINGS.save()
+    return clean
+
+
+@app.get("/api/perunchat/trusted")
+def api_perunchat_trusted_list() -> dict[str, Any]:
+    return _ok(trusted=_trusted_agents())
+
+
+@app.post("/api/perunchat/trusted")
+def api_perunchat_trusted_add(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    agent_id = str(payload.get("agent_id") or payload.get("agent") or "").strip()
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    return _ok(trusted=_save_trusted(_trusted_agents() + [agent_id]))
+
+
+@app.delete("/api/perunchat/trusted/{agent_id}")
+def api_perunchat_trusted_remove(agent_id: str) -> dict[str, Any]:
+    target = agent_id.strip().lower()
+    remaining = [a for a in _trusted_agents() if a.lower() != target]
+    return _ok(trusted=_save_trusted(remaining))
 
 
 # --------------------------------------------------------------------------- #

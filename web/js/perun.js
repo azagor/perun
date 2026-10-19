@@ -3173,6 +3173,14 @@ async function viewPerunChat() {
              <div class="form-row"><input type="text" id="pc-block-id" placeholder="agent_id"><button class="btn danger" id="pc-block-btn">Block</button></div></label>`);
     grid.appendChild(blockedCard);
 
+    const trustedCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Trusted</h4></div>
+         <p class="secondary" style="font-size:12px; margin:-4px 0 10px 0;">Internal context is shared only with these agents, and only in private/group rooms. Public rooms never receive internal context.</p>
+         <div id="pc-trusted-list" class="perunchat-list-box"><p class="muted">Loading…</p></div>
+         <label class="field"><span class="lab">Trust agent</span>
+             <div class="form-row"><input type="text" id="pc-trusted-id" placeholder="agent_id"><button class="btn success" id="pc-trusted-btn">Trust</button></div></label>`);
+    grid.appendChild(trustedCard);
+
     v.appendChild(grid);
 
     // ---- Chat panel --------------------------------------------------------
@@ -3311,19 +3319,20 @@ async function viewPerunChat() {
     // ---- Social refresh ----------------------------------------------------
     async function refreshSocial() {
         if (!pcConfigured) {
-            for (const id of ['pc-friends-list', 'pc-incoming', 'pc-outgoing', 'pc-blocked-list']) {
+            for (const id of ['pc-friends-list', 'pc-incoming', 'pc-outgoing', 'pc-blocked-list', 'pc-trusted-list']) {
                 const box = document.getElementById(id);
                 if (box) box.innerHTML = pcPlaceholder;
             }
             return;
         }
         try {
-            const [friends, incoming, outgoing, fstatus, blocked] = await Promise.all([
+            const [friends, incoming, outgoing, fstatus, blocked, trusted] = await Promise.all([
                 api('/api/perunchat/social/friends'),
                 api('/api/perunchat/social/friends/requests?direction=incoming'),
                 api('/api/perunchat/social/friends/requests?direction=outgoing'),
                 api('/api/perunchat/social/friends/status'),
                 api('/api/perunchat/social/blocked'),
+                api('/api/perunchat/trusted'),
             ]);
             const onlineMap = Object.fromEntries((fstatus.friends || []).map(f => [f.agent_id, f.status]));
 
@@ -3387,6 +3396,19 @@ async function viewPerunChat() {
                 });
                 bList.appendChild(row);
             }
+
+            const tList = $('#pc-trusted-list');
+            const tItems = trusted.trusted || [];
+            tList.innerHTML = tItems.length ? '' : '<p class="muted">No trusted agents.</p>';
+            for (const id of tItems) {
+                const row = el('div', { class: 'row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
+                    `<span>🔒 ${esc(id)}</span><button class="btn ghost danger small" data-untrust="${esc(id)}">Remove</button>`);
+                row.querySelector('button').addEventListener('click', async () => {
+                    try { await api(`/api/perunchat/trusted/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Removed from trusted', 'ok'); refreshSocial(); }
+                    catch (e) { toast(e.message, 'err'); }
+                });
+                tList.appendChild(row);
+            }
         } catch (e) { toast(e.message, 'err'); }
     }
 
@@ -3401,6 +3423,13 @@ async function viewPerunChat() {
         const id = $('#pc-block-id').value.trim();
         if (!id) return;
         try { await api('/api/perunchat/social/blocked', { method: 'POST', body: { blocked_agent_id: id } }); toast('Agent blocked', 'ok'); $('#pc-block-id').value = ''; refreshSocial(); }
+        catch (e) { toast(e.message, 'err'); }
+    });
+
+    $('#pc-trusted-btn').addEventListener('click', async () => {
+        const id = $('#pc-trusted-id').value.trim();
+        if (!id) return;
+        try { await api('/api/perunchat/trusted', { method: 'POST', body: { agent_id: id } }); toast('Agent trusted', 'ok'); $('#pc-trusted-id').value = ''; refreshSocial(); }
         catch (e) { toast(e.message, 'err'); }
     });
 

@@ -129,3 +129,35 @@ def test_perunchat_rooms_forwards_to_gateway(client, monkeypatch) -> None:
     assert data["ok"] is True
     assert data["rooms"][0]["room_id"] == "pub:global:general"
     assert calls == [("GET", "/api/v1/rooms")]
+
+
+def test_trusted_list_add_remove(client) -> None:
+    """The trust list round-trips through settings and persists."""
+    r = client.get("/api/perunchat/trusted", headers=_token_header())
+    assert r.status_code == 200
+    assert r.json()["trusted"] == []
+
+    r = client.post("/api/perunchat/trusted",
+                    json={"agent_id": "frambo_malina_omarchy"},
+                    headers=_token_header())
+    assert r.status_code == 200
+    assert r.json()["trusted"] == ["frambo_malina_omarchy"]
+
+    # Duplicates (case-insensitive) and blanks are ignored.
+    r = client.post("/api/perunchat/trusted",
+                    json={"agent_id": "FRAMBO_malina_omarchy"},
+                    headers=_token_header())
+    assert r.json()["trusted"] == ["frambo_malina_omarchy"]
+
+    r = client.get("/api/perunchat/trusted", headers=_token_header())
+    assert r.json()["trusted"] == ["frambo_malina_omarchy"]
+
+    r = client.delete("/api/perunchat/trusted/frambo_malina_omarchy",
+                      headers=_token_header())
+    assert r.status_code == 200
+    assert r.json()["trusted"] == []
+
+
+def test_trusted_add_requires_agent_id(client) -> None:
+    r = client.post("/api/perunchat/trusted", json={}, headers=_token_header())
+    assert r.status_code == 400

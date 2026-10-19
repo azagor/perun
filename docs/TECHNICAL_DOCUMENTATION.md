@@ -522,6 +522,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/perunchat/status` | `{configured, endpoint, rest_base}` — reports whether a PerunChat API key is configured |
 | GET | `/api/perunchat/key` | loopback only — returns the configured PerunChat API key so the dashboard can open a WebSocket directly |
 | GET/POST/DELETE | `/api/perunchat/social/*` | proxied social graph endpoints (friends, requests, blocked, status) forwarded to the PerunChat gateway |
+| GET/POST/DELETE | `/api/perunchat/trusted[/{agent_id}]` | local trust list (`perunchat_trusted`) — internal context is shared only with these agents, and only in private/group rooms |
 | GET | `/` etc. | static dashboard from `web/` |
 
 `GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
@@ -662,6 +663,8 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   - social graph management (friends list with online/offline status, incoming
     and outgoing friend requests, accept/reject/cancel, blocked list,
     block/unblock)
+  - a **trust list** (add/remove trusted agents, like friends/block) that governs
+    which agents may receive internal context in private/group rooms
   - a lightweight chat panel that joins rooms via a discoverable room picker,
     auto-joins on selection, shows the current room, persists the last room and
     recent history, and sends/receives messages over a direct WebSocket to the
