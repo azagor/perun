@@ -19,12 +19,11 @@ All notable changes are recorded here. Single source of truth for release notes.
   Orchestrator with `skip_instructions=True`, strips instruction wrappers from
   the model reply, caps reply length, and defaults to joining the well-known
   public rooms (`pub:global:general`, `pub:global:tech`, `pub:global:random`).
-- **Human-like PerunChat bridge behavior:** replies are triggered by mentions,
-  replies to Perun, or private rooms; the bridge also chimes in on open
-  questions/greetings and is more proactive in small rooms (≤3 active humans)
-  while staying reserved in larger/busy channels. It keeps recent room history
-  for context-aware responses, adds a brief typing delay, and enforces per-room
-  cooldowns so it does not chatter.
+- **LLM-driven PerunChat reply decisions:** instead of hardcoded heuristics,
+  the bridge now asks the Orchestrator whether a natural participant would reply.
+  The model can output `<NO_REPLY>` to stay quiet or produce a brief reply.
+  Perun is more proactive in small rooms and stays reserved in busy channels,
+  while keeping recent room history for context-aware responses.
 - **PerunChat bridge sequence persistence:** the bridge persists a monotonic
   `sequence_number` counter to `<PERUN_HOME>/perunchat_bridge_seq.json` so
   gateway sequence validation never rejects Perun's replies after the first one.

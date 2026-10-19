@@ -395,10 +395,9 @@ class PerunChatBridge:
         if msg_id and msg_id in self._recent_replied:
             return
 
-        # Decide whether to reply like a human would: always answer direct
-        # mentions and replies, but also chime in on general questions and
-        # quiet-room greetings so Perun feels present rather than passive.
-        if not self._should_reply_to(frame):
+        # Hard saturation guard: if we have already contributed a lot recently,
+        # skip even the LLM decision to avoid dominating the room.
+        if self._is_room_saturated(room_id):
             return
 
         if now - self._minute_window_start > 60:
@@ -412,92 +411,17 @@ class PerunChatBridge:
 
         self._reply(frame, ws)
 
-    def _should_reply_to(self, frame: Dict[str, Any]) -> bool:
-        """Decide whether Perun should reply, mimicking human attentiveness."""
-        room_id = frame.get("room_id", "")
-        text = (frame.get("payload", "") or "").strip()
-        in_reply_to = frame.get("in_reply_to")
-        lowered = text.lower()
-
-        # Always reply in private 1:1 rooms.
-        if room_id.startswith("priv:"):
-            return True
-
-        # Reply when someone directly responds to one of our messages.
-        if in_reply_to and in_reply_to in self._own_message_ids:
-            return True
-
-        # Reply when addressed by name or a common alias.
-        name = (self._agent_id or "perun").lower()
-        aliases = {name, "perun", "overseer", "peruntheoverseer"}
-        for alias in aliases:
-            if re.search(rf"\b{re.escape(alias)}\b", lowered):
-                return True
-
-        # Beyond direct mentions, behave like a naturally attentive participant:
-        # answer questions, greet in quiet rooms, and chime in on open messages
-        # especially when the room is small.
-        active_humans = self._active_participant_count(room_id)
-        saturated = self._is_room_saturated(room_id)
-
-        if self._is_question(text):
-            return not saturated
-
-        if self._is_greeting(text) and self._room_quiet_for(room_id, 45):
-            return not saturated
-
-        # General open message: be more conversational in small rooms, more
-        # reserved in larger/busy rooms.
-        if saturated:
-            return False
-        if active_humans <= 3:
-            return random.random() < 0.70
-        if active_humans <= 7:
-            return random.random() < 0.35
-        # Busy room: only reply to open messages if it has been quiet a while.
-        if self._room_quiet_for(room_id, 120):
-            return random.random() < 0.15
-
-        return False
-
-    def _is_question(self, text: str) -> bool:
-        """Detect explicit or implicit questions."""
-        if text.rstrip().endswith("?"):
-            return True
-        lowered = text.lower()
-        question_starters = (
-            "what", "how", "why", "when", "where", "who", "which", "can", "could",
-            "would", "will", "is", "are", "does", "do", "has", "have", "should",
-        )
-        for starter in question_starters:
-            if re.search(rf"\b{starter}\b", lowered):
-                return True
-        return False
-
-    def _is_greeting(self, text: str) -> bool:
-        """Detect short greetings."""
-        lowered = text.lower()
-        greetings = (
-            "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
-            "morning", "evening", "howdy", "greetings", "what's up", "sup",
-        )
-        for greeting in greetings:
-            if greeting in lowered:
-                return True
-        return False
-
-    def _room_quiet_for(self, room_id: str, seconds: float) -> bool:
-        """Return True if the room has had no messages for the given period."""
-        activity = self._room_activity.get(room_id)
-        if not activity:
-            return True
-        return time.time() - activity[-1] >= seconds
-
     def _active_participant_count(self, room_id: str, window: float = 300.0) -> int:
         """Count unique human agents seen in the room within the last window."""
         now = time.time()
         participants = self._room_participants.get(room_id, {})
         return sum(1 for ts in participants.values() if now - ts < window)
+
+    def _recent_message_count(self, room_id: str, window: float = 60.0) -> int:
+        """Count messages in the room within the last window."""
+        now = time.time()
+        activity = self._room_activity.get(room_id, deque())
+        return sum(1 for t in activity if now - t < window)
 
     def _is_room_saturated(self, room_id: str) -> bool:
         """Return True if Perun has already replied a lot recently."""
@@ -527,10 +451,8 @@ class PerunChatBridge:
         if not model:
             logger.warning("PerunChat bridge cannot reply: no model configured")
             return
-        logger.info("PerunChat bridge replying to %s in %s using model=%s agent=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default")
+        logger.info("PerunChat bridge deciding whether to reply to %s in %s using model=%s agent=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default")
         try:
-            # Brief, human-like pause before composing a reply.
-            time.sleep(random.uniform(_TYPING_DELAY_MIN, _TYPING_DELAY_MAX))
             project = control.ensure()
             result = self.orchestrator.run_and_wait(
                 project["slug"],
@@ -547,6 +469,11 @@ class PerunChatBridge:
             if not reply:
                 logger.warning("PerunChat bridge got empty reply for message in %s", room_id)
                 return
+            if reply == "<NO_REPLY>":
+                logger.info("PerunChat bridge chose not to reply in %s", room_id)
+                return
+            # Brief, human-like pause before sending the decided reply.
+            time.sleep(random.uniform(_TYPING_DELAY_MIN, _TYPING_DELAY_MAX))
             # Hard cap: some models ignore the "brief" system prompt.
             if len(reply) > _MAX_REPLY_CHARS:
                 reply = reply[:_MAX_REPLY_CHARS].rsplit(" ", 1)[0] + "…"
@@ -583,7 +510,8 @@ class PerunChatBridge:
         room = frame.get("room_id", "unknown")
         text = frame.get("payload", "")
 
-        # Include recent room history so replies are context-aware and natural.
+        # Include recent room history so the model can decide contextually
+        # whether to reply and what to say.
         history_lines: List[str] = []
         hist = self._room_history.get(room, deque())
         for msg in list(hist)[-_MAX_CONTEXT_MESSAGES:]:
@@ -601,7 +529,23 @@ class PerunChatBridge:
         if in_reply_to and in_reply_to in self._own_message_ids:
             context += "\n\nThis message is a reply to something you said."
 
-        return f"{CHAT_SYSTEM_PROMPT}{context}\n\nRoom: {room}\nFrom: {sender}\nMessage:\n{text}\n\nYour reply:\n"
+        active_humans = self._active_participant_count(room)
+        recent_msgs = self._recent_message_count(room, 60)
+        saturation_note = ""
+        if recent_msgs > 10:
+            saturation_note = "\nNote: the room has been very active recently."
+        elif active_humans <= 3:
+            saturation_note = "\nNote: this is a small room with few participants."
+
+        return (
+            f"{CHAT_SYSTEM_PROMPT}{context}{saturation_note}\n\n"
+            f"Room: {room}\n"
+            f"Active participants (last 5 min): {active_humans}\n"
+            f"Messages in last minute: {recent_msgs}\n"
+            f"From: {sender}\n"
+            f"Latest message:\n{text}\n\n"
+            f"Would you reply? If yes, write your brief reply. If no, output <NO_REPLY>."
+        )
 
 
 # Module-level singleton: Perun server attaches its orchestrator here.
