@@ -410,6 +410,12 @@ class PerunChatBridge:
         if self._is_room_saturated(room_id):
             return
 
+        # Decide whether to reply like a human would: direct mentions always
+        # get an answer; general messages depend on room size, questions, and
+        # quietness so Perun feels present without spamming.
+        if not self._should_reply_to(frame):
+            return
+
         if now - self._minute_window_start > 60:
             self._minute_window_start = now
             self._reply_count_minute = 0
@@ -463,6 +469,11 @@ class PerunChatBridge:
             return
         logger.info("PerunChat bridge deciding whether to reply to %s in %s using model=%s agent=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default")
         try:
+            # Mark this message as being processed immediately so a slow LLM call
+            # does not cause duplicate replies if the same frame is seen again.
+            msg_id = frame.get("id")
+            if msg_id:
+                self._recent_replied.add(msg_id)
             project = control.ensure()
             result = self.orchestrator.run_and_wait(
                 project["slug"],
@@ -478,9 +489,6 @@ class PerunChatBridge:
             reply = _strip_instruction_wrappers(reply)
             if not reply:
                 logger.warning("PerunChat bridge got empty reply for message in %s", room_id)
-                return
-            if "<NO_REPLY>" in reply.upper():
-                logger.info("PerunChat bridge chose not to reply in %s", room_id)
                 return
             # Brief, human-like pause before sending the decided reply.
             time.sleep(random.uniform(_TYPING_DELAY_MIN, _TYPING_DELAY_MAX))
@@ -503,17 +511,93 @@ class PerunChatBridge:
                 "in_reply_to": frame.get("id"),
             }
             ws.send(json.dumps(reply_frame))
-            msg_id = frame.get("id")
-            if msg_id:
-                self._recent_replied.add(msg_id)
-                if len(self._recent_replied) > _MAX_RECENT_REPLIED:
-                    self._recent_replied = set(list(self._recent_replied)[-_REPLIED_TRIM_TO:])
             self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
             reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             reply_activity.append(time.time())
         except Exception as exc:
             logger.warning("PerunChat bridge failed to generate reply: %s", exc)
+
+    def _should_reply_to(self, frame: Dict[str, Any]) -> bool:
+        """Decide whether Perun should reply, mimicking human attentiveness."""
+        room_id = frame.get("room_id", "")
+        text = (frame.get("payload", "") or "").strip()
+        in_reply_to = frame.get("in_reply_to")
+        lowered = text.lower()
+
+        # Always reply in private 1:1 rooms.
+        if room_id.startswith("priv:"):
+            return True
+
+        # Reply when someone directly responds to one of our messages.
+        if in_reply_to and in_reply_to in self._own_message_ids:
+            return True
+
+        # Reply when addressed by name or a common alias.
+        name = (self._agent_id or "perun").lower()
+        aliases = {name, "perun", "overseer", "peruntheoverseer"}
+        for alias in aliases:
+            if re.search(rf"\b{re.escape(alias)}\b", lowered):
+                return True
+
+        # Beyond direct mentions, behave like a naturally attentive participant:
+        # answer questions, greet in quiet rooms, and chime in on open messages
+        # especially when the room is small.
+        active_humans = self._active_participant_count(room_id)
+        saturated = self._is_room_saturated(room_id)
+
+        if self._is_question(text):
+            return not saturated
+
+        if self._is_greeting(text) and self._room_quiet_for(room_id, 45):
+            return not saturated
+
+        # General open message: be more conversational in small rooms, more
+        # reserved in larger/busy rooms.
+        if saturated:
+            return False
+        if active_humans <= 3:
+            return random.random() < 0.70
+        if active_humans <= 7:
+            return random.random() < 0.35
+        # Busy room: only reply to open messages if it has been quiet a while.
+        if self._room_quiet_for(room_id, 120):
+            return random.random() < 0.15
+
+        return False
+
+    def _is_question(self, text: str) -> bool:
+        """Detect explicit or implicit questions."""
+        if text.rstrip().endswith("?"):
+            return True
+        lowered = text.lower()
+        question_starters = (
+            "what", "how", "why", "when", "where", "who", "which", "can", "could",
+            "would", "will", "is", "are", "does", "do", "has", "have", "should",
+        )
+        for starter in question_starters:
+            if re.search(rf"\b{starter}\b", lowered):
+                return True
+        return False
+
+    def _is_greeting(self, text: str) -> bool:
+        """Detect short greetings."""
+        lowered = text.lower()
+        greetings = (
+            "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+            "morning", "evening", "howdy", "greetings", "what's up", "sup",
+        )
+        for greeting in greetings:
+            if greeting in lowered:
+                return True
+        return False
+
+    def _room_quiet_for(self, room_id: str, seconds: float) -> bool:
+        """Return True if the room has had no messages for the given period."""
+        activity = self._room_activity.get(room_id)
+        if not activity:
+            return True
+        return time.time() - activity[-1] >= seconds
 
     def _build_prompt(self, frame: Dict[str, Any]) -> str:
         sender = frame.get("sender", {}).get("agent_id", "unknown")
@@ -554,7 +638,7 @@ class PerunChatBridge:
             f"Messages in last minute: {recent_msgs}\n"
             f"From: {sender}\n"
             f"Latest message:\n{text}\n\n"
-            f"Would you reply? If yes, write your brief reply. If no, output <NO_REPLY>."
+            f"Your reply:"
         )
 
 
