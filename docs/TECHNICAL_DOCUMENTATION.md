@@ -997,8 +997,10 @@ setting.
   `skip_instructions=True` so project instructions do not overwhelm chat prompts,
   reply length cap, and default public-room auto-join.
 * **Human-like reply behavior.** Mention / reply-to / private-room triggering,
-  rolling room-history context, typing delay, and per-room cooldown so Perun
-  behaves like a naturally attentive participant rather than an echo bot.
+  rolling room-history context, typing delay, and per-room cooldown. Perun is
+  more proactive in small rooms (≤3 active humans) and more reserved in busy
+  channels, behaving like a naturally attentive participant rather than an echo
+  bot.
 * **Bridge sequence persistence.** Monotonic `sequence_number` counter persisted
   in `<PERUN_HOME>/perunchat_bridge_seq.json`, preventing gateway rejection of
   replies after the first one.

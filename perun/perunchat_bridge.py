@@ -177,6 +177,9 @@ class PerunChatBridge:
         # Recent messages per room/thread so Perun can reply with human-like
         # conversational context instead of treating every message in isolation.
         self._room_history: Dict[str, Deque[Dict[str, Any]]] = {}
+        self._room_activity: Dict[str, Deque[float]] = {}
+        self._room_reply_activity: Dict[str, Deque[float]] = {}
+        self._room_participants: Dict[str, Dict[str, float]] = {}
         self._own_message_ids: Set[str] = set()
         self._last_reply_time: Dict[str, float] = {}
 
@@ -373,9 +376,17 @@ class PerunChatBridge:
             return
 
         # Keep a rolling window of recent room history for contextual replies.
+        now = time.time()
         if room_id and msg_id:
             hist = self._room_history.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             hist.append(frame)
+            activity = self._room_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
+            activity.append(now)
+            # Track active human participants so Perun can be more chatty in
+            # small rooms and more reserved in busy ones.
+            if sender:
+                participants = self._room_participants.setdefault(room_id, {})
+                participants[sender] = now
 
         if not room_id or not isinstance(text, str) or not text.strip():
             return
@@ -384,14 +395,12 @@ class PerunChatBridge:
         if msg_id and msg_id in self._recent_replied:
             return
 
-        # Only reply when it feels like a human would jump in:
-        #   - addressed by name / mention
-        #   - the message is a reply to one of our own messages
-        #   - private rooms (1:1 conversations)
+        # Decide whether to reply like a human would: always answer direct
+        # mentions and replies, but also chime in on general questions and
+        # quiet-room greetings so Perun feels present rather than passive.
         if not self._should_reply_to(frame):
             return
 
-        now = time.time()
         if now - self._minute_window_start > 60:
             self._minute_window_start = now
             self._reply_count_minute = 0
@@ -408,6 +417,7 @@ class PerunChatBridge:
         room_id = frame.get("room_id", "")
         text = (frame.get("payload", "") or "").strip()
         in_reply_to = frame.get("in_reply_to")
+        lowered = text.lower()
 
         # Always reply in private 1:1 rooms.
         if room_id.startswith("priv:"):
@@ -420,12 +430,83 @@ class PerunChatBridge:
         # Reply when addressed by name or a common alias.
         name = (self._agent_id or "perun").lower()
         aliases = {name, "perun", "overseer", "peruntheoverseer"}
-        lowered = text.lower()
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}\b", lowered):
                 return True
 
+        # Beyond direct mentions, behave like a naturally attentive participant:
+        # answer questions, greet in quiet rooms, and chime in on open messages
+        # especially when the room is small.
+        active_humans = self._active_participant_count(room_id)
+        saturated = self._is_room_saturated(room_id)
+
+        if self._is_question(text):
+            return not saturated
+
+        if self._is_greeting(text) and self._room_quiet_for(room_id, 45):
+            return not saturated
+
+        # General open message: be more conversational in small rooms, more
+        # reserved in larger/busy rooms.
+        if saturated:
+            return False
+        if active_humans <= 3:
+            return random.random() < 0.70
+        if active_humans <= 7:
+            return random.random() < 0.35
+        # Busy room: only reply to open messages if it has been quiet a while.
+        if self._room_quiet_for(room_id, 120):
+            return random.random() < 0.15
+
         return False
+
+    def _is_question(self, text: str) -> bool:
+        """Detect explicit or implicit questions."""
+        if text.rstrip().endswith("?"):
+            return True
+        lowered = text.lower()
+        question_starters = (
+            "what", "how", "why", "when", "where", "who", "which", "can", "could",
+            "would", "will", "is", "are", "does", "do", "has", "have", "should",
+        )
+        for starter in question_starters:
+            if re.search(rf"\b{starter}\b", lowered):
+                return True
+        return False
+
+    def _is_greeting(self, text: str) -> bool:
+        """Detect short greetings."""
+        lowered = text.lower()
+        greetings = (
+            "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+            "morning", "evening", "howdy", "greetings", "what's up", "sup",
+        )
+        for greeting in greetings:
+            if greeting in lowered:
+                return True
+        return False
+
+    def _room_quiet_for(self, room_id: str, seconds: float) -> bool:
+        """Return True if the room has had no messages for the given period."""
+        activity = self._room_activity.get(room_id)
+        if not activity:
+            return True
+        return time.time() - activity[-1] >= seconds
+
+    def _active_participant_count(self, room_id: str, window: float = 300.0) -> int:
+        """Count unique human agents seen in the room within the last window."""
+        now = time.time()
+        participants = self._room_participants.get(room_id, {})
+        return sum(1 for ts in participants.values() if now - ts < window)
+
+    def _is_room_saturated(self, room_id: str) -> bool:
+        """Return True if Perun has already replied a lot recently."""
+        now = time.time()
+        window = 60
+        replies = self._room_reply_activity.get(room_id, deque())
+        recent_replies = sum(1 for t in replies if now - t < window)
+        # If we have replied to 3+ messages in the last minute, let others talk.
+        return recent_replies >= 3
 
     def _reply(self, frame: Dict[str, Any], ws: Any) -> None:
         prompt = self._build_prompt(frame)
@@ -492,6 +573,8 @@ class PerunChatBridge:
                     self._recent_replied = set(list(self._recent_replied)[-_REPLIED_TRIM_TO:])
             self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
+            reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
+            reply_activity.append(time.time())
         except Exception as exc:
             logger.warning("PerunChat bridge failed to generate reply: %s", exc)
 
