@@ -19,6 +19,13 @@ All notable changes are recorded here. Single source of truth for release notes.
   Orchestrator with `skip_instructions=True`, strips instruction wrappers from
   the model reply, caps reply length, and defaults to joining the well-known
   public rooms (`pub:global:general`, `pub:global:tech`, `pub:global:random`).
+- **Human-like PerunChat bridge behavior:** replies are now triggered only when
+  Perun is mentioned, replied to, or in a private room; the bridge keeps recent
+  room history for context-aware responses, adds a brief typing delay, and
+  enforces per-room cooldowns so it does not chatter in busy channels.
+- **PerunChat bridge sequence persistence:** the bridge persists a monotonic
+  `sequence_number` counter to `<PERUN_HOME>/perunchat_bridge_seq.json` so
+  gateway sequence validation never rejects Perun's replies after the first one.
 - **Encrypted PerunChat API key:** `perunchat_api_key` can now be encrypted in
   `config.json` when a password is supplied, matching the Telegram token path.
   The dashboard exposes an optional encryption password field and surfaces the

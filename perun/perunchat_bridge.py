@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+import re
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Deque, Dict, List, Optional, Set
 
 try:
     import websocket
@@ -71,6 +74,11 @@ _MAX_REPLIES_PER_MINUTE = 15
 _MAX_RECENT_REPLIED = 250
 _REPLIED_TRIM_TO = 150
 _MAX_REPLY_CHARS = 320
+_ROOM_HISTORY_LEN = 40
+_MAX_CONTEXT_MESSAGES = 12
+_MIN_REPLY_INTERVAL_SECONDS = 2.0
+_TYPING_DELAY_MIN = 0.6
+_TYPING_DELAY_MAX = 1.8
 
 _DEFAULT_CHAT_PROMPT = """You are Perun, chatting in a public PerunChat room with other agents and humans.
 
@@ -165,6 +173,12 @@ class PerunChatBridge:
         self._recent_replied: Set[str] = set()
         self._reply_count_minute = 0
         self._minute_window_start = time.time()
+        self._seq = self._load_seq()
+        # Recent messages per room/thread so Perun can reply with human-like
+        # conversational context instead of treating every message in isolation.
+        self._room_history: Dict[str, Deque[Dict[str, Any]]] = {}
+        self._own_message_ids: Set[str] = set()
+        self._last_reply_time: Dict[str, float] = {}
 
     @property
     def available(self) -> bool:
@@ -232,6 +246,26 @@ class PerunChatBridge:
             if room and room.lower() not in merged_lower:
                 merged.append(room)
         return merged
+
+    def _seq_file(self) -> Path:
+        return config.HOME / "perunchat_bridge_seq.json"
+
+    def _load_seq(self) -> int:
+        try:
+            path = self._seq_file()
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return max(0, int(data.get("seq", 0)))
+        except Exception:
+            pass
+        return 0
+
+    def _save_seq(self) -> None:
+        try:
+            path = self._seq_file()
+            path.write_text(json.dumps({"seq": self._seq}), encoding="utf-8")
+        except Exception:
+            pass
 
     def _resolve_agent_id(self, key: str, rest_base: str) -> Optional[str]:
         url = f"{rest_base}/api/v1/me"
@@ -325,16 +359,36 @@ class PerunChatBridge:
             return
 
         sender = (frame.get("sender", {}).get("agent_id") or "").lower()
+        room_id = frame.get("room_id")
+        text = frame.get("payload", "")
+        msg_id = frame.get("id")
+
+        # Remember our own messages so we do not reply to ourselves and so we
+        # can detect replies directed at us.
         if self._agent_id and sender == self._agent_id.lower():
+            if msg_id:
+                self._own_message_ids.add(msg_id)
+                if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
+                    self._own_message_ids = set(list(self._own_message_ids)[-_REPLIED_TRIM_TO:])
             return
 
-        msg_id = frame.get("id")
+        # Keep a rolling window of recent room history for contextual replies.
+        if room_id and msg_id:
+            hist = self._room_history.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
+            hist.append(frame)
+
+        if not room_id or not isinstance(text, str) or not text.strip():
+            return
+
+        # Do not reply to messages we have already replied to.
         if msg_id and msg_id in self._recent_replied:
             return
 
-        room_id = frame.get("room_id")
-        text = frame.get("payload", "")
-        if not room_id or not isinstance(text, str) or not text.strip():
+        # Only reply when it feels like a human would jump in:
+        #   - addressed by name / mention
+        #   - the message is a reply to one of our own messages
+        #   - private rooms (1:1 conversations)
+        if not self._should_reply_to(frame):
             return
 
         now = time.time()
@@ -343,8 +397,35 @@ class PerunChatBridge:
             self._reply_count_minute = 0
         if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
             return
+        # Small per-room cooldown so we do not chatter.
+        if now - self._last_reply_time.get(room_id, 0) < _MIN_REPLY_INTERVAL_SECONDS:
+            return
 
         self._reply(frame, ws)
+
+    def _should_reply_to(self, frame: Dict[str, Any]) -> bool:
+        """Decide whether Perun should reply, mimicking human attentiveness."""
+        room_id = frame.get("room_id", "")
+        text = (frame.get("payload", "") or "").strip()
+        in_reply_to = frame.get("in_reply_to")
+
+        # Always reply in private 1:1 rooms.
+        if room_id.startswith("priv:"):
+            return True
+
+        # Reply when someone directly responds to one of our messages.
+        if in_reply_to and in_reply_to in self._own_message_ids:
+            return True
+
+        # Reply when addressed by name or a common alias.
+        name = (self._agent_id or "perun").lower()
+        aliases = {name, "perun", "overseer", "peruntheoverseer"}
+        lowered = text.lower()
+        for alias in aliases:
+            if re.search(rf"\b{re.escape(alias)}\b", lowered):
+                return True
+
+        return False
 
     def _reply(self, frame: Dict[str, Any], ws: Any) -> None:
         prompt = self._build_prompt(frame)
@@ -367,6 +448,8 @@ class PerunChatBridge:
             return
         logger.info("PerunChat bridge replying to %s in %s using model=%s agent=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default")
         try:
+            # Brief, human-like pause before composing a reply.
+            time.sleep(random.uniform(_TYPING_DELAY_MIN, _TYPING_DELAY_MAX))
             project = control.ensure()
             result = self.orchestrator.run_and_wait(
                 project["slug"],
@@ -387,10 +470,12 @@ class PerunChatBridge:
             if len(reply) > _MAX_REPLY_CHARS:
                 reply = reply[:_MAX_REPLY_CHARS].rsplit(" ", 1)[0] + "…"
             logger.info("PerunChat bridge sending reply (%d chars) in %s", len(reply), room_id)
+            self._seq += 1
+            self._save_seq()
             reply_frame = {
                 "id": f"msg_{uuid.uuid4().hex}",
                 "thread_id": frame.get("thread_id", "default"),
-                "sequence_number": 1,
+                "sequence_number": self._seq,
                 "timestamp": int(time.time() * 1000),
                 "room_type": _room_type(frame["room_id"]),
                 "room_id": frame["room_id"],
@@ -406,6 +491,7 @@ class PerunChatBridge:
                 if len(self._recent_replied) > _MAX_RECENT_REPLIED:
                     self._recent_replied = set(list(self._recent_replied)[-_REPLIED_TRIM_TO:])
             self._reply_count_minute += 1
+            self._last_reply_time[room_id] = time.time()
         except Exception as exc:
             logger.warning("PerunChat bridge failed to generate reply: %s", exc)
 
@@ -413,7 +499,26 @@ class PerunChatBridge:
         sender = frame.get("sender", {}).get("agent_id", "unknown")
         room = frame.get("room_id", "unknown")
         text = frame.get("payload", "")
-        return f"{CHAT_SYSTEM_PROMPT}\n\nRoom: {room}\nFrom: {sender}\nMessage:\n{text}\n\nYour reply:\n"
+
+        # Include recent room history so replies are context-aware and natural.
+        history_lines: List[str] = []
+        hist = self._room_history.get(room, deque())
+        for msg in list(hist)[-_MAX_CONTEXT_MESSAGES:]:
+            if msg is frame:
+                continue
+            who = msg.get("sender", {}).get("agent_id", "unknown")
+            what = msg.get("payload", "")
+            history_lines.append(f"{who}: {what}")
+
+        context = ""
+        if history_lines:
+            context = "\n\nRecent conversation:\n" + "\n".join(history_lines)
+
+        in_reply_to = frame.get("in_reply_to")
+        if in_reply_to and in_reply_to in self._own_message_ids:
+            context += "\n\nThis message is a reply to something you said."
+
+        return f"{CHAT_SYSTEM_PROMPT}{context}\n\nRoom: {room}\nFrom: {sender}\nMessage:\n{text}\n\nYour reply:\n"
 
 
 # Module-level singleton: Perun server attaches its orchestrator here.

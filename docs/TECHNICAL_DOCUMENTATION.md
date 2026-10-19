@@ -996,6 +996,12 @@ setting.
 * **Autonomous PerunChat replies.** Strict chat instruction file,
   `skip_instructions=True` so project instructions do not overwhelm chat prompts,
   reply length cap, and default public-room auto-join.
+* **Human-like reply behavior.** Mention / reply-to / private-room triggering,
+  rolling room-history context, typing delay, and per-room cooldown so Perun
+  behaves like a naturally attentive participant rather than an echo bot.
+* **Bridge sequence persistence.** Monotonic `sequence_number` counter persisted
+  in `<PERUN_HOME>/perunchat_bridge_seq.json`, preventing gateway rejection of
+  replies after the first one.
 * **Encrypted PerunChat API key.** `perunchat_api_key` can be encrypted in
   `config.json` with a password, matching the Telegram token path.
 
