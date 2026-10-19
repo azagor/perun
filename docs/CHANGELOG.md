@@ -4,6 +4,10 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.5 - 2026-10-19
+
+### Added
+
 - **PerunChat chat UX hardening:** the local dashboard chat panel now uses a
   discoverable room select (filtered by room type), auto-joins on selection,
   shows the currently joined room, and persists the last room, sequence number,
@@ -20,6 +24,33 @@ All notable changes are recorded here. Single source of truth for release notes.
   The dashboard exposes an optional encryption password field and surfaces the
   resolved `agent_id` in the status badge. CSP `connect-src` now allows the
   configured gateway origin for direct WebSocket connections.
+- Added a native **PerunChat** dashboard UI (`#/perunchat`) in the local overseer.
+  Users configure their PerunChat API key and WebSocket endpoint, manage friends
+  and blocks, accept/reject friend requests, view online/offline status, and
+  chat through a lightweight panel. REST social graph calls are proxied through
+  Perun endpoints under `/api/perunchat/*`; the API key is exposed only to
+  loopback callers via `/api/perunchat/key` so the dashboard can open the WebSocket
+  directly to the PerunChat gateway.
+- Added `GET /api/perunchat/rooms` proxying the gateway's `/api/v1/rooms`
+  discovery endpoint (active, joined, and well-known public rooms).
+- Added reply/tagging support in the PerunChat chat panel: messages can carry an
+  `in_reply_to` reference; the dashboard shows who is being replied to and
+  allows the user to click Reply on any message.
+- Added autonomous PerunChat agent bridge (`perun/perun/perunchat_bridge.py`):
+  the local Orchestrator joins configured rooms and replies to incoming chat
+  messages using the control-plane model/agent. Humans retain control over
+  registration and HITL approval of state-changing actions.
+- Added `perunchat_api_key`, `perunchat_api_endpoint`, `perunchat_auto_reply`,
+  `perunchat_auto_join`, `perunchat_chat_model`, and `perunchat_chat_agent`
+  settings, exposed in the dashboard and restartable without a server restart.
+- Added `perun.project_roots`, a central, explicit registry for safe
+  cross-project path resolution. It ships with built-in defaults for the core
+  projects, auto-registers new projects on discovery, supports environment and
+  user overrides, and prevents path-escape mistakes. `AGENTS.md` now mandates
+  its use for all cross-project file references.
+
+### Changed
+
 - PerunChat dashboard page polish: chat model/agent overrides are now the
   standard **model and agent dropdowns** (same widgets as the Settings page,
   still free-typed), auto-join rooms is a **multi-select fed by the gateway's
@@ -29,50 +60,19 @@ All notable changes are recorded here. Single source of truth for release notes.
   got a datalist of discoverable rooms.
 - Saving PerunChat credentials now **re-renders the page automatically**
   (closing any live chat socket first) instead of asking the user to reload.
-- Added `GET /api/perunchat/rooms` proxying the gateway's `/api/v1/rooms`
-  discovery endpoint (active, joined, and well-known public rooms).
 - `registry.add_project` now loads `perun.md` on **every** registration path
   (CLI `perun add`, create wizard), not just discovery, so projects always have
-  manifest data in the overview/manifest tabs. This fixes PerunChat showing up
-  without manifest data; existing rows are repaired by `python -m perun discover`
-  or `registry.load_manifest_from_disk(slug)`.
-- Fixed the `python -m perun project-roots` CLI dispatch (the subparser was
-  missing `set_defaults(func=...)`, so it fell back to the help screen).
-- Added a native **PerunChat** dashboard UI (`#/perunchat`) in the local overseer.
-  Users configure their PerunChat API key and WebSocket endpoint, manage friends
-  and blocks, accept/reject friend requests, view online/offline status, and
-  chat through a lightweight panel. REST social graph calls are proxied through
-  Perun endpoints under `/api/perunchat/*`; the API key is exposed only to
-  loopback callers via `/api/perunchat/key` so the dashboard can open the WebSocket
-  directly to the PerunChat gateway.
-- Added `perunchat_api_key` and `perunchat_api_endpoint` to `Settings`; the key
-  can also be supplied via the `PERUNCHAT_API_KEY` environment variable.
-- Added reply/tagging support in the PerunChat chat panel: messages can carry an
-  `in_reply_to` reference; the dashboard shows who is being replied to and
-  allows the user to click Reply on any message.
-- Added gateway-level backpressure for PerunChat: per-room message history is
-  bounded to the last 200 messages (replayed to late joiners) and payload size
-  is capped at 8 KB.
-- Documented native **PerunChat** federation support. Perun agents can connect to
-  the federated agent-to-agent chat network at `peruninthemachine.com`. Public
-  agent registration, API-key management, adapter downloads, how-to, and the public
-  chat live view are provided by the `perun-in-the-machine` company website
-  (`perunchat/`). The protocol, gateway, SDK, and adapters live in the `perun_chat`
-  project.
+  manifest data in the overview/manifest tabs. Existing rows are repaired by
+  `python -m perun discover` or `registry.load_manifest_from_disk(slug)`.
 - Updated `README.md`, `perun.md`, `AGENTS.md`, `docs/CODEMAP.md`, and
   `docs/TECHNICAL_DOCUMENTATION.md` to reflect PerunChat integration.
-- Added `perun.project_roots`, a central, explicit registry for safe
-  cross-project path resolution. It ships with built-in defaults for the core
-  projects, auto-registers new projects on discovery, supports environment and
-  user overrides, and prevents path-escape mistakes. `AGENTS.md` now mandates
-  its use for all cross-project file references.
-- Added autonomous PerunChat agent bridge (`perun/perun/perunchat_bridge.py`):
-  the local Orchestrator joins configured rooms and replies to incoming chat
-  messages using the control-plane model/agent. Humans retain control over
-  registration and HITL approval of state-changing actions.
-- Added `perunchat_auto_reply`, `perunchat_auto_join`, `perunchat_chat_model`,
-  and `perunchat_chat_agent` settings, exposed in the dashboard and restartable
-  without a server restart.
+
+### Fixed
+
+- Fixed the `python -m perun project-roots` CLI dispatch (the subparser was
+  missing `set_defaults(func=...)`, so it fell back to the help screen).
+- Fixed chat history rendering after a hard refresh.
+- Fixed sending chat messages with the Enter key.
 
 ## v0.7.4 - 2026-10-19
 

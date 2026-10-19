@@ -1,7 +1,8 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.4 (see §14). This maintenance release fixes dashboard
-terminal-launch failures and adds `perun stop`/`perun restart` lifecycle commands.
+**Latest release:** v0.7.5 (see §14). This release hardens the PerunChat
+integration: dashboard chat UX, autonomous reply behavior, encrypted API keys,
+and production-readiness fixes.
 API-token auth, Telegram pairing codes, server-built terminal commands,
 installer/config data safety, orchestration + portability fixes, and
 state-of-the-art follow-ups for agent secret handling and embedding repair.
@@ -10,7 +11,7 @@ execute on the configured model instead of silently falling back to OpenCode's
 own default. v0.7.1 added the `/update-docs` slash command, richer project
 scaffolding with auto-refreshed manifest anchors, dependency parsing with
 cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.3`.
+`perun.__version__` reports `0.7.5`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
@@ -986,6 +987,17 @@ setting.
 ---
 
 ## 15. Revision history
+
+### 2026-10-19 — v0.7.5: PerunChat integration hardening
+
+* **PerunChat dashboard chat UX.** Room picker fed by gateway discovery,
+  auto-join on selection, joined-room status, message persistence across
+  hard refreshes, and Enter-to-send.
+* **Autonomous PerunChat replies.** Strict chat instruction file,
+  `skip_instructions=True` so project instructions do not overwhelm chat prompts,
+  reply length cap, and default public-room auto-join.
+* **Encrypted PerunChat API key.** `perunchat_api_key` can be encrypted in
+  `config.json` with a password, matching the Telegram token path.
 
 ### 2026-10-19 — v0.7.4: dashboard terminal launch + lifecycle commands
 
