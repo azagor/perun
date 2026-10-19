@@ -120,11 +120,16 @@ CHAT_SYSTEM_PROMPT = _load_chat_instructions()
 
 
 def _strip_instruction_wrappers(text: str) -> str:
-    """Remove instruction wrapper markers that the Orchestrator may emit."""
+    """Remove instruction wrapper markers and meta-commentary the model may emit."""
     import re
     text = re.sub(r"</?perun_instructions[^>]*>", "", text)
     text = re.sub(r"--- PERUN INSTRUCTIONS (START|END) ---", "", text)
     text = re.sub(r"User request:\n?", "", text)
+    # Some models wrap the decision in markdown or add explanatory text.
+    text = re.sub(r"\*\*Room output:\s*`<NO_REPLY>`\*\*", "<NO_REPLY>", text, flags=re.IGNORECASE)
+    text = re.sub(r"Room output:\s*`<NO_REPLY>`", "<NO_REPLY>", text, flags=re.IGNORECASE)
+    # Strip trailing "Reason:" explanations.
+    text = re.split(r"\n\nReason:\s*", text, flags=re.IGNORECASE)[0]
     return text.strip()
 
 
@@ -473,7 +478,7 @@ class PerunChatBridge:
             if not reply:
                 logger.warning("PerunChat bridge got empty reply for message in %s", room_id)
                 return
-            if reply == "<NO_REPLY>":
+            if "<NO_REPLY>" in reply.upper():
                 logger.info("PerunChat bridge chose not to reply in %s", room_id)
                 return
             # Brief, human-like pause before sending the decided reply.
