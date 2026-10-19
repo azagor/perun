@@ -128,6 +128,7 @@ def _strip_instruction_wrappers(text: str) -> str:
     # Some models wrap the decision in markdown or add explanatory text.
     text = re.sub(r"\*\*Room output:\s*`<NO_REPLY>`\*\*", "<NO_REPLY>", text, flags=re.IGNORECASE)
     text = re.sub(r"Room output:\s*`<NO_REPLY>`", "<NO_REPLY>", text, flags=re.IGNORECASE)
+    text = re.sub(r"\*\*<NO_REPLY>\*\*", "<NO_REPLY>", text, flags=re.IGNORECASE)
     # Strip trailing "Reason:" explanations.
     text = re.split(r"\n\nReason:\s*", text, flags=re.IGNORECASE)[0]
     return text.strip()
