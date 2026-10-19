@@ -286,6 +286,26 @@ def _origin_ok(origin: str, host_header: str, request_scheme: str = "http") -> b
     return False
 
 
+def _perunchat_connect_origin() -> str:
+    """Return the configured PerunChat gateway origin for connect-src CSP.
+
+    The dashboard opens a WebSocket directly to the gateway, so the CSP must
+    allow that origin. Derives the origin from the configured WS endpoint.
+    """
+    endpoint = SETTINGS.perunchat()[1] or "wss://peruninthemachine.com/v1/chat/ws"
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(endpoint)
+        if parsed.scheme and parsed.hostname:
+            if parsed.port:
+                return f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+            return f"{parsed.scheme}://{parsed.hostname}"
+    except Exception:
+        pass
+    return "wss://peruninthemachine.com"
+
+
 @app.middleware("http")
 async def _origin_guard(request: Request, call_next):
     if request.url.path.startswith("/api/"):
@@ -313,11 +333,13 @@ async def _origin_guard(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Allow the configured PerunChat gateway origin for WebSocket connections.
+    pc_origin = _perunchat_connect_origin()
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
-        "connect-src 'self'; "
+        f"connect-src 'self' {pc_origin}; "
         "img-src 'self' data:; "
         "font-src 'self';"
     )
@@ -2060,6 +2082,29 @@ def _coerce_setting(key: str, value: Any) -> Any:
 @app.patch("/api/settings")
 def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     global SETTINGS, ORCH
+    from . import secrets as _secrets
+
+    # Encrypt perunchat_api_key when a password is available, exactly like the
+    # Telegram token path, so the key is not stored plaintext in config.json.
+    pc_password = (payload.get("perunchat_password") or os.environ.get("PERUN_PASSWORD") or "").strip()
+    if "perunchat_api_key" in payload:
+        pc_key = str(payload.get("perunchat_api_key") or "").strip()
+        if pc_key and pc_password:
+            try:
+                payload = dict(payload)
+                payload["perunchat_api_key"] = _secrets.encrypt_value(pc_key, pc_password)
+            except _secrets.SecretError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif pc_password and SETTINGS.perunchat_api_key:
+        # No new key supplied, but a password is now available: encrypt an
+        # existing plaintext key in place.
+        current = SETTINGS.perunchat_api_key
+        if not _secrets.is_encrypted(current):
+            try:
+                SETTINGS.perunchat_api_key = _secrets.encrypt_value(current, pc_password)
+            except _secrets.SecretError:
+                pass
+
     allowed = set(config.Settings.__dataclass_fields__)
     for key, value in payload.items():
         if key in allowed:
@@ -2354,19 +2399,27 @@ def api_telegram_send(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 # PerunChat federation proxy (dashboard UI)
 # --------------------------------------------------------------------------- #
 def _perunchat_rest_base() -> str:
-    """Derive the PerunChat REST base URL from the configured WS endpoint."""
+    """Derive the PerunChat REST base URL from the configured WS endpoint.
+
+    The public deployment exposes the REST API under ``/chat/api/v1`` and the
+    WebSocket under ``/v1/chat/ws``. Local/dev gateways expose both under the
+    same origin with the REST API at ``/api/v1``.
+    """
+    from urllib.parse import urlparse
+
     endpoint = SETTINGS.perunchat()[1] or "wss://peruninthemachine.com/v1/chat/ws"
-    if endpoint.startswith("wss://"):
-        base = endpoint.replace("wss://", "https://", 1)
-    elif endpoint.startswith("ws://"):
-        base = endpoint.replace("ws://", "http://", 1)
-    else:
-        raise HTTPException(status_code=400, detail="invalid perunchat_api_endpoint")
-    if "/v1/chat/ws" in base:
-        base = base.rsplit("/v1/chat/ws", 1)[0]
-    elif base.endswith("/"):
-        base = base[:-1]
-    return base
+    try:
+        parsed = urlparse(endpoint)
+        scheme = parsed.scheme.replace("wss", "https").replace("ws", "http")
+        if not scheme or not parsed.hostname:
+            raise ValueError("missing scheme or host")
+        base = f"{scheme}://{parsed.netloc}"
+        # Public deployment routes REST under /chat.
+        if parsed.hostname.lower() in ("peruninthemachine.com", "www.peruninthemachine.com"):
+            return f"{base}/chat"
+        return base
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid perunchat_api_endpoint") from exc
 
 
 def _perunchat_key() -> str:
@@ -2410,7 +2463,13 @@ def _perunchat_proxy(method: str, path: str, body: dict[str, Any] | None = None,
 def api_perunchat_status() -> dict[str, Any]:
     key, endpoint = SETTINGS.perunchat()
     rest_base = _perunchat_rest_base() if key else ""
-    return _ok(configured=bool(key), endpoint=endpoint, rest_base=rest_base)
+    agent_id = ""
+    if key:
+        try:
+            agent_id = _perunchat_proxy("GET", "/api/v1/me").get("agent_id", "")
+        except Exception:
+            pass
+    return _ok(configured=bool(key), endpoint=endpoint, rest_base=rest_base, agent_id=agent_id)
 
 
 @app.get("/api/perunchat/key")

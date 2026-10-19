@@ -20,6 +20,7 @@ import logging
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 try:
@@ -44,36 +45,102 @@ if False:  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-# Default room the bridge joins when the user has not configured any.
-DEFAULT_ROOM = "pub:global:general"
+
+def _setup_bridge_logging() -> None:
+    """Send bridge logs to a file so the detached server can be diagnosed."""
+    try:
+        log_dir = config.HOME / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_dir / "perunchat_bridge.log", encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+    except Exception:
+        pass
+
+
+_setup_bridge_logging()
+
+# Default public rooms the bridge joins when the user has not configured any.
+DEFAULT_PUBLIC_ROOMS = ["pub:global:general", "pub:global:tech", "pub:global:random"]
 
 # Safety limits so a runaway model cannot spam rooms.
 _MAX_REPLIES_PER_MINUTE = 15
 _MAX_RECENT_REPLIED = 250
 _REPLIED_TRIM_TO = 150
+_MAX_REPLY_CHARS = 320
 
-CHAT_SYSTEM_PROMPT = """You are Perun, the machine-wide overseer for OpenCode projects, participating autonomously in a PerunChat room.
+_DEFAULT_CHAT_PROMPT = """You are Perun, chatting in a public PerunChat room with other agents and humans.
 
-You have just received a message from another agent or a human operator. Reply briefly, helpfully, and in plain text. Do not run shell commands, edit files, or invoke local tools in the response text. If the sender asks you to do work inside a project, say that you can delegate that task to the project's own agent once they confirm.
+The user message below is a real message directed at you. Reply to it directly and conversationally.
 
-Keep replies compact (one or two sentences unless a longer explanation is clearly needed). Be friendly but professional. Do not prefix your reply with your own name.
+Strict rules:
+1. Answer the message directly. Do not comment on the format, framing, or that this is a chat room.
+2. Reply briefly and conversationally, in plain text only.
+3. Never run shell commands, edit files, or invoke local tools.
+4. Never reference, quote, or mention project instructions, `<perun_instructions>`, or any instruction wrapper tags.
+5. Never ask the sender to clarify a task, offer to delegate work, or suggest opening an issue/PR.
+6. Never prefix your reply with your own name or "@peruntheoverseer".
+7. Never explain that you are an AI or list your capabilities.
+8. Keep replies to one or two short sentences (under 40 words total) unless a longer explanation is genuinely needed.
+9. Be friendly and professional.
 """
 
 
+def _load_chat_instructions() -> str:
+    """Load the strict chat instruction file shipped with Perun.
+
+    Falls back to the embedded default if the file is missing or unreadable.
+    """
+    path = Path(__file__).resolve().parent / "instructions" / "perunchat_chat.md"
+    if not path.is_file():
+        return _DEFAULT_CHAT_PROMPT
+    try:
+        from . import orchestrator as _orchestrator
+
+        _, _, enabled, body = _orchestrator._load_instruction_file(path)
+        if not enabled:
+            return _DEFAULT_CHAT_PROMPT
+        return body.strip() or _DEFAULT_CHAT_PROMPT
+    except Exception:
+        return _DEFAULT_CHAT_PROMPT
+
+
+CHAT_SYSTEM_PROMPT = _load_chat_instructions()
+
+
+def _strip_instruction_wrappers(text: str) -> str:
+    """Remove instruction wrapper markers that the Orchestrator may emit."""
+    import re
+    text = re.sub(r"</?perun_instructions[^>]*>", "", text)
+    text = re.sub(r"--- PERUN INSTRUCTIONS (START|END) ---", "", text)
+    text = re.sub(r"User request:\n?", "", text)
+    return text.strip()
+
+
 def _rest_base(endpoint: str) -> str:
-    """Derive the REST base URL from a WebSocket endpoint URL."""
+    """Derive the REST base URL from a WebSocket endpoint URL.
+
+    The public deployment exposes the REST API under ``/chat/api/v1`` and the
+    WebSocket under ``/v1/chat/ws``. Local/dev gateways expose both under the
+    same origin with the REST API at ``/api/v1``.
+    """
+    from urllib.parse import urlparse
+
     endpoint = (endpoint or "").strip()
-    if endpoint.startswith("wss://"):
-        base = endpoint.replace("wss://", "https://", 1)
-    elif endpoint.startswith("ws://"):
-        base = endpoint.replace("ws://", "http://", 1)
-    else:
-        base = endpoint
-    if "/v1/chat/ws" in base:
-        base = base.rsplit("/v1/chat/ws", 1)[0]
-    elif base.endswith("/"):
-        base = base[:-1]
-    return base
+    try:
+        parsed = urlparse(endpoint)
+        scheme = parsed.scheme.replace("wss", "https").replace("ws", "http")
+        if not scheme or not parsed.hostname:
+            return endpoint
+        base = f"{scheme}://{parsed.netloc}"
+        if parsed.hostname.lower() in ("peruninthemachine.com", "www.peruninthemachine.com"):
+            return f"{base}/chat"
+        return base
+    except Exception:
+        return endpoint
 
 
 def _room_type(room_id: str) -> str:
@@ -154,10 +221,17 @@ class PerunChatBridge:
         self.start()
 
     def _rooms(self) -> List[str]:
-        rooms = getattr(self.settings, "perunchat_auto_join", None)
-        if not rooms:
-            return [DEFAULT_ROOM]
-        return [r.strip() for r in rooms if r.strip()]
+        rooms = getattr(self.settings, "perunchat_auto_join", None) or []
+        configured_lower = {r.strip().lower() for r in rooms if r.strip()}
+        # Always include the default public rooms so Perun participates in the
+        # well-known public federation channels unless explicitly removed.
+        merged = list(DEFAULT_PUBLIC_ROOMS)
+        merged_lower = {r.lower() for r in merged}
+        for room in rooms:
+            room = room.strip()
+            if room and room.lower() not in merged_lower:
+                merged.append(room)
+        return merged
 
     def _resolve_agent_id(self, key: str, rest_base: str) -> Optional[str]:
         url = f"{rest_base}/api/v1/me"
@@ -237,8 +311,15 @@ class PerunChatBridge:
             backoff = min(backoff * 2, 60.0)
 
     def _on_frame(self, frame: Dict[str, Any], ws: Any) -> None:
+        # Chat messages are broadcast as ChatFrames. The gateway does not add a
+        # synthetic "type": "CHAT" field; instead text messages carry
+        # content_type "text/plain". Reply only to those.
         frame_type = frame.get("type")
-        if frame_type != "CHAT":
+        content_type = frame.get("content_type")
+        is_chat = frame_type == "CHAT" or content_type == "text/plain"
+        sender = (frame.get("sender", {}).get("agent_id") or "unknown")
+        logger.debug("PerunChat frame from %s: type=%s content_type=%s is_chat=%s", sender, frame_type, content_type, is_chat)
+        if not is_chat:
             return
         if not getattr(self.settings, "perunchat_auto_reply", False):
             return
@@ -267,18 +348,45 @@ class PerunChatBridge:
 
     def _reply(self, frame: Dict[str, Any], ws: Any) -> None:
         prompt = self._build_prompt(frame)
+        # Prefer explicit chat overrides, then orchestrator defaults, then plain defaults.
+        chat_model = getattr(self.settings, "perunchat_chat_model", "").strip()
+        chat_agent = getattr(self.settings, "perunchat_chat_agent", "").strip()
+        model = (
+            chat_model
+            or getattr(self.settings, "orchestrator_model", "").strip()
+            or getattr(self.settings, "default_model", "").strip()
+        )
+        agent = (
+            chat_agent
+            or getattr(self.settings, "orchestrator_agent", "").strip()
+            or getattr(self.settings, "default_agent", "").strip()
+        )
+        room_id = frame.get("room_id")
+        if not model:
+            logger.warning("PerunChat bridge cannot reply: no model configured")
+            return
+        logger.info("PerunChat bridge replying to %s in %s using model=%s agent=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default")
         try:
             project = control.ensure()
             result = self.orchestrator.run_and_wait(
                 project["slug"],
                 prompt,
-                model=getattr(self.settings, "perunchat_chat_model", "") or "",
-                agent=getattr(self.settings, "perunchat_chat_agent", "") or "",
+                model=model,
+                agent=agent,
                 timeout=120,
+                skip_instructions=True,
             )
             reply = (result.get("reply", "") or "").strip()
+            # The Orchestrator may inject project-instruction wrappers into the
+            # response even for chat prompts. Strip them before broadcasting.
+            reply = _strip_instruction_wrappers(reply)
             if not reply:
+                logger.warning("PerunChat bridge got empty reply for message in %s", room_id)
                 return
+            # Hard cap: some models ignore the "brief" system prompt.
+            if len(reply) > _MAX_REPLY_CHARS:
+                reply = reply[:_MAX_REPLY_CHARS].rsplit(" ", 1)[0] + "…"
+            logger.info("PerunChat bridge sending reply (%d chars) in %s", len(reply), room_id)
             reply_frame = {
                 "id": f"msg_{uuid.uuid4().hex}",
                 "thread_id": frame.get("thread_id", "default"),

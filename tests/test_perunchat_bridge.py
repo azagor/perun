@@ -42,10 +42,19 @@ def test_bridge_enabled(settings):
     assert bridge.enabled
 
 
-def test_default_room_when_empty(settings):
+def test_default_rooms_when_empty(settings):
     settings.perunchat_auto_join = []
     bridge = PerunChatBridge(MagicMock(settings=settings))
-    assert bridge._rooms() == ["pub:global:general"]
+    assert bridge._rooms() == ["pub:global:general", "pub:global:tech", "pub:global:random"]
+
+
+def test_default_rooms_merged_with_configured(settings):
+    settings.perunchat_auto_join = ["pub:global:general", "grp:my-org:alerts"]
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    assert bridge._rooms() == [
+        "pub:global:general", "pub:global:tech", "pub:global:random",
+        "grp:my-org:alerts",
+    ]
 
 
 def test_room_type_classification():
@@ -95,4 +104,94 @@ def test_status_exposes_agent_id(settings):
     status = bridge.status
     assert status["enabled"] is True
     assert status["agent_id"] == "perun-local"
-    assert status["rooms"] == ["pub:global:test"]
+    # Configured pub:global:test is merged with the default public rooms.
+    assert "pub:global:test" in status["rooms"]
+    assert "pub:global:general" in status["rooms"]
+
+
+def test_rest_base_public_host():
+    from perun.perunchat_bridge import _rest_base
+    assert _rest_base("wss://peruninthemachine.com/v1/chat/ws") == "https://peruninthemachine.com/chat"
+    assert _rest_base("ws://www.peruninthemachine.com/v1/chat/ws") == "http://www.peruninthemachine.com/chat"
+
+
+def test_rest_base_local_dev():
+    from perun.perunchat_bridge import _rest_base
+    assert _rest_base("ws://127.0.0.1:8765/v1/chat/ws") == "http://127.0.0.1:8765"
+    assert _rest_base("wss://localhost/v1/chat/ws") == "https://localhost"
+
+
+def test_bridge_replies_by_content_type_without_type_field(settings):
+    """Gateway CHAT frames may omit 'type' and use content_type='text/plain'."""
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "Hi there"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_3",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "text/plain",
+        "payload": "hello perun",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+        mock_reply.assert_called_once_with(frame, None)
+
+
+def test_bridge_skips_non_text_frames(settings):
+    mock_orchestrator = MagicMock(settings=settings)
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_4",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "application/json",
+        "payload": '{"action":"proposal"}',
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+        mock_reply.assert_not_called()
+
+
+def test_strip_instruction_wrappers():
+    from perun.perunchat_bridge import _strip_instruction_wrappers
+    text = "<perun_instructions scope='project'>hello</perun_instructions> world"
+    assert _strip_instruction_wrappers(text) == "hello world"
+
+
+def test_reply_uses_model_fallback_chain(settings):
+    """chat_model -> orchestrator_model -> default_model is resolved and skip_instructions is used."""
+    settings.perunchat_chat_model = ""
+    settings.orchestrator_model = "opencode/orchestrator"
+    settings.default_model = "opencode/default"
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_5",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "text/plain",
+        "payload": "hi",
+    }
+    bridge._reply(frame, None)
+    call = mock_orchestrator.run_and_wait.call_args
+    assert call.kwargs.get("model") == "opencode/orchestrator"
+    assert call.kwargs.get("skip_instructions") is True
+
+
+def test_chat_system_prompt_loads_from_file():
+    from perun.perunchat_bridge import _load_chat_instructions
+    from perun import orchestrator as _orchestrator
+
+    path = MagicMock()
+    path.is_file.return_value = True
+    with patch("perun.perunchat_bridge.Path", return_value=path):
+        with patch.object(
+            _orchestrator, "_load_instruction_file", return_value=("scope", "source", True, "Strict chat prompt from file.")
+        ):
+            body = _load_chat_instructions()
+    assert body == "Strict chat prompt from file."

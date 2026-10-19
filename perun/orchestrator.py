@@ -341,16 +341,19 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
     body = "\n\n".join(b for b in blocks if b)
     if not body:
         return prompt
-    # Escape only the closing tag so a malicious body cannot prematurely close
-    # the instruction envelope.
-    safe_body = body.replace("</perun_instructions>", "&lt;/perun_instructions&gt;")
+    # Use plain-text markers instead of XML-like tags. Some models interpret
+    # <perun_instructions> as part of the user request and ignore the actual
+    # prompt that follows the closing tag. Strip any injected markers from the
+    # body so a malicious instruction file cannot prematurely close the envelope.
+    safe_body = body.replace("--- PERUN INSTRUCTIONS START ---", "")
+    safe_body = safe_body.replace("--- PERUN INSTRUCTIONS END ---", "")
     return (
-        "<perun_instructions scope=\"project\" source=\"perun\">\n"
+        "--- PERUN INSTRUCTIONS START ---\n"
         "The following are project-level instructions. Follow them for every task "
         "in this session unless the user explicitly says otherwise.\n\n"
         f"{safe_body}\n"
-        "</perun_instructions>\n\n"
-        f"{prompt}"
+        "--- PERUN INSTRUCTIONS END ---\n\n"
+        f"User request:\n{prompt}"
     )
 
 
@@ -642,7 +645,8 @@ class Orchestrator:
                   opencode_session_id: str = "",
                   model: str = "",
                   agent: str = "",
-                  title: str = "") -> dict[str, Any]:
+                  title: str = "",
+                  skip_instructions: bool = False) -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
@@ -684,6 +688,9 @@ class Orchestrator:
             session_pk=session_pk, opencode_session_id=opencode_session_id,
             model=model, model_explicit=model_explicit, agent=agent,
         )
+        # Carry skip_instructions in memory (not persisted to DB) so chat-like
+        # runs can bypass project-instruction injection.
+        run["skip_instructions"] = skip_instructions
         registry.log_activity(project["id"], "run",
                               f"Started agent run ({run_uid})",
                               {"prompt": prompt[:200]})
@@ -784,8 +791,13 @@ class Orchestrator:
                 cancelled=False)
             return
         # Project-scoped custom instructions ride along with a new session.
-        prompt = compose_prompt(project, prompt, new_session=not oc_sid,
-                                settings=self.settings)
+        # Chat-like runs can opt out so the model sees only the chat prompt.
+        skip_instructions = run.get("skip_instructions", False)
+        prompt = compose_prompt(
+            project, prompt,
+            new_session=not oc_sid and not skip_instructions,
+            settings=self.settings,
+        )
         argv = resolve_opencode("opencode") + ["run", "--format", "json", "--auto"]
         # Forward the resolved model whenever there is one — `start_run` resolves
         # it from a call argument, a project override, or a control-plane setting

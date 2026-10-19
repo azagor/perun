@@ -78,6 +78,9 @@ anchors:
 - label: Autonomous PerunChat bridge
   kind: file
   path: perun/perunchat_bridge.py
+- label: PerunChat chat instructions
+  kind: file
+  path: perun/instructions/perunchat_chat.md
 - label: perun_chat repo
   kind: url
   url: https://github.com/azagor/perun_chat

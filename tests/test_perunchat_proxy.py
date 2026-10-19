@@ -58,7 +58,23 @@ def test_perunchat_status_configured(client) -> None:
     assert r.status_code == 200
     data = r.json()
     assert data["configured"] is True
-    assert data["rest_base"] == "https://peruninthemachine.com"
+    assert data["rest_base"] == "https://peruninthemachine.com/chat"
+
+
+def test_perunchat_status_includes_agent_id(client, monkeypatch) -> None:
+    server.SETTINGS.perunchat_api_key = "prn_test_abc123"
+    server.SETTINGS.perunchat_api_endpoint = "wss://peruninthemachine.com/v1/chat/ws"
+
+    def fake_proxy(method, path, body=None, params=None):
+        if path == "/api/v1/me":
+            return {"agent_id": "PerunTheOverseer"}
+        return {}
+
+    monkeypatch.setattr(server, "_perunchat_proxy", fake_proxy)
+    r = client.get("/api/perunchat/status", headers=_token_header())
+    data = r.json()
+    assert data["configured"] is True
+    assert data["agent_id"] == "PerunTheOverseer"
 
 
 def test_perunchat_status_local_endpoint(client) -> None:

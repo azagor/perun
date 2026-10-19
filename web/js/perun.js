@@ -3009,6 +3009,8 @@ async function viewPerunChat() {
          <p class="secondary">Register for a PerunChat API key on the <a href="https://peruninthemachine.com/perunchat/" target="_blank" rel="noopener">company website</a>. The local overseer stores the key and proxies social-management calls to the chat gateway; the WebSocket chat connects directly from this dashboard.</p>
          <label class="field"><span class="lab">API key <span id="pc-key-badge" class="badge"></span></span>
              <input type="password" id="pc-key" placeholder="prn_live_..." value=""></label>
+         <label class="field"><span class="lab">Encryption password <span class="muted">— optional; if set, the key is encrypted in config.json. Set PERUN_PASSWORD at launch so the bridge can decrypt it.</span></span>
+             <input type="password" id="pc-password" autocomplete="off" placeholder="leave blank to store plain text"></label>
          <label class="field"><span class="lab">WebSocket endpoint</span>
              <input type="text" id="pc-endpoint" value="${esc(settings.perunchat_api_endpoint || 'wss://peruninthemachine.com/v1/chat/ws')}"></label>
          <label class="field"><span class="lab">Autonomous mode</span>
@@ -3069,8 +3071,7 @@ async function viewPerunChat() {
                 if (!known.has(rid)) roomCatalog.push({ value: rid, label: rid, description: 'configured' });
             }
             joinSel.setItems(roomCatalog);
-            const dl = $('#pc-room-dl');
-            if (dl) dl.innerHTML = roomCatalog.map((x) => `<option value="${esc(x.value)}">`).join('');
+            refreshRoomSelect();
         } catch (e) { /* room catalog is optional */ }
     }
 
@@ -3087,7 +3088,8 @@ async function viewPerunChat() {
 
     const keyBadge = $('#pc-key-badge');
     if (settings.perunchat_api_key_set) {
-        keyBadge.textContent = 'set';
+        const agentLabel = status.agent_id ? `connected as ${status.agent_id}` : 'set';
+        keyBadge.textContent = agentLabel;
         keyBadge.className = 'badge green';
         $('#pc-key').placeholder = 'leave blank to keep the stored key';
     } else {
@@ -3097,6 +3099,7 @@ async function viewPerunChat() {
 
     $('#pc-save').addEventListener('click', async () => {
         const key = $('#pc-key').value.trim();
+        const password = $('#pc-password').value.trim();
         const endpoint = $('#pc-endpoint').value.trim();
         const autoReply = $('#pc-auto-reply').checked;
         const autoJoin = joinSel.getValue();
@@ -3110,6 +3113,7 @@ async function viewPerunChat() {
             perunchat_chat_agent: chatAgent,
         };
         if (key) body.perunchat_api_key = key;
+        if (password) body.perunchat_password = password;
         try {
             await api('/api/settings', { method: 'PATCH', body });
             toast('PerunChat credentials saved', 'ok');
@@ -3173,18 +3177,133 @@ async function viewPerunChat() {
         `<div class="card-head"><h4>Chat</h4><span id="pc-ws-status" class="badge">disconnected</span></div>
          <div id="pc-chat-log" class="perunchat-chat-log"></div>
          <div id="pc-reply-bar" class="perunchat-reply-bar"></div>
-         <div class="form-row">
-             <input type="text" id="pc-chat-room" list="pc-room-dl" placeholder="room_id" style="flex:1" value="pub:global:general">
-             <select id="pc-chat-type" style="width:110px"><option value="PUBLIC">PUBLIC</option><option value="GROUP">GROUP</option><option value="PRIVATE">PRIVATE</option></select>
+         <div class="form-row" style="align-items:flex-end">
+             <label class="field" style="flex:1"><span class="lab">Room <span class="muted">(type filters the list)</span></span>
+                 <select id="pc-chat-room-select"><option value="">— choose a room —</option></select>
+                 <input type="text" id="pc-chat-room-custom" placeholder="custom room id" style="display:none; margin-top:6px;"></label>
+             <label class="field" style="width:130px"><span class="lab">Type <span class="muted">(auto)</span></span>
+                 <select id="pc-chat-type"><option value="PUBLIC">PUBLIC</option><option value="GROUP">GROUP</option><option value="PRIVATE">PRIVATE</option></select></label>
              <button class="btn ghost" id="pc-chat-join">Join</button>
              <button class="btn ghost" id="pc-chat-leave">Leave</button>
          </div>
-         <datalist id="pc-room-dl"></datalist>
+         <div id="pc-joined-status" class="secondary" style="font-size:12px; margin:-8px 0 8px 0;">Not joined to any room.</div>
          <div class="form-row">
              <input type="text" id="pc-chat-msg" placeholder="Message (emoji supported 👋)…" style="flex:1">
              <button class="btn primary" id="pc-chat-send">Send</button>
          </div>`);
     v.appendChild(chatCard);
+
+    function inferRoomType(roomId) {
+        if (!roomId) return 'PUBLIC';
+        const p = roomId.split(':')[0];
+        if (p === 'priv') return 'PRIVATE';
+        if (p === 'grp') return 'GROUP';
+        return 'PUBLIC';
+    }
+
+    function currentRoomId() {
+        const sel = $('#pc-chat-room-select');
+        if (sel.value === '__custom__') {
+            return $('#pc-chat-room-custom').value.trim();
+        }
+        return sel.value;
+    }
+
+    function setCurrentRoomId(roomId) {
+        const sel = $('#pc-chat-room-select');
+        const custom = $('#pc-chat-room-custom');
+        if (!sel || !custom) return;
+        if (roomId && Array.from(sel.options).some((o) => o.value === roomId)) {
+            sel.value = roomId;
+            custom.style.display = 'none';
+        } else if (roomId) {
+            sel.value = '__custom__';
+            custom.value = roomId;
+            custom.style.display = 'block';
+        } else {
+            sel.value = '';
+            custom.value = '';
+            custom.style.display = 'none';
+        }
+    }
+
+    function refreshRoomSelect() {
+        const sel = $('#pc-chat-room-select');
+        if (!sel) return;
+        const type = $('#pc-chat-type').value;
+        const current = currentRoomId();
+        let html = '<option value="">— choose a room —</option>';
+        const filtered = roomCatalog.filter((item) => inferRoomType(item.value) === type);
+        if (filtered.length) {
+            html += `<optgroup label="${type} rooms">`;
+            for (const item of filtered) {
+                const active = item.description ? ` (${esc(item.description)})` : '';
+                html += `<option value="${esc(item.value)}">${esc(item.value)}${active}</option>`;
+            }
+            html += '</optgroup>';
+        }
+        html += '<option value="__custom__">Other / custom room…</option>';
+        sel.innerHTML = html;
+        setCurrentRoomId(current);
+    }
+
+    function updateJoinedStatus() {
+        const box = $('#pc-joined-status');
+        if (!box) return;
+        box.textContent = joinedRoom
+            ? `Joined: ${joinedRoom} (${joinedRoomType || inferRoomType(joinedRoom)})`
+            : 'Not joined to any room.';
+    }
+
+    function joinCurrentRoom() {
+        const room = currentRoomId();
+        const type = $('#pc-chat-type').value;
+        if (!room) return;
+        if (joinedRoom === room && joinedRoomType === type) return;
+        joinedRoom = room;
+        joinedRoomType = type;
+        messageHistory.length = 0;
+        $('#pc-chat-log').innerHTML = '';
+        restoreChat(room);
+        updateJoinedStatus();
+        try {
+            localStorage.setItem('perunchat_joined_room', room);
+            localStorage.setItem('perunchat_joined_room_type', type);
+        } catch (e) { /* storage may be unavailable */ }
+        sendFrame({ type: 'ROOM_JOIN', room_id: room, room_type: type, timestamp: Date.now() });
+    }
+
+    $('#pc-chat-room-select').addEventListener('change', () => {
+        const sel = $('#pc-chat-room-select');
+        const custom = $('#pc-chat-room-custom');
+        if (sel.value === '__custom__') {
+            custom.style.display = 'block';
+            custom.focus();
+        } else {
+            custom.style.display = 'none';
+            $('#pc-chat-type').value = inferRoomType(sel.value);
+            // Auto-join when the user picks a known room.
+            joinCurrentRoom();
+        }
+    });
+
+    $('#pc-chat-room-custom').addEventListener('change', () => {
+        $('#pc-chat-type').value = inferRoomType($('#pc-chat-room-custom').value);
+        joinCurrentRoom();
+    });
+
+    $('#pc-chat-room-custom').addEventListener('input', () => {
+        $('#pc-chat-type').value = inferRoomType($('#pc-chat-room-custom').value);
+    });
+
+    $('#pc-chat-type').addEventListener('change', () => {
+        refreshRoomSelect();
+        // If the newly selected type doesn't match the current room, clear it.
+        const room = currentRoomId();
+        if (room && inferRoomType(room) !== $('#pc-chat-type').value) {
+            setCurrentRoomId('');
+        }
+    });
 
     // ---- Social refresh ----------------------------------------------------
     async function refreshSocial() {
@@ -3287,11 +3406,42 @@ async function viewPerunChat() {
     // ---- WebSocket chat ----------------------------------------------------
     let ws = null;
     let seq = 0;
-    let joinedRoom = null;
+    try {
+        const savedSeq = parseInt(localStorage.getItem('perunchat_seq') || '0', 10);
+        seq = Number.isFinite(savedSeq) && savedSeq > 0 ? savedSeq : 0;
+    } catch (e) { seq = 0; }
+    let joinedRoom = localStorage.getItem('perunchat_joined_room') || null;
+    let joinedRoomType = localStorage.getItem('perunchat_joined_room_type') || 'PUBLIC';
     let replyToId = null;
     let replyToPreview = null;
     const messageHistory = []; // keep recent messages for reply rendering
     const MAX_HISTORY = 200;
+    const MAX_STORED_HISTORY = 100;
+
+    function chatHistoryKey(roomId) {
+        return 'perunchat_chat_history:' + (roomId || 'none');
+    }
+
+    function persistChat() {
+        try {
+            const recent = messageHistory.slice(-MAX_STORED_HISTORY);
+            localStorage.setItem(chatHistoryKey(joinedRoom), JSON.stringify(recent));
+        } catch (e) { /* storage may be unavailable */ }
+    }
+
+    function restoreChat(roomId) {
+        try {
+            const raw = localStorage.getItem(chatHistoryKey(roomId));
+            if (!raw) return;
+            const stored = JSON.parse(raw);
+            if (!Array.isArray(stored)) return;
+            messageHistory.length = 0;
+            messageHistory.push(...stored.slice(-MAX_HISTORY));
+            const box = $('#pc-chat-log');
+            box.innerHTML = '';
+            for (const msg of messageHistory) renderMessage(msg);
+        } catch (e) { /* ignore corrupt storage */ }
+    }
 
     const log = (html, meta) => {
         const box = $('#pc-chat-log');
@@ -3308,8 +3458,10 @@ async function viewPerunChat() {
 
     function renderMessage(msg) {
         if (!msg.id) return;
+        if (messageHistory.some((m) => m.id === msg.id)) return;
         messageHistory.push(msg);
         if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
+        persistChat();
 
         const own = msg.sender && msg.sender.agent_id ? esc(msg.sender.agent_id) : '?';
         const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
@@ -3369,7 +3521,13 @@ async function viewPerunChat() {
         } catch (e) { toast('Could not load chat credentials: ' + e.message, 'err'); return; }
         try {
             ws = new WebSocket(endpoint);
-            ws.onopen = () => { setWsStatus('connected', 'green'); log('<span class="muted">Connected to PerunChat gateway.</span>'); };
+            ws.onopen = () => {
+                setWsStatus('connected', 'green');
+                log('<span class="muted">Connected to PerunChat gateway.</span>');
+                if (joinedRoom) {
+                    sendFrame({ type: 'ROOM_JOIN', room_id: joinedRoom, room_type: joinedRoomType, timestamp: Date.now() });
+                }
+            };
             ws.onclose = () => { setWsStatus('disconnected', ''); log('<span class="muted">Disconnected.</span>'); ws = null; };
             ws.onerror = (e) => { log('<span style="color:var(--danger)">WebSocket error.</span>'); };
             ws.onmessage = (ev) => {
@@ -3399,18 +3557,24 @@ async function viewPerunChat() {
     }
 
     $('#pc-chat-join').addEventListener('click', () => {
-        const room = $('#pc-chat-room').value.trim();
-        const type = $('#pc-chat-type').value;
-        if (!room) return;
-        joinedRoom = room;
-        sendFrame({ type: 'ROOM_JOIN', room_id: room, room_type: type, timestamp: Date.now() });
+        if (!currentRoomId()) { toast('Choose a room first', 'err'); return; }
+        joinCurrentRoom();
     });
 
     $('#pc-chat-leave').addEventListener('click', () => {
         if (!joinedRoom) return;
-        const type = $('#pc-chat-type').value;
+        const type = joinedRoomType || $('#pc-chat-type').value;
         sendFrame({ type: 'ROOM_LEAVE', room_id: joinedRoom, room_type: type, timestamp: Date.now() });
         joinedRoom = null;
+        joinedRoomType = 'PUBLIC';
+        messageHistory.length = 0;
+        $('#pc-chat-log').innerHTML = '';
+        setCurrentRoomId('');
+        updateJoinedStatus();
+        try {
+            localStorage.removeItem('perunchat_joined_room');
+            localStorage.removeItem('perunchat_joined_room_type');
+        } catch (e) { /* storage may be unavailable */ }
     });
 
     $('#pc-chat-send').addEventListener('click', () => {
@@ -3418,12 +3582,14 @@ async function viewPerunChat() {
         const text = $('#pc-chat-msg').value;
         if (!text.trim()) return;
         seq += 1;
+        try { localStorage.setItem('perunchat_seq', String(seq)); } catch (e) { /* ignore */ }
+        const now = Date.now();
         const frame = {
-            id: `msg_${Date.now()}`,
-            trace_id: `trc_${Date.now()}`,
+            id: `msg_${now}`,
+            trace_id: `trc_${now}`,
             thread_id: 'default',
             sequence_number: seq,
-            timestamp: Date.now(),
+            timestamp: now,
             room_type: $('#pc-chat-type').value,
             room_id: joinedRoom,
             sender: {},
@@ -3433,10 +3599,24 @@ async function viewPerunChat() {
             payload: text,
         };
         if (replyToId) frame.in_reply_to = replyToId;
+        // The gateway now echoes every chat frame back to the sender, so the
+        // message will appear once the round-trip completes.
         sendFrame(frame);
         $('#pc-chat-msg').value = '';
         clearReply();
     });
+
+    // Restore previously joined room and chat history into the panel.
+    const restoredRoom = joinedRoom;
+    if (restoredRoom) {
+        $('#pc-chat-type').value = joinedRoomType || inferRoomType(restoredRoom);
+        refreshRoomSelect();
+        setCurrentRoomId(restoredRoom);
+        restoreChat(restoredRoom);
+    } else {
+        refreshRoomSelect();
+    }
+    updateJoinedStatus();
 
     if (pcConfigured) {
         connectChat();

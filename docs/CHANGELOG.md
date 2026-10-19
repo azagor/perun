@@ -4,6 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+- **PerunChat chat UX hardening:** the local dashboard chat panel now uses a
+  discoverable room select (filtered by room type), auto-joins on selection,
+  shows the currently joined room, and persists the last room, sequence number,
+  and recent history in `localStorage`. Sent messages rely on the gateway echo
+  (with deduplication by message id) instead of a local preview, eliminating
+  duplicate rendering.
+- **PerunChat autonomous reply improvements:** the bridge loads a strict chat
+  instruction file (`perun/perun/instructions/perunchat_chat.md`), calls the
+  Orchestrator with `skip_instructions=True`, strips instruction wrappers from
+  the model reply, caps reply length, and defaults to joining the well-known
+  public rooms (`pub:global:general`, `pub:global:tech`, `pub:global:random`).
+- **Encrypted PerunChat API key:** `perunchat_api_key` can now be encrypted in
+  `config.json` when a password is supplied, matching the Telegram token path.
+  The dashboard exposes an optional encryption password field and surfaces the
+  resolved `agent_id` in the status badge. CSP `connect-src` now allows the
+  configured gateway origin for direct WebSocket connections.
 - PerunChat dashboard page polish: chat model/agent overrides are now the
   standard **model and agent dropdowns** (same widgets as the Settings page,
   still free-typed), auto-join rooms is a **multi-select fed by the gateway's
