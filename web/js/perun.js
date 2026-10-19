@@ -3120,6 +3120,9 @@ async function viewPerunChat() {
             // Tear down any live chat socket and re-render the whole view so
             // the saved key, status, room catalog and social lists take effect
             // immediately — no manual reload needed.
+            wsExplicitClose = true;
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
             if (ws) { try { ws.close(); } catch (err) { /* ignore */ } ws = null; }
             await viewPerunChat();
         } catch (e) { toast(e.message, 'err'); }
@@ -3417,6 +3420,9 @@ async function viewPerunChat() {
     const messageHistory = []; // keep recent messages for reply rendering
     const MAX_HISTORY = 200;
     const MAX_STORED_HISTORY = 100;
+    let wsReconnectTimer = null;
+    let wsReconnectDelay = 1000;
+    let wsExplicitClose = false;
 
     function chatHistoryKey(roomId) {
         return 'perunchat_chat_history:' + (roomId || 'none');
@@ -3506,8 +3512,24 @@ async function viewPerunChat() {
         if (bar) { bar.innerHTML = ''; bar.style.display = 'none'; }
     }
 
+    function scheduleReconnect() {
+        if (wsExplicitClose || wsReconnectTimer) return;
+        setWsStatus('reconnecting', 'orange');
+        log(`<span class="muted">Reconnecting in ${Math.round(wsReconnectDelay / 1000)}s…</span>`);
+        wsReconnectTimer = setTimeout(() => {
+            wsReconnectTimer = null;
+            connectChat();
+        }, wsReconnectDelay);
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+    }
+
     async function connectChat() {
-        if (ws) { ws.close(); ws = null; }
+        // A deliberate reconnect or page re-render closes the old socket first;
+        // unexpected closes schedule a reconnect from ws.onclose.
+        wsExplicitClose = true;
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+        if (ws) { try { ws.close(); } catch (err) { /* ignore */ } ws = null; }
         let key, endpoint;
         try {
             // The PerunChat gateway accepts the API key via query parameter because
@@ -3519,6 +3541,8 @@ async function viewPerunChat() {
             endpoint = `${s.endpoint}${s.endpoint.includes('?') ? '&' : '?'}token=${key}`;
         } catch (e) { toast('Could not load chat credentials: ' + e.message, 'err'); return; }
         try {
+            wsExplicitClose = false;
+            wsReconnectDelay = 1000;
             ws = new WebSocket(endpoint);
             ws.onopen = () => {
                 setWsStatus('connected', 'green');
@@ -3527,7 +3551,12 @@ async function viewPerunChat() {
                     sendFrame({ type: 'ROOM_JOIN', room_id: joinedRoom, room_type: joinedRoomType, timestamp: Date.now() });
                 }
             };
-            ws.onclose = () => { setWsStatus('disconnected', ''); log('<span class="muted">Disconnected.</span>'); ws = null; };
+            ws.onclose = () => {
+                setWsStatus('disconnected', '');
+                log('<span class="muted">Disconnected.</span>');
+                ws = null;
+                scheduleReconnect();
+            };
             ws.onerror = (e) => { log('<span style="color:var(--danger)">WebSocket error.</span>'); };
             ws.onmessage = (ev) => {
                 try {
@@ -3547,7 +3576,7 @@ async function viewPerunChat() {
                     }
                 } catch (_) { log(`<span class="muted">${esc(ev.data)}</span>`); }
             };
-        } catch (e) { toast('Could not open WebSocket: ' + e.message, 'err'); }
+        } catch (e) { toast('Could not open WebSocket: ' + e.message, 'err'); scheduleReconnect(); }
     }
 
     function sendFrame(frame) {
@@ -3624,6 +3653,22 @@ async function viewPerunChat() {
         refreshRoomSelect();
     }
     updateJoinedStatus();
+
+    // Close the chat socket if the user navigates away from this page so it
+    // does not keep reconnecting in the background.
+    function cleanupPerunChat() {
+        wsExplicitClose = true;
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+        if (ws) { try { ws.close(); } catch (err) { /* ignore */ } ws = null; }
+    }
+    function onHashChange() {
+        if (!location.hash.startsWith('#/perunchat')) {
+            cleanupPerunChat();
+            window.removeEventListener('hashchange', onHashChange);
+        }
+    }
+    window.addEventListener('hashchange', onHashChange);
 
     if (pcConfigured) {
         connectChat();
