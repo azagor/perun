@@ -3436,10 +3436,9 @@ async function viewPerunChat() {
             const stored = JSON.parse(raw);
             if (!Array.isArray(stored)) return;
             messageHistory.length = 0;
-            messageHistory.push(...stored.slice(-MAX_HISTORY));
             const box = $('#pc-chat-log');
             box.innerHTML = '';
-            for (const msg of messageHistory) renderMessage(msg);
+            for (const msg of stored.slice(-MAX_HISTORY)) renderMessage(msg);
         } catch (e) { /* ignore corrupt storage */ }
     }
 
@@ -3577,7 +3576,7 @@ async function viewPerunChat() {
         } catch (e) { /* storage may be unavailable */ }
     });
 
-    $('#pc-chat-send').addEventListener('click', () => {
+    function sendChatMessage() {
         if (!joinedRoom) { toast('Join a room first', 'err'); return; }
         const text = $('#pc-chat-msg').value;
         if (!text.trim()) return;
@@ -3604,6 +3603,14 @@ async function viewPerunChat() {
         sendFrame(frame);
         $('#pc-chat-msg').value = '';
         clearReply();
+    }
+
+    $('#pc-chat-send').addEventListener('click', sendChatMessage);
+    $('#pc-chat-msg').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendChatMessage();
+        }
     });
 
     // Restore previously joined room and chat history into the panel.
