@@ -83,8 +83,13 @@ _TYPING_DELAY_MAX = 1.8
 # Patterns that may reveal internal/private information. Used as a last-line
 # guard before broadcasting a reply, especially in public rooms.
 _INTERNAL_PATTERNS: List[Tuple[str, re.Pattern]] = [
-    ("windows_path", re.compile(r"[A-Za-z]:\\[^\s]+")),
-    ("unix_path", re.compile(r"(?:/[^\s]+){2,}")),
+    # Windows paths: allow both back- and forward-slash separators, and require
+    # at least one separator so a bare "C:foo" is not treated as a path.
+    ("windows_path", re.compile(r"\b[A-Za-z]:[\\/][^\s]+")),
+    # POSIX absolute paths, but NOT URL scheme separators: the negative
+    # lookbehind keeps "https://host/path" (the "//" after the scheme) from
+    # being mangled, while still catching "/home/user/project".
+    ("unix_path", re.compile(r"(?<![:\w/])/(?:[^\s/]+/)+[^\s/]+")),
     ("perun_internal", re.compile(r"\bperun/(?:instructions|mcp|config|server|orchestrator)\b", re.IGNORECASE)),
     ("dotfile", re.compile(r"\.[a-z]+\.json|\.env|\.ssh|\.perun\b", re.IGNORECASE)),
     ("mcp_tools", re.compile(r"\bMCP tools?\b|\bmcp server\b", re.IGNORECASE)),

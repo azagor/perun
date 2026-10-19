@@ -233,6 +233,34 @@ def test_public_reply_redacts_internal_details(settings):
     assert "[redacted]" in out
 
 
+def test_public_reply_redacts_forward_slash_and_posix_paths(settings):
+    """Forward-slash Windows paths and POSIX paths are also internal."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    out = bridge._redact_internal_info(
+        "code at C:/my_apps/perun/x.py and /home/user/project/main.py",
+        "pub:global:general",
+    )
+    assert "my_apps" not in out
+    assert "/home/user/project" not in out
+    assert "[redacted]" in out
+
+
+def test_public_reply_keeps_public_urls(settings):
+    """A legitimate scheme URL must NOT be mangled by the path guard."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    text = "more at https://peruninthemachine.com/perunchat/public_chat.html"
+    out = bridge._redact_internal_info(text, "pub:global:general")
+    assert out == text
+
+
+def test_public_reply_keeps_plain_ratios(settings):
+    """Plain numeric ratios are not paths and must survive untouched."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    text = "3/4 of 1/2 is not a path"
+    out = bridge._redact_internal_info(text, "pub:global:general")
+    assert out == text
+
+
 def test_trusted_private_reply_keeps_context(settings):
     """Trusted private replies may keep non-path context."""
     settings.perunchat_trusted = ["frambo"]
