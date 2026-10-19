@@ -9,6 +9,7 @@ Usage::
     python -m perun discover [--roots a;b] [--index]
     python -m perun projects
     python -m perun add <name> <path> [--model M] [--agent A]
+    python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
     python -m perun status [--json]
     python -m perun encrypt-config [--password PWD]
     python -m perun remember <text> [--project SLUG] [--global] [--topic T]
@@ -33,7 +34,7 @@ import threading
 import time
 from typing import Any
 
-from . import config, daemon, db, discovery, memory, registry
+from . import config, daemon, db, discovery, memory, project_roots, registry
 
 
 # --------------------------------------------------------------------------- #
@@ -621,6 +622,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="store_true", help="print version and exit")
     sub = parser.add_subparsers(dest="command")
 
+    p_roots = sub.add_parser(
+        "project-roots",
+        help="Manage explicit project-root mappings for safe cross-project references.",
+    )
+    p_roots.add_argument("--add", nargs=2, metavar=("NAME", "PATH"),
+                         help="Register or override a project root")
+    p_roots.add_argument("--remove", metavar="NAME",
+                         help="Remove a user-defined project root override")
+    p_roots.add_argument("--list", action="store_true",
+                         help="List effective project roots")
+    p_roots.set_defaults(func=cmd_project_roots)
+
     p = sub.add_parser("serve", help="run the HTTP + SSE service and dashboard")
     p.add_argument("--host", default=None)
     p.add_argument("--port", type=int, default=None)
@@ -765,6 +778,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_mcp)
 
     return parser
+
+
+def cmd_project_roots(args) -> int:
+    """List, add, or remove project-root mappings."""
+    if args.add:
+        name, path = args.add
+        project_roots.add_root(name, path)
+        print(f"Registered root: {name} -> {project_roots.get_root(name)}")
+        return 0
+    if args.remove:
+        project_roots.remove_root(args.remove)
+        print(f"Removed override: {args.remove}")
+        return 0
+    roots = project_roots.list_roots()
+    print("Effective project roots:")
+    for name, path in sorted(roots.items()):
+        print(f"  {name}: {path}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -169,3 +169,40 @@ def test_bridge_links_upsert():
     assert link["project_id"] == p["id"] and link["session_pk"] is None
     registry.set_bridge_link("chat1", p["id"], 7)
     assert registry.get_bridge_link("chat1")["session_pk"] == 7
+
+
+def test_add_project_loads_manifest(tmp_path):
+    """Registration outside discovery (CLI ``perun add``, wizard) must still
+    populate manifest data so the dashboard overview shows it like any
+    discovered project."""
+    proj = tmp_path / "manifested"
+    proj.mkdir()
+    (proj / "perun.md").write_text(
+        "---\n"
+        "name: Manifested Project\n"
+        "kind: opencode\n"
+        "description: Declared in the manifest\n"
+        "tags:\n"
+        "  - alpha\n"
+        "  - beta\n"
+        "---\n\n"
+        "Body text.\n",
+        encoding="utf-8",
+    )
+    p = registry.add_project("Manifested Project", str(proj))
+    assert p["has_manifest"] is True
+    assert p["kind"] == "opencode"
+    assert p["description"] == "Declared in the manifest"
+    assert "alpha" in p["tags"] and "beta" in p["tags"]
+    stored = registry.get_project_manifest(p["slug"])
+    assert stored["data"]["name"] == "Manifested Project"
+    assert stored["body"].startswith("Body text.")
+    assert p["manifest_path"] == str(proj / "perun.md")
+
+
+def test_add_project_without_manifest_is_unaffected(tmp_path):
+    proj = tmp_path / "bare"
+    proj.mkdir()
+    p = registry.add_project("Bare Project", str(proj))
+    assert p["has_manifest"] is False
+    assert p["kind"] == "dir"

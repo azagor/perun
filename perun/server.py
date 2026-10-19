@@ -41,6 +41,8 @@ from starlette.concurrency import iterate_in_threadpool
 from . import (__version__, config, control, db, discovery, git, manifest,
                memory, projects, providers, registry, scaffold)
 from . import orchestrator
+from .perunchat_bridge import attach as _attach_perunchat_bridge
+from .perunchat_bridge import get_bridge as _get_perunchat_bridge
 
 STARTED_AT = time.time()
 
@@ -52,6 +54,7 @@ _SSE_HEADERS = {
 
 SETTINGS = config.Settings.load()
 ORCH = orchestrator.Orchestrator(SETTINGS)
+PERUNCHAT_BRIDGE = _attach_perunchat_bridge(ORCH)
 
 
 def _control_project() -> dict[str, Any]:
@@ -118,11 +121,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Start a background thread that repairs embeddings written while Ollama
     # was down. It is daemonic and signalled on shutdown.
     reembed_stop = _start_reembed_thread()
+    # Start the autonomous PerunChat agent bridge when a key is configured.
+    if PERUNCHAT_BRIDGE is not None:
+        PERUNCHAT_BRIDGE.start()
     try:
         yield
     finally:
         if reembed_stop is not None:
             reembed_stop.set()
+        if PERUNCHAT_BRIDGE is not None:
+            PERUNCHAT_BRIDGE.stop()
     # Shutdown: stop what we started so a restart does not orphan interactive
     # terminals or leave agent processes writing into a database nobody watches.
     # Run the blocking cleanup in a thread so the event loop is not stalled.
@@ -1748,6 +1756,15 @@ def api_get_settings() -> dict[str, Any]:
     # clients via /api/telegram/status.
     data["telegram_pair_code"] = ""
     data["telegram_chat_count"] = len(chats)
+    pc_key, pc_endpoint = SETTINGS.perunchat()
+    data["perunchat_api_key"] = ""  # never echo
+    data["perunchat_api_key_set"] = bool(pc_key)
+    data["perunchat_api_endpoint"] = pc_endpoint
+    # Expose bridge controls so the dashboard can pre-fill them.
+    data.setdefault("perunchat_auto_reply", False)
+    data.setdefault("perunchat_auto_join", [])
+    data.setdefault("perunchat_chat_model", "")
+    data.setdefault("perunchat_chat_agent", "")
     return _ok(settings=data)
 
 
@@ -2002,12 +2019,15 @@ def api_search_unified(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 def _coerce_setting(key: str, value: Any) -> Any:
     """Validate and coerce a setting value to the expected type."""
     int_fields = {"port", "max_concurrent_runs", "run_timeout", "embed_dim"}
-    bool_fields = {"auto_discover_on_start", "index_docs_on_discover"}
-    list_fields = {"roots", "telegram_allowed_chats"}
+    bool_fields = {
+        "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
+    }
+    list_fields = {"roots", "telegram_allowed_chats", "perunchat_auto_join"}
     str_fields = {
         "host", "default_model", "default_agent", "orchestrator_model",
         "orchestrator_agent", "ollama_host", "embed_model", "telegram_token",
-        "telegram_bot_name", "terminal",
+        "telegram_bot_name", "terminal", "perunchat_api_key", "perunchat_api_endpoint",
+        "perunchat_chat_model", "perunchat_chat_agent",
     }
     if key in int_fields:
         try:
@@ -2049,10 +2069,18 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # immediately instead of requiring a server restart.
     ORCH.settings = SETTINGS
     ORCH.set_max_concurrent(SETTINGS.max_concurrent_runs)
+    # Restart the autonomous PerunChat bridge so key/endpoint/auto_reply changes
+    # take effect without a full restart.
+    if PERUNCHAT_BRIDGE is not None:
+        PERUNCHAT_BRIDGE.restart()
     data = SETTINGS.to_dict()
     data["telegram_token"] = ""
     data["telegram_token_set"] = bool(SETTINGS.telegram()[0])
     data["telegram_chat_count"] = len(SETTINGS.telegram()[1])
+    pc_key, pc_endpoint = SETTINGS.perunchat()
+    data["perunchat_api_key"] = ""
+    data["perunchat_api_key_set"] = bool(pc_key)
+    data["perunchat_api_endpoint"] = pc_endpoint
     return _ok(settings=data)
 
 
@@ -2320,6 +2348,146 @@ def api_telegram_send(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     res = _telegram_api("sendMessage", chat_id=chat_id, text=format_html(text),
                         parse_mode="HTML", disable_web_page_preview=True)
     return _ok(sent=bool(res.get("ok")), result=res.get("result"))
+
+
+# --------------------------------------------------------------------------- #
+# PerunChat federation proxy (dashboard UI)
+# --------------------------------------------------------------------------- #
+def _perunchat_rest_base() -> str:
+    """Derive the PerunChat REST base URL from the configured WS endpoint."""
+    endpoint = SETTINGS.perunchat()[1] or "wss://peruninthemachine.com/v1/chat/ws"
+    if endpoint.startswith("wss://"):
+        base = endpoint.replace("wss://", "https://", 1)
+    elif endpoint.startswith("ws://"):
+        base = endpoint.replace("ws://", "http://", 1)
+    else:
+        raise HTTPException(status_code=400, detail="invalid perunchat_api_endpoint")
+    if "/v1/chat/ws" in base:
+        base = base.rsplit("/v1/chat/ws", 1)[0]
+    elif base.endswith("/"):
+        base = base[:-1]
+    return base
+
+
+def _perunchat_key() -> str:
+    key, _ = SETTINGS.perunchat()
+    if not key:
+        raise HTTPException(status_code=400, detail="perunchat api key not configured")
+    return key
+
+
+def _perunchat_proxy(method: str, path: str, body: dict[str, Any] | None = None,
+                     params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Forward a request to the PerunChat gateway using the configured key."""
+    key = _perunchat_key()
+    base = _perunchat_rest_base()
+    url = f"{base}{path}"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            headers = {"Authorization": f"Bearer {key}"}
+            if method == "GET":
+                res = client.get(url, headers=headers, params=params)
+            elif method == "POST":
+                res = client.post(url, headers=headers, json=body)
+            elif method == "DELETE":
+                res = client.delete(url, headers=headers, params=params)
+            else:
+                raise HTTPException(status_code=405, detail="method not supported")
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPStatusError as exc:
+        detail = "perunchat gateway error"
+        try:
+            detail = exc.response.json().get("detail", detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=exc.response.status_code, detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/perunchat/status")
+def api_perunchat_status() -> dict[str, Any]:
+    key, endpoint = SETTINGS.perunchat()
+    rest_base = _perunchat_rest_base() if key else ""
+    return _ok(configured=bool(key), endpoint=endpoint, rest_base=rest_base)
+
+
+@app.get("/api/perunchat/key")
+def api_perunchat_key(request: Request) -> dict[str, Any]:
+    """Reveal the PerunChat API key only to loopback clients so the dashboard
+    can open a WebSocket connection directly to the chat gateway."""
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in _LOOPBACK_NAMES:
+        raise HTTPException(status_code=403, detail="key only available to loopback clients")
+    key, _ = SETTINGS.perunchat()
+    if not key:
+        raise HTTPException(status_code=400, detail="perunchat api key not configured")
+    return _ok(key=key)
+
+
+@app.get("/api/perunchat/bridge/status")
+def api_perunchat_bridge_status() -> dict[str, Any]:
+    bridge = _get_perunchat_bridge()
+    if bridge is None:
+        return _ok(available=False, enabled=False, running=False)
+    return _ok(**bridge.status)
+
+
+@app.get("/api/perunchat/rooms")
+def api_perunchat_rooms() -> dict[str, Any]:
+    """Discoverable rooms (active, joined, and well-known public channels)."""
+    return _perunchat_proxy("GET", "/api/v1/rooms")
+
+
+@app.get("/api/perunchat/social/friends")
+def api_perunchat_social_friends() -> dict[str, Any]:
+    return _perunchat_proxy("GET", "/api/v1/social/friends")
+
+
+@app.get("/api/perunchat/social/friends/status")
+def api_perunchat_social_friends_status() -> dict[str, Any]:
+    return _perunchat_proxy("GET", "/api/v1/social/friends/status")
+
+
+@app.get("/api/perunchat/social/friends/requests")
+def api_perunchat_social_requests(direction: str = "all") -> dict[str, Any]:
+    return _perunchat_proxy("GET", "/api/v1/social/friends/requests", params={"direction": direction})
+
+
+@app.post("/api/perunchat/social/friends/requests")
+def api_perunchat_social_send_request(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return _perunchat_proxy("POST", "/api/v1/social/friends/requests", body=payload)
+
+
+@app.post("/api/perunchat/social/friends/requests/{request_id}/accept")
+def api_perunchat_social_accept(request_id: str) -> dict[str, Any]:
+    return _perunchat_proxy("POST", f"/api/v1/social/friends/requests/{request_id}/accept")
+
+
+@app.post("/api/perunchat/social/friends/requests/{request_id}/reject")
+def api_perunchat_social_reject(request_id: str) -> dict[str, Any]:
+    return _perunchat_proxy("POST", f"/api/v1/social/friends/requests/{request_id}/reject")
+
+
+@app.delete("/api/perunchat/social/friends/{agent_id}")
+def api_perunchat_social_remove_friend(agent_id: str) -> dict[str, Any]:
+    return _perunchat_proxy("DELETE", f"/api/v1/social/friends/{agent_id}")
+
+
+@app.get("/api/perunchat/social/blocked")
+def api_perunchat_social_blocked() -> dict[str, Any]:
+    return _perunchat_proxy("GET", "/api/v1/social/blocked")
+
+
+@app.post("/api/perunchat/social/blocked")
+def api_perunchat_social_block(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return _perunchat_proxy("POST", "/api/v1/social/blocked", body=payload)
+
+
+@app.delete("/api/perunchat/social/blocked/{agent_id}")
+def api_perunchat_social_unblock(agent_id: str) -> dict[str, Any]:
+    return _perunchat_proxy("DELETE", f"/api/v1/social/blocked/{agent_id}")
 
 
 # --------------------------------------------------------------------------- #

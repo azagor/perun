@@ -1,0 +1,324 @@
+"""
+PerunChat autonomous agent bridge for Perun.
+
+The bridge keeps a background WebSocket connection to the PerunChat gateway and
+lets the Perun Orchestrator participate autonomously in chat rooms. Incoming
+messages are handed to the Orchestrator as prompts; the Orchestrator's reply is
+posted back to the room with ``in_reply_to`` set to the original message id.
+
+Human operators remain in control:
+- Registration / API-key management is manual.
+- State-changing actions proposed by the Orchestrator still go through the
+  normal HITL approval pipeline (``PERUN_ACTION_PROPOSAL`` tokens).
+- The bridge can be disabled with ``perunchat_auto_reply = false``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Set
+
+try:
+    import websocket
+
+    _HAS_WEBSOCKET = True
+except Exception:  # pragma: no cover
+    _HAS_WEBSOCKET = False
+
+try:
+    import httpx
+
+    _HAS_HTTPX = True
+except Exception:  # pragma: no cover
+    _HAS_HTTPX = False
+
+from . import config, control
+
+if False:  # type: ignore
+    # Circular-import-safe type hint for the orchestrator.
+    from .orchestrator import Orchestrator
+
+logger = logging.getLogger(__name__)
+
+# Default room the bridge joins when the user has not configured any.
+DEFAULT_ROOM = "pub:global:general"
+
+# Safety limits so a runaway model cannot spam rooms.
+_MAX_REPLIES_PER_MINUTE = 15
+_MAX_RECENT_REPLIED = 250
+_REPLIED_TRIM_TO = 150
+
+CHAT_SYSTEM_PROMPT = """You are Perun, the machine-wide overseer for OpenCode projects, participating autonomously in a PerunChat room.
+
+You have just received a message from another agent or a human operator. Reply briefly, helpfully, and in plain text. Do not run shell commands, edit files, or invoke local tools in the response text. If the sender asks you to do work inside a project, say that you can delegate that task to the project's own agent once they confirm.
+
+Keep replies compact (one or two sentences unless a longer explanation is clearly needed). Be friendly but professional. Do not prefix your reply with your own name.
+"""
+
+
+def _rest_base(endpoint: str) -> str:
+    """Derive the REST base URL from a WebSocket endpoint URL."""
+    endpoint = (endpoint or "").strip()
+    if endpoint.startswith("wss://"):
+        base = endpoint.replace("wss://", "https://", 1)
+    elif endpoint.startswith("ws://"):
+        base = endpoint.replace("ws://", "http://", 1)
+    else:
+        base = endpoint
+    if "/v1/chat/ws" in base:
+        base = base.rsplit("/v1/chat/ws", 1)[0]
+    elif base.endswith("/"):
+        base = base[:-1]
+    return base
+
+
+def _room_type(room_id: str) -> str:
+    if room_id.startswith("pub:"):
+        return "PUBLIC"
+    if room_id.startswith("priv:"):
+        return "PRIVATE"
+    return "GROUP"
+
+
+class PerunChatBridge:
+    """Background bridge connecting Perun's Orchestrator to PerunChat rooms."""
+
+    def __init__(self, orchestrator: "Orchestrator") -> None:
+        self.orchestrator = orchestrator
+        self.settings = orchestrator.settings
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self._ws: Optional[Any] = None
+        self._lock = threading.Lock()
+        self._agent_id: Optional[str] = None
+        self._recent_replied: Set[str] = set()
+        self._reply_count_minute = 0
+        self._minute_window_start = time.time()
+
+    @property
+    def available(self) -> bool:
+        return _HAS_WEBSOCKET and _HAS_HTTPX
+
+    @property
+    def enabled(self) -> bool:
+        if not self.available:
+            return False
+        key, _ = self.settings.perunchat()
+        return bool(key) and bool(getattr(self.settings, "perunchat_auto_reply", False))
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def status(self) -> Dict[str, Any]:
+        return {
+            "available": self.available,
+            "enabled": self.enabled,
+            "running": self.running,
+            "agent_id": self._agent_id,
+            "rooms": self._rooms(),
+        }
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        with self._lock:
+            ws = self._ws
+            self._ws = None
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def restart(self) -> None:
+        self.stop()
+        # Wait for the receive loop to exit so we don't immediately reconnect
+        # with stale settings.
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        self.start()
+
+    def _rooms(self) -> List[str]:
+        rooms = getattr(self.settings, "perunchat_auto_join", None)
+        if not rooms:
+            return [DEFAULT_ROOM]
+        return [r.strip() for r in rooms if r.strip()]
+
+    def _resolve_agent_id(self, key: str, rest_base: str) -> Optional[str]:
+        url = f"{rest_base}/api/v1/me"
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(url, headers={"Authorization": f"Bearer {key}"})
+            if resp.status_code == 200:
+                return resp.json().get("agent_id")
+            logger.warning("PerunChat /api/v1/me returned %s", resp.status_code)
+        except Exception as exc:
+            logger.warning("PerunChat /api/v1/me failed: %s", exc)
+        return None
+
+    def _connect(self, key: str, agent_id: str, endpoint: str, rooms: List[str]) -> Any:
+        headers = [
+            f"Authorization: Bearer {key}",
+            f"X-Agent-ID: {agent_id}",
+            "X-Agent-Runtime: perun",
+        ]
+        ws = websocket.create_connection(endpoint, header=headers, timeout=10)
+        now = int(time.time() * 1000)
+        for room_id in rooms:
+            ws.send(
+                json.dumps(
+                    {
+                        "type": "ROOM_JOIN",
+                        "room_id": room_id,
+                        "room_type": _room_type(room_id),
+                        "timestamp": now,
+                    }
+                )
+            )
+        return ws
+
+    def _run(self) -> None:
+        key, endpoint = self.settings.perunchat()
+        rest_base = _rest_base(endpoint)
+        agent_id = self._resolve_agent_id(key, rest_base)
+        if not agent_id:
+            logger.error("Cannot start PerunChat bridge: could not resolve agent_id from API key")
+            return
+        self._agent_id = agent_id
+        rooms = self._rooms()
+        backoff = 1.0
+
+        while not self._stop.is_set():
+            try:
+                ws = self._connect(key, agent_id, endpoint, rooms)
+                with self._lock:
+                    self._ws = ws
+                backoff = 1.0
+                logger.info("PerunChat bridge connected as %s", agent_id)
+
+                while not self._stop.is_set():
+                    try:
+                        raw = ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    if raw is None:
+                        continue
+                    try:
+                        frame = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    self._on_frame(frame, ws)
+
+            except websocket.WebSocketConnectionClosedException:
+                logger.info("PerunChat bridge connection closed; reconnecting...")
+            except Exception as exc:
+                logger.warning("PerunChat bridge error: %s", exc)
+
+            with self._lock:
+                self._ws = None
+            if self._stop.is_set():
+                break
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+    def _on_frame(self, frame: Dict[str, Any], ws: Any) -> None:
+        frame_type = frame.get("type")
+        if frame_type != "CHAT":
+            return
+        if not getattr(self.settings, "perunchat_auto_reply", False):
+            return
+
+        sender = (frame.get("sender", {}).get("agent_id") or "").lower()
+        if self._agent_id and sender == self._agent_id.lower():
+            return
+
+        msg_id = frame.get("id")
+        if msg_id and msg_id in self._recent_replied:
+            return
+
+        room_id = frame.get("room_id")
+        text = frame.get("payload", "")
+        if not room_id or not isinstance(text, str) or not text.strip():
+            return
+
+        now = time.time()
+        if now - self._minute_window_start > 60:
+            self._minute_window_start = now
+            self._reply_count_minute = 0
+        if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
+            return
+
+        self._reply(frame, ws)
+
+    def _reply(self, frame: Dict[str, Any], ws: Any) -> None:
+        prompt = self._build_prompt(frame)
+        try:
+            project = control.ensure()
+            result = self.orchestrator.run_and_wait(
+                project["slug"],
+                prompt,
+                model=getattr(self.settings, "perunchat_chat_model", "") or "",
+                agent=getattr(self.settings, "perunchat_chat_agent", "") or "",
+                timeout=120,
+            )
+            reply = (result.get("reply", "") or "").strip()
+            if not reply:
+                return
+            reply_frame = {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "thread_id": frame.get("thread_id", "default"),
+                "sequence_number": 1,
+                "timestamp": int(time.time() * 1000),
+                "room_type": _room_type(frame["room_id"]),
+                "room_id": frame["room_id"],
+                "sender": {"agent_id": self._agent_id, "runtime": "perun"},
+                "content_type": "text/plain",
+                "payload": reply,
+                "in_reply_to": frame.get("id"),
+            }
+            ws.send(json.dumps(reply_frame))
+            msg_id = frame.get("id")
+            if msg_id:
+                self._recent_replied.add(msg_id)
+                if len(self._recent_replied) > _MAX_RECENT_REPLIED:
+                    self._recent_replied = set(list(self._recent_replied)[-_REPLIED_TRIM_TO:])
+            self._reply_count_minute += 1
+        except Exception as exc:
+            logger.warning("PerunChat bridge failed to generate reply: %s", exc)
+
+    def _build_prompt(self, frame: Dict[str, Any]) -> str:
+        sender = frame.get("sender", {}).get("agent_id", "unknown")
+        room = frame.get("room_id", "unknown")
+        text = frame.get("payload", "")
+        return f"{CHAT_SYSTEM_PROMPT}\n\nRoom: {room}\nFrom: {sender}\nMessage:\n{text}\n\nYour reply:\n"
+
+
+# Module-level singleton: Perun server attaches its orchestrator here.
+_BRIDGE: Optional[PerunChatBridge] = None
+
+
+def attach(orchestrator: "Orchestrator") -> PerunChatBridge:
+    """Create and return the global bridge attached to *orchestrator*."""
+    global _BRIDGE
+    _BRIDGE = PerunChatBridge(orchestrator)
+    return _BRIDGE
+
+
+def get_bridge() -> Optional[PerunChatBridge]:
+    """Return the attached bridge, if any."""
+    return _BRIDGE

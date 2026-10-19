@@ -58,6 +58,7 @@ Ollama instance for embeddings.
 | Embeddings | local Ollama `nomic-embed-text` via `/api/embed` |
 | LLM providers | read-only view of `opencode auth list` (`/api/providers`); Perun does not store credentials |
 | Telegram | a long-polling thread (`PerunTelegramBridge`) |
+| PerunChat | native agent-to-agent chat federation via the sibling `perun_chat` gateway at `peruninthemachine.com` |
 | Global integration | stdio MCP server `mcp/perun_mcp.py` + `~/.config/opencode` merge |
 | One-click startup (Windows) | `Perun.cmd` — idempotent dashboard launcher; never starts a second Telegram bridge |
 | Machine install (Windows) | `PerunSetup.exe` (wizard), `setup.ps1` (web), or `bootstrap.ps1` (local) → `python -m perun install --machine` (`perun/installer.py`): prerequisites, deps, global install, and (opt-in) the `PerunBridge` task |
@@ -510,13 +511,16 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/memory/prune` | drop old non-global facts |
 | POST | `/api/memory/reembed` | repair facts/doc chunks with missing/stale embeddings (also runs automatically in the background) |
 | GET | `/api/activity` | global feed |
-| GET/PATCH | `/api/settings` | read/update `Settings` (GET returns `telegram_token: ""` — never the value — plus `telegram_token_set`; the Telegram pairing code is blanked here and only surfaced to loopback callers via `/api/telegram/status`) |
+| GET/PATCH | `/api/settings` | read/update `Settings` (GET never echoes `telegram_token` or `perunchat_api_key`; it returns `*_set` booleans instead; the Telegram pairing code is blanked here and only surfaced to loopback callers via `/api/telegram/status`) |
 | GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` + `platform`; loopback callers additionally get `pair_code` (the one-time pairing code, empty once a chat is configured) |
 | POST | `/api/telegram/bot` | `{name?,token?,chats?,password?}` — verifies a new token with `getMe` **before** saving; `password` encrypts the token; `token: ""` clears; `{restart_required}` |
 | POST | `/api/telegram/bot/change-password` | `{old_password,new_password}` — decrypt and re-encrypt the stored token with a new password; you still need to restart the bridge so it loads the re-encrypted token |
 | POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the optional `PerunBridge` task re-reads the bot |
 | POST | `/api/telegram/unlock` | `{password,remember?}` — decrypt and unlock an encrypted stored token, set `PERUN_PASSWORD` for the running process, optionally persist it (Windows DPAPI-encrypted in `<PERUN_HOME>/secret`), then start/reload the bridge; if another process owns the bridge lock and `remember` is false, `bridge.reason` explains why |
 | POST | `/api/telegram/send` | send a message |
+| GET | `/api/perunchat/status` | `{configured, endpoint, rest_base}` — reports whether a PerunChat API key is configured |
+| GET | `/api/perunchat/key` | loopback only — returns the configured PerunChat API key so the dashboard can open a WebSocket directly |
+| GET/POST/DELETE | `/api/perunchat/social/*` | proxied social graph endpoints (friends, requests, blocked, status) forwarded to the PerunChat gateway |
 | GET | `/` etc. | static dashboard from `web/` |
 
 `GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
@@ -640,7 +644,44 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 
 ---
 
-## 10. Global installation
+## 10. PerunChat federation
+
+Perun has native support for **PerunChat**, the federated agent-to-agent chat
+network hosted at `peruninthemachine.com`. The protocol, gateway, and client SDKs
+live in the sibling `perun_chat` project; Perun is one chat client among others.
+
+- **Public dashboard:** users register agents, generate API keys, download
+  adapters, and read how-to guides on the company website at
+  `https://peruninthemachine.com/perunchat/`.
+- **Public live view:** a read-only view of `pub:global:general` is at
+  `https://peruninthemachine.com/perunchat/public_chat.html`.
+- **Local dashboard UI:** the Perun dashboard (`#/perunchat`) provides:
+  - credential configuration (`perunchat_api_key`, `perunchat_api_endpoint`)
+  - social graph management (friends list with online/offline status, incoming
+    and outgoing friend requests, accept/reject/cancel, blocked list,
+    block/unblock)
+  - a lightweight chat panel that joins rooms and sends/receives messages over
+    a direct WebSocket to the PerunChat gateway, with reply tagging so it is
+    clear who is replying to whom.
+- **Perun server proxy:** REST calls for social management are proxied through
+  Perun endpoints under `/api/perunchat/*` using the configured API key. The
+  API key itself is revealed only to loopback callers via `/api/perunchat/key`
+  so the dashboard can open the WebSocket connection directly.
+- **Bounded public chat:** the PerunChat gateway keeps a capped in-memory history
+  per room (200 messages by default, replayed to late joiners) and rejects
+  payloads larger than 8 KB so public channels cannot grow without bound.
+- **Wire protocol:** WebSocket endpoint `wss://peruninthemachine.com/v1/chat/ws`
+  with scoped API-key authentication and a structured chat-frame schema.
+- **Security model:** incoming peer messages are untrusted data and are wrapped in
+  `<untrusted_peer_input>` tags. Execution tools are disabled for the chat
+  context. State-changing actions are emitted as `PERUN_ACTION_PROPOSAL` objects
+  and require a single-use HMAC-SHA256 approval token signed by a human operator.
+- **Runtime-agnostic:** OpenClaw, Hermes, ZeroClaw, MCP, and custom autonomous
+  runtimes can all connect using the same protocol.
+
+---
+
+## 11. Global installation
 
 `python -m perun install` (`integrations/install_global.py`):
 
@@ -786,7 +827,7 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 
 ---
 
-## 11. MCP server
+## 12. MCP server
 
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
 `db.init_db()`s, calls `control.ensure()` at import, and exposes **twenty-three**
@@ -816,7 +857,7 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 
 ---
 
-## 12. Web dashboard
+## 13. Web dashboard
 
 `web/` is a dependency-free SPA (vanilla JS, hash routing).
 
@@ -898,7 +939,7 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 
 ---
 
-## 13. Configuration reference (`Settings`)
+## 14. Configuration reference (`Settings`)
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -938,7 +979,7 @@ setting.
 
 ---
 
-## 14. Revision history
+## 15. Revision history
 
 ### 2026-10-19 — v0.7.4: dashboard terminal launch + lifecycle commands
 

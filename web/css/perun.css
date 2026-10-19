@@ -421,6 +421,13 @@ select { cursor: pointer; }
 .chat-composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 160px; }
 .chat-composer .btn { height: 44px; }
 
+/* ---------- perunchat view ---------- */
+.perunchat-chat-log { height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 12px 0; background: var(--bg-inset); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; }
+.perunchat-chat-log > div { margin-bottom: 6px; overflow-wrap: anywhere; }
+.perunchat-list-box { min-height: 80px; }
+.perunchat-list-box .row:last-child { border-bottom: none; }
+.perunchat-reply-bar { display: none; margin-bottom: 8px; padding: 8px 10px; border-radius: 6px; background: rgba(201, 162, 39, 0.08); border: 1px solid var(--border-strong); font-size: 13px; }
+
 /* ==========================================================================
    Perun FX — the storm layer
    --------------------------------------------------------------------------

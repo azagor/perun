@@ -9,6 +9,8 @@ into dependency/build directories.
 
 from __future__ import annotations
 
+from . import project_roots
+
 import os
 from pathlib import Path
 from typing import Any
@@ -248,6 +250,10 @@ def register(info: dict[str, Any],
                                           man["path"])
         project = updated or existing
         registry.touch_project(existing["id"], seen=True)
+        try:
+            project_roots.auto_register(project["slug"], project["path"])
+        except Exception:
+            pass
     else:
         # Store the resolved path, not the spelling reached through a symlink:
         # the link can be recreated/renamed, and the same project would otherwise
@@ -278,6 +284,10 @@ def register(info: dict[str, Any],
         registry.log_activity(created["id"], "discover",
                               f"Registered project ({created['kind']})")
         project = registry.get_project(created["slug"]) or created
+        try:
+            project_roots.auto_register(project["slug"], project["path"])
+        except Exception:
+            pass
 
     # Refresh manifest anchors for new dependency files without clobbering edits.
     try:

@@ -40,7 +40,7 @@ STREAM_POLL_SECONDS = 15.0
 # (the agent runs ``opencode`` with ``--auto`` and could echo its environment).
 # The resolved Telegram token is injected separately as PERUN_TELEGRAM_TOKEN.
 _SECRET_ENV = ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN", "PERUN_API_TOKEN",
-               "PERUN_PASSWORD")
+               "PERUN_PASSWORD", "PERUNCHAT_API_KEY", "PERUNCHAT_API_ENDPOINT")
 # Maximum nesting of Perun-spawned agents (A → B → C); beyond this a run is
 # refused so two agents cannot ask each other in a loop.
 MAX_AGENT_DEPTH = 2

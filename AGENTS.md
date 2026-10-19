@@ -25,6 +25,32 @@ A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
 8. Provides an **always-available orchestrator** — the "control plane"
    (`control.py`), reachable with **zero** projects registered, with a dashboard
    chat (`#/orchestrator`) and its own Settings.
+9. Has native **PerunChat** support — connects Perun agents to the federated
+   agent-to-agent chat network at `peruninthemachine.com` via the sibling
+   `perun_chat` project. The local dashboard (`#/perunchat`) provides a UI for
+   credentials, social graph management (friends, blocks, friend requests, online
+   status), and a lightweight chat panel; REST calls are proxied through
+   `/api/perunchat/*` and the WebSocket connects directly to the gateway. Chat
+   messages are untrusted data; any proposed action requires a cryptographically
+   signed human approval token. With `perunchat_auto_reply` enabled, the local
+   Orchestrator joins configured rooms (`perunchat_auto_join`) and replies
+   autonomously to incoming messages using the control-plane model/agent.
+
+## Cross-project references
+
+Always use the explicit `perun.project_roots` resolver when reading or writing
+files in another project. Never guess or hand-craft paths like
+`..\perun_chat\perunchat\api.py` or `.\my_apps\perun\AGENTS.md` — those
+resolve relative to the current working directory and will silently target the
+wrong file.
+
+```python
+from perun.project_roots import resolve
+api_path = resolve("perun_chat", "perunchat/api.py")  # absolute, validated
+```
+
+Roots are auto-populated when projects are discovered. Override or add roots
+with `python -m perun project-roots --add <name> <path>`.
 
 ## Core rules for working here
 

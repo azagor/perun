@@ -744,6 +744,7 @@ const routes = {
     '#/activity': viewActivity,
     '#/mcp': viewMcp,
     '#/telegram': viewTelegram,
+    '#/perunchat': viewPerunChat,
     '#/providers': viewProviders,
     '#/settings': viewSettings,
 };
@@ -2977,6 +2978,471 @@ function mountTelegram(host, status, reload) {
             toast(r.sent ? 'Sent ✈' : 'Send failed', r.sent ? 'ok' : 'err');
         } catch (e) { toast(e.message, 'err'); }
     });
+}
+
+/* ========================================================= PERUNCHAT ==== */
+async function viewPerunChat() {
+    $('#topbar-title').textContent = 'PerunChat';
+    const v = $('#view');
+    v.innerHTML = '<div class="empty"><span class="spinner"></span> loading PerunChat…</div>';
+
+    let status = {};
+    let settings = state.settings || {};
+    try {
+        await loadSettings();
+        settings = state.settings || {};
+        status = (await api('/api/perunchat/status')) || {};
+    } catch (e) {
+        status = { configured: false };
+    }
+    // Populate the shared model/agent lists used by the dropdown pickers.
+    try { await loadModels(); await loadAgents(); } catch (e) { /* best-effort */ }
+
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow">Federation</div><h1>PerunChat</h1>
+         <div class="sub">Manage your agent's social graph and chat through the PerunChat gateway.</div></div>`));
+
+    // ---- Configuration -----------------------------------------------------
+    const cfgCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Gateway credentials</h4><span class="badge gold">machine-wide</span></div>
+         <p class="secondary">Register for a PerunChat API key on the <a href="https://peruninthemachine.com/perunchat/" target="_blank" rel="noopener">company website</a>. The local overseer stores the key and proxies social-management calls to the chat gateway; the WebSocket chat connects directly from this dashboard.</p>
+         <label class="field"><span class="lab">API key <span id="pc-key-badge" class="badge"></span></span>
+             <input type="password" id="pc-key" placeholder="prn_live_..." value=""></label>
+         <label class="field"><span class="lab">WebSocket endpoint</span>
+             <input type="text" id="pc-endpoint" value="${esc(settings.perunchat_api_endpoint || 'wss://peruninthemachine.com/v1/chat/ws')}"></label>
+         <label class="field"><span class="lab">Autonomous mode</span>
+             <label class="row"><input type="checkbox" id="pc-auto-reply" ${settings.perunchat_auto_reply ? 'checked' : ''}> <span>Let the Orchestrator reply to incoming chat messages</span></label></label>
+         <label class="field"><span class="lab">Auto-join rooms <span class="muted">(joined by the Orchestrator on startup)</span></span>
+             <span id="pc-autojoin-host"></span></label>
+         <div class="form-row">
+             <label class="field" style="flex:1"><span class="lab">Custom room id <span class="muted">(not in the catalog yet)</span></span>
+                 <input type="text" id="pc-custom-room" placeholder="pub:tenant:channel"></label>
+             <div style="align-self:flex-end"><button class="btn ghost" id="pc-add-room">Add room</button></div>
+         </div>
+         <div class="form-row">
+             <label class="field" style="flex:1"><span class="lab">Chat model <span class="muted">(optional override)</span></span>
+                 <span id="pc-chat-model-host"></span></label>
+             <label class="field" style="flex:1"><span class="lab">Chat agent <span class="muted">(optional override)</span></span>
+                 <span id="pc-chat-agent-host"></span></label>
+         </div>
+         <div class="form-actions">
+             <button class="btn primary" id="pc-save">Save credentials</button>
+             <button class="btn ghost" id="pc-test">Test connection</button>
+         </div>
+         <div id="pc-status" class="secondary mt"></div>`);
+    v.appendChild(cfgCard);
+
+    // Same dropdown widgets as the Settings page; both stay free-typed too.
+    const chatModelSel = modelSelect({ value: settings.perunchat_chat_model || '', placeholder: 'orchestrator / default model' });
+    $('#pc-chat-model-host').appendChild(chatModelSel);
+    const chatAgentSel = agentSelect({ value: settings.perunchat_chat_agent || '', placeholder: 'orchestrator / default agent' });
+    $('#pc-chat-agent-host').appendChild(chatAgentSel);
+
+    // Auto-join picker: options come from the gateway's discoverable rooms.
+    const autoJoinRooms = settings.perunchat_auto_join || [];
+    const joinSel = multiSelect({
+        id: 'pc-auto-join-sel',
+        items: autoJoinRooms.map((r) => ({ value: r, label: r })),
+        value: autoJoinRooms,
+        placeholder: 'Select rooms…',
+    });
+    $('#pc-autojoin-host').appendChild(joinSel);
+
+    let roomCatalog = [];
+    async function refreshRooms() {
+        if (!status.configured) return;
+        try {
+            const r = await api('/api/perunchat/rooms');
+            roomCatalog = (r.rooms || []).map((x) => ({
+                value: x.room_id,
+                label: x.room_id,
+                description: [
+                    x.active ? 'live' : '',
+                    x.joined ? 'joined' : '',
+                    x.members ? `${x.members} member${x.members === 1 ? '' : 's'}` : '',
+                ].filter(Boolean).join(' · ') || undefined,
+            }));
+            // Keep rooms that are configured but not in the gateway catalog.
+            const known = new Set(roomCatalog.map((x) => x.value));
+            for (const rid of autoJoinRooms) {
+                if (!known.has(rid)) roomCatalog.push({ value: rid, label: rid, description: 'configured' });
+            }
+            joinSel.setItems(roomCatalog);
+            const dl = $('#pc-room-dl');
+            if (dl) dl.innerHTML = roomCatalog.map((x) => `<option value="${esc(x.value)}">`).join('');
+        } catch (e) { /* room catalog is optional */ }
+    }
+
+    $('#pc-add-room').addEventListener('click', () => {
+        const rid = $('#pc-custom-room').value.trim();
+        if (!rid) return;
+        if (!roomCatalog.some((x) => x.value === rid)) {
+            roomCatalog.push({ value: rid, label: rid, description: 'custom' });
+            joinSel.setItems(roomCatalog);
+        }
+        if (!joinSel.getValue().includes(rid)) joinSel.setValue([...joinSel.getValue(), rid]);
+        $('#pc-custom-room').value = '';
+    });
+
+    const keyBadge = $('#pc-key-badge');
+    if (settings.perunchat_api_key_set) {
+        keyBadge.textContent = 'set';
+        keyBadge.className = 'badge green';
+        $('#pc-key').placeholder = 'leave blank to keep the stored key';
+    } else {
+        keyBadge.textContent = 'not set';
+        keyBadge.className = 'badge';
+    }
+
+    $('#pc-save').addEventListener('click', async () => {
+        const key = $('#pc-key').value.trim();
+        const endpoint = $('#pc-endpoint').value.trim();
+        const autoReply = $('#pc-auto-reply').checked;
+        const autoJoin = joinSel.getValue();
+        const chatModel = chatModelSel.getValue();
+        const chatAgent = chatAgentSel.getValue();
+        const body = {
+            perunchat_api_endpoint: endpoint,
+            perunchat_auto_reply: autoReply,
+            perunchat_auto_join: autoJoin,
+            perunchat_chat_model: chatModel,
+            perunchat_chat_agent: chatAgent,
+        };
+        if (key) body.perunchat_api_key = key;
+        try {
+            await api('/api/settings', { method: 'PATCH', body });
+            toast('PerunChat credentials saved', 'ok');
+            // Tear down any live chat socket and re-render the whole view so
+            // the saved key, status, room catalog and social lists take effect
+            // immediately — no manual reload needed.
+            if (ws) { try { ws.close(); } catch (err) { /* ignore */ } ws = null; }
+            await viewPerunChat();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    $('#pc-test').addEventListener('click', async () => {
+        try {
+            const r = await api('/api/perunchat/status');
+            const bridge = (await api('/api/perunchat/bridge/status')) || {};
+            $('#pc-status').textContent = r.configured
+                ? `Gateway reachable: ${r.rest_base || r.endpoint}; bridge: ${bridge.running ? 'running as ' + (bridge.agent_id || '—') : 'stopped'}`
+                : 'API key not configured';
+        } catch (e) { $('#pc-status').textContent = 'Gateway unreachable: ' + e.message; }
+    });
+
+    // The social grid and chat panel are always visible so it is obvious what
+    // exists here; without an API key they show a hint instead of live data.
+    const pcConfigured = !!status.configured;
+    const pcPlaceholder = '<p class="muted">Add your PerunChat API key above to load this list.</p>';
+    if (!pcConfigured) {
+        $('#pc-status').textContent = 'API key not configured — add your key above to enable friends, blocks and chat.';
+    } else {
+        $('#pc-status').textContent = `Gateway: ${status.rest_base || status.endpoint}`;
+        refreshRooms();
+    }
+
+    // ---- Social grid -------------------------------------------------------
+    const grid = el('div', { class: 'grid', style: 'grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px;' });
+
+    const friendsCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Friends</h4></div>
+         <div id="pc-friends-list" class="perunchat-list-box"><p class="muted">Loading…</p></div>`);
+    grid.appendChild(friendsCard);
+
+    const requestsCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Requests</h4></div>
+         <div id="pc-incoming" class="perunchat-list-box"><p class="muted">Loading incoming…</p></div>
+         <hr style="border-color:var(--border); margin:12px 0">
+         <div id="pc-outgoing" class="perunchat-list-box"><p class="muted">Loading outgoing…</p></div>
+         <label class="field"><span class="lab">Send friend request</span>
+             <div class="form-row"><input type="text" id="pc-request-to" placeholder="agent_id"><button class="btn primary" id="pc-request-btn">Request</button></div></label>`);
+    grid.appendChild(requestsCard);
+
+    const blockedCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Blocked</h4></div>
+         <div id="pc-blocked-list" class="perunchat-list-box"><p class="muted">Loading…</p></div>
+         <label class="field"><span class="lab">Block agent</span>
+             <div class="form-row"><input type="text" id="pc-block-id" placeholder="agent_id"><button class="btn danger" id="pc-block-btn">Block</button></div></label>`);
+    grid.appendChild(blockedCard);
+
+    v.appendChild(grid);
+
+    // ---- Chat panel --------------------------------------------------------
+    const chatCard = el('div', { class: 'card mt' },
+        `<div class="card-head"><h4>Chat</h4><span id="pc-ws-status" class="badge">disconnected</span></div>
+         <div id="pc-chat-log" class="perunchat-chat-log"></div>
+         <div id="pc-reply-bar" class="perunchat-reply-bar"></div>
+         <div class="form-row">
+             <input type="text" id="pc-chat-room" list="pc-room-dl" placeholder="room_id" style="flex:1" value="pub:global:general">
+             <select id="pc-chat-type" style="width:110px"><option value="PUBLIC">PUBLIC</option><option value="GROUP">GROUP</option><option value="PRIVATE">PRIVATE</option></select>
+             <button class="btn ghost" id="pc-chat-join">Join</button>
+             <button class="btn ghost" id="pc-chat-leave">Leave</button>
+         </div>
+         <datalist id="pc-room-dl"></datalist>
+         <div class="form-row">
+             <input type="text" id="pc-chat-msg" placeholder="Message (emoji supported 👋)…" style="flex:1">
+             <button class="btn primary" id="pc-chat-send">Send</button>
+         </div>`);
+    v.appendChild(chatCard);
+
+    // ---- Social refresh ----------------------------------------------------
+    async function refreshSocial() {
+        if (!pcConfigured) {
+            for (const id of ['pc-friends-list', 'pc-incoming', 'pc-outgoing', 'pc-blocked-list']) {
+                const box = document.getElementById(id);
+                if (box) box.innerHTML = pcPlaceholder;
+            }
+            return;
+        }
+        try {
+            const [friends, incoming, outgoing, fstatus, blocked] = await Promise.all([
+                api('/api/perunchat/social/friends'),
+                api('/api/perunchat/social/friends/requests?direction=incoming'),
+                api('/api/perunchat/social/friends/requests?direction=outgoing'),
+                api('/api/perunchat/social/friends/status'),
+                api('/api/perunchat/social/blocked'),
+            ]);
+            const onlineMap = Object.fromEntries((fstatus.friends || []).map(f => [f.agent_id, f.status]));
+
+            const fList = $('#pc-friends-list');
+            const fItems = friends.friends || [];
+            fList.innerHTML = fItems.length ? '' : '<p class="muted">No friends yet.</p>';
+            for (const id of fItems) {
+                const st = onlineMap[id] || 'offline';
+                const badge = st === 'online' ? '🟢' : '⚪';
+                const row = el('div', { class: 'row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
+                    `<span>${badge} ${esc(id)}</span><button class="btn ghost danger small" data-remove="${esc(id)}">Remove</button>`);
+                row.querySelector('button').addEventListener('click', async () => {
+                    try { await api(`/api/perunchat/social/friends/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Friend removed', 'ok'); refreshSocial(); }
+                    catch (e) { toast(e.message, 'err'); }
+                });
+                fList.appendChild(row);
+            }
+
+            const iList = $('#pc-incoming');
+            const iReqs = incoming.requests || [];
+            iList.innerHTML = iReqs.length ? '' : '<p class="muted">No incoming requests.</p>';
+            for (const req of iReqs) {
+                const row = el('div', { class: 'row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
+                    `<span>← ${esc(req.from_agent_id)}</span>
+                     <span><button class="btn ghost success small" data-accept="${esc(req.request_id)}">Accept</button>
+                           <button class="btn ghost danger small" data-reject="${esc(req.request_id)}">Reject</button></span>`);
+                row.querySelector('[data-accept]').addEventListener('click', async () => {
+                    try { await api(`/api/perunchat/social/friends/requests/${esc(req.request_id)}/accept`, { method: 'POST' }); toast('Request accepted', 'ok'); refreshSocial(); }
+                    catch (e) { toast(e.message, 'err'); }
+                });
+                row.querySelector('[data-reject]').addEventListener('click', async () => {
+                    try { await api(`/api/perunchat/social/friends/requests/${esc(req.request_id)}/reject`, { method: 'POST' }); toast('Request rejected', 'ok'); refreshSocial(); }
+                    catch (e) { toast(e.message, 'err'); }
+                });
+                iList.appendChild(row);
+            }
+
+            const oList = $('#pc-outgoing');
+            const oReqs = outgoing.requests || [];
+            oList.innerHTML = oReqs.length ? '' : '<p class="muted">No outgoing requests.</p>';
+            for (const req of oReqs) {
+                const row = el('div', { class: 'row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
+                    `<span>→ ${esc(req.to_agent_id)} <code>${esc(req.status)}</code></span>
+                     <button class="btn ghost danger small" data-cancel="${esc(req.request_id)}">Cancel</button>`);
+                row.querySelector('button').addEventListener('click', async () => {
+                    try { await api(`/api/perunchat/social/friends/requests/${esc(req.request_id)}/reject`, { method: 'POST' }); toast('Request cancelled', 'ok'); refreshSocial(); }
+                    catch (e) { toast(e.message, 'err'); }
+                });
+                oList.appendChild(row);
+            }
+
+            const bList = $('#pc-blocked-list');
+            const bItems = blocked.blocked || [];
+            bList.innerHTML = bItems.length ? '' : '<p class="muted">No blocked agents.</p>';
+            for (const id of bItems) {
+                const row = el('div', { class: 'row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
+                    `<span>${esc(id)}</span><button class="btn ghost small" data-unblock="${esc(id)}">Unblock</button>`);
+                row.querySelector('button').addEventListener('click', async () => {
+                    try { await api(`/api/perunchat/social/blocked/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Unblocked', 'ok'); refreshSocial(); }
+                    catch (e) { toast(e.message, 'err'); }
+                });
+                bList.appendChild(row);
+            }
+        } catch (e) { toast(e.message, 'err'); }
+    }
+
+    $('#pc-request-btn').addEventListener('click', async () => {
+        const to = $('#pc-request-to').value.trim();
+        if (!to) return;
+        try { await api('/api/perunchat/social/friends/requests', { method: 'POST', body: { to_agent_id: to } }); toast('Friend request sent', 'ok'); $('#pc-request-to').value = ''; refreshSocial(); }
+        catch (e) { toast(e.message, 'err'); }
+    });
+
+    $('#pc-block-btn').addEventListener('click', async () => {
+        const id = $('#pc-block-id').value.trim();
+        if (!id) return;
+        try { await api('/api/perunchat/social/blocked', { method: 'POST', body: { blocked_agent_id: id } }); toast('Agent blocked', 'ok'); $('#pc-block-id').value = ''; refreshSocial(); }
+        catch (e) { toast(e.message, 'err'); }
+    });
+
+    refreshSocial();
+
+    // ---- WebSocket chat ----------------------------------------------------
+    let ws = null;
+    let seq = 0;
+    let joinedRoom = null;
+    let replyToId = null;
+    let replyToPreview = null;
+    const messageHistory = []; // keep recent messages for reply rendering
+    const MAX_HISTORY = 200;
+
+    const log = (html, meta) => {
+        const box = $('#pc-chat-log');
+        const line = el('div', {}, html);
+        if (meta) line._meta = meta;
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+    };
+    const setWsStatus = (text, cls) => {
+        const badge = $('#pc-ws-status');
+        badge.textContent = text;
+        badge.className = 'badge ' + (cls || '');
+    };
+
+    function renderMessage(msg) {
+        if (!msg.id) return;
+        messageHistory.push(msg);
+        if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
+
+        const own = msg.sender && msg.sender.agent_id ? esc(msg.sender.agent_id) : '?';
+        const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
+        let replyHtml = '';
+        if (msg.in_reply_to) {
+            const original = messageHistory.find(m => m.id === msg.in_reply_to);
+            const replyToWho = original ? esc(original.sender.agent_id) : 'unknown';
+            const replyToText = original ? esc(String(original.payload).slice(0, 60)) : '…';
+            replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
+        }
+
+        const lineHtml = `<div style="margin-bottom:4px;">
+            <div class="row" style="gap:10px; align-items:baseline;">
+                <span style="color:var(--gold); font-weight:600;">@${own}</span>
+                <span class="muted" style="font-size:11px;">${esc(ts)}</span>
+                <button class="btn ghost small" data-reply-id="${esc(msg.id)}" data-reply-sender="${own}">Reply</button>
+            </div>
+            ${replyHtml}
+            <div style="margin-left:12px; overflow-wrap:anywhere;">${esc(String(msg.payload))}</div>
+        </div>`;
+        log(lineHtml, { id: msg.id });
+
+        // Attach listener to the reply button of the line we just appended.
+        const box = $('#pc-chat-log');
+        const btn = box.querySelector(`[data-reply-id="${CSS.escape(msg.id)}"]`);
+        if (btn) {
+            btn.addEventListener('click', () => {
+                replyToId = msg.id;
+                replyToPreview = `@${own}: ${String(msg.payload).slice(0, 40)}`;
+                const bar = $('#pc-reply-bar');
+                if (bar) bar.innerHTML = `↩ ${esc(replyToPreview)} <button class="btn ghost small" id="pc-clear-reply">Cancel</button>`;
+                bar.style.display = 'block';
+                bar.querySelector('#pc-clear-reply').addEventListener('click', clearReply);
+                $('#pc-chat-msg').focus();
+            });
+        }
+    }
+
+    function clearReply() {
+        replyToId = null;
+        replyToPreview = null;
+        const bar = $('#pc-reply-bar');
+        if (bar) { bar.innerHTML = ''; bar.style.display = 'none'; }
+    }
+
+    async function connectChat() {
+        if (ws) { ws.close(); ws = null; }
+        let key, endpoint;
+        try {
+            // The PerunChat gateway accepts the API key via query parameter because
+            // browser WebSocket cannot set custom headers. The key is revealed only
+            // to loopback clients.
+            const k = await api('/api/perunchat/key');
+            key = encodeURIComponent(k.key);
+            const s = await api('/api/perunchat/status');
+            endpoint = `${s.endpoint}${s.endpoint.includes('?') ? '&' : '?'}token=${key}`;
+        } catch (e) { toast('Could not load chat credentials: ' + e.message, 'err'); return; }
+        try {
+            ws = new WebSocket(endpoint);
+            ws.onopen = () => { setWsStatus('connected', 'green'); log('<span class="muted">Connected to PerunChat gateway.</span>'); };
+            ws.onclose = () => { setWsStatus('disconnected', ''); log('<span class="muted">Disconnected.</span>'); ws = null; };
+            ws.onerror = (e) => { log('<span style="color:var(--danger)">WebSocket error.</span>'); };
+            ws.onmessage = (ev) => {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    if (msg.type === 'ERROR') {
+                        log(`<span style="color:var(--danger)">Error: ${esc(msg.message)}${msg.room_id ? ' (' + esc(msg.room_id) + ')' : ''}</span>`);
+                    } else if (msg.type === 'ROOM_JOINED') {
+                        log(`<span class="muted">Joined ${esc(msg.room_id)}.</span>`);
+                    } else if (msg.type === 'ROOM_LEFT') {
+                        log(`<span class="muted">Left ${esc(msg.room_id)}.</span>`);
+                    } else if (msg.type === 'PRESENCE_UPDATE') {
+                        log(`<span class="muted">${esc(msg.agent_id)} is ${esc(msg.status)}.</span>`);
+                    } else if (msg.sender && msg.payload !== undefined) {
+                        renderMessage(msg);
+                    } else {
+                        log(`<span class="muted">${esc(ev.data)}</span>`);
+                    }
+                } catch (_) { log(`<span class="muted">${esc(ev.data)}</span>`); }
+            };
+        } catch (e) { toast('Could not open WebSocket: ' + e.message, 'err'); }
+    }
+
+    function sendFrame(frame) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) { toast('Not connected', 'err'); return; }
+        ws.send(JSON.stringify(frame));
+    }
+
+    $('#pc-chat-join').addEventListener('click', () => {
+        const room = $('#pc-chat-room').value.trim();
+        const type = $('#pc-chat-type').value;
+        if (!room) return;
+        joinedRoom = room;
+        sendFrame({ type: 'ROOM_JOIN', room_id: room, room_type: type, timestamp: Date.now() });
+    });
+
+    $('#pc-chat-leave').addEventListener('click', () => {
+        if (!joinedRoom) return;
+        const type = $('#pc-chat-type').value;
+        sendFrame({ type: 'ROOM_LEAVE', room_id: joinedRoom, room_type: type, timestamp: Date.now() });
+        joinedRoom = null;
+    });
+
+    $('#pc-chat-send').addEventListener('click', () => {
+        if (!joinedRoom) { toast('Join a room first', 'err'); return; }
+        const text = $('#pc-chat-msg').value;
+        if (!text.trim()) return;
+        seq += 1;
+        const frame = {
+            id: `msg_${Date.now()}`,
+            trace_id: `trc_${Date.now()}`,
+            thread_id: 'default',
+            sequence_number: seq,
+            timestamp: Date.now(),
+            room_type: $('#pc-chat-type').value,
+            room_id: joinedRoom,
+            sender: {},
+            recipient_id: null,
+            content_type: 'text/plain',
+            turn_count: 0,
+            payload: text,
+        };
+        if (replyToId) frame.in_reply_to = replyToId;
+        sendFrame(frame);
+        $('#pc-chat-msg').value = '';
+        clearReply();
+    });
+
+    if (pcConfigured) {
+        connectChat();
+    } else {
+        log('<span class="muted">Add your PerunChat API key above and save, to enable live chat.</span>');
+    }
 }
 
 /* ========================================================= PROVIDERS ==== */

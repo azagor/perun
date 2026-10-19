@@ -147,6 +147,16 @@ class Settings:
     # (clears it) as soon as a chat completes ``/pair <code>``. An empty
     # allow-list therefore grants *nobody* access by default.
     telegram_pair_code: str = ""
+    # PerunChat federation credentials. The API key is obtained from the company
+    # website at peruninthemachine.com; the endpoint is the WebSocket ingress URL.
+    perunchat_api_key: str = ""
+    perunchat_api_endpoint: str = "wss://peruninthemachine.com/v1/chat/ws"
+    # Autonomous agent-chat bridge. When enabled and a key is configured, the
+    # local Orchestrator joins the listed rooms and replies to incoming messages.
+    perunchat_auto_reply: bool = False
+    perunchat_auto_join: list[str] = field(default_factory=lambda: ["pub:global:general"])
+    perunchat_chat_model: str = ""
+    perunchat_chat_agent: str = ""
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
     # Dedicated terminal / command shell. On Windows the value can be a path to
@@ -329,6 +339,37 @@ class Settings:
         else:
             chat_src = ""
         return {"token": token_src, "chats": chat_src}
+
+    # -- PerunChat resolution (settings first, environment as fallback) ------
+
+    def perunchat(self) -> tuple[str, str]:
+        """Return the effective PerunChat API key and WebSocket endpoint."""
+        from . import secrets
+        env_key = (os.environ.get("PERUNCHAT_API_KEY") or "").strip()
+        key = env_key
+        if not key:
+            config_key = (self.perunchat_api_key or "").strip()
+            if config_key and secrets.is_encrypted(config_key):
+                key = secrets.decrypt_value(config_key) or ""
+            else:
+                key = config_key
+        endpoint = (os.environ.get("PERUNCHAT_API_ENDPOINT") or self.perunchat_api_endpoint or "wss://peruninthemachine.com/v1/chat/ws").strip()
+        return key, endpoint
+
+    def perunchat_sources(self) -> dict[str, str]:
+        """Where the effective PerunChat key/endpoint come from."""
+        from . import secrets
+        if (os.environ.get("PERUNCHAT_API_KEY") or "").strip():
+            key_src = "env"
+        elif (self.perunchat_api_key or "").strip():
+            if secrets.is_encrypted(self.perunchat_api_key):
+                key_src = "settings-encrypted"
+            else:
+                key_src = "settings"
+        else:
+            key_src = ""
+        endpoint_src = "env" if (os.environ.get("PERUNCHAT_API_ENDPOINT") or "").strip() else "settings"
+        return {"key": key_src, "endpoint": endpoint_src}
 
 
 def ensure_dirs() -> None:

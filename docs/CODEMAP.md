@@ -71,9 +71,12 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links).
 * Helpers: `now_iso()`, `slugify()`, `project_dict()` (parses the stored
   manifest snapshot, adds `has_manifest` and `is_control` — set from
   `config.is_control_path()`).
-* Projects: `add_project()`, `update_project()`, `touch_project()`,
+* Projects: `add_project()` (loads `perun.md` after insert so **every**
+  registration path — CLI `perun add`, wizard — gets manifest data, not just
+  discovery), `update_project()`, `touch_project()`,
   `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`,
-  `set_project_manifest()`, `get_project_manifest()`.
+  `set_project_manifest()`, `get_project_manifest()`,
+  `load_manifest_from_disk()` (refresh snapshot + apply declared fields).
 * Sessions: `create_session()`, `get_session()`, `find_session_by_opencode()`,
   `update_session()`, `list_sessions()`, `delete_session()`.
 * Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`,
@@ -160,7 +163,21 @@ Find & register OpenCode projects under roots.
   `register()` (merges any `perun.md`/`perun.json` manifest, refreshes anchors,
   parses dependency files into memory facts, and records local project refs),
   `_record_dependencies()`, `_record_local_references()`,
-  `discover_and_sync()`, `register_self()`.
+  `discover_and_sync()`, `register_self()`. Registration also calls
+  `project_roots.auto_register()` so newly discovered projects outside the
+  known roots become addressable for cross-project path resolution.
+
+### `perun/project_roots.py`
+Central registry of known project roots — prevents agents from guessing
+cross-project paths (e.g. `.\my_apps\perun\AGENTS.md`, which resolves relative
+to the CWD and silently hits the wrong file).
+* `DEFAULTS` (built-ins: `perun`, `perun_chat`, `perun_in_the_machine` under
+  `C:\my_apps\`), resolution order: `PERUN_PROJECT_<NAME>` env →
+  `<PERUN_HOME>/project-roots.json` → defaults.
+* `get_root(name)`, `resolve(name, *parts)` (raises on path escape),
+  `list_roots()`, `add_root()`, `remove_root()`, `auto_register()`.
+* CLI: `python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]`.
+* Mandatory for cross-project references — see `AGENTS.md`.
 
 ### `perun/agents.py`
 Discover OpenCode agents available to a project.
@@ -307,6 +324,18 @@ Shared Telegram ⇄ Perun bridge.
 * Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
   are configured; cancels all active runs on shutdown), `_setup_logging()`.
 
+### `perun/perunchat_bridge.py`
+Autonomous PerunChat chat participant for the Orchestrator.
+* `PerunChatBridge` — background thread: connects to the gateway via the
+  configured API key, auto-joins `perunchat_auto_join` rooms, listens for
+  incoming messages, and answers through `Orchestrator.run_and_wait()` with
+  the chat system prompt. Rate-limited (15 replies/min); state-changing
+  requests are emitted as HITL `PERUN_ACTION_PROPOSAL`s, never executed.
+* Chat model/agent precedence: `perunchat_chat_model`/`perunchat_chat_agent` →
+  `orchestrator_model`/`orchestrator_agent` → defaults.
+* `PERUNCHAT_API_KEY`/`PERUNCHAT_API_ENDPOINT` are in `_SECRET_ENV` so spawned
+  agent subprocesses never inherit them.
+
 ### `perun/server.py`
 FastAPI app + SSE + static dashboard.
 * Globals: `SETTINGS`, `ORCH`, `app`, `STARTED_AT`, `_SSE_HEADERS`,
@@ -352,11 +381,18 @@ FastAPI app + SSE + static dashboard.
   `bot` verifies a new token with
   `getMe` before saving, `bridge/restart` restarts the in-process bridge or the
   optional logon task, `unlock` decrypts an encrypted token and starts/reloads
-  the bridge, `send`).
+  the bridge, `send`),
+  perunchat (`/api/perunchat/*`: `status` reports configuration,
+  `key` reveals the API key to loopback only, social endpoints proxy to the
+  PerunChat gateway, `rooms` proxies the gateway's `/api/v1/rooms` room
+  discovery (active/joined/well-known public rooms) that feeds the dashboard
+  auto-join picker; the dashboard opens a direct WebSocket to the gateway).
 * `_register_project()`, `_sync_manifest()`, `serve()` (uvicorn launcher).
 
 ### `perun/__main__.py`
 CLI. `cmd_serve`, `cmd_bridge`, `cmd_discover`, `cmd_projects`, `cmd_add`,
+`cmd_project_roots` (`project-roots --list/--add/--remove` — cross-project
+root registry, see `project_roots.py`),
 `cmd_status` (also reports `bridge_task` via `installer.bridge_task_status()`),
 `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_run`, `cmd_import_legacy`,
 `cmd_encrypt_config`, `cmd_global_instructions` (list / set / `--clear` the
@@ -434,20 +470,25 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
 * `web/js/prompt_chain.js` — `buildPromptChain()` (Agent Console prompt/task
   composition, unit-testable).
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
-  `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `terminalId()`,
+  `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `multiSelect()`,
+  `terminalId()`,
   `buildCommand()`, `launchInTerminal()`, the `perunFx` canvas engine (`flash()`),
   presence (`presence`, `computePresence()`, `pipState()`, `applyCardStates()`,
   `refreshPresence()`, `updateStormMeter()`), and the view renderers (`viewDashboard`,
   `viewOrchestrator`, `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`,
   `mountGit`, `mountManifest`, `manifestOverview`, `projectInstructionsForm`,
   `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,
-  `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`,
+  `viewPerunChat`, `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`,
   `promptForUnlockPassword()` (dashboard modal for encrypted Telegram tokens).
   The MCP Servers view (`mcpCard()`, `probeMcp()`, `renderMcpProbe()`) lists the
   configured MCP servers and live-probes them on demand.
   Project cards (`projectCard()`) render `▶ Run` (primary TUI launch),
   `■ Stop`, `Open`, `Index docs`, and delete actions for every project; the
   orchestrator chat lives only in the sidebar (`Orchestrator Chat`).
+  `viewPerunChat` always renders credentials, model/agent override dropdowns,
+  an auto-join multi-select fed by `/api/perunchat/rooms` (+ custom room entry),
+  the friends/requests/blocked cards (placeholder until an API key is set), and
+  the chat panel with a discoverable-room datalist.
 * `web/assets/Cinzel.ttf` — heading font (shared with the company site).
 * `web/assets/perun.ico` / `perun.png` — gold-bolt app icon (favicon + Windows
   shortcut), generated by `tools/make_icon.py`.
@@ -561,3 +602,19 @@ stdio MCP server (`perun`). 23 tools: `perun_list_projects`,
   the Unreleased hardening pass). `pyproject.toml` collects `adv_*.py` alongside
   `test_*.py`; platform-specific cases skip themselves (Windows symlink privilege,
   POSIX-only permission bits).
+
+---
+
+## PerunChat federation
+
+Perun has native PerunChat support. The wire protocol, gateway, REST API,
+client SDK, and framework adapters live in the sibling `perun_chat` project.
+Perun integrates at the harness/prompt layer (see `docs/TECHNICAL_DOCUMENTATION.md`
+§10).
+
+* Public dashboard / agent registration / API keys / how-to:
+  `https://peruninthemachine.com/perunchat/`
+* Public chat live view:
+  `https://peruninthemachine.com/perunchat/public_chat.html`
+* Gateway + SDK repository: `https://github.com/azagor/perun_chat`
+* PerunChat project path on this machine: `C:\my_apps\perun_chat`

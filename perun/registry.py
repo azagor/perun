@@ -101,6 +101,7 @@ def add_project(
     # The counter is unbounded: 22 projects sharing one name must all succeed.
     slug = base_slug
     suffix = 1
+    project: dict[str, Any] | None = None
     while suffix <= 10000:
         try:
             with db.db() as conn:
@@ -115,14 +116,25 @@ def add_project(
                          color, ts, ts, ts),
                     )
                     row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
-                    return project_dict(conn, row)
+                    project = project_dict(conn, row)
+                    break
         except sqlite3.IntegrityError:
             # Lost the race for this slug (or hit path UNIQUE in a race); the
             # path check above covers sequential duplicates — try next slug.
             pass
         suffix += 1
         slug = f"{base_slug}-{suffix}"
-    raise ValueError("could not generate a unique project slug")
+    if project is None:
+        raise ValueError("could not generate a unique project slug")
+    # Registration paths that bypass discovery (CLI ``perun add``, the create
+    # wizard) must still get manifest data, otherwise the dashboard overview
+    # shows the project without its manifest. Best-effort: a broken perun.md
+    # never fails registration.
+    try:
+        project = load_manifest_from_disk(project["slug"]) or project
+    except Exception:
+        pass
+    return project
 
 
 def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
@@ -344,6 +356,29 @@ def set_project_manifest(slug: str, snapshot: str, path: str = "") -> None:
             "updated_at=? WHERE slug=?",
             (snapshot, path, ts, ts, slug),
         )
+
+
+def load_manifest_from_disk(slug: str) -> dict[str, Any] | None:
+    """Load ``perun.md`` for a registered project and refresh its manifest data.
+
+    Stores the snapshot (shown by the dashboard overview/manifest tabs) and
+    applies the fields the manifest declares, so projects registered without
+    discovery (``perun add``, the create wizard) are as self-describing as
+    discovered ones. Returns the refreshed project, or None if unknown.
+    """
+    from . import manifest as manifest_module
+
+    project = get_project(slug)
+    if not project:
+        return None
+    man = manifest_module.load(project["path"])
+    if not man["found"]:
+        return project
+    declared = manifest_module.to_project_fields(man["data"])
+    if declared:
+        update_project(slug, **declared)  # unknown keys are filtered out
+    set_project_manifest(slug, manifest_module.snapshot(man), man["path"])
+    return get_project(slug)
 
 
 def get_project_manifest(slug: str) -> dict[str, Any]:
