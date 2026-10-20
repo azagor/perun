@@ -4,7 +4,7 @@ Usage::
 
     python -m perun serve [--host H] [--port P] [--reload] [--bridge]
     python -m perun stop [--timeout S] [--force]
-    python -m perun restart [--host H] [--port P] [--bridge] [--detach] [--timeout S] [--force]
+    python -m perun restart [--host H] [--port P] [--bridge] [--foreground] [--timeout S] [--force]
     python -m perun bridge
     python -m perun discover [--roots a;b] [--index]
     python -m perun projects
@@ -123,7 +123,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 
 def cmd_restart(args: argparse.Namespace) -> int:
-    """Gracefully stop the running server, then start a new one."""
+    """Gracefully stop the running server, then start a new one.
+
+    The replacement runs detached by default so a restart issued from a shell,
+    script, or CI step survives that shell's exit; pass ``--foreground`` to
+    watch the new server's logs instead.
+    """
     settings = config.Settings.load()
     existing = daemon.is_another_perun_running(settings)
     if existing:
@@ -139,24 +144,27 @@ def cmd_restart(args: argparse.Namespace) -> int:
         daemon.clear_pid()
         print("[perun] stopped")
 
-    if args.detach:
-        # Start a detached server and exit; useful for services/scripts.
-        argv = [sys.executable, "-m", "perun", "serve"]
-        if args.host:
-            argv.extend(["--host", args.host])
-        if args.port:
-            argv.extend(["--port", str(args.port)])
-        if args.bridge:
-            argv.append("--bridge")
-        if args.reload:
-            argv.append("--reload")
-        new_pid = daemon.start_detached(argv)
-        daemon.write_pid_for(new_pid)
-        print(f"[perun] started detached server (PID {new_pid})")
-        return 0
+    if args.foreground:
+        print("[perun] starting server (foreground; Ctrl+C to stop)...")
+        return cmd_serve(args)
 
-    print("[perun] starting server...")
-    return cmd_serve(args)
+    # Detached by default. An attached server is killed when the shell that
+    # launched it exits (including non-interactive shells such as CI steps or
+    # agent harnesses timing out), which silently took the bridges down.
+    # ``--detach`` is kept as a no-op for backward compatibility.
+    argv = [sys.executable, "-m", "perun", "serve"]
+    if args.host:
+        argv.extend(["--host", args.host])
+    if args.port:
+        argv.extend(["--port", str(args.port)])
+    if args.bridge:
+        argv.append("--bridge")
+    if args.reload:
+        argv.append("--reload")
+    new_pid = daemon.start_detached(argv)
+    daemon.write_pid_for(new_pid)
+    print(f"[perun] started detached server (PID {new_pid})")
+    return 0
 
 
 # Process-lifetime references for the in-process Telegram bridge. The lock must
@@ -654,7 +662,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reload", action="store_true")
     p.add_argument("--bridge", action="store_true", help="also start the Telegram bridge")
     p.add_argument("--detach", action="store_true",
-                   help="start the new server in the background and exit")
+                   help="start detached (default since v0.7.9; kept for compatibility)")
+    p.add_argument("--foreground", action="store_true",
+                   help="run the replacement in this console instead of detaching")
     p.add_argument("--timeout", type=float, default=30,
                    help="seconds to wait for the old server to shut down")
     p.add_argument("--force", action="store_true",

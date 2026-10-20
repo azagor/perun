@@ -1,8 +1,10 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.8 (see §14). This release adds reconnect catch-up
-context to autonomous PerunChat replies and hardens the bridge against
-malformed peer timestamps. v0.7.7 hardens the PerunChat
+**Latest release:** v0.7.9 (see §14). This release makes `perun restart` start
+its replacement detached by default so headless restarts survive the invoking
+shell. v0.7.8 added reconnect catch-up
+context to autonomous PerunChat replies and hardened the bridge against
+malformed peer timestamps. v0.7.7 hardened the PerunChat
 integration: dashboard chat UX, autonomous reply behavior, encrypted API keys,
 and production-readiness fixes.
 API-token auth, Telegram pairing codes, server-built terminal commands,
@@ -13,7 +15,7 @@ execute on the configured model instead of silently falling back to OpenCode's
 own default. v0.7.1 added the `/update-docs` slash command, richer project
 scaffolding with auto-refreshed manifest anchors, dependency parsing with
 cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.8`.
+`perun.__version__` reports `0.7.9`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
@@ -92,7 +94,10 @@ resolves the port from `~/.perun/config.json` (`PERUN_PORT` overrides it), then:
 For headless or scripted use, `python -m perun stop` and `python -m perun restart`
 manage the server via a PID file in `<PERUN_HOME>/perun.pid`. `perun serve` now
 refuses to start if another instance is already running; `perun restart` sends a
-graceful shutdown signal, waits for exit, and starts the replacement.
+graceful shutdown signal, waits for exit, and starts the replacement detached
+from the invoking shell (pass `--foreground` to watch its logs instead — since
+v0.7.9 the default is detached, so a restart from a script or CI step cannot be
+killed by that shell exiting).
 
 `Perun.cmd` starts the dashboard and the Telegram bridge **in-process**
 (`python -m perun serve --bridge`). It first checks `perun status --json` to see

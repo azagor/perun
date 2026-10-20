@@ -2,6 +2,17 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.9 - 2026-10-20
+
+### Changed
+
+- **`perun restart` now starts its replacement detached by default.** Previously
+  the new server stayed attached to the invoking shell, so a headless restart
+  from a script, CI step, or agent harness died as soon as that shell exited —
+  silently taking the Telegram/PerunChat bridges down with it. `--foreground`
+  restores the watch-the-logs behavior; `--detach` is kept as a no-op for
+  backward compatibility.
+
 ## v0.7.8 - 2026-10-20
 
 ### Changed

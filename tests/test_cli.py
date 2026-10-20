@@ -144,3 +144,63 @@ def test_refresh_deps_cli_records_facts(monkeypatch, tmp_path, capsys):
     assert rc == 0
     assert "refresh complete" in captured.out
     assert "1 fact" in captured.out
+
+
+def test_restart_detaches_by_default(monkeypatch, capsys):
+    """``perun restart`` must start its replacement detached from the shell.
+
+    An attached server dies with the shell that launched it (a CI step, a
+    script, an agent harness hitting its timeout), silently taking the
+    Telegram/PerunChat bridges down with it.
+    """
+    from perun import daemon
+
+    launched: dict = {}
+
+    def fake_detached(argv):  # noqa: ANN001
+        launched["argv"] = argv
+        return 4242
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "start_detached", fake_detached)
+    monkeypatch.setattr(daemon, "write_pid_for",
+                        lambda pid: launched.setdefault("pid", pid))
+
+    rc = cli.main(["restart", "--bridge"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert launched["argv"] == [sys.executable, "-m", "perun", "serve", "--bridge"]
+    assert launched["pid"] == 4242
+    assert "detached server (PID 4242)" in captured.out
+
+
+def test_restart_foreground_stays_attached(monkeypatch, capsys):
+    """``--foreground`` restores the old watch-the-logs behavior."""
+    from perun import daemon
+
+    served: dict = {}
+
+    def fake_serve(args):  # noqa: ANN001
+        served["args"] = args
+        return 0
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(cli, "cmd_serve", fake_serve)
+
+    rc = cli.main(["restart", "--foreground"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "foreground" in captured.out
+    assert served["args"].foreground is True
+
+
+def test_restart_detach_flag_still_accepted(monkeypatch):
+    """``--detach`` is a no-op since v0.7.9 (detached is the default) but
+    existing scripts passing it must keep working."""
+    from perun import daemon
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "start_detached", lambda argv: 7)
+    monkeypatch.setattr(daemon, "write_pid_for", lambda pid: None)
+
+    assert cli.main(["restart", "--detach"]) == 0
