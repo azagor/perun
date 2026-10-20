@@ -2,6 +2,12 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.16 - 2026-10-20
+
+### Fixed
+
+- **Robust Python path quoting in `Perun.cmd`.** Replaced fragile `findstr` pipe logic with substring checks, preventing the launcher from closing immediately when Python is installed under `C:\Program Files\...`.
+
 ## v0.7.15 - 2026-10-20
 
 ### Fixed
