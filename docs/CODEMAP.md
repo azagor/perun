@@ -52,10 +52,12 @@ Filesystem layout + persisted settings.
 
 ### `perun/daemon.py`
 Server lifecycle helpers: PID file, running-check, graceful stop, restart.
-* `PID_PATH`, `write_pid()`, `read_pid()`, `clear_pid()`, `is_running()`,
+* `PID_PATH`, `RUN_RECORD_PATH`, `write_pid()`, `read_pid()`, `clear_pid()`,
+  `record_run()`, `read_recorded_run()`, `read_recorded_argv()`, `is_running()`,
   `is_another_perun_running()`, `stop()`, `kill()`, `start_detached()`.
-* Used by ``perun serve`` to avoid double-starts and by ``perun stop`` /
-  ``perun restart`` for graceful replacement.
+* Used by ``perun serve`` to avoid double-starts and record its launch flags;
+  used by ``perun stop`` / ``perun restart`` for graceful replacement, with
+  ``perun restart`` replaying the recorded flags.
 
 ### `perun/db.py`
 SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,

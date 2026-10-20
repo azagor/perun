@@ -183,3 +183,44 @@ def test_start_detached_starts_background_process(monkeypatch, tmp_path):
             psutil.Process(pid).kill()
         except psutil.NoSuchProcess:
             pass
+
+
+def test_record_run_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+
+    assert daemon.read_recorded_run() is None
+    assert daemon.read_recorded_argv() is None
+
+    daemon.record_run(["serve", "--bridge", "--port", "8760"], pid=12345)
+    data = daemon.read_recorded_run()
+    assert data["pid"] == 12345
+    assert data["argv"] == ["serve", "--bridge", "--port", "8760"]
+    assert daemon.read_recorded_argv() == ["serve", "--bridge", "--port", "8760"]
+
+
+def test_record_run_survives_stop(tmp_path, monkeypatch):
+    """The record describes how Perun was last launched; stop must not clear it."""
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+    monkeypatch.setattr(daemon, "PID_PATH", tmp_path / "perun.pid")
+
+    daemon.record_run(["serve", "--bridge"], pid=os.getpid())
+    daemon.write_pid(os.getpid())
+    daemon.clear_pid()  # what stop does for the current process
+    assert daemon.read_recorded_argv() == ["serve", "--bridge"]
+
+
+def test_read_recorded_run_tolerates_garbage(tmp_path, monkeypatch):
+    path = tmp_path / "server.json"
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", path)
+
+    path.write_text("not json at all", encoding="utf-8")
+    assert daemon.read_recorded_run() is None
+
+    path.write_text("[1, 2, 3]", encoding="utf-8")  # valid JSON, wrong shape
+    assert daemon.read_recorded_run() is None
+
+    path.write_text('{"argv": "serve"}', encoding="utf-8")  # argv not a list
+    assert daemon.read_recorded_run() is None
+
+    path.write_text('{"argv": ["serve", 5]}', encoding="utf-8")  # non-str item
+    assert daemon.read_recorded_run() is None

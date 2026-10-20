@@ -8,6 +8,7 @@ down the existing process before replacing it.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -20,10 +21,15 @@ import psutil
 from . import config
 
 PID_PATH: Path = config.HOME / "perun.pid"
+RUN_RECORD_PATH: Path = config.HOME / "server.json"
 
 
 def _pid_path() -> Path:
     return PID_PATH
+
+
+def _run_record_path() -> Path:
+    return RUN_RECORD_PATH
 
 
 def write_pid(pid: int | None = None) -> Path:
@@ -73,6 +79,57 @@ def clear_pid(force: bool = False) -> None:
             _pid_path().unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def record_run(argv: list[str] | None = None, pid: int | None = None) -> Path:
+    """Record how the current server was launched, for ``perun restart``.
+
+    Writes ``<PERUN_HOME>/server.json`` (owner-only, atomically, like the PID
+    file) with the effective serve flags (``--host``/``--port``/``--reload``/
+    ``--bridge``). ``perun restart`` replays these so a plain restart does not
+    silently drop configuration such as the Telegram/PerunChat bridges.
+
+    The record deliberately survives ``perun stop``: it describes how Perun was
+    *last* launched, and restarting after a stop should still replay it. It is
+    rewritten on every successful ``perun serve`` start.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    config.ensure_dirs()
+    payload = json.dumps(
+        {"pid": pid or os.getpid(), "argv": list(argv), "recorded_at": time.time()}
+    )
+    path = _run_record_path()
+    tmp = path.with_suffix(".json.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+    tmp.replace(path)
+    return path
+
+
+def read_recorded_run() -> dict[str, Any] | None:
+    """Return the recorded run dict (``{"pid", "argv", "recorded_at"}``).
+
+    Tolerant by design: a missing, unreadable, or malformed record (including
+    pre-v0.7.10 installs that never wrote one) simply yields None.
+    """
+    try:
+        data = json.loads(_run_record_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    argv = data.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+        return None
+    return data
+
+
+def read_recorded_argv() -> list[str] | None:
+    """Return the argv of the last recorded ``perun serve`` start, or None."""
+    data = read_recorded_run()
+    return list(data["argv"]) if data else None
 
 
 def is_running(pid: int) -> bool:
@@ -217,8 +274,8 @@ def kill(pid: int) -> bool:
 def start_detached(argv: list[str], **popen_kwargs: Any) -> int:
     """Start *argv* detached from the current console/terminal.
 
-    Returns the new process PID. This is used by ``perun restart --detach`` so
-    the command can exit while the server keeps running.
+    Returns the new process PID. This is used by ``perun restart`` so the
+    command can exit while the server keeps running.
     """
     kwargs: dict[str, Any] = {
         "stdout": subprocess.DEVNULL,

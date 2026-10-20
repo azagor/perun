@@ -2,6 +2,18 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.10 - 2026-10-20
+
+### Changed
+
+- **`perun restart` replays the previous server's launch flags.** `perun serve`
+  now records its effective flags (`--host`, `--port`, `--reload`, `--bridge`)
+  in `<PERUN_HOME>/server.json`; a plain `perun restart` carries them over, so
+  restarting no longer silently drops the Telegram/PerunChat bridges (or the
+  dev reload mode). Explicit flags on the restart command line still win over
+  the recorded ones; the record tolerates missing/corrupt files and survives
+  `perun stop`.
+
 ## v0.7.9 - 2026-10-20
 
 ### Changed

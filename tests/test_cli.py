@@ -204,3 +204,74 @@ def test_restart_detach_flag_still_accepted(monkeypatch):
     monkeypatch.setattr(daemon, "write_pid_for", lambda pid: None)
 
     assert cli.main(["restart", "--detach"]) == 0
+
+
+def test_restart_replays_recorded_flags(monkeypatch, tmp_path):
+    """A plain restart must not silently drop recorded flags such as --bridge."""
+    from perun import daemon
+
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+    daemon.record_run(
+        ["serve", "--host", "0.0.0.0", "--port", "8760", "--bridge"], pid=1
+    )
+
+    launched: dict = {}
+
+    def fake_detached(argv):  # noqa: ANN001
+        launched["argv"] = argv
+        return 4242
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "start_detached", fake_detached)
+    monkeypatch.setattr(daemon, "write_pid_for", lambda pid: None)
+
+    assert cli.main(["restart"]) == 0
+    assert launched["argv"] == [
+        sys.executable, "-m", "perun", "serve",
+        "--host", "0.0.0.0", "--port", "8760", "--bridge",
+    ]
+
+
+def test_restart_explicit_flags_override_recorded(monkeypatch, tmp_path):
+    """Flags passed on the restart command line win over the recorded ones."""
+    from perun import daemon
+
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+    daemon.record_run(["serve", "--host", "0.0.0.0", "--port", "8760"], pid=1)
+
+    launched: dict = {}
+
+    def fake_detached(argv):  # noqa: ANN001
+        launched["argv"] = argv
+        return 4242
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "start_detached", fake_detached)
+    monkeypatch.setattr(daemon, "write_pid_for", lambda pid: None)
+
+    assert cli.main(["restart", "--port", "1234"]) == 0
+    assert launched["argv"] == [
+        sys.executable, "-m", "perun", "serve",
+        "--host", "0.0.0.0", "--port", "1234",
+    ]
+
+
+def test_serve_records_launch_argv(monkeypatch, tmp_path):
+    """``perun serve`` records its effective flags for later restarts."""
+    from perun import daemon, server
+
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "write_pid", lambda pid=None: None)
+    monkeypatch.setattr(daemon, "clear_pid", lambda force=False: None)
+
+    served: dict = {}
+
+    def fake_serve(host=None, port=None, reload=False):  # noqa: A002
+        served.update(host=host, port=port, reload=reload)
+
+    monkeypatch.setattr(server, "serve", fake_serve)
+
+    assert cli.main(["serve", "--port", "1234"]) == 0
+    assert served == {"host": None, "port": 1234, "reload": False}
+    assert daemon.read_recorded_argv() == ["serve", "--port", "1234"]

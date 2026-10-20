@@ -85,6 +85,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print("[perun] use 'perun restart' to replace it or 'perun stop' to stop it")
         return 1
     daemon.write_pid()
+    # Record the effective launch flags so a later `perun restart` can replay
+    # them (e.g. --bridge) instead of silently dropping configuration.
+    run_argv = ["serve"]
+    if args.host:
+        run_argv += ["--host", str(args.host)]
+    if args.port:
+        run_argv += ["--port", str(args.port)]
+    if args.reload:
+        run_argv += ["--reload"]
+    if args.bridge:
+        run_argv += ["--bridge"]
+    daemon.record_run(run_argv)
     try:
         if args.bridge:
             _start_bridge_thread()
@@ -122,12 +134,34 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 1
 
 
+def _recorded_flag_value(recorded: list[str], flag: str) -> str | None:
+    """Return the value following *flag* in a recorded argv, or None."""
+    try:
+        i = recorded.index(flag)
+    except ValueError:
+        return None
+    return recorded[i + 1] if i + 1 < len(recorded) else None
+
+
+def _recorded_port(recorded: list[str]) -> int | None:
+    """Return the recorded ``--port`` value as an int, or None."""
+    raw = _recorded_flag_value(recorded, "--port")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def cmd_restart(args: argparse.Namespace) -> int:
     """Gracefully stop the running server, then start a new one.
 
-    The replacement runs detached by default so a restart issued from a shell,
-    script, or CI step survives that shell's exit; pass ``--foreground`` to
-    watch the new server's logs instead.
+    The replacement replays the previous server's recorded launch flags
+    (``--host``/``--port``/``--reload``/``--bridge``; explicit flags here win),
+    and runs detached by default so a restart issued from a shell, script, or
+    CI step survives that shell's exit; pass ``--foreground`` to watch the new
+    server's logs instead.
     """
     settings = config.Settings.load()
     existing = daemon.is_another_perun_running(settings)
@@ -143,6 +177,16 @@ def cmd_restart(args: argparse.Namespace) -> int:
                 return 1
         daemon.clear_pid()
         print("[perun] stopped")
+
+    # Replay the previous server's recorded launch flags so a plain restart
+    # does not silently drop configuration (bridges, reload mode, host/port).
+    recorded = daemon.read_recorded_argv() or []
+    if not args.host:
+        args.host = _recorded_flag_value(recorded, "--host")
+    if not args.port:
+        args.port = _recorded_port(recorded)
+    args.bridge = bool(args.bridge or "--bridge" in recorded)
+    args.reload = bool(args.reload or "--reload" in recorded)
 
     if args.foreground:
         print("[perun] starting server (foreground; Ctrl+C to stop)...")
@@ -656,7 +700,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="force-kill if graceful shutdown fails")
     p.set_defaults(func=cmd_stop)
 
-    p = sub.add_parser("restart", help="gracefully restart the Perun server")
+    p = sub.add_parser(
+        "restart",
+        help="restart the Perun server, replaying the last recorded launch flags",
+    )
     p.add_argument("--host", default=None)
     p.add_argument("--port", type=int, default=None)
     p.add_argument("--reload", action="store_true")
