@@ -1776,14 +1776,24 @@ async function loadGitLog(container, slug) {
 }
 
 /* ======================================================== MANIFEST ====== */
-/* Open a file path from a manifest anchor. We try a direct window.open to the
-   OS handler (vscode://file/... or file://...). The path is normalised so it
-   cannot escape the project root. */
+/* Open a file path from a manifest anchor/docs/link. We try a direct
+   window.open to the OS handler (vscode://file/... or file://...).
+   Relative targets are normalised so they cannot escape the project root;
+   absolute targets (drive letter / UNC / POSIX) are used as written. */
 function openManifestPath(projectRoot, relPath) {
-    let clean = String(relPath || '').replace(/^[\/]+/, '').replace(/\.{2,}(?:[\/]|$)/g, '').replace(/[\/]+/g, '/');
+    const raw = String(relPath || '').trim();
+    if (!raw) return;
+    const isAbs = /^[a-z]:[\\/]/i.test(raw) || raw.startsWith('\\\\');   // drive letter / UNC
+    // Separators are normalised ("\" → "/", repeats collapsed). Relative targets
+    // keep the anti-escape guard (leading "/" and ".." segments dropped); absolute
+    // ones are trusted as written — the manifest is local, user-authored content
+    // that explicitly names a location outside the project root.
+    const slashed = raw.replace(/\\/g, '/').replace(/[\/]+/g, '/');
+    const clean = isAbs ? slashed : slashed.replace(/^[\/]+/, '').replace(/\.{2,}(?:[\/]|$)/g, '');
     if (!clean) return;
     const root = String(projectRoot || '').replace(/[\/]+$/, '').replace(/\\/g, '/');
-    const absolute = root + '/' + clean;
+    // Collapse "/./" segments so the handler receives a clean path.
+    const absolute = (isAbs ? clean : root + '/' + clean).replace(/\/\.(?=\/|$)/g, '');
     const vscodeUrl = 'vscode://file/' + absolute;
     const fileUrl = 'file:///' + absolute;
     const tryOpen = (url) => {
@@ -1798,6 +1808,45 @@ function openManifestPath(projectRoot, relPath) {
             }
         }, 200);
     }
+}
+
+/* Open a manifest link/anchor target: URLs open in a new tab, anything else
+   is treated as a local path and launched via the OS handler. */
+function openManifestLink(projectRoot, value) {
+    const u = String(value || '').trim();
+    if (!u) { toast('Enter a target first', 'err'); return; }
+    if (u.startsWith('#')) return;                       // in-page anchor — nothing to launch
+    if (/^(https?:|mailto:)/i.test(u)) {                 // external URL
+        window.open(u, '_blank', 'noopener');            // noopener: a manifest URL is untrusted input
+        return;
+    }
+    if (/^[a-z]:[\\/]/i.test(u) || u.startsWith('\\\\')) {
+        openManifestPath(projectRoot, u);                // absolute local path
+        return;
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(u)) {                // other scheme (vscode://, ftp:// …)
+        const safe = safeUrl(u);
+        if (safe === '#') { toast(`Blocked unsafe link: ${u}`, 'err'); return; }
+        window.open(safe, '_blank');
+        return;
+    }
+    openManifestPath(projectRoot, u);
+}
+
+/* Wire the links inside rendered manifest Markdown: external ones already open
+   in a new tab (target=_blank + noopener), relative/local paths go through the
+   OS handler instead of navigating the dashboard away, bare "#…" anchors are
+   left alone. Shared by the Overview tab card and the editor's live preview. */
+function wireManifestLinks(root, projectRoot) {
+    if (!root) return;
+    root.querySelectorAll('a[href]').forEach((a) => {
+        const href = a.getAttribute('href') || '';
+        if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href)) return;
+        a.addEventListener('click', (e) => {
+            e.preventDefault();
+            openManifestLink(projectRoot, href);
+        });
+    });
 }
 
 function manifestOverview(p) {
@@ -1820,10 +1869,12 @@ function manifestOverview(p) {
             const kind = a.kind || 'file';
             const isFile = kind === 'file' || kind === 'doc';
             const isUrl = kind === 'url';
+            const external = /^(https?:|mailto:)/i.test(String(target).trim());
+            const openable = (isFile || isUrl) && Boolean(target);   // symbol/command stay inert
             let targetHtml;
-            if (isUrl) {
+            if (openable && external) {
                 targetHtml = `<a class="ai-target" href="${esc(safeUrl(target))}" target="_blank" rel="noopener noreferrer" title="${esc(target)}">${esc(target)}</a>`;
-            } else if (isFile) {
+            } else if (openable) {
                 targetHtml = `<button class="ai-target" data-path="${esc(target)}" title="Open ${esc(target)}" type="button">${esc(target)}</button>`;
             } else {
                 targetHtml = `<span class="ai-target">${esc(target)}</span>`;
@@ -1832,9 +1883,9 @@ function manifestOverview(p) {
                 `<span class="ai-kind">${esc(kind)}</span>
                  <span class="ai-label">${esc(a.label || '')}</span>
                  ${targetHtml}`);
-            if (isFile) {
+            if (openable && !external) {
                 const btn = item.querySelector('[data-path]');
-                if (btn) btn.addEventListener('click', () => openManifestPath(p.path, btn.dataset.path));
+                if (btn) btn.addEventListener('click', () => openManifestLink(p.path, btn.dataset.path));
             }
             list.appendChild(item);
         }
@@ -1854,7 +1905,15 @@ function manifestOverview(p) {
     if (docs.length || links.length) {
         box.appendChild(el('div', { class: 'subhead' }, 'Links & docs'));
         const row = el('div', { class: 'row wrap' });
-        for (const [k, v] of links) row.appendChild(el('a', { class: 'chip', href: safeUrl(v), target: '_blank', rel: 'noopener noreferrer' }, `<b>${esc(k)}</b>`));
+        for (const [k, v] of links) {
+            if (/^(https?:|mailto:)/i.test(String(v || '').trim())) {
+                row.appendChild(el('a', { class: 'chip chip-link', href: safeUrl(v), target: '_blank', rel: 'noopener noreferrer', title: v }, `<b>${esc(k)}</b> ${esc(v)}`));
+            } else {
+                const chip = el('button', { class: 'chip chip-link', title: v, type: 'button' }, `<b>${esc(k)}</b> ${esc(v)}`);
+                chip.addEventListener('click', () => openManifestLink(p.path, v));
+                row.appendChild(chip);
+            }
+        }
         for (const [k, v] of docs) {
             const chip = el('button', { class: 'chip chip-link', title: v, type: 'button' }, `<b>${esc(k)}</b> ${esc(v)}`);
             chip.addEventListener('click', () => openManifestPath(p.path, v));
@@ -1867,33 +1926,20 @@ function manifestOverview(p) {
         box.appendChild(el('div', { class: 'subhead' }, 'Overview'));
         const md = el('div', { class: 'md-body', html: renderMarkdown(body) });
         box.appendChild(md);
-        // Make relative/local links in the overview body open via the OS handler.
-        md.querySelectorAll('a[href]').forEach((a) => {
-            const href = a.getAttribute('href') || '';
-            if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) {
-                a.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    openManifestPath(p.path, href);
-                });
-            }
-        });
+        wireManifestLinks(md, p.path);
     }
     return box;
 }
 
 async function mountManifest(container, p) {
     container.innerHTML = '<div class="empty"><span class="spinner"></span> loading manifest…</div>';
-    let detail, snap;
+    // This tab is the editor. The read-only manifest card (anchors, links &
+    // docs, rendered body) belongs to the Overview tab — see renderProjectTab.
+    let snap;
     try {
-        detail = await api(`/api/projects/${p.slug}`);
         snap = (await api(`/api/projects/${p.slug}/manifest`)).manifest;
     }
     catch (e) { container.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-    container.innerHTML = '';
-    // Show the same read-only manifest card that appears on the Overview tab.
-    if (detail.project && detail.project.has_manifest) {
-        container.appendChild(manifestOverview(detail.project));
-    }
     renderManifestEditor(container, p, snap || {});
 }
 
@@ -1903,6 +1949,18 @@ function renderManifestEditor(container, p, snap) {
     const data = snap.data || {};
     const body = snap.body || '';
     const warnings = snap.warnings || [];
+
+    // Typing anywhere in the editor marks it dirty. Reload/Generate rebuild the
+    // editor from server state, so ask before discarding unsaved edits.
+    let dirty = false;
+    const confirmDiscard = (message, proceed) => {
+        if (!dirty) { proceed(); return; }
+        const body = el('div', {}, `<p class="secondary">${esc(message)}</p>`);
+        modal('Unsaved changes', body, [
+            { label: 'Cancel', class: 'ghost', onClick: closeModal },
+            { label: 'Discard changes', class: 'primary', onClick: () => { closeModal(); proceed(); } },
+        ]);
+    };
 
     const status = el('div', { class: 'card mb' });
     status.appendChild(el('div', { class: 'card-head' },
@@ -1920,24 +1978,28 @@ function renderManifestEditor(container, p, snap) {
     const actions = el('div', { class: 'form-actions' });
     if (found) {
         const reload = el('button', { class: 'btn ghost' }, '⟳ Reload from disk');
-        reload.addEventListener('click', async () => {
-            try {
-                const r = await api(`/api/projects/${p.slug}/manifest/refresh`, { method: 'POST' });
-                toast('Reloaded from disk', 'ok');
-                await loadProjects();
-                renderManifestEditor(container, p, r.manifest);
-            } catch (e) { toast(e.message, 'err'); }
+        reload.addEventListener('click', () => {
+            confirmDiscard('Reloading from disk replaces this editor and discards unsaved edits. Continue?', async () => {
+                try {
+                    const r = await api(`/api/projects/${p.slug}/manifest/refresh`, { method: 'POST' });
+                    toast('Reloaded from disk', 'ok');
+                    await loadProjects();
+                    renderManifestEditor(container, p, r.manifest);
+                } catch (e) { toast(e.message, 'err'); }
+            });
         });
         actions.appendChild(reload);
     } else {
         const gen = el('button', { class: 'btn primary' }, '＋ Generate from registry');
-        gen.addEventListener('click', async () => {
-            try {
-                const r = await api(`/api/projects/${p.slug}/manifest/export`, { method: 'POST' });
-                toast('Manifest generated', 'ok');
-                await loadProjects();
-                renderManifestEditor(container, p, r.manifest);
-            } catch (e) { toast(e.message, 'err'); }
+        gen.addEventListener('click', () => {
+            confirmDiscard('Generating from the registry replaces this editor and discards unsaved edits. Continue?', async () => {
+                try {
+                    const r = await api(`/api/projects/${p.slug}/manifest/export`, { method: 'POST' });
+                    toast('Manifest generated', 'ok');
+                    await loadProjects();
+                    renderManifestEditor(container, p, r.manifest);
+                } catch (e) { toast(e.message, 'err'); }
+            });
         });
         actions.appendChild(gen);
     }
@@ -1946,6 +2008,7 @@ function renderManifestEditor(container, p, snap) {
 
     // ---- editor ----
     const card = el('div', { class: 'card' });
+    card.addEventListener('input', () => { dirty = true; });
     card.appendChild(el('div', { class: 'card-head' }, '<h4>Edit manifest</h4>'));
     card.innerHTML += `
         <div class="form-row">
@@ -1976,15 +2039,34 @@ function renderManifestEditor(container, p, snap) {
     card.appendChild(el('div', { class: 'subhead' }, 'Anchors'));
     const anchorHost = el('div', { class: 'anchor-editor' });
     card.appendChild(anchorHost);
-    for (const a of (data.anchors || [])) addAnchorRow(anchorHost, a);
+    for (const a of (data.anchors || [])) addAnchorRow(anchorHost, a, p.path);
     const anchorAdd = el('button', { class: 'btn sm ghost' }, '＋ Add anchor');
-    anchorAdd.addEventListener('click', () => addAnchorRow(anchorHost, { kind: 'file' }));
+    anchorAdd.addEventListener('click', () => addAnchorRow(anchorHost, { kind: 'file' }, p.path));
     card.appendChild(anchorAdd);
 
     card.appendChild(el('div', { class: 'subhead' }, 'Overview body (Markdown)'));
     const ta = el('textarea', { id: 'mf-body', rows: '10', placeholder: '# Project overview\n\nFree-form Markdown shown on the project page.' });
     ta.value = body;
     card.appendChild(ta);
+
+    // Live preview — the same rendering the Overview tab shows, so editing the
+    // body isn't blind. renderMarkdown() escapes by default, so this adds no new
+    // HTML surface; links are wired exactly like the read-only card's body.
+    card.appendChild(el('div', { class: 'subhead' }, 'Preview'));
+    const preview = el('div', { class: 'md-body manifest-preview' });
+    card.appendChild(preview);
+    const paintPreview = () => {
+        const md = ta.value;
+        preview.innerHTML = md.trim() ? renderMarkdown(md) : '<div class="empty">Nothing to preview yet.</div>';
+        wireManifestLinks(preview, p.path);
+    };
+    // Debounced: one repaint per pause in typing, not per keystroke.
+    let repaintTimer = null;
+    ta.addEventListener('input', () => {
+        clearTimeout(repaintTimer);
+        repaintTimer = setTimeout(paintPreview, 150);
+    });
+    paintPreview();
 
     const saveRow = el('div', { class: 'form-actions' });
     const save = el('button', { class: 'btn primary' }, '💾 Save manifest to disk');
@@ -2011,8 +2093,14 @@ function addKvRow(host, group, key, value, placeholder, projectRoot) {
     row.appendChild(k); row.appendChild(v); row.appendChild(del);
     // Documentation rows get an Open button so the file can be launched from the editor.
     if (group === 'docs' && projectRoot) {
-        const open = el('button', { class: 'icon-btn', title: 'Open file', type: 'button' }, '↗');
+        const open = el('button', { class: 'icon-btn open-btn', title: 'Open file', type: 'button' }, '↗');
         open.addEventListener('click', () => openManifestPath(projectRoot, v.value));
+        row.appendChild(open);
+    }
+    // Link rows get an Open button (URL opens in a new tab, local path via the OS handler).
+    if (group === 'links') {
+        const open = el('button', { class: 'icon-btn open-btn', title: 'Open link', type: 'button' }, '↗');
+        open.addEventListener('click', () => openManifestLink(projectRoot, v.value));
         row.appendChild(open);
     }
     host.appendChild(row);
@@ -2032,7 +2120,7 @@ function gatherKv(host, group) {
     return out;
 }
 
-function addAnchorRow(host, a) {
+function addAnchorRow(host, a, projectRoot) {
     a = a || {};
     const row = el('div', { class: 'anchor-row' });
     const label = el('input', { type: 'text', value: a.label || '', placeholder: 'Label', dataset: { role: 'label' } });
@@ -2046,6 +2134,17 @@ function addAnchorRow(host, a) {
     const del = el('button', { class: 'icon-btn', title: 'Remove', type: 'button' }, '✕');
     del.addEventListener('click', () => row.remove());
     row.appendChild(label); row.appendChild(kind); row.appendChild(target); row.appendChild(del);
+    // Open button — the action follows the currently selected kind.
+    if (projectRoot) {
+        const open = el('button', { class: 'icon-btn open-btn', title: 'Open target', type: 'button' }, '↗');
+        open.addEventListener('click', () => {
+            const value = target.value.trim();
+            if (!value) { toast('Enter a target first', 'err'); return; }
+            if (kind.value === 'command') copyCommandToClipboard(value);
+            else openManifestLink(projectRoot, value);
+        });
+        row.appendChild(open);
+    }
     host.appendChild(row);
     return row;
 }

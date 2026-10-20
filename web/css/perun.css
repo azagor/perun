@@ -329,16 +329,19 @@ select { cursor: pointer; }
 .kv-editor { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
 .kv-edit-row { display: grid; grid-template-columns: 1fr 1.5fr auto auto; gap: 8px; align-items: center; }
 .kv-edit-row input { font-size: .82rem; }
-.kv-edit-row .icon-btn[title="Open file"] { color: var(--gold-light); border-color: rgba(201,162,39,.35); }
-.kv-edit-row .icon-btn[title="Open file"]:hover { color: var(--gold); border-color: var(--gold-light); background: rgba(201,162,39,.12); }
+/* shared gold "open" affordance for docs / links / anchors rows */
+.icon-btn.open-btn { color: var(--gold-light); border-color: rgba(201,162,39,.35); }
+.icon-btn.open-btn:hover { color: var(--gold); border-color: var(--gold-light); background: rgba(201,162,39,.12); }
 .anchor-editor { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
-.anchor-row { display: grid; grid-template-columns: 1.1fr .85fr 1.6fr auto; gap: 8px; align-items: center; }
+.anchor-row { display: grid; grid-template-columns: 1.1fr .85fr 1.6fr auto auto; gap: 8px; align-items: center; }
 .anchor-row input, .anchor-row select { font-size: .82rem; }
 .icon-btn { border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-muted); border-radius: var(--radius-sm); width: 34px; height: 34px; cursor: pointer; font-size: .9rem; line-height: 1; }
 .icon-btn:hover { color: var(--red); border-color: rgba(224,90,90,.4); }
 .subhead { font-size: .72rem; text-transform: uppercase; letter-spacing: 1.6px; color: var(--text-muted); margin: 14px 0 8px; }
 
 /* ---------- manifest display ---------- */
+.manifest-preview { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; min-height: 46px; overflow-wrap: anywhere; }
+.manifest-preview .empty { padding: 6px 0; }
 .anchor-list { display: flex; flex-direction: column; gap: 7px; }
 .anchor-item { display: flex; align-items: baseline; gap: 10px; font-size: .85rem; flex-wrap: wrap; }
 .anchor-item .ai-kind { font-size: .66rem; text-transform: uppercase; letter-spacing: .6px; color: var(--gold); min-width: 58px; }

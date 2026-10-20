@@ -977,7 +977,11 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   `/api/fs/*`; **Git** and **Manifest** tabs load their own data lazily.
 * **Manifest body** is rendered by `renderMarkdown()` — a small, escaped-by-default
   Markdown subset (headings, lists, emphasis, code, links); link targets are
-  restricted to `http(s)`, `mailto`, or relative URLs.
+  restricted to `http(s)`, `mailto`, or relative URLs. The Manifest tab renders a
+  **live preview** of that body under the editor's textarea (repainted on every
+  keystroke, same renderer + link wiring); the read-only presentation of the whole
+  manifest — anchors, links & docs, commands, rendered body — lives on the
+  Overview tab only.
 * **Design tokens** mirror peruninthemachine.com: `#050505` background,
   `#c9a227` gold, `Cinzel` headings (font copied to `web/assets/Cinzel.ttf`), and
   the gold-bolt favicon `web/assets/perun.ico`.

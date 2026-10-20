@@ -2,6 +2,57 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## Unreleased
+
+### Added
+
+- **Live preview of the manifest body in the Manifest tab.** The editor now
+  renders the Overview-body Markdown in a box under the textarea and re-renders
+  on every keystroke, through the same escaped-by-default `renderMarkdown()`
+  and the same link wiring (`wireManifestLinks()`, extracted from the read-only
+  card) that the Overview tab uses — so editing free-form Markdown is no longer
+  blind and no new HTML surface is introduced.
+
+### Fixed
+
+- **The Manifest tab no longer fetches project detail it immediately threw
+  away.** `mountManifest()` built the read-only manifest card — the same one
+  the Overview tab renders — appended it, and then let `renderManifestEditor`
+  clear the container, so the card never appeared; it also paid a duplicate
+  `GET /api/projects/{slug}` (already issued by `viewProject`) solely to feed
+  that dead append. The dead code and the redundant request are gone, and the
+  comment now describes reality: presentation lives on the Overview tab,
+  editing on the Manifest tab.
+- **Unsaved manifest edits are no longer discarded silently.** The editor marks
+  itself dirty on any input; *⟳ Reload from disk* and *＋ Generate from
+  registry* — both of which rebuild the editor from server state — now ask for
+  confirmation first when there are unsaved changes.
+- **Manifest path targets open cleanly.** Backslashes are normalised to `/`
+  (so `docs\CODEMAP.md` and `C:\my_apps\perun` work), `/./` segments are
+  collapsed before the path is handed to the OS handler, and `..` segments are
+  still stripped from *relative* targets only — absolute targets keep their
+  real semantics instead of being mangled.
+- **Read-only anchors are clickable whenever they point at something openable.**
+  A `file`/`doc` anchor whose target is a URL now renders as a real link (it
+  previously fell back to an inert label after the `safeUrl` guard);
+  `symbol`/`command` anchors remain informational.
+- **External manifest URLs open with `rel=noopener` semantics** — a manifest is
+  local but potentially untrusted content (e.g. a cloned repo), so
+  `window.open(..., 'noopener')` prevents the opened page from reaching back
+  into the dashboard tab.
+
+### Changed
+
+- **Manifest Links and Anchors are clickable in the dashboard editor.** Rows in
+  the Manifest tab's *Links* and *Anchors* sections now carry an ↗ open button
+  like the Documentation rows: URLs open in a new tab, local paths (relative to
+  the project or absolute) launch through the OS handler, and `command` anchors
+  copy themselves to the clipboard. Read-only manifest cards also render
+  local-path links as clickable chips instead of a dead `#` href, and show the
+  link's value next to its key (as docs already did).
+- **The live body preview is debounced (150 ms)**, so a large manifest body
+  repaints once per pause in typing rather than once per keystroke.
+
 ## v0.7.11 - 2026-10-20
 
 ### Fixed
