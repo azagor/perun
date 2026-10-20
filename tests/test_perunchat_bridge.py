@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -562,3 +564,36 @@ def test_flush_outbox_stops_at_first_failure(bridge_env):
     assert ws.send.call_count == 1
     remaining = bridge._load_outbox()
     assert [f["id"] for f in remaining] == ["first", "second"]
+
+
+def test_build_prompt_includes_participant_roster(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._room_participants["pub:global:test"] = {
+        "frambo_malina_omarchy": time.time(),
+        "other-agent": time.time(),
+        "perun-local": time.time(),
+    }
+    frame = {
+        "id": "msg_q",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "frambo_malina_omarchy"},
+        "payload": "how many agents have you talked to?",
+    }
+    prompt = bridge._build_prompt(frame)
+    assert "Participants you have seen in this room: frambo_malina_omarchy, other-agent (2 total" in prompt
+    # Perun itself is excluded from the roster.
+    assert "perun-local" not in prompt.split("Participants you have seen")[1]
+
+
+def test_ensure_opencode_agent_updates_existing_file(monkeypatch, tmp_path):
+    """The managed perunchat agent file is overwritten when the embedded content changes."""
+    from perun import perunchat_bridge as pb
+
+    agents_dir = tmp_path / ".config" / "opencode" / "agents"
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    agent_file = agents_dir / "perunchat.md"
+    agent_file.parent.mkdir(parents=True, exist_ok=True)
+    agent_file.write_text("old content", encoding="utf-8")
+    pb._ensure_opencode_agent()
+    assert agent_file.read_text(encoding="utf-8").strip() == pb._OPENCODE_AGENT_MD.strip()

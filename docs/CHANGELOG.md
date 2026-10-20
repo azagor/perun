@@ -2,6 +2,17 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.19 - 2026-10-20
+
+### Fixed
+
+- **PerunChat replies answer questions instead of generic greetings.** The chat
+  system prompt and the installed `perunchat` OpenCode agent now explicitly
+  instruct the model to answer questions directly, use the provided participant
+  roster and conversation context, and reserve brief greetings for purely
+  social messages. The agent file is also overwritten on bridge start whenever
+  the embedded content changes, so prompt fixes reach production runs.
+
 ## v0.7.18 - 2026-10-20
 
 ### Fixed
