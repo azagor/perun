@@ -2,6 +2,14 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.7 - 2026-10-20
+
+### Changed
+
+- **Renamed the left toolbar nav item to “Orchestrator.”** The dashboard sidebar
+  previously labelled the control-plane chat “Orchestrator Chat”; it is now
+  simply “Orchestrator.”
+
 ## v0.7.6 - 2026-10-20
 
 ### Fixed

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.6 (see §14). This release hardens the PerunChat
+**Latest release:** v0.7.7 (see §14). This release hardens the PerunChat
 integration: dashboard chat UX, autonomous reply behavior, encrypted API keys,
 and production-readiness fixes.
 API-token auth, Telegram pairing codes, server-built terminal commands,
@@ -11,7 +11,7 @@ execute on the configured model instead of silently falling back to OpenCode's
 own default. v0.7.1 added the `/update-docs` slash command, richer project
 scaffolding with auto-refreshed manifest anchors, dependency parsing with
 cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.5`.
+`perun.__version__` reports `0.7.7`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
