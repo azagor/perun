@@ -39,6 +39,17 @@ if not defined PY (
     exit /b 1
 )
 
+rem -- normalize PY for safe execution (quote paths with spaces) --
+if defined PY (
+    if /I not "%PY%"=="py" (
+        if /I not "%PY:~0,3%"=="py " (
+            echo "%PY%" | findstr /C:" " >nul && (
+                echo "%PY%" | findstr /C:"\"" >nul || set "PY="%PY%""
+            )
+        )
+    )
+)
+
 rem -- resolve the dashboard port (Settings.port, default 8760) ---------
 set "PORT=8760"
 set "CFG=%USERPROFILE%\.perun\config.json"
