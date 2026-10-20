@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -398,3 +399,166 @@ def test_build_prompt_no_catchup_note_for_live_message(settings):
     bridge._connect_epoch_ms = _T0
     prompt = bridge._build_prompt(_frame_at_ts(_T0))
     assert "catching up" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# No-loss delivery guarantees.
+# A reply must never be dropped because a run came back empty, because the
+# socket died between generation and send, or because the bridge restarted.
+# ---------------------------------------------------------------------------
+
+
+def _chat_frame(msg_id="msg_in_1", room="pub:global:test", text="hello perun"):
+    return {
+        "type": "CHAT",
+        "id": msg_id,
+        "room_id": room,
+        "sender": {"agent_id": "other-agent"},
+        "payload": text,
+    }
+
+
+@pytest.fixture
+def bridge_env(settings, tmp_path, monkeypatch, control_repo):
+    """Bridge with isolated state files and zero artificial delays."""
+    from perun import perunchat_bridge as pb
+
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(pb, "_TYPING_DELAY_MIN", 0)
+    monkeypatch.setattr(pb, "_TYPING_DELAY_MAX", 0)
+    monkeypatch.setattr(pb, "_REPLY_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(pb, "_OUTBOX_FLUSH_DELAY_SECONDS", 0)
+    # Mirror production: PerunChat replies run on the dedicated "perunchat"
+    # agent. The model is never executed here (the orchestrator is mocked); the
+    # value only satisfies the "model configured" guard in _reply.
+    settings.perunchat_chat_agent = "perunchat"
+    settings.perunchat_chat_model = "opencode/test-chat-model"
+    orchestrator = MagicMock(settings=settings)
+    bridge = PerunChatBridge(orchestrator)
+    bridge._agent_id = "perun-local"
+    return bridge, orchestrator
+
+
+def _run_result(reply, status="done", uid="run_1"):
+    return {"reply": reply, "run": {"run_uid": uid, "status": status}}
+
+
+def test_reply_retries_empty_run_instead_of_dropping(bridge_env):
+    """A cancelled/empty run must be regenerated once, never silently dropped."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.side_effect = [
+        _run_result("", status="cancelled", uid="run_1"),
+        _run_result("pong", uid="run_2"),
+    ]
+    ws = MagicMock()
+    bridge._reply(_chat_frame(), ws)
+    assert orchestrator.run_and_wait.call_count == 2
+    # Both attempts run on the dedicated perunchat agent, not a generic one.
+    assert all(c.kwargs.get("agent") == "perunchat"
+               for c in orchestrator.run_and_wait.call_args_list)
+    ws.send.assert_called_once()
+    sent = ws.send.call_args[0][0]
+    assert "pong" in sent
+
+
+def test_reply_waits_for_running_run_instead_of_duplicate(bridge_env):
+    """A still-running run is awaited, not re-run (no duplicate generation)."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("", status="running", uid="run_1")
+    orchestrator.wait_for_run.return_value = _run_result("late reply", uid="run_1")
+    ws = MagicMock()
+    bridge._reply(_chat_frame(), ws)
+    assert orchestrator.run_and_wait.call_count == 1
+    orchestrator.wait_for_run.assert_called_once()
+    ws.send.assert_called_once()
+    assert "late reply" in ws.send.call_args[0][0]
+
+
+def test_reply_gives_up_loudly_after_final_empty_runs(bridge_env):
+    """Two final-empty runs: no send, but a loud log line (not a silent drop)."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.side_effect = [
+        _run_result("", status="cancelled", uid="run_1"),
+        _run_result("", status="cancelled", uid="run_2"),
+    ]
+    ws = MagicMock()
+    with patch("perun.perunchat_bridge.logger") as mock_logger:
+        bridge._reply(_chat_frame(), ws)
+    ws.send.assert_not_called()
+    assert mock_logger.error.called
+    assert bridge._load_outbox() == []
+
+
+def test_no_reply_decision_is_not_sent(bridge_env):
+    """An explicit <NO_REPLY> decision is silence, not a delivery failure."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("<NO_REPLY>", uid="run_1")
+    ws = MagicMock()
+    bridge._reply(_chat_frame(), ws)
+    ws.send.assert_not_called()
+    assert bridge._load_outbox() == []
+
+
+def test_send_failure_keeps_frame_and_flush_resends_same_id_and_seq(bridge_env):
+    """A dead socket keeps the frame durable; the resend is idempotent."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("hello there", uid="run_1")
+    failing_ws = MagicMock()
+    failing_ws.send.side_effect = OSError("connection dropped")
+    bridge._reply(_chat_frame(), failing_ws)
+    failing_ws.send.assert_called_once()
+    queued = bridge._load_outbox()
+    assert len(queued) == 1
+    assert "hello there" in queued[0]["payload"]
+    # Reconnect: the SAME frame (id + sequence_number) goes out, so the
+    # gateway's monotonic-sequence check prevents a possible duplicate.
+    working_ws = MagicMock()
+    bridge._flush_outbox(working_ws)
+    working_ws.send.assert_called_once()
+    resent = working_ws.send.call_args[0][0]
+    assert resent == json.dumps(queued[0])
+    assert bridge._load_outbox() == []
+
+
+def test_flush_outbox_orders_by_sequence(bridge_env):
+    """Older queued frames are resent first so none is rejected as stale."""
+    bridge, _ = bridge_env
+    frames = [
+        {"id": "b", "sequence_number": 12, "payload": "second"},
+        {"id": "a", "sequence_number": 11, "payload": "first"},
+    ]
+    bridge._store_outbox(frames)
+    ws = MagicMock()
+    bridge._flush_outbox(ws)
+    sent = [json.loads(c[0][0])["id"] for c in ws.send.call_args_list]
+    assert sent == ["a", "b"]
+
+
+def test_replied_ids_survive_restart(bridge_env):
+    """A restart must not reply again to messages the gateway replays."""
+    bridge, _ = bridge_env
+    bridge._mark_replied("msg_seen_before_restart")
+    assert (config.HOME / "perunchat_replied.json").is_file()
+    restarted = PerunChatBridge(MagicMock(settings=bridge.settings))
+    restarted._agent_id = "perun-local"
+    assert "msg_seen_before_restart" in restarted._recent_replied
+    with patch.object(restarted, "_reply") as mock_reply:
+        restarted._on_frame(_chat_frame(msg_id="msg_seen_before_restart",
+                                        room="priv:abc123"), None)
+        mock_reply.assert_not_called()
+
+
+def test_flush_outbox_stops_at_first_failure(bridge_env):
+    """A failed resend must not skip ahead: later frames stay queued."""
+    bridge, _ = bridge_env
+    frames = [
+        {"id": "first", "sequence_number": 10, "payload": "a"},
+        {"id": "second", "sequence_number": 11, "payload": "b"},
+    ]
+    bridge._store_outbox(frames)
+    ws = MagicMock()
+    ws.send.side_effect = OSError("boom")
+    bridge._flush_outbox(ws)
+    assert ws.send.call_count == 1
+    remaining = bridge._load_outbox()
+    assert [f["id"] for f in remaining] == ["first", "second"]

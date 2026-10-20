@@ -88,6 +88,26 @@ _TYPING_DELAY_MAX = 1.8
 _RECONNECT_CATCHUP_AFTER_MS = 120_000
 _RECONNECT_CLOCK_SKEW_MS = 60_000
 
+# No-loss delivery guarantees.
+# -----------------------------
+# A reply is generated at most _REPLY_GENERATION_ATTEMPTS times before the
+# bridge gives up; between attempts the bridge first *waits* for a still-running
+# run (never starts a duplicate) and only re-runs when the previous run reached a
+# final state with empty output (e.g. it was cancelled mid-generation).
+_REPLY_GENERATION_ATTEMPTS = 2
+_REPLY_RETRY_DELAY_SECONDS = 2.0
+_RUN_WAIT_TIMEOUT_SECONDS = 300
+# Write-ahead outbox: every outbound frame is persisted before it is sent and
+# only removed after a successful send. Frames are resent after a reconnect with
+# their ORIGINAL id + sequence_number, which is idempotent at the gateway: if the
+# first attempt was delivered, the resend is rejected as non-monotonic (no
+# duplicate); if it never arrived, the resend goes through.
+_MAX_OUTBOX_FRAMES = 100
+_OUTBOX_FLUSH_DELAY_SECONDS = 0.3
+# Persisted so a bridge restart cannot reply twice to replayed history.
+_REPLIED_FILE_NAME = "perunchat_replied.json"
+_OUTBOX_FILE_NAME = "perunchat_outbox.json"
+
 # Patterns that may reveal internal/private information. Used as a last-line
 # guard before broadcasting a reply, especially in public rooms.
 _INTERNAL_PATTERNS: List[Tuple[str, re.Pattern]] = [
@@ -241,7 +261,13 @@ class PerunChatBridge:
         self._ws: Optional[Any] = None
         self._lock = threading.Lock()
         self._agent_id: Optional[str] = None
+        # Recently replied message ids. Persisted to disk so a bridge restart
+        # cannot reply twice to messages the gateway replays on reconnect.
         self._recent_replied: Set[str] = set()
+        self._replied_order: List[str] = []
+        for _mid in self._load_replied():
+            self._recent_replied.add(_mid)
+            self._replied_order.append(_mid)
         self._reply_count_minute = 0
         self._minute_window_start = time.time()
         self._seq = self._load_seq()
@@ -347,6 +373,130 @@ class PerunChatBridge:
         except Exception:
             pass
 
+    # -- durable reply bookkeeping ---------------------------------------- #
+    # The gateway replays room history after every reconnect; without durable
+    # dedup state a bridge restart would reply a second time to old messages,
+    # and a queued reply that was never sent would be silently forgotten.
+    # These files live next to the sequence counter under PERUN_HOME.
+    def _replied_file(self) -> Path:
+        return config.HOME / _REPLIED_FILE_NAME
+
+    def _outbox_file(self) -> Path:
+        return config.HOME / _OUTBOX_FILE_NAME
+
+    def _load_replied(self) -> List[str]:
+        try:
+            path = self._replied_file()
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                ids = [str(i) for i in (data.get("replied") or [])]
+                return ids[-_MAX_RECENT_REPLIED:]
+        except Exception:
+            pass
+        return []
+
+    def _save_replied(self) -> None:
+        try:
+            path = self._replied_file()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"replied": self._replied_order[-_MAX_RECENT_REPLIED:]}),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except Exception:
+            pass
+
+    def _mark_replied(self, msg_id: Optional[str]) -> None:
+        if not msg_id or msg_id in self._recent_replied:
+            return
+        self._recent_replied.add(msg_id)
+        self._replied_order.append(msg_id)
+        if len(self._replied_order) > _MAX_RECENT_REPLIED:
+            for old in self._replied_order[:-_REPLIED_TRIM_TO]:
+                self._recent_replied.discard(old)
+            self._replied_order = self._replied_order[-_REPLIED_TRIM_TO:]
+        self._save_replied()
+
+    def _load_outbox(self) -> List[Dict[str, Any]]:
+        try:
+            path = self._outbox_file()
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                frames = [f for f in (data.get("frames") or []) if isinstance(f, dict)]
+                return frames[-_MAX_OUTBOX_FRAMES:]
+        except Exception:
+            pass
+        return []
+
+    def _store_outbox(self, frames: List[Dict[str, Any]]) -> None:
+        try:
+            path = self._outbox_file()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"frames": frames[-_MAX_OUTBOX_FRAMES:]}), encoding="utf-8"
+            )
+            tmp.replace(path)
+        except Exception:
+            pass
+
+    def _queue_outbox(self, frame: Dict[str, Any]) -> None:
+        """Persist an outbound frame BEFORE attempting to send it (write-ahead)."""
+        frames = [f for f in self._load_outbox() if f.get("id") != frame.get("id")]
+        frames.append(frame)
+        self._store_outbox(frames)
+
+    def _drop_from_outbox(self, frame_id: Optional[str]) -> None:
+        if not frame_id:
+            return
+        self._store_outbox([f for f in self._load_outbox() if f.get("id") != frame_id])
+
+    def _send_frame(self, ws: Any, frame: Dict[str, Any], *,
+                    write_ahead: bool = True) -> bool:
+        """Send a reply frame, never losing it on a dead socket.
+
+        With ``write_ahead`` the frame is persisted first and removed only after
+        a successful send; a failure leaves it queued for ``_flush_outbox``.
+        """
+        if write_ahead:
+            self._queue_outbox(frame)
+        try:
+            ws.send(json.dumps(frame))
+        except Exception as exc:
+            logger.warning("PerunChat reply send failed (kept in outbox): %s", exc)
+            return False
+        self._drop_from_outbox(frame.get("id"))
+        return True
+
+    def _flush_outbox(self, ws: Any) -> None:
+        """Resend queued frames after a (re)connect.
+
+        Each frame keeps its original id and sequence_number, so the gateway's
+        monotonic-sequence check makes the resend idempotent: a frame that was
+        actually delivered before the disconnect is rejected as a duplicate and
+        one that never arrived is delivered now. Ordered by sequence so an older
+        queued frame is never rejected in favour of a newer one.
+
+        Stops at the first send failure: continuing would advance the gateway's
+        sequence counter past the failed frame, making its later retry
+        impossible.
+        """
+        pending = sorted(self._load_outbox(), key=lambda f: f.get("sequence_number", 0))
+        if not pending:
+            return
+        logger.info("PerunChat outbox: resending %d queued frame(s)", len(pending))
+        remaining: List[Dict[str, Any]] = []
+        for i, frame in enumerate(pending):
+            try:
+                ws.send(json.dumps(frame))
+            except Exception as exc:
+                logger.warning("PerunChat outbox flush interrupted: %s", exc)
+                remaining = pending[i:]
+                break
+            # Brief pacing so a burst of queued replies looks natural in-room.
+            time.sleep(_OUTBOX_FLUSH_DELAY_SECONDS)
+        self._store_outbox(remaining)
+
     def _resolve_agent_id(self, key: str, rest_base: str) -> Optional[str]:
         url = f"{rest_base}/api/v1/me"
         try:
@@ -402,6 +552,10 @@ class PerunChatBridge:
                     self._ws = ws
                 backoff = 1.0
                 logger.info("PerunChat bridge connected as %s", agent_id)
+                # Anything queued while disconnected (or from a previous
+                # process) goes out first, before new replies are generated,
+                # so sequence numbers stay monotonic in the room.
+                self._flush_outbox(ws)
 
                 while not self._stop.is_set():
                     try:
@@ -567,23 +721,56 @@ class PerunChatBridge:
             # Mark this message as being processed immediately so a slow LLM call
             # does not cause duplicate replies if the same frame is seen again.
             msg_id = frame.get("id")
-            if msg_id:
-                self._recent_replied.add(msg_id)
+            self._mark_replied(msg_id)
             project = control.ensure()
-            result = self.orchestrator.run_and_wait(
-                project["slug"],
-                prompt,
-                model=model,
-                agent=agent,
-                timeout=120,
-                skip_instructions=skip_instructions,
-            )
-            reply = (result.get("reply", "") or "").strip()
-            # The Orchestrator may inject project-instruction wrappers into the
-            # response even for chat prompts. Strip them before broadcasting.
-            reply = _strip_instruction_wrappers(reply)
+            reply = ""
+            run_uid = ""
+            run_status = ""
+            # No-loss generation: never drop a message because a run came back
+            # empty. If the run is still alive we WAIT for it (never start a
+            # duplicate); only a final-empty run (cancelled/failed/timeout) is
+            # regenerated once.
+            for attempt in range(1, _REPLY_GENERATION_ATTEMPTS + 1):
+                result = self.orchestrator.run_and_wait(
+                    project["slug"],
+                    prompt,
+                    model=model,
+                    agent=agent,
+                    timeout=_RUN_WAIT_TIMEOUT_SECONDS,
+                    skip_instructions=skip_instructions,
+                )
+                run = result.get("run") or {}
+                run_uid = run.get("run_uid") or ""
+                run_status = run.get("status", "")
+                if run_status in ("queued", "running") and run_uid:
+                    result = self.orchestrator.wait_for_run(run_uid, _RUN_WAIT_TIMEOUT_SECONDS)
+                    run = result.get("run") or {}
+                    run_status = run.get("status", run_status)
+                # The Orchestrator may inject project-instruction wrappers into the
+                # response even for chat prompts. Strip them before broadcasting.
+                reply = _strip_instruction_wrappers((result.get("reply", "") or "").strip())
+                if reply:
+                    break
+                logger.warning(
+                    "PerunChat bridge empty reply (attempt %d/%d, run=%s status=%s) for message in %s",
+                    attempt, _REPLY_GENERATION_ATTEMPTS, run_uid, run_status, room_id,
+                )
+                if attempt < _REPLY_GENERATION_ATTEMPTS:
+                    time.sleep(_REPLY_RETRY_DELAY_SECONDS)
             if not reply:
-                logger.warning("PerunChat bridge got empty reply for message in %s", room_id)
+                # Last resort after the retry: if the run is still going (slow
+                # provider), keep waiting once more instead of losing the reply.
+                if run_status in ("queued", "running") and run_uid:
+                    result = self.orchestrator.wait_for_run(run_uid, _RUN_WAIT_TIMEOUT_SECONDS)
+                    reply = _strip_instruction_wrappers((result.get("reply", "") or "").strip())
+            if not reply:
+                logger.error(
+                    "PerunChat bridge giving up on message in %s after %d attempts (run=%s status=%s); the message was NOT answered",
+                    room_id, _REPLY_GENERATION_ATTEMPTS, run_uid, run_status,
+                )
+                return
+            if reply == "<NO_REPLY>":
+                # Explicit decision, not a failure: the model chose silence.
                 return
             # DLP guard: in public rooms, redact anything that looks like internal
             # or private information before it leaves the local environment.
@@ -608,7 +795,10 @@ class PerunChatBridge:
                 "payload": reply,
                 "in_reply_to": frame.get("id"),
             }
-            ws.send(json.dumps(reply_frame))
+            if not self._send_frame(ws, reply_frame):
+                # The frame stays in the durable outbox and is resent with the
+                # same id + sequence_number on the next (re)connect.
+                return
             self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
             reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))

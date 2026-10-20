@@ -2,6 +2,18 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.18 - 2026-10-20
+
+### Fixed
+
+- **No-loss PerunChat reply delivery.** Cancelled or slow orchestrator runs no
+  longer discard replies that were already emitted: the stdout loop now parses
+  every line before honouring a cancel/timeout break, and drains buffered final
+  lines after the process exits. The bridge retries empty replies, waits for
+  still-running runs instead of starting duplicates, persists replied-message
+  ids across restarts, and stores every outbound frame in a write-ahead outbox
+  that is flushed idempotently on reconnect.
+
 ## v0.7.17 - 2026-10-20
 
 ### Fixed

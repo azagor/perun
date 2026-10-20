@@ -704,12 +704,27 @@ class Orchestrator:
     def run_and_wait(self, project_ref: str, prompt: str, *, timeout: int | None = None,
                      **kwargs: Any) -> dict[str, Any]:
         run = self.start_run(project_ref, prompt, **kwargs)
-        uid = run["run_uid"]
-        done = self._done.get(uid)
+        return self.wait_for_run(run["run_uid"], timeout)
+
+    def wait_for_run(self, run_uid: str, timeout: int | None = None) -> dict[str, Any]:
+        """Wait for an already-started run and return its state plus reply.
+
+        The reply is taken from the in-memory ``_replies`` map when available,
+        otherwise from the run record persisted by ``_finalize`` — the DB write
+        always happens before the done event is set, so a reply can never be
+        lost to the pop race in ``_finalize``.
+
+        If the run is still executing when the wait expires and it reached a
+        *final* status without a reply, the caller may retry: a non-final
+        status means the run is still alive and its output should be awaited
+        with another ``wait_for_run`` instead of starting a duplicate run.
+        """
+        done = self._done.get(run_uid)
         if done:
             done.wait(timeout or self.settings.run_timeout)
-        final = registry.get_run(uid) or run
-        return {"run": final, "reply": self._replies.get(uid, final.get("output", ""))}
+        final = registry.get_run(run_uid) or {}
+        reply = self._replies.get(run_uid) or final.get("output", "")
+        return {"run": final, "reply": reply}
 
     def cancel(self, run_uid: str) -> bool:
         run = registry.get_run(run_uid)
@@ -886,14 +901,21 @@ class Orchestrator:
             assert proc.stdout is not None
             with log_path.open("w", encoding="utf-8", errors="replace",
                                buffering=1) as logf:
-                for line in proc.stdout:
+
+                def _harvest(line: str) -> None:
+                    """Log one stdout line and fold its event into the reply.
+
+                    Parsing happens *before* any cancel/timeout decision: the
+                    pipe can deliver the model's final text in the same
+                    instant a cancel lands (the process kill flushes its
+                    buffered stdout), and an already-read line must never be
+                    discarded — that lost a real bridge reply once.
+                    """
+                    nonlocal learned_sid, provider_error_seen
                     logf.write(line)
-                    if timed_out or run_uid in self._cancelled:
-                        terminate_tree(proc)
-                        break
                     evt = parse_event(line)
                     if not evt:
-                        continue
+                        return
                     sid = evt.get("session_id")
                     if sid and sid != learned_sid:
                         learned_sid = sid
@@ -921,7 +943,31 @@ class Orchestrator:
                             provider_error_seen = True
                         self.bus.publish(run_uid, {"type": "error", "run": run_uid,
                                                    "text": err_text})
-            proc.wait(timeout=30)
+
+                for line in proc.stdout:
+                    _harvest(line)
+                    if timed_out or run_uid in self._cancelled:
+                        terminate_tree(proc)
+                        break
+                # Wait for the child, then drain whatever it flushed to the
+                # pipe after the break: a cancelled/timed-out run may still
+                # have a complete final line buffered. Bounded (daemon thread
+                # + join timeout) so a pipe handle inherited by a grandchild
+                # cannot hang the worker. Everything happens while the run log
+                # is still open so drained lines are logged and harvested too.
+                proc.wait(timeout=30)
+
+                def _drain() -> None:
+                    try:
+                        assert proc.stdout is not None
+                        for line in proc.stdout:
+                            _harvest(line)
+                    except Exception:  # pragma: no cover - best effort
+                        pass
+
+                drain = threading.Thread(target=_drain, daemon=True)
+                drain.start()
+                drain.join(timeout=5)
         except subprocess.TimeoutExpired:
             terminate_tree(proc)
             timed_out = True

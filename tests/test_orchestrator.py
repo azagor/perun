@@ -632,3 +632,93 @@ def test_child_env_injects_decrypted_telegram_token(monkeypatch):
     monkeypatch.delenv("PERUN_TELEGRAM_TOKEN", raising=False)
     env = orch._child_env(1)
     assert env.get("PERUN_TELEGRAM_TOKEN") == "decrypted-token"
+
+
+def test_execute_harvests_text_that_arrives_with_cancel(monkeypatch, tmp_path):
+    """Text flushed by the child at cancel time must still become the reply.
+
+    Regression for the lost bridge reply (run 78d2b6d2665a4d51): the model's
+    final text line reached the pipe without a trailing newline, so it was only
+    read when the cancel killed the process. The old stdout loop logged the
+    line and *then* broke on the cancel flag before parsing it, so the reply
+    was discarded and the bridge saw "empty reply". A line that was already
+    read must always be harvested, even when the run is being cancelled.
+    """
+    import sys
+    import time
+
+    from perun import orchestrator, registry
+
+    registry.add_project("FakeCancel", str(tmp_path))
+    text_event = json.dumps({
+        "type": "text",
+        "sessionID": "ses_1",
+        "part": {"type": "text", "text": "final words before cancel"},
+    })
+    # Written WITHOUT a trailing newline: the parent's readline only returns it
+    # at EOF, i.e. exactly when the cancel terminates the child. This mirrors
+    # the opencode stdout buffering that produced the original data loss.
+    script = (
+        "import sys,time;"
+        f"sys.stdout.write({text_event!r});"
+        "sys.stdout.flush();"
+        "time.sleep(60)"
+    )
+    monkeypatch.setattr(
+        orchestrator, "resolve_opencode",
+        lambda name: [sys.executable, "-c", script],
+    )
+
+    o = orchestrator.Orchestrator()
+    run = o.start_run("fakecancel", "hi")
+    uid = run["run_uid"]
+    done = o._done.get(uid)  # popped by _finalize; grab it before cancelling
+    # Give the child time to start and emit the line (it sits unread in the
+    # pipe because no newline terminates it).
+    for _ in range(100):
+        rec = registry.get_run(uid)
+        if rec and rec["status"] == "running":
+            break
+        time.sleep(0.05)
+    time.sleep(0.5)
+    assert o.cancel(uid)
+    # _finalize (which persists the harvested output) sets the done event.
+    assert done is not None and done.wait(15)
+    rec = registry.get_run(uid)
+    assert rec["status"] == "cancelled"
+    # The harvested text survives the cancel: persisted on the run record and
+    # returned to run_and_wait callers (the chat bridge) so it can be sent.
+    assert "final words before cancel" in (rec.get("output") or "")
+    # wait_for_run (used by the bridge) returns the same reply.
+    assert o.wait_for_run(uid, timeout=5)["reply"] == "final words before cancel"
+
+
+def test_run_and_wait_reply_survives_finalize_pop(monkeypatch, tmp_path):
+    """A reply already persisted by _finalize is returned even after its pop.
+
+    _finalize clears the in-memory reply map after setting the done event; a
+    waiter racing that pop must still get the reply from the run record.
+    """
+    import sys
+
+    from perun import orchestrator
+
+    registry = __import__("perun.registry", fromlist=["registry"])
+    registry.add_project("FakeWait", str(tmp_path))
+    script = (
+        "import json;"
+        "print(json.dumps({'type':'text','sessionID':'ses_2',"
+        "'part':{'type':'text','text':'durable reply'}}))"
+    )
+    monkeypatch.setattr(
+        orchestrator, "resolve_opencode",
+        lambda name: [sys.executable, "-c", script],
+    )
+    o = orchestrator.Orchestrator()
+    res = o.run_and_wait("fakewait", "hi", timeout=60)
+    # Simulate _finalize having popped the in-memory entry before the waiter
+    # read it: the DB-backed fallback must still produce the reply.
+    o._replies.clear()
+    res2 = o.wait_for_run(res["run"]["run_uid"], timeout=5)
+    assert res["reply"] == "durable reply"
+    assert res2["reply"] == "durable reply"
