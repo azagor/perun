@@ -281,3 +281,85 @@ def test_chat_system_prompt_loads_from_file():
         ):
             body = _load_chat_instructions()
     assert body == "Strict chat prompt from file."
+
+
+def _frame_at_ts(ts_ms: int) -> dict:
+    """Frame with an explicit timestamp (deterministic, no wall clock)."""
+    return {
+        "id": "msg_stale",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "text/plain",
+        "payload": "hello perun",
+        "timestamp": ts_ms,
+    }
+
+
+# Fixed epoch for deterministic age tests: two wall-clock reads can straddle a
+# millisecond boundary and make an exact-age assertion flaky.
+_T0 = 1_760_000_000_000
+
+
+def test_missed_while_offline_detects_old_message(settings):
+    """A message older than the connect time is reported with its age."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    assert bridge._missed_while_offline(_frame_at_ts(_T0 - 30 * 60_000)) == 30
+
+
+def test_missed_while_offline_ignores_live_messages(settings):
+    """Messages at/after connect time are live - no catch-up."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    assert bridge._missed_while_offline(_frame_at_ts(_T0)) is None
+    assert bridge._missed_while_offline(_frame_at_ts(_T0 + 5_000)) is None
+
+
+def test_missed_while_offline_never_negative(settings):
+    """Clock skew (timestamp in the future) must not report a negative age."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    assert bridge._missed_while_offline(_frame_at_ts(_T0 + 120_000)) is None
+
+
+def test_missed_while_offline_threshold_boundary(settings):
+    """Catch-up kicks in at 2 min + 60 s skew tolerance, not a second earlier."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    # Just inside the effective 180 s threshold: still treated as live.
+    assert bridge._missed_while_offline(_frame_at_ts(_T0 - 179_999)) is None
+    # Exactly at/over the threshold: reported (3 minutes).
+    assert bridge._missed_while_offline(_frame_at_ts(_T0 - 180_000)) == 3
+    # The bare 120 s constant alone does not trigger (skew tolerance applies).
+    assert bridge._missed_while_offline(_frame_at_ts(_T0 - 120_000)) is None
+
+
+def test_missed_while_offline_missing_timestamp(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = 1
+    frame = _frame_at_ts(_T0 + 1_000_000)
+    frame.pop("timestamp")
+    assert bridge._missed_while_offline(frame) is None
+
+
+def test_missed_while_offline_malformed_timestamp(settings):
+    """bool/NaN/Infinity/string timestamps must never raise."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    for bad in (True, float("nan"), float("inf"), float("-inf"), "not-a-ts", None, 0, -1):
+        assert bridge._missed_while_offline(_frame_at_ts(bad)) is None, bad
+
+
+def test_build_prompt_includes_catchup_note_for_stale_message(settings):
+    """Stale replayed messages get a 'catching up' note, not a live reply."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    prompt = bridge._build_prompt(_frame_at_ts(_T0 - 10 * 60_000))
+    assert "catching up" in prompt
+
+
+def test_build_prompt_no_catchup_note_for_live_message(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    prompt = bridge._build_prompt(_frame_at_ts(_T0))
+    assert "catching up" not in prompt

@@ -1,6 +1,8 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.7 (see §14). This release hardens the PerunChat
+**Latest release:** v0.7.8 (see §14). This release adds reconnect catch-up
+context to autonomous PerunChat replies and hardens the bridge against
+malformed peer timestamps. v0.7.7 hardens the PerunChat
 integration: dashboard chat UX, autonomous reply behavior, encrypted API keys,
 and production-readiness fixes.
 API-token auth, Telegram pairing codes, server-built terminal commands,
@@ -11,7 +13,7 @@ execute on the configured model instead of silently falling back to OpenCode's
 own default. v0.7.1 added the `/update-docs` slash command, richer project
 scaffolding with auto-refreshed manifest anchors, dependency parsing with
 cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.7`.
+`perun.__version__` reports `0.7.8`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
@@ -690,6 +692,13 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   orchestrator persona nor project `AGENTS.md` instructions leak into chat
   replies. The agent file (`~/.config/opencode/agents/perunchat.md`) is
   self-installed on bridge start.
+- **Reconnect catch-up:** because the gateway replays buffered history to late
+  joiners, the bridge records its gateway connect time and stamps any message
+  older than 2 minutes (plus a 60 s clock-skew tolerance) with a "you were
+  offline when this arrived" note in the prompt, so replies acknowledge the gap
+  instead of pretending the message just arrived. Frames with missing or
+  malformed timestamps (non-numeric, `NaN`, `Infinity`, boolean) are treated as
+  live rather than raising.
 - **Information-plane guardrails:** public-room replies pass through a redaction
   guard (`_redact_internal_info`) that strips local file paths, project
   internals, config files, and MCP/tool references before sending. Internal

@@ -2,6 +2,24 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.8 - 2026-10-20
+
+### Changed
+
+- **PerunChat replies after a reconnect acknowledge the gap.** The autonomous
+  bridge now records when it connected to the gateway. A message that predates
+  that connect by more than 2 minutes (plus a 60 s clock-skew tolerance) gets a
+  catch-up note in the chat prompt, so Perun answers messages missed while
+  offline like someone returning to the conversation instead of replying as if
+  the message had just arrived. No message is ever skipped as "stale."
+
+### Fixed
+
+- **Malformed chat timestamps can no longer interrupt the bridge.** `NaN`,
+  `Infinity`, boolean, or other non-numeric `timestamp` values are rejected
+  before any age arithmetic, so a bad frame from a peer or gateway cannot take
+  down the receive loop.
+
 ## v0.7.7 - 2026-10-20
 
 ### Changed

@@ -79,6 +79,14 @@ _MAX_CONTEXT_MESSAGES = 12
 _MIN_REPLY_INTERVAL_SECONDS = 2.0
 _TYPING_DELAY_MIN = 0.6
 _TYPING_DELAY_MAX = 1.8
+# Catch-up threshold. A message that predates our gateway connect by more than
+# _RECONNECT_CATCHUP_AFTER_MS *plus* the clock-skew tolerance below (an
+# effective 3 minutes) was sent while we were offline; replies then acknowledge
+# the gap ("catching up") instead of pretending the message just arrived. The
+# skew tolerance keeps senders whose clocks run slow from being misread as
+# stale and senders whose clocks run fast from being rejected as impossible.
+_RECONNECT_CATCHUP_AFTER_MS = 120_000
+_RECONNECT_CLOCK_SKEW_MS = 60_000
 
 # Patterns that may reveal internal/private information. Used as a last-line
 # guard before broadcasting a reply, especially in public rooms.
@@ -237,6 +245,11 @@ class PerunChatBridge:
         self._reply_count_minute = 0
         self._minute_window_start = time.time()
         self._seq = self._load_seq()
+        # Wall-clock ms of the most recent successful gateway connect. Used to
+        # detect messages that predate the connection (the gateway replays
+        # history after a reconnect) so replies can acknowledge the gap
+        # instead of pretending the message just arrived.
+        self._connect_epoch_ms: int = 0
         # Recent messages per room/thread so Perun can reply with human-like
         # conversational context instead of treating every message in isolation.
         self._room_history: Dict[str, Deque[Dict[str, Any]]] = {}
@@ -381,6 +394,10 @@ class PerunChatBridge:
         while not self._stop.is_set():
             try:
                 ws = self._connect(key, agent_id, endpoint, rooms)
+                # Recorded after a successful connect: the gateway replays
+                # history right after the join, and anything older than this
+                # point was sent while we were offline.
+                self._connect_epoch_ms = int(time.time() * 1000)
                 with self._lock:
                     self._ws = ws
                 backoff = 1.0
@@ -686,6 +703,37 @@ class PerunChatBridge:
             return True
         return time.time() - activity[-1] >= seconds
 
+    def _missed_while_offline(self, frame: Dict[str, Any]) -> Optional[int]:
+        """Return the message age in whole minutes if it predates our connect.
+
+        The gateway replays buffered history after every (re)connect, so a
+        message may arrive minutes or hours after it was actually sent. This
+        tells the reply pipeline how old the triggering message really is, so
+        the model can react like someone catching up rather than pretending
+        the message just landed. Returns None for live/fresh messages (or
+        when the timestamp is missing or our clock differs too much from the
+        sender's).
+        """
+        if not self._connect_epoch_ms:
+            return None
+        ts = frame.get("timestamp")
+        # bool is an int subclass: reject it so `true` is not read as 1 ms.
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
+            return None
+        try:
+            ts_ms = int(ts)
+        except (ValueError, OverflowError):
+            # Python's json.loads accepts NaN/Infinity literals; int() on them
+            # raises and must never take the receive loop down.
+            return None
+        age_ms = self._connect_epoch_ms - ts_ms
+        # Messages "from the future" mean clock skew, not catch-up.
+        if age_ms < -_RECONNECT_CLOCK_SKEW_MS:
+            return None
+        if age_ms < _RECONNECT_CATCHUP_AFTER_MS + _RECONNECT_CLOCK_SKEW_MS:
+            return None
+        return max(1, int(age_ms // 60_000))
+
     def _build_prompt(
         self,
         frame: Dict[str, Any],
@@ -732,8 +780,25 @@ class PerunChatBridge:
                 "room, so internal project context may be discussed with them."
             )
 
+        # The gateway replays history after a reconnect, so the triggering
+        # message may be old. Tell the model so it can greet like someone
+        # catching up instead of replying as if the message just arrived.
+        missed_min = self._missed_while_offline(frame)
+        catchup_note = ""
+        if missed_min is not None:
+            when = (
+                f"~{missed_min} minute{'s' if missed_min != 1 else ''} ago"
+                if missed_min < 60
+                else "~an hour or more ago"
+            )
+            catchup_note = (
+                f"\nNote: you were offline when this message arrived ({when}, "
+                "before you connected). Briefly acknowledge that you are "
+                "catching up on what you missed, then answer it naturally."
+            )
+
         return (
-            f"{CHAT_SYSTEM_PROMPT}{context}{saturation_note}{trust_note}\n\n"
+            f"{CHAT_SYSTEM_PROMPT}{context}{saturation_note}{trust_note}{catchup_note}\n\n"
             f"Room: {room}\n"
             f"Active participants (last 5 min): {active_humans}\n"
             f"Messages in last minute: {recent_msgs}\n"
