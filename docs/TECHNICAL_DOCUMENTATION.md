@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.5 (see §14). This release hardens the PerunChat
+**Latest release:** v0.7.6 (see §14). This release hardens the PerunChat
 integration: dashboard chat UX, autonomous reply behavior, encrypted API keys,
 and production-readiness fixes.
 API-token auth, Telegram pairing codes, server-built terminal commands,

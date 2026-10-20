@@ -2,7 +2,7 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## Unreleased
+## v0.7.6 - 2026-10-20
 
 ### Fixed
 
