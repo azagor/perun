@@ -2,6 +2,24 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.11 - 2026-10-20
+
+### Fixed
+
+- **Restart-flag replay is now validated and never blocks startup.**
+  `perun restart` rejects flag-looking tokens (`--port`, …) as recorded values
+  in `<PERUN_HOME>/server.json`, so a hand-edited record cannot produce an argv
+  the replacement fails to parse; a failed record write warns and lets
+  `perun serve` start instead of aborting; the record file re-asserts owner-only
+  permissions after the atomic rename (matching the PID file).
+
+### Changed
+
+- **Malformed PerunChat frames are dropped, not fatal.** Non-object JSON frames
+  (arrays/scalars) are ignored and `sender: null` / missing `sender` are
+  normalized at the bridge entry point, instead of raising in the receive loop
+  and forcing a reconnect cycle.
+
 ## v0.7.10 - 2026-10-20
 
 ### Changed

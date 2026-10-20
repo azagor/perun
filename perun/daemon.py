@@ -105,6 +105,15 @@ def record_run(argv: list[str] | None = None, pid: int | None = None) -> Path:
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(payload)
     tmp.replace(path)
+    if os.name != "nt":
+        # Belt and braces, matching write_pid(): the creation mode above is
+        # already 0600, but write_pid() re-asserts it after the rename and the
+        # record deserves the same guarantees.
+        try:
+            import stat
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
     return path
 
 

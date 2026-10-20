@@ -1,14 +1,15 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.10 (see §14). This release makes `perun restart` start
-its replacement detached by default and replay the previous server's recorded
+**Latest release:** v0.7.11 (see §14). This release hardens restart-flag replay
+(flag-as-value guard, non-blocking record writes) and makes the PerunChat
+bridge drop malformed frames instead of reconnecting. v0.7.10 made `perun
+restart` start detached by default and replay the previous server's recorded
 launch flags (`--bridge`, `--host`, `--port`, `--reload`), so headless
 restarts survive the invoking shell and no longer silently drop the bridges.
-v0.7.9 made `perun restart` detach by default. v0.7.8 added reconnect
-catch-up context to autonomous PerunChat replies and hardened the bridge
-against malformed peer timestamps. v0.7.7 hardened the PerunChat
-integration: dashboard chat UX, autonomous reply behavior, encrypted API keys,
-and production-readiness fixes.
+v0.7.8 added reconnect catch-up context to autonomous PerunChat replies and
+hardened the bridge against malformed peer timestamps. v0.7.7 hardened the
+PerunChat integration: dashboard chat UX, autonomous reply behavior, encrypted
+API keys, and production-readiness fixes.
 API-token auth, Telegram pairing codes, server-built terminal commands,
 installer/config data safety, orchestration + portability fixes, and
 state-of-the-art follow-ups for agent secret handling and embedding repair.
@@ -17,7 +18,7 @@ execute on the configured model instead of silently falling back to OpenCode's
 own default. v0.7.1 added the `/update-docs` slash command, richer project
 scaffolding with auto-refreshed manifest anchors, dependency parsing with
 cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.10`.
+`perun.__version__` reports `0.7.11`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter

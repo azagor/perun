@@ -275,3 +275,56 @@ def test_serve_records_launch_argv(monkeypatch, tmp_path):
     assert cli.main(["serve", "--port", "1234"]) == 0
     assert served == {"host": None, "port": 1234, "reload": False}
     assert daemon.read_recorded_argv() == ["serve", "--port", "1234"]
+
+
+def test_serve_survives_record_write_failure(monkeypatch, capsys):
+    """A failed launch-flag record must warn, not prevent serve from starting."""
+    from perun import daemon, server
+
+    def boom(argv=None):  # noqa: ANN001
+        raise OSError("disk full")
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "write_pid", lambda pid=None: None)
+    monkeypatch.setattr(daemon, "clear_pid", lambda force=False: None)
+    monkeypatch.setattr(daemon, "record_run", boom)
+    monkeypatch.setattr(server, "serve", lambda host=None, port=None, reload=False: None)
+
+    assert cli.main(["serve"]) == 0
+    assert "could not record launch flags" in capsys.readouterr().out
+
+
+def test_recorded_flag_value_rejects_flag_as_value():
+    """A flag-looking token in a hand-edited record is not a valid value."""
+    assert cli._recorded_flag_value(["serve", "--host", "0.0.0.0"], "--host") == "0.0.0.0"
+    assert cli._recorded_flag_value(["serve", "--host", "--port", "8760"], "--host") is None
+    assert cli._recorded_flag_value(["serve", "--port", "8760"], "--port") == "8760"
+    assert cli._recorded_flag_value(["serve", "--host"], "--host") is None  # no value
+    assert cli._recorded_flag_value(["serve", "--bridge"], "--host") is None  # absent
+    assert cli._recorded_port(["serve", "--port", "not-a-number"]) is None
+    assert cli._recorded_port(["serve", "--port", "--bridge"]) is None
+    assert cli._recorded_port(["serve", "--port", "8760"]) == 8760
+
+
+def test_restart_foreground_replays_recorded_flags(monkeypatch, tmp_path):
+    """The foreground path must receive the replayed flags too, never detach."""
+    from perun import daemon
+
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+    daemon.record_run(["serve", "--bridge"], pid=1)
+
+    served: dict = {}
+    detached: list = []
+
+    def fake_serve(args):  # noqa: ANN001
+        served["args"] = args
+        return 0
+
+    monkeypatch.setattr(daemon, "is_another_perun_running", lambda settings: None)
+    monkeypatch.setattr(daemon, "start_detached",
+                        lambda argv: detached.append(argv) or 1)
+    monkeypatch.setattr(cli, "cmd_serve", fake_serve)
+
+    assert cli.main(["restart", "--foreground"]) == 0
+    assert served["args"].bridge is True
+    assert detached == []

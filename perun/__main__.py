@@ -96,7 +96,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         run_argv += ["--reload"]
     if args.bridge:
         run_argv += ["--bridge"]
-    daemon.record_run(run_argv)
+    try:
+        daemon.record_run(run_argv)
+    except OSError as exc:
+        # Degrade, don't block: without a record a later `perun restart` falls
+        # back to flag-only behavior (the pre-v0.7.10 status quo).
+        print(f"[perun] warning: could not record launch flags for restart: {exc}")
     try:
         if args.bridge:
             _start_bridge_thread()
@@ -135,12 +140,20 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 
 def _recorded_flag_value(recorded: list[str], flag: str) -> str | None:
-    """Return the value following *flag* in a recorded argv, or None."""
+    """Return the value following *flag* in a recorded argv, or None.
+
+    A token that itself looks like a flag is never treated as a value: a
+    hand-edited record such as ``["serve", "--host", "--port", "8760"]`` must
+    not yield ``--host --port``, which the replacement would fail to parse.
+    """
     try:
         i = recorded.index(flag)
     except ValueError:
         return None
-    return recorded[i + 1] if i + 1 < len(recorded) else None
+    if i + 1 >= len(recorded):
+        return None
+    value = recorded[i + 1]
+    return None if value.startswith("--") else value
 
 
 def _recorded_port(recorded: list[str]) -> int | None:

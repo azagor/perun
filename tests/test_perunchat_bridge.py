@@ -97,6 +97,41 @@ def test_bridge_replies_to_other_messages(settings):
         mock_reply.assert_called_once_with(frame, None)
 
 
+def test_on_frame_ignores_non_object_frames(settings):
+    """A JSON array/scalar frame must be dropped, not crash the receive loop."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    for bad in ([1, 2, 3], "just a string", 42, None, True):
+        bridge._on_frame(bad, None)  # must not raise
+    assert bridge._room_history == {}
+
+
+def test_on_frame_normalizes_null_sender(settings):
+    """`sender: null` must not AttributeError on `.get('agent_id')` downstream."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "type": "CHAT",
+        "id": "msg_null_sender",
+        "room_id": "pub:global:test",
+        "sender": None,
+        "payload": "hello",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)  # must not raise
+    assert frame["sender"] == {}
+    # Frames with a missing sender key are normalized too.
+    frame2 = {
+        "type": "CHAT",
+        "id": "msg_no_sender",
+        "room_id": "pub:global:test",
+        "payload": "hello",
+    }
+    with patch.object(bridge, "_reply"):
+        bridge._on_frame(frame2, None)  # must not raise
+    assert frame2["sender"] == {}
+
+
 def test_status_exposes_agent_id(settings):
     mock_orchestrator = MagicMock(settings=settings)
     bridge = PerunChatBridge(mock_orchestrator)

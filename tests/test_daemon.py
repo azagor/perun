@@ -198,6 +198,15 @@ def test_record_run_roundtrip(tmp_path, monkeypatch):
     assert daemon.read_recorded_argv() == ["serve", "--bridge", "--port", "8760"]
 
 
+def test_record_run_defaults_to_sys_argv(tmp_path, monkeypatch):
+    """With no explicit argv, the current process's argv (minus argv0) is used."""
+    monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")
+    monkeypatch.setattr(sys, "argv", ["perun", "serve", "--bridge"])
+
+    daemon.record_run(pid=1)
+    assert daemon.read_recorded_argv() == ["serve", "--bridge"]
+
+
 def test_record_run_survives_stop(tmp_path, monkeypatch):
     """The record describes how Perun was last launched; stop must not clear it."""
     monkeypatch.setattr(daemon, "RUN_RECORD_PATH", tmp_path / "server.json")

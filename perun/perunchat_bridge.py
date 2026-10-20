@@ -429,6 +429,17 @@ class PerunChatBridge:
             backoff = min(backoff * 2, 60.0)
 
     def _on_frame(self, frame: Dict[str, Any], ws: Any) -> None:
+        # A malformed payload (JSON array/scalar instead of an object, or a
+        # `sender: null`) must never take the receive loop down; frames are
+        # stored in room history here, so normalizing once at the entry point
+        # keeps every downstream `.get("sender", {})` access safe.
+        if not isinstance(frame, dict):
+            logger.warning(
+                "PerunChat bridge ignoring non-object frame (%s)", type(frame).__name__
+            )
+            return
+        if not isinstance(frame.get("sender"), dict):
+            frame["sender"] = {}
         # Chat messages are broadcast as ChatFrames. The gateway does not add a
         # synthetic "type": "CHAT" field; instead text messages carry
         # content_type "text/plain". Reply only to those.
