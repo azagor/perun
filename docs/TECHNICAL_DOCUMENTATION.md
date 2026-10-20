@@ -1,7 +1,11 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.11 (see §14). This release hardens restart-flag replay
-(flag-as-value guard, non-blocking record writes) and makes the PerunChat
+**Latest release:** v0.7.12 (see §14). This release makes the Manifest tab
+clickable end-to-end: *Links*/*Anchors* rows open through the OS handler or a
+new tab, the body gets a debounced live Markdown preview, and unsaved edits are
+confirmed before *Reload*/*Generate* discards them; the tab's dead read-only
+card and duplicate project fetch are gone. v0.7.11 hardened restart-flag replay
+(flag-as-value guard, non-blocking record writes) and made the PerunChat
 bridge drop malformed frames instead of reconnecting. v0.7.10 made `perun
 restart` start detached by default and replay the previous server's recorded
 launch flags (`--bridge`, `--host`, `--port`, `--reload`), so headless
@@ -18,7 +22,7 @@ execute on the configured model instead of silently falling back to OpenCode's
 own default. v0.7.1 added the `/update-docs` slash command, richer project
 scaffolding with auto-refreshed manifest anchors, dependency parsing with
 cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.11`.
+`perun.__version__` reports `0.7.12`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
