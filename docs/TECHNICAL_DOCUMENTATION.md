@@ -1,27 +1,15 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.19 (see §15). This release hardens PerunChat
-autonomous replies with no-loss delivery: the Orchestrator stdout loop now
-parses every line before honouring a cancel/timeout break and drains buffered
-final lines after the process exits, so replies that were already emitted are
-not discarded. The PerunChat bridge retries empty replies, waits for
-still-running runs instead of starting duplicates, persists replied-message ids
-across restarts, and stores every outbound frame in a write-ahead outbox that
-is flushed idempotently on reconnect. v0.7.19 also makes replies answer
-questions directly: the chat system prompt and the installed `perunchat`
-OpenCode agent instruct the model to use the provided participant roster and
-conversation context, and to avoid generic greetings when a question was asked;
-the agent file is overwritten on bridge start whenever the embedded content
-changes. Earlier releases: v0.7.12 made the Manifest tab clickable end-to-end
-with a live body preview and confirmed reloads; v0.7.11 hardened restart-flag
-replay and made the bridge drop malformed frames; v0.7.10 made `perun restart`
-detached by default and replay recorded launch flags; v0.7.8 added reconnect
-catch-up context to autonomous PerunChat replies; v0.7.5 brought PerunChat
-integration hardening (dashboard chat UX, autonomous replies, encrypted API
-keys); v0.7.3 added API-token auth, Telegram pairing codes, server-built
-terminal commands, and audit hardening; v0.7.2 fixed model forwarding; v0.7.1
-added `/update-docs`, richer scaffolding, dependency parsing, and made the
-Telegram bridge opt-in at logon. `perun.__version__` reports `0.7.19`.
+**Latest release:** v0.7.20 (see §15). This release adds full provider
+management to the dashboard: API-key and local providers can be added,
+connected, and disconnected directly from the UI, with credentials written to
+the user's `opencode.json[c]` and OpenCode asked to reload its config. Presets
+include OpenCode Console, OpenCode Go, Ollama, Ollama Cloud, OpenAI,
+Anthropic, DeepSeek, and local endpoints; non-built-in presets are configured
+with the OpenAI-compatible runtime package and a known base URL. OAuth
+providers still open a terminal for `opencode auth login`. The provider and
+embeddings stat cards on the Dashboard now refresh automatically every 10
+seconds. `perun.__version__` reports `0.7.20`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
@@ -456,8 +444,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
-| GET | `/api/providers` | LLM providers from `opencode auth list --format json` with `connected`/`status` (+ `count`, `error`); Perun does not store credentials |
+| GET | `/api/providers` | LLM providers merged from `opencode auth list` and `opencode.json[c]`, each with `connected`/`configured`/`status`, plus a `catalog` of well-known providers and the `config_file` path |
 | POST | `/api/providers/{provider_id}/logout` | disconnect a provider via `opencode auth logout`; returns `{ok, error}` |
+| POST | `/api/providers/{provider_id}/connect` | write/update a provider in `opencode.json[c]` (`api_key`, `base_url`, `models`, etc.) and ask OpenCode to reload its config |
+| POST | `/api/providers/{provider_id}/disconnect` | remove the provider from `opencode.json[c]` and, if a credential is saved, run `opencode auth logout` |
 | GET | `/api/agents` | OpenCode agents: built-ins (`build`,`plan`,`general`,`explore`) + user-defined agents on disk (+ `count`) |
 | GET | `/api/skills` | OpenCode skills: global `~/.config/opencode/skills/` + project-local `.opencode/skills/` + runtime built-ins (`code-audit`, `android-design-guidelines`, `find-skills`) (+ `count`) |
 | GET | `/api/tools` | OpenCode tools: built-ins + custom `.ts/.js/.mjs` under `~/.config/opencode/tools/` and project-local `.opencode/tools/` (+ `count`) |
@@ -930,15 +920,20 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   with tabs Overview/Console/Sessions/Memory/Activity/Git/Manifest/Instructions/
   Config), Agent Console (live SSE), Memory Explorer, Activity (live
   `/api/stream`), MCP Servers (`#/mcp`), **Providers**, Telegram, Settings.
-* **Providers view (`#/providers`).** Shows LLM providers reported by
-  `opencode auth list --format json` with their credential status ("Saved
-  credential" / "No credential"). The Connect button opens the configured
-  terminal running `opencode auth login <id>` so Perun never handles API keys.
-  Disconnect invokes `POST /api/providers/{id}/logout`. Results are cached for
-  30 seconds; a Refresh button fetches with `?refresh=true`.
-* **Dashboard provider preview.** A stat card on the Dashboard shows the count of
-  connected/total providers, complementing the existing Ollama embeddings status
-  card.
+* **Providers view (`#/providers`).** Shows active LLM providers merged from
+  `opencode auth list` and providers configured in `opencode.json[c]`. API-key
+  and local providers can be added/edited directly: the dashboard writes the
+  credential/base URL into `opencode.json[c]` and asks OpenCode to reload.
+  OAuth providers still open a terminal for `opencode auth login <id>`. A
+  separate **Add provider** section lists well-known presets (OpenCode Go,
+  Ollama, Ollama Cloud, OpenAI, Anthropic, local endpoints, etc.) and supports
+  custom OpenAI-compatible providers. Non-built-in presets are written with the
+  OpenAI-compatible runtime package and a known base URL. Disconnect removes
+  the config entry and clears any saved credential. Results are cached for
+  30 seconds; Refresh fetches with `?refresh=true`.
+* **Dashboard live stat cards.** The provider and embeddings stat cards on the
+  Dashboard now refresh automatically every 10 seconds, so they stay current
+  without a full page reload.
 * **MCP Servers view.** Lists every MCP server OpenCode is configured to load
   (global + per project) with a config-derived status badge, transport, target,
   and resolved executable. A `Test` button (and `Test all enabled`) calls
@@ -1049,6 +1044,20 @@ setting.
 ---
 
 ## 15. Revision history
+
+### 2026-10-21 — v0.7.20: Dashboard provider management
+
+* **Full provider management in the dashboard.** The Providers view supports
+  adding, connecting, and disconnecting API-key and local providers directly.
+  Credentials are written to the user's `opencode.json[c]`; Perun never stores
+  keys separately. OAuth providers still open a terminal for `opencode auth
+  login`. A catalog of well-known presets plus custom OpenAI-compatible
+  providers is available.
+* **`perun/opencode_config.py`.** Safe JSON/JSONC read/write helpers for the
+  user-level OpenCode config, with backups, legacy `provider` → V2 `providers`
+  migration, and best-effort `opencode reload` orchestration.
+* **Live dashboard stat cards.** The provider and embeddings stat cards refresh
+  automatically every 10 seconds.
 
 ### 2026-10-20 — v0.7.19: PerunChat direct answers
 

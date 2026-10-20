@@ -57,6 +57,12 @@ anchors:
 - label: perun.telegram
   kind: file
   path: perun/telegram.py
+- label: perun.opencode_config
+  kind: file
+  path: perun/opencode_config.py
+- label: perun.providers
+  kind: file
+  path: perun/providers.py
 - label: requirements.txt
   kind: file
   path: requirements.txt

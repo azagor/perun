@@ -2,6 +2,30 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## Unreleased
+
+## v0.7.20 - 2026-10-21
+
+### Added
+
+- **Full provider management in the dashboard.** The Providers view now supports
+  adding, connecting and disconnecting API-key providers (OpenCode Console,
+  OpenCode Go, Ollama Cloud, OpenAI, DeepSeek, etc.) and local providers
+  (Ollama, LM Studio, vLLM) directly from the UI. Credentials are written to
+  the user's `opencode.json[c]` and OpenCode is asked to reload its config;
+  Perun never stores keys separately. OAuth providers still open a terminal for
+  `opencode auth login`. A new "Add provider" catalog lists well-known presets
+  and supports custom OpenAI-compatible endpoints. Presets that are not built
+  into OpenCode are configured with the canonical OpenAI-compatible runtime
+  package and a known base URL.
+- **`perun/opencode_config.py`** — safe JSON/JSONC read/write helpers for the
+  user-level OpenCode config, with backups, legacy `provider` → V2 `providers`
+  migration, and best-effort `opencode reload` orchestration. The dashboard
+  warns that saving providers normalizes the config file to plain JSON.
+- **Live dashboard stat cards.** The provider and embeddings stat cards refresh
+  automatically every 10 seconds while on the Dashboard, so they no longer go
+  stale after background changes.
+
 ## v0.7.19 - 2026-10-20
 
 ### Fixed

@@ -847,17 +847,18 @@ async function viewDashboard() {
         const total = (pr.providers || []).length;
         const prOk = pr.ok && total > 0;
         providerSummary = stat('Providers', prOk ? `${connected}/${total}` : '—',
-            prOk ? `${connected} connected, ${total - connected} not connected` : (pr.error || 'check opencode auth'));
+            prOk ? `${connected} connected, ${total - connected} not connected` : (pr.error || 'check opencode auth'),
+            'dash-stat-providers');
     } catch (e) {
-        providerSummary = stat('Providers', '—', 'unavailable');
+        providerSummary = stat('Providers', '—', 'unavailable', 'dash-stat-providers');
     }
-    grid.appendChild(stat('Projects', state.projects.length, `${opencodeCount} OpenCode project(s)`));
+    grid.appendChild(stat('Projects', state.projects.length, `${opencodeCount} OpenCode project(s)`, 'dash-stat-projects'));
     grid.appendChild(stat('Working now', presence.working.size, presence.working.size ? 'agent(s) executing' : 'no active runs', 'dash-stat-working'));
     grid.appendChild(stat('Awake', presence.awake.size, 'active in the last 15 min', 'dash-stat-awake'));
-    grid.appendChild(stat('Facts', stats.facts_total ?? 0, `${stats.facts_global ?? 0} global`));
-    grid.appendChild(stat('Doc chunks', stats.chunks_total ?? 0, 'semantic index'));
+    grid.appendChild(stat('Facts', stats.facts_total ?? 0, `${stats.facts_global ?? 0} global`, 'dash-stat-facts'));
+    grid.appendChild(stat('Doc chunks', stats.chunks_total ?? 0, 'semantic index', 'dash-stat-chunks'));
     grid.appendChild(providerSummary);
-    grid.appendChild(stat('Embeddings', stats.ollama_ok ? 'Online' : 'Offline', stats.ollama_ok ? 'Ollama ready' : 'start ollama serve'));
+    grid.appendChild(stat('Embeddings', stats.ollama_ok ? 'Online' : 'Offline', stats.ollama_ok ? 'Ollama ready' : 'start ollama serve', 'dash-stat-embeddings'));
     v.appendChild(grid);
 
     // Working now — live runs, each mapped to its project
@@ -3853,6 +3854,119 @@ async function viewPerunChat() {
 }
 
 /* ========================================================= PROVIDERS ==== */
+function _providerStatusText(p) {
+    if (p.status === 'connected & configured') return 'Connected & configured';
+    if (p.status === 'connected') return 'Saved credential';
+    if (p.status === 'configured') return 'Configured in OpenCode';
+    if (p.status === 'configured (no key)') return 'Configured (no key)';
+    return 'Not connected';
+}
+
+function providerConnectDialog(p, hadComments = false) {
+    const body = el('div', {});
+    body.dataset.kind = p.kind || 'api_key';
+    const isCustom = p.kind === 'custom';
+    const needsId = isCustom || !p.id;
+
+    if (needsId) {
+        body.appendChild(el('label', { class: 'field' },
+            `<span class="lab">Provider ID</span><input type="text" id="prf-id" value="${esc(p.id || '')}" placeholder="my-provider">`));
+    } else {
+        body.appendChild(el('input', { type: 'hidden', id: 'prf-id', value: p.id }));
+        body.appendChild(el('p', { class: 'secondary' },
+            `Provider: <b>${esc(p.name || p.id)}</b> <span class="muted">(${esc(p.kind || 'api_key')})</span>`));
+    }
+    if (isCustom) {
+        body.appendChild(el('label', { class: 'field' },
+            `<span class="lab">Display name</span><input type="text" id="prf-name" value="${esc(p.name || '')}" placeholder="My Provider">`));
+        body.appendChild(el('label', { class: 'field' },
+            `<span class="lab">Package</span><input type="text" id="prf-package" value="${esc(p.package || '@opencode/ai/providers/openai-compatible')}" placeholder="@opencode/ai/providers/openai-compatible">`));
+    }
+    if (p.kind !== 'oauth') {
+        const basePlaceholder = p.kind === 'local' ? 'http://127.0.0.1:11434/v1' : 'optional proxy / base URL';
+        body.appendChild(el('label', { class: 'field' },
+            `<span class="lab">Base URL</span><input type="text" id="prf-baseurl" value="${esc(p.default_base_url || p.base_url || '')}" placeholder="${basePlaceholder}">`));
+        if (p.kind === 'api_key' || isCustom) {
+            body.appendChild(el('label', { class: 'field' },
+                `<span class="lab">API key</span><input type="password" id="prf-key" autocomplete="off" placeholder="paste key here">`));
+        }
+        body.appendChild(el('label', { class: 'field' },
+            `<span class="lab">Models (comma-separated, optional)</span><input type="text" id="prf-models" placeholder="model-1, model-2">`));
+    }
+    body.appendChild(el('p', { class: 'muted mt' },
+        'Credentials are written to your OpenCode config; Perun does not store them separately.'));
+    if (hadComments) {
+        body.appendChild(el('p', { class: 'muted mt' },
+            'Note: your opencode.json[c] currently contains comments or trailing commas; saving will rewrite it as plain JSON and those will be removed.'));
+    }
+
+    const submit = async () => {
+        const id = $('#prf-id').value.trim();
+        if (!id) { toast('Provider ID is required.', 'err'); return; }
+        const payload = {};
+        const baseUrl = $('#prf-baseurl') ? $('#prf-baseurl').value.trim() : '';
+        const apiKey = $('#prf-key') ? $('#prf-key').value.trim() : '';
+        const models = $('#prf-models') ? $('#prf-models').value.split(',').map((s) => s.trim()).filter(Boolean) : [];
+        if (baseUrl) payload.base_url = baseUrl;
+        if (apiKey) payload.api_key = apiKey;
+        if (models.length) payload.models = models;
+        if ($('#prf-name')) {
+            const name = $('#prf-name').value.trim();
+            if (name) payload.name = name;
+        }
+        if ($('#prf-package')) {
+            const pkg = $('#prf-package').value.trim();
+            if (pkg) payload.package = pkg;
+        }
+        try {
+            const res = await api('/api/providers/' + encodeURIComponent(id) + '/connect', {
+                method: 'POST',
+                body: payload,
+            });
+            const reloaded = res && res.reloaded;
+            toast(`Provider saved${reloaded ? ' — OpenCode config reloaded' : ''}`, reloaded ? 'ok' : '');
+            closeModal();
+            await viewProviders(true);
+            await loadModels(true);
+        } catch (e) {
+            toast(e.message, 'err');
+        }
+    };
+
+    modal(p.id ? `Connect ${p.name || p.id}` : 'Add provider', body, [
+        { label: 'Cancel', class: 'ghost', onClick: closeModal },
+        { label: 'Save', class: 'primary', onClick: submit },
+    ]);
+    const firstInput = body.querySelector('input:not([type=hidden])');
+    if (firstInput) firstInput.focus();
+}
+
+function addProviderDialog(catalog, hadComments = false) {
+    const body = el('div', {});
+    const options = [`<option value="">Choose a provider…</option>`]
+        .concat(catalog.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.kind)})</option>`))
+        .concat(['<option value="__custom__">➕ Custom OpenAI-compatible provider</option>'])
+        .join('');
+    body.innerHTML = `<label class="field"><span class="lab">Provider</span><select id="pr-add-select">${options}</select></label>
+        <p class="muted mt">Select a preset or configure a custom endpoint.</p>`;
+
+    const select = $('#pr-add-select', body);
+    select.addEventListener('change', () => {
+        const id = select.value;
+        closeModal();
+        if (id === '__custom__') {
+            providerConnectDialog({ id: '', name: '', kind: 'custom', package: '@opencode/ai/providers/openai-compatible' }, hadComments);
+        } else if (id) {
+            const p = catalog.find((c) => c.id === id);
+            if (p) providerConnectDialog(p, hadComments);
+        }
+    });
+    modal('Add provider', body, [
+        { label: 'Cancel', class: 'ghost', onClick: closeModal },
+    ]);
+    select.focus();
+}
+
 async function viewProviders(refresh = false) {
     $('#topbar-title').textContent = 'Providers';
     const v = $('#view');
@@ -3867,45 +3981,68 @@ async function viewProviders(refresh = false) {
     v.innerHTML = '';
     v.appendChild(el('div', { class: 'view-head' },
         `<div><div class="eyebrow">LLM integrations</div><h1>Providers</h1>
-         <div class="sub">Connection status from OpenCode auth. A provider shown as “saved” has credentials stored by OpenCode; Perun never stores API keys.</div></div>
-         <div class="form-actions"><button class="btn ghost" id="pr-refresh">⟳ Refresh</button></div>`));
+         <div class="sub">Connect API-key providers and local endpoints directly; OAuth providers still use <code>opencode auth login</code>. Credentials live in your OpenCode config.</div></div>
+         <div class="form-actions">
+            <button class="btn ghost" id="pr-refresh">⟳ Refresh</button>
+            <button class="btn primary" id="pr-add">＋ Add provider</button>
+         </div>`));
 
-    const providers = data.providers || [];
-    if (!providers.length) {
+    const active = data.providers || [];
+    if (!active.length) {
         v.appendChild(el('div', { class: 'card empty' },
-            data.error ? esc(data.error) : 'No providers reported by OpenCode.'));
-        return;
+            data.error ? esc(data.error) : 'No providers connected yet. Add one below.'));
+    } else {
+        const grid = el('div', { class: 'grid providers-grid' });
+        for (const p of active) {
+            const connected = !!p.connected;
+            const statusClass = connected ? 'ok' : 'warn';
+            const statusText = _providerStatusText(p);
+            const actions = [];
+            if (p.kind === 'oauth') {
+                actions.push(`<button class="btn ${connected ? 'ghost' : 'primary'}" data-action="login" data-id="${esc(p.id)}">${connected ? 'Re-connect' : 'Connect…'}</button>`);
+            } else {
+                actions.push(`<button class="btn ${connected ? 'ghost' : 'primary'}" data-action="connect" data-id="${esc(p.id)}">${connected ? 'Edit' : 'Connect…'}</button>`);
+            }
+            if (connected || p.configured) {
+                actions.push(`<button class="btn ghost danger" data-action="disconnect" data-id="${esc(p.id)}">Disconnect</button>`);
+            }
+            const card = el('div', { class: 'card provider-card' },
+                `<div class="card-head"><h4>${esc(p.name || p.id)}</h4><span class="badge ${statusClass}">${statusText}</span></div>
+                 <div class="provider-meta">
+                    <span class="mono">${esc(p.id)}</span>
+                    ${p.connections && p.connections.length ? `<span class="muted">${esc(p.connections.map((c) => c.label || c.method || c.type).join(', '))}</span>` : ''}
+                    ${p.base_url ? `<span class="muted">${esc(p.base_url)}</span>` : ''}
+                 </div>
+                 <div class="form-actions">${actions.join('')}</div>`);
+            grid.appendChild(card);
+        }
+        v.appendChild(grid);
     }
 
-    const grid = el('div', { class: 'grid providers-grid' });
-    for (const p of providers) {
-        const connected = !!p.connected;
-        const statusClass = connected ? 'ok' : 'warn';
-        const statusText = connected ? 'Saved credential' : 'No credential';
-        const card = el('div', { class: 'card provider-card' },
-            `<div class="card-head"><h4>${esc(p.name || p.id)}</h4><span class="badge ${statusClass}">${statusText}</span></div>
-             <div class="provider-meta">
-                <span class="mono">${esc(p.id)}</span>
-                ${p.connections && p.connections.length ? `<span class="muted">${esc(p.connections.map((c) => c.label || c.method || c.type).join(', '))}</span>` : ''}
-             </div>
-             <div class="form-actions">
-                ${connected
-                    ? `<button class="btn ghost" data-action="logout" data-id="${esc(p.id)}">Disconnect</button>`
-                    : `<button class="btn primary" data-action="login" data-id="${esc(p.id)}">Connect…</button>`}
-             </div>`);
-        grid.appendChild(card);
+    const catalog = data.catalog || [];
+    if (catalog.length) {
+        v.appendChild(sectionTitle('Add a provider'));
+        const catGrid = el('div', { class: 'grid providers-grid' });
+        for (const p of catalog) {
+            const card = el('div', { class: 'card provider-card' },
+                `<div class="card-head"><h4>${esc(p.name)}</h4><span class="badge muted">${esc(p.kind)}</span></div>
+                 <div class="provider-meta"><span class="mono">${esc(p.id)}</span></div>
+                 <div class="form-actions">
+                    <button class="btn primary" data-action="add" data-id="${esc(p.id)}">Add…</button>
+                 </div>`);
+            catGrid.appendChild(card);
+        }
+        v.appendChild(catGrid);
     }
-    v.appendChild(grid);
 
-    $('#pr-refresh').addEventListener('click', async () => {
-        await viewProviders(true);
-    });
+    $('#pr-refresh').addEventListener('click', async () => { await viewProviders(true); });
+    $('#pr-add').addEventListener('click', () => { addProviderDialog(catalog, data.config_had_comments); });
 
     v.querySelectorAll('button[data-action="login"]').forEach((b) => {
         b.addEventListener('click', () => {
             const id = b.dataset.id;
             const cmd = `opencode auth login ${esc(id)}`;
-            confirmDialog('Connect provider', `Open a terminal to run <code>${cmd}</code>? Perun will not see your API key.`, async () => {
+            confirmDialog('Connect provider', `Open a terminal to run <code>${cmd}</code>? Perun will not see your credentials.`, async () => {
                 try {
                     await api('/api/run-in-terminal', {
                         method: 'POST',
@@ -3919,16 +4056,35 @@ async function viewProviders(refresh = false) {
             }, 'Open terminal');
         });
     });
-    v.querySelectorAll('button[data-action="logout"]').forEach((b) => {
+    v.querySelectorAll('button[data-action="connect"]').forEach((b) => {
+        b.addEventListener('click', () => {
+            const id = b.dataset.id;
+            const p = active.find((x) => x.id === id) || { id };
+            providerConnectDialog(p, data.config_had_comments);
+        });
+    });
+    v.querySelectorAll('button[data-action="add"]').forEach((b) => {
+        b.addEventListener('click', () => {
+            const id = b.dataset.id;
+            const p = catalog.find((x) => x.id === id) || { id };
+            providerConnectDialog(p, data.config_had_comments);
+        });
+    });
+    v.querySelectorAll('button[data-action="disconnect"]').forEach((b) => {
         b.addEventListener('click', async () => {
             const id = b.dataset.id;
-            try {
-                await api('/api/providers/' + encodeURIComponent(id) + '/logout', { method: 'POST' });
-                toast('Disconnected', 'ok');
-                await viewProviders();
-            } catch (e) {
-                toast(e.message, 'err');
-            }
+            confirmDialog('Disconnect provider',
+                `Remove <b>${esc(id)}</b> from your OpenCode config and clear any saved credential?`,
+                async () => {
+                    try {
+                        await api('/api/providers/' + encodeURIComponent(id) + '/disconnect', { method: 'POST' });
+                        toast('Disconnected', 'ok');
+                        await viewProviders(true);
+                        await loadModels(true);
+                    } catch (e) {
+                        toast(e.message, 'err');
+                    }
+                }, 'Disconnect');
         });
     });
 }
@@ -4180,6 +4336,36 @@ async function refreshHealth() {
     }
 }
 
+async function refreshDashboardStats() {
+    if (!location.hash.startsWith('#/dashboard')) return;
+    try {
+        const pr = await api('/api/providers');
+        const active = pr.providers || [];
+        const connected = active.filter((p) => p.connected).length;
+        const total = active.length;
+        const elp = $('#dash-stat-providers');
+        if (elp) {
+            elp.querySelector('.stat-value').textContent = total ? `${connected}/${total}` : '—';
+            elp.querySelector('.stat-foot').textContent = total
+                ? `${connected} connected, ${total - connected} not connected`
+                : (pr.error || 'check opencode auth');
+        }
+        const mem = await api('/api/memory/stats');
+        const stats = mem.stats || {};
+        const elf = $('#dash-stat-facts');
+        if (elf) elf.querySelector('.stat-value').textContent = stats.facts_total ?? 0;
+        const elc = $('#dash-stat-chunks');
+        if (elc) elc.querySelector('.stat-value').textContent = stats.chunks_total ?? 0;
+        const ele = $('#dash-stat-embeddings');
+        if (ele) {
+            ele.querySelector('.stat-value').textContent = stats.ollama_ok ? 'Online' : 'Offline';
+            ele.querySelector('.stat-foot').textContent = stats.ollama_ok ? 'Ollama ready' : 'start ollama serve';
+        }
+    } catch (e) {
+        // Silent best-effort refresh; the next poll will retry.
+    }
+}
+
 let _unlockPromptDismissed = false;
 
 async function promptForUnlockPassword(force = false) {
@@ -4248,8 +4434,10 @@ async function boot() {
     await refreshPresence();
     await router();
     promptForUnlockPassword();
+    refreshDashboardStats();
     setInterval(refreshHealth, 15000);
     setInterval(refreshPresence, 4000);
+    setInterval(refreshDashboardStats, 10000);
     window.addEventListener('hashchange', router);
 }
 

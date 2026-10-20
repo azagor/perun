@@ -517,11 +517,12 @@ def models(refresh: bool = False) -> dict[str, Any]:
 
 @app.get("/api/providers")
 def api_list_providers(refresh: bool = False) -> dict[str, Any]:
-    """LLM providers known to OpenCode auth, with connection status.
+    """LLM providers known to OpenCode, with auth/config/catalog status.
 
-    Perun does not store credentials; this endpoint shells out to
-    ``opencode auth list --format json`` and reports whether each provider has
-    at least one saved credential. Results are cached for 30 seconds unless
+    The response merges providers saved in OpenCode auth with providers
+    configured in ``opencode.json[c]``. The separate ``catalog`` list contains
+    well-known providers that are not yet active, so the dashboard can offer an
+    "Add provider" flow. Results are cached for 30 seconds unless
     ``refresh=true`` is passed.
     """
     return providers.list_providers(refresh=refresh)
@@ -537,6 +538,33 @@ def api_provider_logout(provider_id: str) -> dict[str, Any]:
     result = providers.logout_provider(provider_id)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "logout failed")
+    return _ok(**result)
+
+
+@app.post("/api/providers/{provider_id}/connect")
+def api_provider_connect(provider_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Add or update a provider in the OpenCode config.
+
+    The dashboard collects the fields appropriate for the provider kind
+    (API key, base URL, models, etc.) and writes them into the user's
+    ``opencode.json[c]``. OpenCode is then asked to reload its configuration.
+    """
+    result = providers.connect_provider(provider_id, payload)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "connect failed")
+    return _ok(**result)
+
+
+@app.post("/api/providers/{provider_id}/disconnect")
+def api_provider_disconnect(provider_id: str) -> dict[str, Any]:
+    """Disconnect a provider from both config and OpenCode auth.
+
+    Removing the config entry clears credentials written by the dashboard;
+    ``opencode auth logout`` clears credentials saved through the CLI.
+    """
+    result = providers.disconnect_provider(provider_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "disconnect failed")
     return _ok(**result)
 
 

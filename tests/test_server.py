@@ -594,6 +594,28 @@ def test_provider_logout_endpoint_returns_400_on_invalid_id(client, monkeypatch)
     assert "invalid provider id" in r.json()["detail"]
 
 
+def test_provider_connect_endpoint(client, monkeypatch):
+    """POST /api/providers/{id}/connect writes a provider entry."""
+    monkeypatch.setattr(
+        server.providers, "connect_provider",
+        lambda pid, payload: {"ok": True, "provider_id": pid, "reloaded": True, "path": "/tmp/opencode.json"})
+    r = client.post("/api/providers/openai/connect", json={"api_key": "sk-test"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["provider_id"] == "openai"
+
+
+def test_provider_disconnect_endpoint(client, monkeypatch):
+    """POST /api/providers/{id}/disconnect removes config and optionally logs out."""
+    monkeypatch.setattr(
+        server.providers, "disconnect_provider",
+        lambda pid: {"ok": True, "logout": {"ok": True}, "config": {"removed": True}})
+    r = client.post("/api/providers/openai/disconnect")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
 # --------------------------------------------------------------------------- #
 # Project instructions + manifest
 # --------------------------------------------------------------------------- #
