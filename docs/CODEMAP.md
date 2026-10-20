@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.7.5"`).
+Package docstring + `__version__` (`"0.7.19"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -240,17 +240,21 @@ Start / stream / cancel headless `opencode run`.
   resolved Telegram token as `PERUN_TELEGRAM_TOKEN`).
 * `Orchestrator`: `start_run()`, `run_and_wait()`, `cancel()` (idempotent; also
   cancels queued runs), `is_final()`, `set_max_concurrent()`, `active()`,
-  `_worker()`, `_execute()` (with wall-clock watchdog thread), `_emit_end()`,
-  `_finalize()`, `stream()`. Model/agent precedence: explicit arg → project
-  override → (control only) `orchestrator_model`/`orchestrator_agent` →
-  (control only) the global `default_model`/`default_agent`. The global default
-  is never forced onto ordinary project runs — with no override they defer to
-  OpenCode's own default model. Every source is stripped; `start_run` stores
-  `model_explicit=bool(model)` and `_execute` forwards `--model` whenever a
-  non-empty model was resolved (only an empty resolution defers to OpenCode).
+  `_worker()`, `_execute()` (with wall-clock watchdog thread and no-loss stdout
+  parsing: `_harvest()` parses each line *before* honouring a cancel/timeout
+  break, and a bounded `_drain()` thread harvests buffered final lines after the
+  process exits), `_emit_end()`, `_finalize()`, `stream()`. Model/agent
+  precedence: explicit arg → project override → (control only)
+  `orchestrator_model`/`orchestrator_agent` → (control only) the global
+  `default_model`/`default_agent`. The global default is never forced onto
+  ordinary project runs — with no override they defer to OpenCode's own default
+  model. Every source is stripped; `start_run` stores `model_explicit=bool(model)`
+  and `_execute` forwards `--model` whenever a non-empty model was resolved
+  (only an empty resolution defers to OpenCode).
 * Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `SUB_QUEUE_LIMIT`,
-  `HISTORY_TTL_SECONDS`, `STREAM_POLL_SECONDS`, `MAX_AGENT_DEPTH`, `_SECRET_ENV`,
-  `INSTRUCTION_OPEN`, `INSTRUCTION_CLOSE`.
+  `HISTORY_TTL_SECONDS`, `STREAM_POLL_SECONDS`, `MAX_AGENT_DEPTH`, `_SECRET_ENV`.
+  The instruction envelope uses plain-text markers
+  (`--- PERUN INSTRUCTIONS START ---` / `--- PERUN INSTRUCTIONS END ---`).
 
 ### `perun/skills.py`
 Discovery of OpenCode agent skills and tools available to a project.
@@ -333,6 +337,20 @@ Autonomous PerunChat chat participant for the Orchestrator.
   incoming messages, and answers through `Orchestrator.run_and_wait()` with
   the chat system prompt. Rate-limited (15 replies/min); state-changing
   requests are emitted as HITL `PERUN_ACTION_PROPOSAL`s, never executed.
+* No-loss reply delivery: every outbound reply frame is persisted in a
+  write-ahead outbox (`perunchat_outbox.json`) before sending and removed only
+  after success; `_flush_outbox()` resends queued frames after a reconnect with
+  their original id + `sequence_number`, which is idempotent at the gateway.
+  Empty replies are retried once, and a still-running run is awaited instead of
+  starting a duplicate. Replied-message ids are persisted
+  (`perunchat_replied.json`) so bridge restarts do not reply twice to replayed
+  history.
+* The prompt includes the participant roster and recent room history so the
+  model can answer factual questions about the room and avoid generic greetings
+  when a question was asked.
+* `_ensure_opencode_agent()` installs/updates the dedicated `perunchat` OpenCode
+  agent (`~/.config/opencode/agents/perunchat.md`) on bridge start, overwriting
+  it whenever the embedded content changes so prompt fixes reach production.
 * Chat model/agent precedence: `perunchat_chat_model`/`perunchat_chat_agent` →
   `orchestrator_model`/`orchestrator_agent` → defaults.
 * `PERUNCHAT_API_KEY`/`PERUNCHAT_API_ENDPOINT` are in `_SECRET_ENV` so spawned

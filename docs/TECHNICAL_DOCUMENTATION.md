@@ -1,28 +1,27 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.12 (see §14). This release makes the Manifest tab
-clickable end-to-end: *Links*/*Anchors* rows open through the OS handler or a
-new tab, the body gets a debounced live Markdown preview, and unsaved edits are
-confirmed before *Reload*/*Generate* discards them; the tab's dead read-only
-card and duplicate project fetch are gone. v0.7.11 hardened restart-flag replay
-(flag-as-value guard, non-blocking record writes) and made the PerunChat
-bridge drop malformed frames instead of reconnecting. v0.7.10 made `perun
-restart` start detached by default and replay the previous server's recorded
-launch flags (`--bridge`, `--host`, `--port`, `--reload`), so headless
-restarts survive the invoking shell and no longer silently drop the bridges.
-v0.7.8 added reconnect catch-up context to autonomous PerunChat replies and
-hardened the bridge against malformed peer timestamps. v0.7.7 hardened the
-PerunChat integration: dashboard chat UX, autonomous reply behavior, encrypted
-API keys, and production-readiness fixes.
-API-token auth, Telegram pairing codes, server-built terminal commands,
-installer/config data safety, orchestration + portability fixes, and
-state-of-the-art follow-ups for agent secret handling and embedding repair.
-v0.7.2 fixed model forwarding so Telegram-triggered and other project runs
-execute on the configured model instead of silently falling back to OpenCode's
-own default. v0.7.1 added the `/update-docs` slash command, richer project
-scaffolding with auto-refreshed manifest anchors, dependency parsing with
-cross-project references, and made the Telegram bridge opt-in at logon.
-`perun.__version__` reports `0.7.12`.
+**Latest release:** v0.7.19 (see §15). This release hardens PerunChat
+autonomous replies with no-loss delivery: the Orchestrator stdout loop now
+parses every line before honouring a cancel/timeout break and drains buffered
+final lines after the process exits, so replies that were already emitted are
+not discarded. The PerunChat bridge retries empty replies, waits for
+still-running runs instead of starting duplicates, persists replied-message ids
+across restarts, and stores every outbound frame in a write-ahead outbox that
+is flushed idempotently on reconnect. v0.7.19 also makes replies answer
+questions directly: the chat system prompt and the installed `perunchat`
+OpenCode agent instruct the model to use the provided participant roster and
+conversation context, and to avoid generic greetings when a question was asked;
+the agent file is overwritten on bridge start whenever the embedded content
+changes. Earlier releases: v0.7.12 made the Manifest tab clickable end-to-end
+with a live body preview and confirmed reloads; v0.7.11 hardened restart-flag
+replay and made the bridge drop malformed frames; v0.7.10 made `perun restart`
+detached by default and replay recorded launch flags; v0.7.8 added reconnect
+catch-up context to autonomous PerunChat replies; v0.7.5 brought PerunChat
+integration hardening (dashboard chat UX, autonomous replies, encrypted API
+keys); v0.7.3 added API-token auth, Telegram pairing codes, server-built
+terminal commands, and audit hardening; v0.7.2 fixed model forwarding; v0.7.1
+added `/update-docs`, richer scaffolding, dependency parsing, and made the
+Telegram bridge opt-in at logon. `perun.__version__` reports `0.7.19`.
 
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
@@ -707,7 +706,23 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   and denies all tools. Runs use `skip_instructions=True` so neither the coding
   orchestrator persona nor project `AGENTS.md` instructions leak into chat
   replies. The agent file (`~/.config/opencode/agents/perunchat.md`) is
-  self-installed on bridge start.
+  self-installed on bridge start and overwritten whenever the embedded content
+  changes, so prompt fixes reach production runs. The prompt also injects the
+  room's participant roster and recent conversation context so the model answers
+  questions directly instead of with generic greetings.
+- **No-loss reply delivery:** every outbound reply frame is persisted in a
+  write-ahead outbox (`<PERUN_HOME>/perunchat_outbox.json`) before it is sent and
+  removed only after the gateway accepts it. After a reconnect the bridge flushes
+  queued frames with their **original id and `sequence_number`**, which is
+  idempotent: a frame that was already delivered is rejected as non-monotonic,
+  while a frame that never arrived is delivered now. Replied-message ids are also
+  persisted (`<PERUN_HOME>/perunchat_replied.json`) so a bridge restart cannot
+  reply twice to messages the gateway replays on reconnect.
+- **Retry behavior:** if a run finishes with an empty reply (for example because
+  it was cancelled mid-generation), the bridge retries once after a short delay.
+  If a previous run is still `queued` or `running`, the bridge waits for it
+  rather than starting a duplicate. Together with the stdout-loop improvements
+  in the Orchestrator, this prevents slow or cancelled runs from losing replies.
 - **Reconnect catch-up:** because the gateway replays buffered history to late
   joiners, the bridge records its gateway connect time and stamps any message
   older than 2 minutes (plus a 60 s clock-skew tolerance) with a "you were
@@ -1034,6 +1049,24 @@ setting.
 ---
 
 ## 15. Revision history
+
+### 2026-10-20 — v0.7.19: PerunChat direct answers
+
+* **PerunChat replies answer questions directly.** The chat system prompt and
+  the installed `perunchat` OpenCode agent now instruct the model to answer
+  questions using the provided participant roster and conversation context, and
+  to avoid generic greetings when a question was asked. The agent file is
+  overwritten on bridge start whenever the embedded content changes.
+
+### 2026-10-20 — v0.7.18: no-loss PerunChat reply delivery
+
+* **No-loss PerunChat reply delivery.** Cancelled or slow orchestrator runs no
+  longer discard replies that were already emitted: the stdout loop parses every
+  line before honouring a cancel/timeout break, and drains buffered final lines
+  after the process exits. The bridge retries empty replies, waits for
+  still-running runs instead of starting duplicates, persists replied-message ids
+  across restarts, and stores every outbound frame in a write-ahead outbox that
+  is flushed idempotently on reconnect.
 
 ### 2026-10-19 — v0.7.5: PerunChat integration hardening
 

@@ -34,7 +34,12 @@ A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
    messages are untrusted data; any proposed action requires a cryptographically
    signed human approval token. With `perunchat_auto_reply` enabled, the local
    Orchestrator joins configured rooms (`perunchat_auto_join`) and replies
-   autonomously to incoming messages using the control-plane model/agent.
+   autonomously to incoming messages through a dedicated `perunchat` OpenCode
+   agent. The bridge injects the participant roster and recent room history into
+   the prompt so replies answer questions directly, retries empty replies, waits
+   for still-running runs, and stores every outbound frame in a durable
+   write-ahead outbox that is flushed idempotently after reconnects so no reply
+   is lost.
 
 ## Cross-project references
 
