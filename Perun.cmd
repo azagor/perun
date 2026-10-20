@@ -41,20 +41,16 @@ if not defined PY (
 
 rem -- normalize PY for safe execution (quote paths with spaces) --
 if defined PY (
-    rem Skip if it's just 'py' or 'py -3' launcher
-    if /I "%PY%"=="py" goto :py_ok
-    if /I "%PY:~0,3%"=="py " goto :py_ok
-    rem Check if it contains spaces and is not already quoted
-    echo "%PY%" | findstr " " >nul
-    if not errorlevel 1 (
-        rem Has spaces, check if already quoted
-        if not "%PY:~0,1%"=="^"" (
-            if not "%PY:~0,1%"==""" (
-                set "PY="%PY%""
+    if /I not "%PY%"=="py" (
+        if /I not "%PY:~0,3%"=="py " (
+            echo "%PY%" | findstr " " >nul 2>&1
+            if not errorlevel 1 (
+                if not "%PY:~0,1%"=="\"" (
+                    set "PY="%PY%""
+                )
             )
         )
     )
-    :py_ok
 )
 
 rem -- resolve the dashboard port (Settings.port, default 8760) ---------
