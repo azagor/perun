@@ -432,6 +432,16 @@ function computePresence() {
     perunFx.setLevel(presence.level);
     updateStormMeter();
     applyCardStates();
+    renderWorkingNow($('#dash-working-now'));
+    const statWorking = $('#dash-stat-working');
+    if (statWorking) {
+        statWorking.querySelector('.stat-value').textContent = presence.working.size;
+        statWorking.querySelector('.stat-foot').textContent = presence.working.size ? 'agent(s) executing' : 'no active runs';
+    }
+    const statAwake = $('#dash-stat-awake');
+    if (statAwake) {
+        statAwake.querySelector('.stat-value').textContent = presence.awake.size;
+    }
     // Lightning greets a project the moment its agent starts working.
     for (const slug of working) {
         if (prevWorking.has(slug)) continue;
@@ -498,6 +508,29 @@ function applyCardStates() {
             if (stopBtn) stopBtn.remove();
         }
     });
+}
+
+function renderWorkingNow(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!(state.activeRuns || []).length) return;
+    container.appendChild(sectionTitle('Working now'));
+    const box = el('div', { class: 'card' });
+    const list = el('div', { class: 'list' });
+    for (const r of state.activeRuns) {
+        const row = el('div', { class: 'list-row' },
+            `<span class="badge amber">${esc(r.status)}</span>
+             <span class="grow"><b>${esc(r.project_name || r.project_slug)}</b>
+             <span class="muted"> — ${esc((r.prompt || '').slice(0, 90))}</span></span>
+             <button class="btn sm ghost" data-run="${esc(r.run_uid)}" data-project="${esc(r.project_slug || '')}">View</button>`);
+        list.appendChild(row);
+    }
+    box.appendChild(list);
+    container.appendChild(box);
+    box.querySelectorAll('[data-run]').forEach((b) => b.addEventListener('click', () => {
+        const slug = b.dataset.project;
+        goto(slug ? '#/console/' + slug : '#/console');
+    }));
 }
 
 function updateStormMeter() {
@@ -804,7 +837,7 @@ async function viewDashboard() {
          <span class="lg"><i class="lg-eye"></i> Idle — registered, quiet</span>`));
 
     const grid = el('div', { class: 'grid stats-grid' });
-    const stat = (label, value, foot) => el('div', { class: 'card stat' },
+    const stat = (label, value, foot, id) => el('div', { class: 'card stat', ...(id ? { id } : {}) },
         `<div class="stat-label">${esc(label)}</div><div class="stat-value">${esc(value)}</div><div class="stat-foot">${esc(foot || '')}</div>`);
     const opencodeCount = state.projects.filter((p) => p.kind === 'opencode').length;
     let providerSummary;
@@ -819,8 +852,8 @@ async function viewDashboard() {
         providerSummary = stat('Providers', '—', 'unavailable');
     }
     grid.appendChild(stat('Projects', state.projects.length, `${opencodeCount} OpenCode project(s)`));
-    grid.appendChild(stat('Working now', presence.working.size, presence.working.size ? 'agent(s) executing' : 'no active runs'));
-    grid.appendChild(stat('Awake', presence.awake.size, 'active in the last 15 min'));
+    grid.appendChild(stat('Working now', presence.working.size, presence.working.size ? 'agent(s) executing' : 'no active runs', 'dash-stat-working'));
+    grid.appendChild(stat('Awake', presence.awake.size, 'active in the last 15 min', 'dash-stat-awake'));
     grid.appendChild(stat('Facts', stats.facts_total ?? 0, `${stats.facts_global ?? 0} global`));
     grid.appendChild(stat('Doc chunks', stats.chunks_total ?? 0, 'semantic index'));
     grid.appendChild(providerSummary);
@@ -828,20 +861,9 @@ async function viewDashboard() {
     v.appendChild(grid);
 
     // Working now — live runs, each mapped to its project
-    if ((state.activeRuns || []).length) {
-        v.appendChild(sectionTitle('Working now'));
-        const box = el('div', { class: 'card' });
-        const list = el('div', { class: 'list' });
-        for (const r of state.activeRuns) {
-            list.appendChild(el('div', { class: 'list-row' },
-                `<span class="badge amber">${esc(r.status)}</span>
-                 <span class="grow"><b>${esc(r.project_name || r.project_slug)}</b>
-                 <span class="muted"> — ${esc((r.prompt || '').slice(0, 90))}</span></span>
-                 <button class="btn sm ghost" data-run="${esc(r.run_uid)}" data-project="${esc(r.project_slug || '')}">View</button>`));
-        }
-        box.appendChild(list);
-        v.appendChild(box);
-    }
+    const workingNowBox = el('div', { id: 'dash-working-now' });
+    renderWorkingNow(workingNowBox);
+    v.appendChild(workingNowBox);
 
     // Projects grid
     v.appendChild(sectionTitle('Projects', el('button', { class: 'btn sm ghost', onclick: () => goto('#/projects') }, 'Manage →')));
