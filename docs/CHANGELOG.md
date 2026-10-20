@@ -2,6 +2,12 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.13 - 2026-10-20
+
+### Fixed
+
+- **Quote Python executable paths with spaces in `Perun.cmd`.** Prevents launch failures when Python is installed under `C:\Program Files\...`.
+
 ## v0.7.12 - 2026-10-20
 
 ### Added
