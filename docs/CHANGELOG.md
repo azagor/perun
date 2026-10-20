@@ -2,6 +2,12 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.15 - 2026-10-20
+
+### Fixed
+
+- **Fix `Perun.cmd` premature exit.** Removed invalid goto label causing the launcher to close immediately on Windows.
+
 ## v0.7.14 - 2026-10-20
 
 ### Fixed
