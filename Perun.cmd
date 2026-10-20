@@ -43,12 +43,15 @@ rem -- normalize PY for safe execution (quote paths with spaces) --
 if defined PY (
     if /I not "%PY%"=="py" (
         if /I not "%PY:~0,3%"=="py " (
-            echo "%PY%" | findstr " " >nul 2>&1
-            if not errorlevel 1 (
-                if not "%PY:~0,1%"=="\"" (
+            set "PY_NOQ=%PY:"=%"
+            if "!PY_NOQ!"=="%PY%" (
+                set "PY_NOSP=%PY: =%"
+                if not "!PY_NOSP!"=="%PY%" (
                     set "PY="%PY%""
                 )
+                set "PY_NOSP="
             )
+            set "PY_NOQ="
         )
     )
 )
