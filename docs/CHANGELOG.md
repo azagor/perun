@@ -2,6 +2,12 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.14 - 2026-10-20
+
+### Fixed
+
+- **Improve Python path quoting in `Perun.cmd`.** More robust handling of Python paths containing spaces.
+
 ## v0.7.13 - 2026-10-20
 
 ### Fixed
