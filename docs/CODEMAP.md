@@ -109,17 +109,19 @@ Shared project creation/registration, used by **both** the HTTP wizard
 LLM provider discovery, status and configuration. Perun never stores credentials
 itself; it edits OpenCode's own config so the CLI/server remain the source of truth.
 * `_PROVIDER_CATALOG` — built-in/well-known providers grouped by ``kind``
-  (``api_key`` / ``local`` / ``oauth`` / ``custom``) with default base URLs and docs.
+  (``api_key`` / ``local`` / ``oauth`` / ``custom``). Non-built-in presets include
+  the canonical OpenAI-compatible runtime ``package`` and a known ``default_base_url``.
 * `list_providers()` — ``GET /api/providers``; merges providers from
   ``opencode auth list --format json`` with providers configured in ``opencode.json[c]``,
-  plus a ``catalog`` of providers not yet active. Results are cached.
+  plus a ``catalog`` of providers not yet active. Returns ``config_had_comments`` so
+  the dashboard can warn before rewriting. Results are cached.
 * `logout_provider()` — ``POST /api/providers/{id}/logout``; runs
   ``opencode auth logout`` and validates the provider id.
 * `connect_provider()` — ``POST /api/providers/{id}/connect``; writes a provider entry
   into ``opencode.json[c]`` and reloads OpenCode. Keeps Perun's ``ollama_host`` in sync
   when connecting local Ollama.
 * `disconnect_provider()` — ``POST /api/providers/{id}/disconnect``; removes the config
-  entry and clears any saved auth credential.
+  entry (even if ``opencode auth list`` fails) and clears any saved auth credential.
 
 ### `perun/embeddings.py`
 Ollama transport + vector math (project-agnostic).
@@ -280,7 +282,9 @@ Discovery of OpenCode agent skills and tools available to a project.
 ### `perun/opencode_config.py`
 Safe read/write helpers for the user-level OpenCode config (``opencode.json[c]``).
 * ``_config_file()`` honours ``OPENCODE_CONFIG`` and ``XDG_CONFIG_HOME``.
-* ``load_config()``, ``save_config()`` parse JSON/JSONC and back up before writes.
+* ``load_config()`` returns ``(data, path, had_comments)`` so callers can warn when
+  comments/trailing commas will be lost on rewrite.
+* ``save_config()`` parses JSON/JSONC and backs up before atomic writes.
 * ``providers_section()`` / ``set_providers_section()`` handle both legacy ``provider`` and V2 ``providers`` keys.
 * ``configured_providers()``, ``configure_provider()``, ``remove_provider()`` edit provider entries without touching unrelated config keys.
 * ``reload_opencode()`` asks the OpenCode service to reload its config after a change.

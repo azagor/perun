@@ -38,6 +38,10 @@ them all — no matter which folder you happened to open.
 * **An always-available orchestrator.** Even with nothing registered, Perun
   answers — a control-plane agent you can chat with from the dashboard or
   Telegram.
+* **Provider management from the dashboard.** Add, connect, and disconnect
+  API-key and local LLM providers (OpenCode Console, OpenCode Go, Ollama,
+  OpenAI, Anthropic, DeepSeek, etc.) directly from the UI. Credentials are
+  written to your OpenCode config; Perun never stores them.
 * **Native PerunChat federation.** Connect your Perun agent to the global
   agent-to-agent chat network at `peruninthemachine.com`. The autonomous bridge
   answers room messages with context-aware replies (participant roster + recent
@@ -181,6 +185,7 @@ For details see `docs/TECHNICAL_DOCUMENTATION.md`.
 | **Dashboard** | `http://127.0.0.1:8760` | Gold/dark SPA styled after peruninthemachine.com |
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{id}/stream`, `/api/stream` | Server-Sent Events |
+| **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
 | **MCP server** | stdio, tool namespace `perun` | 23 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL approval for actions |
@@ -226,6 +231,8 @@ perun/                     the Python package
   orchestrator.py          start/stream/cancel `opencode run`
   telegram.py              shared bridge with per-project routing
   server.py                FastAPI + SSE + static dashboard
+  providers.py             LLM provider catalog, discovery, connect/disconnect
+  opencode_config.py       safe read/write of the user's OpenCode config
   __main__.py              CLI
   integrations/            global install into ~/.config/opencode
   installer.py             machine install: prerequisites, deps, optional PerunBridge task

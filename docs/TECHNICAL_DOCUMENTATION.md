@@ -55,7 +55,7 @@ Ollama instance for embeddings.
 | Persistence | one WAL-mode SQLite DB at `~/.perun/perun.db` |
 | Agent execution | `subprocess` of `opencode run …`, one thread per run, semaphore-capped |
 | Embeddings | local Ollama `nomic-embed-text` via `/api/embed` |
-| LLM providers | read-only view of `opencode auth list` (`/api/providers`); Perun does not store credentials |
+| LLM providers | full dashboard management (`/api/providers` connect/disconnect); credentials live in `opencode.json[c]`, Perun does not store keys |
 | Telegram | a long-polling thread (`PerunTelegramBridge`) |
 | PerunChat | native agent-to-agent chat federation via the sibling `perun_chat` gateway at `peruninthemachine.com` |
 | Global integration | stdio MCP server `mcp/perun_mcp.py` + `~/.config/opencode` merge |
@@ -444,7 +444,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
-| GET | `/api/providers` | LLM providers merged from `opencode auth list` and `opencode.json[c]`, each with `connected`/`configured`/`status`, plus a `catalog` of well-known providers and the `config_file` path |
+| GET | `/api/providers` | LLM providers merged from `opencode auth list` and `opencode.json[c]`, each with `connected`/`configured`/`status`, plus a `catalog` of well-known providers, the `config_file` path, and `config_had_comments` (true when comments/trailing commas will be lost on rewrite) |
 | POST | `/api/providers/{provider_id}/logout` | disconnect a provider via `opencode auth logout`; returns `{ok, error}` |
 | POST | `/api/providers/{provider_id}/connect` | write/update a provider in `opencode.json[c]` (`api_key`, `base_url`, `models`, etc.) and ask OpenCode to reload its config |
 | POST | `/api/providers/{provider_id}/disconnect` | remove the provider from `opencode.json[c]` and, if a credential is saved, run `opencode auth logout` |
@@ -929,8 +929,10 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   Ollama, Ollama Cloud, OpenAI, Anthropic, local endpoints, etc.) and supports
   custom OpenAI-compatible providers. Non-built-in presets are written with the
   OpenAI-compatible runtime package and a known base URL. Disconnect removes
-  the config entry and clears any saved credential. Results are cached for
-  30 seconds; Refresh fetches with `?refresh=true`.
+  the config entry and clears any saved credential. If `opencode.json[c]`
+  contains comments or trailing commas, the dashboard warns that saving will
+  rewrite the file as plain JSON. Results are cached for 30 seconds; Refresh
+  fetches with `?refresh=true`.
 * **Dashboard live stat cards.** The provider and embeddings stat cards on the
   Dashboard now refresh automatically every 10 seconds, so they stay current
   without a full page reload.
