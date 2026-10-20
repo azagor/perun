@@ -2,6 +2,12 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.7.17 - 2026-10-20
+
+### Fixed
+
+- **Dashboard "Working now" section now updates live.** The stat counter and active-run list refresh automatically when presence changes, instead of only on manual page refresh.
+
 ## v0.7.16 - 2026-10-20
 
 ### Fixed
