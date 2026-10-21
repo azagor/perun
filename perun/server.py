@@ -38,7 +38,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
-from . import (__version__, config, control, db, discovery, git, manifest,
+from . import (__version__, config, context, control, db, discovery, git, manifest,
                memory, projects, providers, registry, scaffold)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
@@ -90,6 +90,10 @@ def _start_reembed_thread() -> threading.Event | None:
         while not stop.wait(delay):
             try:
                 memory.reembed_missing(limit=32)
+            except Exception:  # pragma: no cover - best effort
+                pass
+            try:
+                context.reembed_missing(limit=32)
             except Exception:  # pragma: no cover - best effort
                 pass
             delay = _REEMBED_INTERVAL_SECONDS
@@ -1780,6 +1784,10 @@ def api_memory_reembed(payload: dict[str, Any] = Body(default={})) -> dict[str, 
     if limit < 1:
         raise HTTPException(status_code=400, detail="limit must be positive")
     result = memory.reembed_missing(limit=limit)
+    try:
+        result["context"] = context.reembed_missing(limit=limit)
+    except Exception:  # pragma: no cover - best effort
+        result["context"] = {"ok": False}
     return _ok(**result)
 
 

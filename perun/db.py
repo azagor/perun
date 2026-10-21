@@ -138,6 +138,48 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON doc_chunks(project_id);
 
+-- Perun Context: keyed, agent-retrievable reference docs. Distinct from
+-- ``doc_chunks`` (which mirrors files under a project's ``docs/``) because a
+-- context doc has a *stable key* an agent can ask for by name, and its own
+-- scope: 'global' rows use project_id=0 and are visible from every project,
+-- 'project' rows belong to exactly one project.
+CREATE TABLE IF NOT EXISTS context_docs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope         TEXT NOT NULL DEFAULT 'global',
+    project_id    INTEGER NOT NULL DEFAULT 0,
+    key           TEXT NOT NULL,
+    title         TEXT NOT NULL DEFAULT '',
+    summary       TEXT NOT NULL DEFAULT '',
+    body          TEXT NOT NULL,
+    source_file   TEXT NOT NULL DEFAULT '',
+    embedding     BLOB,
+    content_hash  TEXT NOT NULL,
+    embedded_hash TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL,
+    UNIQUE(scope, project_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_context_docs_key ON context_docs(key);
+CREATE INDEX IF NOT EXISTS idx_context_docs_project ON context_docs(project_id);
+CREATE INDEX IF NOT EXISTS idx_context_docs_scope ON context_docs(scope, project_id);
+
+-- The encrypted secret store. Values are Fernet blobs produced by
+-- ``perun/secrets.py`` (PBKDF2 + AES), never plaintext. ``hint`` is a
+-- non-sensitive description so an agent can pick the right secret without
+-- revealing it.
+CREATE TABLE IF NOT EXISTS secret_store (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    scope       TEXT NOT NULL DEFAULT 'global',
+    project_id  INTEGER NOT NULL DEFAULT 0,
+    value       TEXT NOT NULL,
+    hint        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE(scope, project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_secret_store_name ON secret_store(name);
+CREATE INDEX IF NOT EXISTS idx_secret_store_project ON secret_store(project_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT
@@ -245,7 +287,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def init_db() -> None:

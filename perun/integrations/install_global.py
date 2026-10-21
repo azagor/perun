@@ -91,10 +91,26 @@ def agents_target() -> Path:
 # --------------------------------------------------------------------------- #
 # Global AGENTS.md managed block (the V2 instruction mechanism)
 # --------------------------------------------------------------------------- #
-def _managed_block() -> str:
-    """The AGENTS.md block, sourced from the packaged INSTRUCTIONS.md."""
+def kernel_text() -> str:
+    """The rendered global kernel: the template plus the generated key table.
+
+    The template ships with the package; the key table is generated from the
+    handbook manifest so the table an agent reads can never disagree with the
+    context docs that actually exist.
+    """
     src = config.TEMPLATES_DIR / INSTRUCTIONS_FILE
-    body = src.read_text(encoding="utf-8").strip() if src.is_file() else ""
+    raw = src.read_text(encoding="utf-8") if src.is_file() else ""
+    try:
+        from ..handbook import render_kernel
+
+        return render_kernel(raw).strip()
+    except Exception:  # pragma: no cover - fall back to the raw template
+        return raw.strip()
+
+
+def _managed_block() -> str:
+    """The AGENTS.md block, sourced from the packaged kernel template."""
+    body = kernel_text()
     return f"{AGENTS_BEGIN}\n{body}\n{AGENTS_END}\n"
 
 
@@ -206,7 +222,8 @@ def install(*, force: bool = False, index: bool = True) -> int:
     templates = config.TEMPLATES_DIR
     ins_src = templates / INSTRUCTIONS_FILE
     if ins_src.is_file():
-        shutil.copy2(ins_src, instructions_target())
+        # The kernel is rendered (key table generated), not copied verbatim.
+        instructions_target().write_text(kernel_text() + "\n", encoding="utf-8")
     commands_dir = cfg_dir / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
     installed_commands: list[str] = []
@@ -314,6 +331,18 @@ def install(*, force: bool = False, index: bool = True) -> int:
                     memory.index_project_docs(proj["id"])
                 except Exception:
                     pass
+        # Index the handbook into the Perun Context store so `perun_context`
+        # can serve the reference material that used to live in full inside
+        # the AGENTS.md block.
+        try:
+            from .. import handbook
+
+            res = handbook.ensure_indexed()
+            if res.get("ok"):
+                print(f"[perun] handbook:      {res.get('indexed', 0)} doc(s) indexed, "
+                      f"{res.get('unchanged', 0)} unchanged")
+        except Exception as exc:  # pragma: no cover - best effort
+            print(f"[perun] warning: could not index the handbook ({exc})")
     except Exception as exc:  # pragma: no cover - best effort
         print(f"[perun] warning: could not seed the registry ({exc})")
 

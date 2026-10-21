@@ -18,6 +18,8 @@ docs:
   codemap: docs/CODEMAP.md
   technical: docs/TECHNICAL_DOCUMENTATION.md
   changelog: docs/CHANGELOG.md
+  design: docs/DESIGN.md
+  agents_optimization: docs/AGENTS_OPTIMIZATION.md
   agents: AGENTS.md
 commands:
   serve: python -m perun serve
@@ -39,6 +41,20 @@ anchors:
 - label: Release history
   kind: doc
   path: docs/CHANGELOG.md
+- label: Product design
+  kind: doc
+  path: docs/DESIGN.md
+- label: AGENTS.md context-budget optimisation (design proposal)
+  kind: doc
+  path: docs/AGENTS_OPTIMIZATION.md
+- label: Perun agent reference (verbatim, retrievable)
+  kind: doc
+  path: AGENTS.md
+  memory: perun.agents.full
+- label: Perun reference handbook (verbatim, retrievable)
+  kind: doc
+  path: perun/integrations/templates/handbook/global.md
+  memory: handbook.global
 - label: perun.server
   kind: file
   path: perun/server.py

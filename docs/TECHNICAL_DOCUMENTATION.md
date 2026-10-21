@@ -11,6 +11,22 @@ providers still open a terminal for `opencode auth login`. The provider and
 embeddings stat cards on the Dashboard now refresh automatically every 10
 seconds. `perun.__version__` reports `0.7.20`.
 
+**In development — Perun Context (see §3).** `AGENTS.md` is ambient context: it
+is paid for in full on every request of every session, and it grows without
+bound because every project carries its own copy of the same reference
+material. The **Context layer** (`perun/context.py`) stores reference material
+as keyed, vector-backed documents that are retrieved on demand instead of being
+inlined. The always-on global `AGENTS.md` block is now a generated **kernel**
+of ≈1.4 KB (down from ≈6.1 KB), and the complete previous global guide is kept
+verbatim as the `handbook.global` context doc — nothing was deleted, only
+relocated. Awareness parity is a contract with four mechanisms: the original
+`AGENTS.md` is retained verbatim, the key inventory is always visible,
+reference material is **pre-fetched by task** on the orchestrated path, and
+`perun context verify` gates every migration. Credentials moved to an
+**encrypted secret store** (`perun/secret_store.py`, `perun_secret` MCP tool,
+`perun secret` CLI) — encrypted at rest, pulled by name at the moment of use,
+never listed.
+
 **Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
 (`name`, `enabled`); enabled files are injected into new agent sessions in sorted filename
@@ -124,6 +140,8 @@ can all write concurrently.
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
 | `memory` | facts | `scope` ∈ {global,project}; **`scope='global'` rows use `project_id=0`**; `UNIQUE(scope,project_id,content_hash)` |
 | `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)` |
+| `context_docs` | **Context layer** — keyed reference docs | `key` unique per scope, `scope` ∈ {global,project}, `content_hash`, `embedded_hash`, `embedding` (nullable blob), `body`; global rows use `project_id=0` |
+| `secret_store` | encrypted secrets | `name` unique per scope, `value` holds an `enc:<base64>` Fernet blob (never plaintext), `hint` (metadata only) |
 | `settings` | key/value scratch | |
 | `bridge_links` | Telegram routing | `chat_id` → `project_id` + `session_pk` |
 
@@ -139,7 +157,7 @@ rows if the id were `NULL`. Using `0` keeps the constraint meaningful.
 
 ---
 
-## 3. Memory subsystem
+## 3. Memory, context and secret subsystems
 
 Two stores, one search surface (`memory.unified_search`):
 
@@ -165,6 +183,105 @@ reports `ollama_ok`.
 **Legacy import.** `import_legacy_memory()` copies facts from the old shared
 `~/.config/opencode/memory.db` into global Perun scope (skipping stale CODEMAP
 "Subsystem:" rows, which are re-indexed per project instead).
+
+### The Context layer (`perun/context.py`)
+
+`AGENTS.md` is *ambient* context: it is paid for in full, on every request, in
+every session, and it grows without bound because every project keeps its own
+copy of the same reference material. The Context layer is the alternative — a
+store of **keyed, retrievable reference documents** that replaces inlined
+material with on-demand retrieval.
+
+The whole design turns on one hard constraint: **the agent's awareness of a
+project must never fall below its current level.** Deferring content without a
+discovery path is a silent capability loss, so four mechanisms guarantee parity:
+
+| | Mechanism | Where |
+|---|---|---|
+| **P1** | Nothing is deleted — the complete original `AGENTS.md` is retained verbatim as a context doc and stays reachable in one call | `perun.agents.full` |
+| **P2** | The key inventory is always visible, so the agent always knows what it does *not* currently have | `context.list_keys()` / `render_inventory()` |
+| **P3** | Relevant material is **pre-fetched by task**, not requested — the agent does not have to know a doc exists | `orchestrator._prefetch_blocks()` |
+| **P4** | Every migration is gated by a parity harness | `perun context verify` |
+
+**Storage.** The `context_docs` table — deliberately **not** `doc_chunks`, so a
+project-scoped context doc never leaks into another project's cross-project
+document search. Global scope uses `project_id = 0`; a project-scoped doc
+shadows a global one of the same key.
+
+**Retrieval order** (`context.search()`): exact key → anchor label → key
+substring → semantic. An *anchor label* is resolved through the project's
+`perun.md`: an anchor with a `memory:` key binds a human label to a context
+key, so an agent can ask for a document the way a human would name it.
+
+**Embedding hygiene.** A body that trips `memory.is_sensitive()` is still
+**stored verbatim** (dropping it would break P1) but is **never embedded** —
+the embedding is the only part that leaves the machine. Such a row is marked
+`embedded_hash == content_hash` with a NULL vector, so `reembed_missing()` (the
+repair path) leaves it alone. Embeddings are always computed **before** a DB
+connection is opened, never held across a network call.
+
+**Pre-fetch gate.** `context.prefetch()` is deterministic and Ollama-free:
+exact key → anchor label → key fragment → **subject** match
+(`topical_overlap()` over stemmed content words of the key/title/summary,
+threshold 0.5). At most `PREFETCH_MAX_DOCS` docs and `PREFETCH_MAX_CHARS`
+characters are injected. A wrong injection costs tokens *and* can mislead, so
+the default is to inject nothing rather than something plausible.
+
+**The two surfaces.**
+
+* **OpenCode TUI** — the always-on global `AGENTS.md` holds a generated
+  **kernel** (≈1.4 KB, down from ≈6.1 KB): a short orientation plus the
+  handbook key table. The agent pulls the rest with `perun_context("<task>")`.
+* **Orchestrated runs** — Perun pre-fetches and injects automatically in a
+  `--- PERUN CONTEXT START/END ---` envelope (`orchestrator.compose_prompt()`),
+  so the run path needs no cooperation from the agent.
+
+**The handbook** (`perun/handbook.py`) is Perun's own reference material,
+rendered as context docs from `perun/integrations/templates/handbook/`.
+`ENTRIES` is the single source of truth for the key table, the indexed docs and
+`perun context list`. `handbook.tools` is **generated from the live MCP
+registry**, so the tool reference cannot drift from the tools that exist.
+`handbook.global` keeps the **complete previous global guide, verbatim**.
+
+**CLI.** Every action accepts `--project <slug|path>` to scope the lookup
+(default: the project owning the current directory).
+
+```
+perun context list                 # the key inventory (P2)
+perun context get <key>            # one doc, verbatim
+perun context search "<topic>"     # resolve a topic into docs (--k 1-8)
+perun context sync                 # re-index the handbook + refresh the global kernel
+perun context index <file> --key <key> [--title T] [--summary S] [--scope project|global]
+perun context verify               # parity check (P4): kernel drift, handbook
+                                   # coverage, memory:-bound anchors, secret anchors
+perun context stats                # AGENTS.md sizes, token estimates, duplicates
+```
+
+### The secret store (`perun/secret_store.py`)
+
+Credentials do not belong in a prompt file. A secret is stored by **name**,
+encrypted at rest, and pulled at the moment it is used — so one prompt carries
+the credential instead of every prompt carrying it.
+
+* Values are Fernet-encrypted (`perun/secrets.py`, PBKDF2-HMAC-SHA256) before
+  they reach the database; the master password is protected with **Windows
+  DPAPI**, bound to the current user (`perun secret password` persists it,
+  `PERUN_PASSWORD` overrides it).
+* `list_secrets()` returns **metadata only** — never a value.
+* `get_secret()` resolves the **project scope first**, then global.
+* `delete_secret()` removes only the row a lookup resolves, so deleting a
+  project-scoped secret cannot silently destroy the global one.
+* A `perun.md` anchor with `kind: secret` names a secret; `perun context
+  verify` checks that it actually exists.
+
+```
+perun secret list                   # names + hints, never values
+perun secret get <name>             # decrypt one value on demand
+perun secret set <name>             # store (--value, or read from stdin; --hint, --scope)
+perun secret delete <name>
+perun secret password               # store the master password (DPAPI-protected)
+perun secret status                 # is the store unlocked?
+```
 
 ---
 
@@ -356,9 +473,15 @@ anchors:
 Free-form notes rendered on the project page.
 ```
 
-* **Anchor kinds:** `file`, `doc`, `symbol`, `url`, `command`. Each anchor needs
+* **Anchor kinds:** `file`, `doc`, `symbol`, `url`, `command`, `secret`. Each anchor needs
   a `label` and one locator (`path` / `url` / `command`). Shorthand: a string
   anchor becomes a `file` anchor; `kind` is inferred when omitted.
+* **Memory-bound anchors.** An anchor may carry a **`memory:`** key naming a
+  Context-layer doc. That binds a human label to a context key, so an agent can
+  ask for the document by the name a human would use (`perun_context("Release
+  history")` resolves it). An anchor with `kind: secret` instead names a
+  secret in the encrypted store — `perun context verify` checks that it
+  actually exists.
 * **JSON fallback:** a plain `perun.json` is accepted; if a project uses JSON,
   `save()` writes JSON back (the Markdown body is stored under a `body` key) and
   `perun.md` is never created alongside it. `perun.md` wins if both exist.
@@ -433,6 +556,17 @@ run status to `provider_error` rather than `failed`, and the `sessions` row stay
 
 `run_and_wait()` blocks on a per-run `threading.Event` and returns
 `{run, reply}` — used by the MCP `perun_ask` tool and the Telegram bridge.
+
+**Task-driven context pre-fetch.** `compose_prompt()` (new sessions only)
+resolves the *request* into the Context-layer documents it needs and injects
+them in a `--- PERUN CONTEXT START/END ---` envelope, after the global/project
+instruction blocks. The gate is deterministic and Ollama-free (exact key →
+anchor label → key fragment → subject match), so a run never depends on an
+embedding service — and a wrong injection costs tokens *and* can mislead, so
+the default is to inject nothing rather than something plausible. Markers
+appearing in an injected instruction file are stripped, and Perun's own
+envelope is appended *after* that strip, so an instruction file cannot close
+the envelope early.
 
 ---
 
@@ -517,7 +651,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/memory/recent` | recent facts |
 | POST | `/api/memory/import-legacy` | migrate legacy facts |
 | POST | `/api/memory/prune` | drop old non-global facts |
-| POST | `/api/memory/reembed` | repair facts/doc chunks with missing/stale embeddings (also runs automatically in the background) |
+| POST | `/api/memory/reembed` | repair facts/doc chunks/**context docs** with missing or stale embeddings (also runs automatically in the background; docs that are deliberately vector-less — sensitive bodies — are never selected) |
 | GET | `/api/activity` | global feed |
 | GET/PATCH | `/api/settings` | read/update `Settings` (GET never echoes `telegram_token` or `perunchat_api_key`; it returns `*_set` booleans instead; the Telegram pairing code is blanked here and only surfaced to loopback callers via `/api/telegram/status`) |
 | GET | `/api/telegram/status` | bot + allowed chats + `token_source`/`chats_source` + `bridge_running` + `bridge_task` + `platform`; loopback callers additionally get `pair_code` (the one-time pairing code, empty once a chat is configured) |
@@ -752,7 +886,22 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
    when the merge actually changes the file, so re-running the installer no longer
    piles up identical backups. A config that is not valid JSON/JSONC aborts the
    install (exit 2) instead of being silently replaced;
-4. seeds the registry (this repo + a discovery pass) and optionally indexes docs.
+4. seeds the registry (this repo + a discovery pass) and optionally indexes docs;
+5. **writes the global kernel** into `~/.config/opencode/AGENTS.md` and indexes
+   the handbook.
+
+**The kernel.** The always-on managed block in the global `AGENTS.md` is
+generated by `install_global.kernel_text()` from
+`perun/integrations/templates/INSTRUCTIONS.md`, with `{{KEY_TABLE}}` filled
+from `handbook.render_key_table()`. It is a short orientation plus the handbook
+key table — ≈1.4 KB instead of the previous ≈6.1 KB block. Only the block
+between the `BEGIN perun (managed)` / `END perun (managed)` markers is
+rewritten; anything the user wrote around it is preserved. The complete
+previous global guide is retained verbatim as the `handbook.global` context
+doc, so nothing was deleted — it was relocated.
+
+The install also calls `handbook.ensure_indexed()`, so the reference material
+is retrievable through `perun_context` immediately after installation.
 
 Unrelated keys are preserved (JSON load → edit → dump). `config_dir()` honours
 `XDG_CONFIG_HOME`, and `OPENCODE_CONFIG` (a full path to the config *file*)
@@ -885,8 +1034,9 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 ## 12. MCP server
 
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
-`db.init_db()`s, calls `control.ensure()` at import, and exposes **twenty-three**
-tools:
+`db.init_db()`s, calls `control.ensure()` at import, calls
+`handbook.ensure_indexed()` at import (so the reference material is retrievable
+from the first call), and exposes **twenty-five** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
@@ -894,6 +1044,10 @@ tools:
   (requires `confirm=True`; refuses the control plane), `perun_discover`.
 * **Memory & docs:** `perun_memory_search`, `perun_memory_store`,
   `perun_docs_index`.
+* **Context & secrets:** `perun_context` (retrieve the Context layer — by
+  exact key, by anchor label, or by describing the task; the key inventory is
+  always visible), `perun_secret` (read/write a named value in the encrypted
+  store; a listing never returns a value).
 * **Instructions & manifest:** `perun_get_instructions`,
   `perun_set_instructions`, `perun_list_instruction_files`,
   `perun_get_manifest`, `perun_set_manifest`.
@@ -1046,6 +1200,35 @@ setting.
 ---
 
 ## 15. Revision history
+
+### Unreleased — Perun Context and the ambient-context budget
+
+* **The Context layer (`perun/context.py`).** Keyed, vector-backed reference
+  docs replace inlined ambient context. A new `context_docs` table — separate
+  from `doc_chunks`, so a project-scoped context doc never leaks into another
+  project's cross-project document search. Retrieval order: exact key → anchor
+  label → key substring → semantic.
+* **Awareness parity is a contract, not a hope.** The original `AGENTS.md` is
+  retained verbatim as a context doc, the key inventory is always visible,
+  reference material is pre-fetched **by task** on the orchestrated path, and
+  `perun context verify` gates every migration.
+* **Task-driven pre-fetch.** `orchestrator.compose_prompt()` injects the
+  reference material a request actually needs, in a
+  `--- PERUN CONTEXT START/END ---` envelope. The gate is deterministic and
+  Ollama-free, so a run never depends on an embedding service.
+* **The global kernel.** The always-on global `AGENTS.md` block is generated
+  from the handbook manifest: ≈1.4 KB instead of ≈6.1 KB. The complete
+  previous global guide is kept verbatim as `handbook.global`.
+* **The encrypted secret store (`perun/secret_store.py`).** Values are
+  Fernet-encrypted at rest, the master password is DPAPI-protected, a listing
+  never returns a value, and the project scope shadows the global one. Exposed
+  as the `perun_secret` MCP tool and the `perun secret` CLI group.
+* **Nothing sensitive is ever embedded.** A context doc whose body trips the
+  sensitive-data guard is stored verbatim but never sent to the embedding
+  endpoint; it is marked so the repair path leaves it alone.
+* **New surfaces.** `perun_context` (MCP), `perun secret` (MCP), the
+  `perun context` and `perun secret` CLI groups, and `memory:` /
+  `kind: secret` manifest anchors.
 
 ### 2026-10-21 — v0.7.20: Dashboard provider management
 

@@ -30,7 +30,7 @@ MANIFEST_JSON = "perun.json"
 MANIFEST_NAMES = (MANIFEST_MD, MANIFEST_JSON)
 SCHEMA_VERSION = 1
 
-ANCHOR_KINDS = ("file", "doc", "url", "command", "symbol")
+ANCHOR_KINDS = ("file", "doc", "url", "command", "symbol", "secret")
 
 _FENCE = re.compile(r"^---\s*$")
 _STR_KEYS = ("name", "slug", "kind", "description", "model", "agent", "instructions")
@@ -123,7 +123,8 @@ def _normalize_anchors(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
             else:
                 kind = "file"
         anchor: dict[str, Any] = {"label": label, "kind": kind}
-        for key in ("path", "url", "command", "symbol", "section", "description"):
+        for key in ("path", "url", "command", "symbol", "section", "description",
+                    "memory"):
             if item.get(key) not in (None, ""):
                 anchor[key] = str(item[key])
         # A command anchor may name a command defined in `commands`.
@@ -131,6 +132,9 @@ def _normalize_anchors(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
             anchor["command"] = anchor.pop("path")
         if kind in ("file", "doc", "symbol") and not anchor.get("path"):
             warnings.append(f"anchor '{label}' ({kind}) is missing 'path'")
+            continue
+        if kind == "secret" and not anchor.get("path"):
+            warnings.append(f"anchor '{label}' (secret) is missing 'path'")
             continue
         if kind == "url" and not anchor.get("url"):
             warnings.append(f"anchor '{label}' (url) is missing 'url'")

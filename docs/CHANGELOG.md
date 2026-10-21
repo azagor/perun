@@ -4,6 +4,72 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- **Perun Context — the ambient-context budget is now bounded.** `AGENTS.md` used
+  to grow without limit: every project carried its own copy of the same
+  reference material, and it was paid for in full on every request of every
+  session. Reference material now lives in a **Context layer** — keyed,
+  vector-backed documents that are retrieved on demand instead of being inlined.
+  * `perun/context.py` — the store: `index_docs()` / `index_doc()` / `delete()` /
+    `reembed_missing()`, `get()` / `list_keys()`, `search()` (exact key → anchor
+    label → key substring → semantic), `outline()` / `slice_section()`,
+    `prefetch()`, and the renderers.
+  * `perun/handbook.py` — Perun's own reference material as context docs, with
+    `ENTRIES` as the single source of truth for the key table.
+  * A new `context_docs` table — deliberately **not** `doc_chunks`, so a
+    project-scoped context doc never leaks into another project's cross-project
+    document search.
+  * `perun_context` (MCP) — retrieve the context for a key, an anchor label, or
+    a task description. The key inventory is always visible, so an agent always
+    knows what it does not currently have.
+  * `perun context list|get|search|sync|index|verify|stats` (CLI) — the same
+    surface without an agent, plus a drift check (`verify`) and a budget report
+    (`stats`: AGENTS.md sizes, token estimates, duplicated sections).
+  * **Awareness parity is a contract, not a hope.** Four mechanisms: the
+    original `AGENTS.md` is retained verbatim as a context doc
+    (`perun.agents.full`); the key inventory is always visible; relevant content
+    is **pre-fetched by task**, not requested; and `perun context verify` gates
+    every migration.
+  * **Task-driven pre-fetch on the orchestrated path.** `compose_prompt()` now
+    injects the reference material a request actually needs, in a
+    `--- PERUN CONTEXT START/END ---` envelope. The gate is deterministic and
+    Ollama-free — exact key → anchor label → key fragment → subject match — so
+    the run path never depends on an embedding service. A wrong injection costs
+    tokens *and* can mislead, so the default is to inject nothing rather than
+    something plausible.
+  * `memory:` anchors in `perun.md` bind a document to its context key, so an
+    agent can ask for it by its human label.
+- **The global kernel is now ~1.4 KB instead of ~6.1 KB.** The always-on block
+  in the global `AGENTS.md` was replaced by a generated kernel: a short
+  orientation plus the handbook key table. The **complete previous global guide
+  is kept verbatim** as `handbook.global` and stays reachable in one call —
+  nothing was deleted, only relocated.
+- **An encrypted secret store.** `perun/secret_store.py` +
+  `perun secret list|get|set|delete|password|status` + the `perun_secret` MCP
+  tool. Values are Fernet-encrypted (PBKDF2-HMAC-SHA256) at rest and the master
+  password is protected with Windows DPAPI, bound to the current user. A
+  listing never contains a value; the project file keeps only the **name**, and
+  the agent fetches the value at the moment it is used — one prompt carries the
+  credential instead of every prompt carrying it. `kind: secret` anchors and
+  `perun context verify` check that a named secret actually exists.
+- **Nothing sensitive is ever embedded.** A context doc whose body trips the
+  sensitive-data guard is still stored verbatim (dropping it would break the
+  parity contract) but is never sent to the embedding endpoint. Such a doc is
+  marked `embedded_hash == content_hash` with a NULL vector, so the repair path
+  leaves it alone.
+
+### Fixed
+
+- Docs indexed while Ollama was down stay vector-less forever. The Context
+  store now compares the stored embedding hash with the content hash, so a
+  missing or stale vector is re-embedded on the next index — and the repair
+  path (`context.reembed_missing()`, also wired into the server's background
+  repair thread) never selects a doc that is deliberately vector-less.
+- `handbook.ensure_indexed()` could recurse: rendering the MCP tool reference
+  loads the MCP server module, which calls back into it on import. A
+  re-entrancy guard now breaks the cycle.
+
 ## v0.7.20 - 2026-10-21
 
 ### Added

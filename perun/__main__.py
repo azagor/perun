@@ -10,6 +10,8 @@ Usage::
     python -m perun projects
     python -m perun add <name> <path> [--model M] [--agent A]
     python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
+    python -m perun context list|get|search|sync|verify|stats [--project SLUG]
+    python -m perun secret list|get|set|delete|password|status
     python -m perun status [--json]
     python -m perun encrypt-config [--password PWD]
     python -m perun remember <text> [--project SLUG] [--global] [--topic T]
@@ -32,9 +34,12 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
-from . import config, daemon, db, discovery, memory, project_roots, registry
+from . import (config, context, daemon, db, discovery, handbook, memory,
+               project_roots, registry, secret_store)
+from . import secrets as crypto
 
 
 # --------------------------------------------------------------------------- #
@@ -681,6 +686,370 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
+def cmd_context(args: argparse.Namespace) -> int:
+    """Perun Context — keys, retrieval, sync and drift verification."""
+    action = getattr(args, "action", "list") or "list"
+    _ensure()
+    pid = _context_project_id(getattr(args, "project", None))
+
+    if action == "list":
+        keys = context.list_keys(project_id=pid)
+        print(context.render_inventory(keys))
+        print(f"\n{len(keys)} key(s).")
+        return 0
+
+    if action == "get":
+        key = getattr(args, "key", "") or ""
+        hit = context.get(key, project_id=pid)
+        if not hit:
+            print(f"[perun] no context doc for key '{key}'")
+            return 1
+        print(context.render_hit(hit))
+        return 0
+
+    if action == "search":
+        topic = getattr(args, "topic", "") or ""
+        k = int(getattr(args, "k", 3) or 3)
+        hits = context.search(topic, project_id=pid, k=k)
+        print(context.render_hits(hits))
+        return 0
+
+    if action == "sync":
+        res = handbook.ensure_indexed()
+        print(f"[perun] handbook: {res.get('indexed', 0)} indexed, "
+              f"{res.get('unchanged', 0)} unchanged, "
+              f"{len(res.get('skipped', []))} skipped")
+        for item in res.get("skipped", []):
+            print(f"  skipped {item.get('key')}: {item.get('reason')}")
+        try:
+            from .integrations import install_global
+
+            path = install_global._sync_agents_block()
+            print(f"[perun] kernel:   refreshed {path}")
+        except Exception as exc:
+            print(f"[perun] warning: could not refresh the kernel ({exc})")
+        return 0
+
+    if action == "index":
+        source = getattr(args, "file", "") or ""
+        key = getattr(args, "key", "") or ""
+        if not source or not key:
+            print("[perun] index needs a file and a key.")
+            return 2
+        path = Path(source)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if not path.is_file():
+            print(f"[perun] no such file: {path}")
+            return 1
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"[perun] could not read {path}: {exc}")
+            return 1
+        title = getattr(args, "title", "") or path.name
+        scope = (getattr(args, "scope", "project") or "project").strip().lower()
+        if scope not in ("global", "project"):
+            scope = "project"
+        if scope == "project" and not pid:
+            print("[perun] could not resolve a project — pass --project.")
+            return 1
+        res = context.index_doc(
+            key, title, body, scope=scope, project_id=pid,
+            summary=getattr(args, "summary", "") or "",
+            source_file=str(path),
+        )
+        if not res.get("ok"):
+            print(f"[perun] could not index: {res.get('reason')}")
+            return 1
+        print(f"[perun] indexed '{context.normalize_key(key)}' "
+              f"({res.get('indexed', 0)} written, {res.get('unchanged', 0)} unchanged)")
+        return 0
+
+    if action == "verify":
+        problems = _context_verify()
+        for line in problems["report"]:
+            print(line)
+        return 1 if problems["problems"] else 0
+
+    if action == "stats":
+        _print(_context_stats())
+        return 0
+
+    print(f"[perun] unknown context action: {action}")
+    return 2
+
+
+def _context_project_id(slug: str | None) -> int:
+    """Resolve a project slug/path (or the cwd's project) to a project id."""
+    if slug:
+        p = registry.get_project(slug) or registry.get_project_by_path(slug)
+        return p["id"] if p else 0
+    try:
+        cur = Path.cwd().resolve()
+    except OSError:
+        return 0
+    by_path: dict[str, dict[str, Any]] = {}
+    for p in registry.list_projects():
+        try:
+            by_path[os.path.normcase(os.path.abspath(p["path"]))] = p
+        except Exception:
+            continue
+    for candidate in [cur, *cur.parents]:
+        hit = by_path.get(os.path.normcase(str(candidate)))
+        if hit:
+            return int(hit["id"])
+    return 0
+
+
+def _context_verify() -> dict[str, Any]:
+    """Check that the kernel, the handbook and the manifest anchors agree."""
+    report: list[str] = []
+    problems: list[str] = []
+
+    # 1. The global AGENTS.md kernel must match the generated one.
+    try:
+        from .integrations import install_global
+
+        target = install_global.agents_target()
+        current = target.read_text(encoding="utf-8") if target.is_file() else ""
+        expected = install_global._managed_block()
+        if not current:
+            problems.append("global AGENTS.md is missing")
+            report.append("kernel:      MISSING")
+        elif current.strip() != expected.strip():
+            problems.append("global AGENTS.md kernel is out of date")
+            report.append("kernel:      DRIFT  (run: perun context sync)")
+        else:
+            report.append("kernel:      ok")
+    except Exception as exc:
+        problems.append(f"kernel check failed: {exc}")
+        report.append(f"kernel:      ERROR {exc}")
+
+    # 2. Every handbook key must be indexed.
+    indexed = {k["key"] for k in context.list_keys(project_id=0, scope="global")}
+    missing = [e["key"] for e in handbook.ENTRIES if e["key"] not in indexed]
+    if missing:
+        problems.append(f"handbook keys not indexed: {', '.join(missing)}")
+        report.append(f"handbook:    MISSING {', '.join(missing)}")
+    else:
+        report.append(f"handbook:    ok ({len(indexed)} global key(s))")
+
+    # 3. Every manifest anchor that declares a `memory:` key must resolve.
+    unresolved: list[str] = []
+    missing_secrets: list[str] = []
+    anchors_seen = 0
+    for proj in registry.list_projects():
+        try:
+            from . import manifest as manifest_mod
+
+            data = manifest_mod.load(proj["path"]).get("data") or {}
+        except Exception:
+            continue
+        for anchor in data.get("anchors") or []:
+            if not isinstance(anchor, dict):
+                continue
+            mem = str(anchor.get("memory") or "").strip()
+            if mem:
+                anchors_seen += 1
+                if not context.get(mem, project_id=int(proj["id"])):
+                    unresolved.append(f"{proj['slug']}:{mem}")
+            if str(anchor.get("kind") or "").lower() == "secret":
+                secret_name = str(anchor.get("path") or "").strip()
+                if secret_name and not secret_store.get_secret(
+                        secret_name, project_id=int(proj["id"]), reveal=False):
+                    missing_secrets.append(f"{proj['slug']}:{secret_name}")
+    if unresolved:
+        problems.append(f"anchors with unresolved memory keys: {', '.join(unresolved)}")
+        report.append(f"anchors:     UNRESOLVED {', '.join(unresolved)}")
+    else:
+        report.append(f"anchors:     ok ({anchors_seen} memory-bound anchor(s))")
+    if missing_secrets:
+        problems.append(f"secret anchors with no stored secret: {', '.join(missing_secrets)}")
+        report.append(f"secrets:     MISSING {', '.join(missing_secrets)}")
+    else:
+        report.append("secrets:     ok")
+
+    return {"ok": not problems, "problems": problems, "report": report}
+
+
+def _context_stats() -> dict[str, Any]:
+    """Ambient-context budget: how big the AGENTS.md files are, and what repeats."""
+    projects: list[dict[str, Any]] = []
+    section_index: dict[str, list[str]] = {}
+
+    for proj in registry.list_projects():
+        f = Path(proj["path"]) / "AGENTS.md"
+        entry: dict[str, Any] = {
+            "slug": proj["slug"],
+            "path": str(f),
+            "exists": f.is_file(),
+            "bytes": 0,
+            "lines": 0,
+            "approx_tokens": 0,
+        }
+        if f.is_file():
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            entry["bytes"] = len(text.encode("utf-8"))
+            entry["lines"] = text.count("\n") + 1
+            entry["approx_tokens"] = len(text) // 4
+            for heading, body in _split_sections(text):
+                digest = memory.content_hash(f"{heading}\n{body}")
+                section_index.setdefault(digest, []).append(
+                    f"{proj['slug']}#{heading}")
+        projects.append(entry)
+
+    duplicated = [
+        {"copies": sorted(slugs), "sections": len(slugs)}
+        for slugs in section_index.values() if len(slugs) > 1
+    ]
+    duplicated.sort(key=lambda d: d["sections"], reverse=True)
+
+    global_block: dict[str, Any] = {}
+    try:
+        from .integrations import install_global
+
+        gpath = install_global.agents_target()
+        gtext = gpath.read_text(encoding="utf-8") if gpath.is_file() else ""
+        global_block = {
+            "path": str(gpath),
+            "bytes": len(gtext.encode("utf-8")),
+            "approx_tokens": len(gtext) // 4,
+        }
+    except Exception:
+        pass
+
+    total_bytes = sum(p["bytes"] for p in projects) + global_block.get("bytes", 0)
+    return {
+        "global_agents_md": global_block,
+        "projects": projects,
+        "worst_project": max(projects, key=lambda p: p["bytes"]) if projects else None,
+        "total_bytes": total_bytes,
+        "total_approx_tokens": total_bytes // 4,
+        "duplicated_sections": duplicated[:40],
+        "duplicated_section_count": len(duplicated),
+    }
+
+
+def _split_sections(text: str) -> list[tuple[str, str]]:
+    """Split Markdown into ``(heading, body)`` pairs at level-2 headings."""
+    sections: list[tuple[str, str]] = []
+    heading = "(top)"
+    buf: list[str] = []
+    for line in (text or "").splitlines():
+        if line.startswith("## "):
+            body = "\n".join(buf).strip()
+            if body:
+                sections.append((heading, body))
+            heading = line[3:].strip() or "(untitled)"
+            buf = []
+        else:
+            buf.append(line)
+    body = "\n".join(buf).strip()
+    if body:
+        sections.append((heading, body))
+    return sections
+
+
+def cmd_secret(args: argparse.Namespace) -> int:
+    """Perun's encrypted secret store."""
+    action = getattr(args, "action", "list") or "list"
+    _ensure()
+    pid = _context_project_id(getattr(args, "project", None))
+
+    if action == "status":
+        _print(secret_store.unlock_status())
+        return 0
+
+    if action == "password":
+        pw = getattr(args, "password", None)
+        if not pw:
+            try:
+                pw = crypto.prompt_password()
+            except Exception as exc:  # pragma: no cover - no tty
+                print(f"[perun] could not read the password ({exc})")
+                return 1
+        if crypto.persist_password(pw):
+            print("[perun] password stored (DPAPI-protected, current user only).")
+            return 0
+        print("[perun] could not store the password — DPAPI is unavailable here. "
+              "Set PERUN_PASSWORD instead.")
+        return 1
+
+    if action == "list":
+        rows = secret_store.list_secrets(project_id=pid)
+        if not rows:
+            print("[perun] no secrets stored.")
+            return 0
+        for r in rows:
+            scope_txt = r["scope"]
+            if scope_txt == "project":
+                scope_txt = f"project:{r['project_id']}"
+            print(f"{r['name']}  [{scope_txt}]  {r['hint']}".rstrip())
+        return 0
+
+    if action == "get":
+        name = getattr(args, "name", "") or ""
+        row = secret_store.get_secret(name, project_id=pid)
+        if row is None:
+            print(f"[perun] no secret named '{name}'.")
+            return 1
+        if row.get("error"):
+            print(f"[perun] {row['error']}")
+            return 1
+        print(row["value"])
+        return 0
+
+    if action == "set":
+        name = getattr(args, "name", "") or ""
+        value = getattr(args, "value", None)
+        if value is None:
+            try:
+                if not sys.stdin.isatty():
+                    value = sys.stdin.read()
+            except Exception:
+                value = None
+        if not value:
+            try:
+                import getpass
+
+                value = getpass.getpass(f"Value for '{name}': ")
+            except Exception:
+                value = None
+        if not name or not value:
+            print("[perun] set needs a name and a value.")
+            return 1
+        use_scope = (getattr(args, "scope", "auto") or "auto").strip().lower()
+        if use_scope == "auto":
+            use_scope = "project" if pid else "global"
+        if use_scope not in ("global", "project"):
+            print("[perun] scope must be one of: auto, global, project")
+            return 2
+        res = secret_store.set_secret(name, value, scope=use_scope,
+                                      project_id=pid,
+                                      hint=getattr(args, "hint", "") or "")
+        if not res.get("ok"):
+            print(f"[perun] could not store the secret: {res.get('reason')}")
+            if res.get("hint"):
+                print(f"        {res['hint']}")
+            return 1
+        print(f"[perun] stored '{res['name']}' in {res['scope']} scope.")
+        return 0
+
+    if action == "delete":
+        name = getattr(args, "name", "") or ""
+        removed = secret_store.delete_secret(name, project_id=pid)
+        print(f"[perun] deleted '{secret_store.normalize_name(name)}'."
+              if removed else f"[perun] no secret named '{name}'.")
+        return 0 if removed else 1
+
+    print(f"[perun] unknown secret action: {action}")
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="perun", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -698,6 +1067,85 @@ def build_parser() -> argparse.ArgumentParser:
     p_roots.add_argument("--list", action="store_true",
                          help="List effective project roots")
     p_roots.set_defaults(func=cmd_project_roots)
+
+    p_ctx = sub.add_parser(
+        "context",
+        help="Perun Context: reference docs, key inventory, sync and drift checks.",
+    )
+    ctx_sub = p_ctx.add_subparsers(dest="action")
+
+    pc_list = ctx_sub.add_parser("list", help="Show the context key inventory.")
+    pc_list.add_argument("--project", help="scope to a project slug or path")
+
+    pc_get = ctx_sub.add_parser("get", help="Fetch one context doc by exact key.")
+    pc_get.add_argument("key", help="context key, e.g. handbook.tools")
+    pc_get.add_argument("--project", help="scope to a project slug or path")
+
+    pc_search = ctx_sub.add_parser(
+        "search", help="Resolve a topic into context docs (key, label or task).")
+    pc_search.add_argument("topic", nargs="?", default="",
+                           help="key, anchor label, or a description of the task")
+    pc_search.add_argument("--project", help="scope to a project slug or path")
+    pc_search.add_argument("--k", type=int, default=3, help="max documents (1-8)")
+
+    pc_sync = ctx_sub.add_parser(
+        "sync", help="Re-index the handbook and refresh the global AGENTS.md kernel.")
+    pc_sync.add_argument("--project", help="scope to a project slug or path")
+
+    pc_index = ctx_sub.add_parser(
+        "index", help="Index a file as a context doc under a stable key.")
+    pc_index.add_argument("file", help="path to the file to index")
+    pc_index.add_argument("--key", required=True, help="the context key")
+    pc_index.add_argument("--title", default="", help="human-readable title")
+    pc_index.add_argument("--summary", default="", help="one-line summary")
+    pc_index.add_argument("--scope", default="project",
+                          choices=["project", "global"])
+    pc_index.add_argument("--project", help="scope to a project slug or path")
+
+    pc_verify = ctx_sub.add_parser(
+        "verify", help="Check that kernel, handbook and manifest anchors agree.")
+    pc_verify.add_argument("--project", help="scope to a project slug or path")
+
+    pc_stats = ctx_sub.add_parser(
+        "stats", help="Ambient-context budget: AGENTS.md sizes and duplication.")
+    pc_stats.add_argument("--project", help="scope to a project slug or path")
+
+    p_ctx.set_defaults(func=cmd_context)
+
+    p_sec = sub.add_parser(
+        "secret",
+        help="Perun's encrypted secret store: named values, never in a prompt.",
+    )
+    sec_sub = p_sec.add_subparsers(dest="action")
+
+    ps_list = sec_sub.add_parser("list", help="List secret names (never values).")
+    ps_list.add_argument("--project", help="scope to a project slug or path")
+
+    ps_get = sec_sub.add_parser("get", help="Print one secret's value.")
+    ps_get.add_argument("name")
+    ps_get.add_argument("--project", help="scope to a project slug or path")
+
+    ps_set = sec_sub.add_parser("set", help="Store a secret (encrypted at rest).")
+    ps_set.add_argument("name")
+    ps_set.add_argument("--value", help="the value; omit to read it from stdin")
+    ps_set.add_argument("--hint", default="", help="short non-sensitive description")
+    ps_set.add_argument("--scope", default="auto",
+                        choices=["auto", "global", "project"])
+    ps_set.add_argument("--project", help="scope to a project slug or path")
+
+    ps_del = sec_sub.add_parser("delete", help="Delete a secret.")
+    ps_del.add_argument("name")
+    ps_del.add_argument("--project", help="scope to a project slug or path")
+
+    ps_pw = sec_sub.add_parser(
+        "password", help="Store the master password (DPAPI-protected).")
+    ps_pw.add_argument("--password", help="omit to prompt without echo")
+
+    ps_status = sec_sub.add_parser(
+        "status", help="Report whether the store can be read and written.")
+    ps_status.add_argument("--project", help="scope to a project slug or path")
+
+    p_sec.set_defaults(func=cmd_secret)
 
     p = sub.add_parser("serve", help="run the HTTP + SSE service and dashboard")
     p.add_argument("--host", default=None)

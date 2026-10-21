@@ -313,6 +313,39 @@ def _project_instruction_blocks(project: dict[str, Any]) -> list[str]:
     return blocks
 
 
+def _prefetch_blocks(project: dict[str, Any], prompt: str) -> list[str]:
+    """Task-driven pre-fetch: the reference material *this request* needs.
+
+    The orchestrated path does not depend on the agent asking for context.
+    Perun resolves the request into the documents it needs and injects them
+    before the run starts, so the agent has the same awareness it would have
+    had with the material still inline. That is the parity guarantee for this
+    surface — the TUI path gets the same guarantee from the retained original
+    document plus the agent's own ``perun_context`` call.
+
+    The gate is conservative and deterministic (see
+    :func:`perun.context.prefetch`), and the injected size is capped, so this
+    adds a bounded, relevant slice rather than replacing the ambient context.
+    """
+    try:
+        from . import context as context_mod
+
+        hits = context_mod.prefetch(prompt, project_id=int(project.get("id") or 0))
+    except Exception:  # pragma: no cover - never break a run over context
+        return []
+    if not hits:
+        return []
+    rendered = [context_mod.render_hit(h) for h in hits]
+    return [
+        "--- PERUN CONTEXT START ---\n"
+        "Reference material retrieved for this request. It was selected for "
+        "this task specifically — use it instead of re-deriving what it "
+        "states.\n\n"
+        + "\n\n".join(rendered)
+        + "\n--- PERUN CONTEXT END ---"
+    ]
+
+
 def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
                    settings: config.Settings | None = None) -> str:
     """Prepend per-session instructions to a fresh session's prompt.
@@ -323,6 +356,8 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
     2. The user's **orchestrator-scoped** Markdown instruction files (control plane only).
     3. The user's **all-projects-scoped** Markdown instruction files (every project).
     4. The project's own multi-file instructions under ``.perun/instructions/*.md``.
+    5. **Task-driven context pre-fetch** — the reference material this request
+       actually needs (see :func:`_prefetch_blocks`).
 
     All are injected only when a **new** session starts; continuations inherit
     them from the session history, so they are never repeated on every turn.
@@ -339,14 +374,21 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
     blocks.extend(instruction_blocks("all_projects"))
     blocks.extend(_project_instruction_blocks(project))
     body = "\n\n".join(b for b in blocks if b)
-    if not body:
-        return prompt
     # Use plain-text markers instead of XML-like tags. Some models interpret
     # <perun_instructions> as part of the user request and ignore the actual
     # prompt that follows the closing tag. Strip any injected markers from the
     # body so a malicious instruction file cannot prematurely close the envelope.
     safe_body = body.replace("--- PERUN INSTRUCTIONS START ---", "")
     safe_body = safe_body.replace("--- PERUN INSTRUCTIONS END ---", "")
+    safe_body = safe_body.replace("--- PERUN CONTEXT START ---", "")
+    safe_body = safe_body.replace("--- PERUN CONTEXT END ---", "")
+    # The pre-fetch envelope is Perun's own, so its markers are added after
+    # the strip above — otherwise the strip would erase them too.
+    prefetch = "\n\n".join(b for b in _prefetch_blocks(project, prompt) if b)
+    if prefetch:
+        safe_body = f"{safe_body}\n\n{prefetch}" if safe_body else prefetch
+    if not safe_body:
+        return prompt
     return (
         "--- PERUN INSTRUCTIONS START ---\n"
         "The following are project-level instructions. Follow them for every task "

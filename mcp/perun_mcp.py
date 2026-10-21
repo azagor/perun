@@ -15,6 +15,8 @@ Tools
 ``perun_discover``       Rescan the configured roots for projects.
 ``perun_memory_search``  Search facts + indexed docs (this or all projects).
 ``perun_memory_store``   Store a durable fact (global or project scope).
+``perun_context``        Retrieve context docs — keys, or the context for a task.
+``perun_secret``         Read/write a named secret from the encrypted store.
 ``perun_docs_index``     (Re)index a project's docs into the vector store.
 ``perun_get_instructions`` Read a project's custom instructions (effective or a specific file).
 ``perun_set_instructions`` Set a project's custom instructions in ``.perun/instructions/*.md``.
@@ -47,7 +49,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastmcp import FastMCP  # noqa: E402
 
-from perun import config, control, db, discovery, grep, memory, orchestrator, projects, registry  # noqa: E402
+from perun import config, context, control, db, discovery, grep, handbook, memory, orchestrator, projects, registry, secret_store  # noqa: E402
 
 mcp = FastMCP("Perun")
 
@@ -58,6 +60,15 @@ db.init_db()
 # idempotent and best-effort.
 try:
     control.ensure()
+except Exception:  # pragma: no cover - never block the MCP server from starting
+    pass
+
+# Make sure the Perun Context store holds the handbook, so `perun_context`
+# works on a machine that never re-ran the installer. Indexing is
+# content-hash based: after the first run this costs a few small SELECTs and
+# no embedding calls.
+try:
+    handbook.ensure_indexed()
 except Exception:  # pragma: no cover - never block the MCP server from starting
     pass
 
@@ -438,6 +449,116 @@ def perun_memory_store(content: str, project: str | None = None,
     if res.get("duplicate"):
         return "[perun] Already remembered (duplicate)."
     return f"[perun] Stored ({scope} scope, id={res['id']})."
+
+
+@mcp.tool
+def perun_context(topic: str = "", project: str | None = None,
+                  k: int = 3, mode: str = "auto") -> str:
+    """Retrieve Perun context: reference docs, the key inventory, or the
+    context for the task at hand.
+
+    **Call this first when you start work in a Perun-managed project.** Pass a
+    short description of *what you are about to do* and Perun resolves it into
+    the reference material that task needs — build commands, server access,
+    key files, project conventions, the MCP tool surface. You do not have to
+    know which document holds the answer, and you should not guess.
+
+    Args:
+        topic: A context key ("handbook.build"), an anchor label, or — most
+            usefully — a description of what you are about to do.
+        project: Project slug/path to scope to. Omit for the current project.
+        k: Maximum number of documents to return (1-8).
+        mode: "auto" (exact key -> anchor label -> key substring -> semantic),
+            "exact" (exact key or anchor label only), or "list" (the inventory
+            of available keys).
+    """
+    k, error = _safe_int(k, "k", min_val=1, max_val=8)
+    if error:
+        return error
+    mode = (mode or "auto").strip().lower()
+    if mode not in ("auto", "exact", "list"):
+        return "[perun] mode must be one of: auto, exact, list"
+    p = _resolve_project(project)
+    try:
+        hits = context.search(topic, project_id=p["id"] if p else 0, k=k, mode=mode)
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"[perun] context lookup failed: {exc}"
+    if mode == "list":
+        return context.render_inventory(hits)
+    return context.render_hits(hits)
+
+
+@mcp.tool
+def perun_secret(name: str = "", action: str = "get", value: str = "",
+                 hint: str = "", scope: str = "auto",
+                 project: str | None = None) -> str:
+    """Read or write a named secret from Perun's encrypted secret store.
+
+    Secrets live *outside* every prompt. A project file tells you the **name**
+    of a secret; you fetch the value here, only when a task actually needs it.
+    The value is encrypted at rest (Fernet), and the master password is
+    protected with Windows DPAPI, bound to the current user.
+
+    Use ``action="list"`` to see the available secret names and their hints —
+    the listing never contains values.
+
+    Args:
+        name: The secret name, e.g. "deploy-token" or "ssh/prod-key".
+        action: "get" (default), "set", "list" or "delete".
+        value: The new value — for action="set" only.
+        hint: A short, non-sensitive description of the secret.
+        scope: "auto" (project scope when a project is resolved, else global),
+            "global" or "project".
+        project: Project slug/path to scope to. Omit for the current project.
+    """
+    action = (action or "get").strip().lower()
+    if action not in ("get", "set", "list", "delete"):
+        return "[perun] action must be one of: get, set, list, delete"
+    p = _resolve_project(project)
+    pid = int(p["id"]) if p else 0
+
+    if action == "list":
+        rows = secret_store.list_secrets(project_id=pid)
+        if not rows:
+            return "[perun] no secrets stored."
+        out = ["[perun] secrets (names only):"]
+        for r in rows:
+            scope_txt = f"{r['scope']}" + (f":{r['project_id']}" if r["scope"] == "project" else "")
+            hint_txt = f" — {r['hint']}" if r["hint"] else ""
+            out.append(f"  - {r['name']} [{scope_txt}]{hint_txt}")
+        return "\n".join(out)
+
+    if action == "set":
+        if not name or not value:
+            return "[perun] set needs both a name and a value"
+        use_scope = (scope or "auto").strip().lower()
+        if use_scope == "auto":
+            use_scope = "project" if pid else "global"
+        if use_scope not in ("global", "project"):
+            return "[perun] scope must be one of: auto, global, project"
+        res = secret_store.set_secret(name, value, scope=use_scope,
+                                      project_id=pid, hint=hint)
+        if not res.get("ok"):
+            return f"[perun] could not store the secret: {res.get('reason')}" \
+                   + (f" ({res['hint']})" if res.get("hint") else "")
+        return f"[perun] stored '{res['name']}' in {res['scope']} scope."
+
+    if action == "delete":
+        removed = secret_store.delete_secret(name, project_id=pid)
+        return (f"[perun] deleted '{secret_store.normalize_name(name)}'."
+                if removed else f"[perun] no secret named '{name}'.")
+
+    # action == "get"
+    if not name:
+        return "[perun] get needs a name (or use action=\"list\")"
+    row = secret_store.get_secret(name, project_id=pid)
+    if row is None:
+        return f"[perun] no secret named '{name}'."
+    if row.get("error"):
+        return f"[perun] {row['error']}"
+    return (f"[perun] secret '{row['name']}' ({row['scope']} scope)\n"
+            f"{(row['hint'] + chr(10)) if row['hint'] else ''}"
+            f"{row['value']}")
 
 
 @mcp.tool
