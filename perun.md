@@ -55,6 +55,26 @@ anchors:
   kind: doc
   path: perun/integrations/templates/handbook/global.md
   memory: handbook.global
+- label: Project overview (retrievable)
+  kind: doc
+  path: .perun/context/overview.md
+  memory: perun.context.overview
+- label: Extending the project (retrievable)
+  kind: doc
+  path: .perun/context/contributing.md
+  memory: perun.context.contributing
+- label: Build, test and run commands (retrievable)
+  kind: doc
+  path: .perun/context/commands.md
+  memory: perun.context.commands
+- label: Git push credentials (retrievable)
+  kind: doc
+  path: .perun/context/credentials.md
+  memory: perun.context.credentials
+- label: Release procedure (retrievable)
+  kind: doc
+  path: .perun/context/releasing.md
+  memory: perun.context.releasing
 - label: perun.server
   kind: file
   path: perun/server.py

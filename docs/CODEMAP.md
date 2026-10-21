@@ -204,6 +204,28 @@ the agent's awareness of a project must never fall below its current level.
   `_stem()`). Capped at `PREFETCH_MAX_DOCS` / `PREFETCH_MAX_CHARS`.
 * Rendering: `render_hit()`, `render_hits()`, `render_inventory()`.
 
+### `perun/context_map.py`
+The **losslessness contract** for an `AGENTS.md` migration — the proof that
+moving reference material into the Context layer did not lose anything.
+* Sections: `split_sections()` (level-2 headings; the text before the first
+  heading is the `"(top)"` section), `contains()` (whitespace-insensitive
+  substring), `_verbatim()` (a body is present *unchanged* — as a substring or
+  as a section with the same content hash).
+* The map file: `MAP_DIR`/`.perun/context-map.json`, `map_path()`,
+  `load_map()`, `save_map()`, `build_map()` (a draft — every section starts
+  unclassified).
+* Destinations: `inline` (stays in `AGENTS.md`; the `required` fragments must
+  still be there), `context` (relocated to a Context-layer doc, by key),
+  `secret` (moved to the encrypted store), `retained` (lives only in the
+  retained original). `DEST_KINDS`.
+* `check()` — the gate: the retained original still hashes to the map's
+  `source_hash` (nothing was deleted), every section of that original is
+  accounted for (nothing is unaccounted for), and every destination still
+  holds its content (nothing was paraphrased away).
+* Per-project context docs: `context_dir()` (`.perun/context/`),
+  `context_key()`, `retained_key()`, `project_context_files()`,
+  `project_context_key()`, `write_context_doc()`.
+
 ### `perun/handbook.py`
 Perun's own reference material, as retrievable context docs.
 * `ENTRIES` — the manifest of handbook keys (single source of truth for the
@@ -494,13 +516,18 @@ delegate to `installer.machine_install()`; `backfill-docs [slug] [--all]`
 creates missing scaffold docs/manifest; `validate-docs [slug] [--all]` checks
 for stale docs/anchors; `refresh-deps [slug] [--all]` parses dependencies into
 memory facts),
-`cmd_context` (**`perun context list|get|search|sync|index|verify|stats`** —
+`cmd_context` (**`perun context list|get|search|sync|map|index|verify|stats`** —
 the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|status`**),
 `cmd_mcp`, `build_parser()`, `main()`.
 * `_context_project_id()` (slug/path → project id; the cwd's project by
-  default), `_context_verify()` (kernel drift, handbook coverage, `memory:`-
-  bound anchors, `kind: secret` anchors), `_context_stats()` (AGENTS.md sizes,
-  token estimates and duplicated sections), `_split_sections()`.
+  default), `_context_targets()`, `_context_sync_projects()` (indexes each
+  project's `AGENTS.md` as `<slug>.agents.full` and its `.perun/context/*.md`
+  as `<slug>.context.<name>` — the retained original is a **snapshot** and is
+  never overwritten once a context map pins it), `_context_map()` (show or draft
+  the losslessness map), `_context_verify()` (kernel drift, handbook coverage,
+  `memory:`-bound anchors, `kind: secret` anchors, and the **losslessness
+  check**), `_context_stats()` (AGENTS.md sizes, token estimates and duplicated
+  sections), `_split_sections()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
   / `_IN_PROCESS_BRIDGE` — the `serve --bridge` path starts the bridge at most once
   per *machine* and keeps the single-instance mutex alive for the whole process.

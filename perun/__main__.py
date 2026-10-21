@@ -10,7 +10,7 @@ Usage::
     python -m perun projects
     python -m perun add <name> <path> [--model M] [--agent A]
     python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
-    python -m perun context list|get|search|sync|verify|stats [--project SLUG]
+    python -m perun context list|get|search|sync|map|index|verify|stats [--project SLUG]
     python -m perun secret list|get|set|delete|password|status
     python -m perun status [--json]
     python -m perun encrypt-config [--password PWD]
@@ -728,7 +728,13 @@ def cmd_context(args: argparse.Namespace) -> int:
             print(f"[perun] kernel:   refreshed {path}")
         except Exception as exc:
             print(f"[perun] warning: could not refresh the kernel ({exc})")
+        for line in _context_sync_projects(getattr(args, "project", None)):
+            print(line)
         return 0
+
+    if action == "map":
+        return _context_map(getattr(args, "project", None),
+                            write=bool(getattr(args, "write", False)))
 
     if action == "index":
         source = getattr(args, "file", "") or ""
@@ -778,6 +784,126 @@ def cmd_context(args: argparse.Namespace) -> int:
 
     print(f"[perun] unknown context action: {action}")
     return 2
+
+
+def _context_targets(slug: str | None) -> list[dict[str, Any]]:
+    """The projects a context operation applies to."""
+    if slug:
+        p = registry.get_project(slug) or registry.get_project_by_path(slug)
+        return [p] if p else []
+    return registry.list_projects()
+
+
+def _context_sync_projects(slug: str | None) -> list[str]:
+    """Index every project's per-project context docs and its original.
+
+    The retained original is a **snapshot**, not a live mirror: once a
+    project's context map pins it, it is never overwritten. The pre-migration
+    file is the thing the parity contract promises to keep, so re-syncing
+    after a migration must not be able to destroy it.
+    """
+    from . import context_map
+
+    lines: list[str] = []
+    for proj in _context_targets(slug):
+        pid = int(proj.get("id") or 0)
+        root = Path(proj.get("path") or "")
+        name = str(proj.get("name") or proj.get("slug") or "project")
+        pslug = str(proj.get("slug") or "")
+
+        for f in context_map.project_context_files(root):
+            key = context_map.project_context_key(pslug, f)
+            try:
+                body = f.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                lines.append(f"[perun] {pslug}: could not read {f} ({exc})")
+                continue
+            res = context.index_doc(
+                key, f.stem.replace("-", " ").replace("_", " ").title(), body,
+                scope=context.PROJECT_SCOPE, project_id=pid,
+                summary=f"{name}: {f.stem.replace('-', ' ')}",
+                source_file=str(f),
+            )
+            if not res.get("ok"):
+                lines.append(f"[perun] {pslug}: could not index '{key}' "
+                             f"({res.get('reason')})")
+            else:
+                lines.append(f"[perun] {pslug}: '{key}' "
+                             f"({res.get('indexed', 0)} written, "
+                             f"{res.get('unchanged', 0)} unchanged)")
+
+        agents = root / "AGENTS.md"
+        if not agents.is_file():
+            continue
+        key = context_map.retained_key(pslug)
+        pinned = context_map.load_map(root)
+        if pinned and str(pinned.get("retained") or "") == key:
+            lines.append(f"[perun] {pslug}: retained original '{key}' is pinned "
+                         f"by the context map — not overwritten")
+            continue
+        try:
+            body = agents.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            lines.append(f"[perun] {pslug}: could not read {agents} ({exc})")
+            continue
+        res = context.index_doc(
+            key, f"{name} agent reference (verbatim)", body,
+            scope=context.PROJECT_SCOPE, project_id=pid,
+            summary=f"the complete {name} AGENTS.md, retained verbatim",
+            source_file=str(agents),
+        )
+        if not res.get("ok"):
+            lines.append(f"[perun] {pslug}: could not retain {agents} "
+                         f"({res.get('reason')})")
+        else:
+            lines.append(f"[perun] {pslug}: retained '{key}' "
+                         f"({res.get('indexed', 0)} written, "
+                         f"{res.get('unchanged', 0)} unchanged)")
+    return lines
+
+
+def _context_map(slug: str | None, *, write: bool = False) -> int:
+    """Show (or draft) the losslessness map for a project's AGENTS.md."""
+    from . import context_map
+
+    projects = _context_targets(slug)
+    if not projects:
+        print("[perun] no project to map.")
+        return 1
+    rc = 0
+    for proj in projects:
+        root = Path(proj.get("path") or "")
+        pslug = str(proj.get("slug") or "")
+        agents = root / "AGENTS.md"
+        if not agents.is_file():
+            print(f"[perun] {pslug}: no AGENTS.md")
+            continue
+        body = agents.read_text(encoding="utf-8", errors="replace")
+        existing = context_map.load_map(root)
+        if existing:
+            print(f"[perun] {pslug}: a context map already exists "
+                  f"({context_map.map_path(root)})")
+            for s in existing.get("sections") or []:
+                dests = ", ".join(
+                    f"{d.get('kind')}"
+                    + (f":{d.get('key')}" if d.get("key") else "")
+                    for d in (s.get("dest") or []) if isinstance(d, dict))
+                print(f"    {str(s.get('bytes')):>6} B  {s.get('heading')}  "
+                      f"-> {dests or '(unclassified)'}")
+            continue
+        sections = context_map.split_sections(body)
+        print(f"[perun] {pslug}: {len(sections)} section(s), "
+              f"{len(body.encode('utf-8'))} B")
+        for s in sections:
+            print(f"    {s['bytes']:>6} B  {s['hash'][:12]}  {s['heading']}")
+        if write:
+            draft = context_map.build_map(pslug, body)
+            path = context_map.save_map(root, draft)
+            print(f"[perun] {pslug}: draft map written to {path}")
+        else:
+            print(f"[perun] {pslug}: pass --write to draft "
+                  f"{context_map.map_path(root)}")
+    return rc
 
 
 def _context_project_id(slug: str | None) -> int:
@@ -869,6 +995,30 @@ def _context_verify() -> dict[str, Any]:
         report.append(f"secrets:     MISSING {', '.join(missing_secrets)}")
     else:
         report.append("secrets:     ok")
+
+    # 4. Every migrated project's AGENTS.md must be provably lossless.
+    lossy: list[str] = []
+    checked = 0
+    for proj in registry.list_projects():
+        try:
+            from . import context_map
+
+            res = context_map.check(proj)
+        except Exception as exc:  # pragma: no cover - defensive
+            lossy.append(f"{proj.get('slug')}: check failed ({exc})")
+            continue
+        if res.get("skipped"):
+            continue
+        checked += 1
+        report.extend(res.get("report") or [])
+        lossy.extend(res.get("problems") or [])
+    if lossy:
+        problems.append(f"losslessness check failed: {len(lossy)} problem(s)")
+        report.append(f"lossless:    FAILED ({len(lossy)} problem(s))")
+        for line in lossy[:20]:
+            report.append(f"  - {line}")
+    else:
+        report.append(f"lossless:    ok ({checked} migrated project(s))")
 
     return {"ok": not problems, "problems": problems, "report": report}
 
@@ -1091,6 +1241,12 @@ def build_parser() -> argparse.ArgumentParser:
     pc_sync = ctx_sub.add_parser(
         "sync", help="Re-index the handbook and refresh the global AGENTS.md kernel.")
     pc_sync.add_argument("--project", help="scope to a project slug or path")
+
+    pc_map = ctx_sub.add_parser(
+        "map", help="Show (or draft) the losslessness map for a project's AGENTS.md.")
+    pc_map.add_argument("--project", help="scope to a project slug or path")
+    pc_map.add_argument("--write", action="store_true",
+                         help="write a draft .perun/context-map.json")
 
     pc_index = ctx_sub.add_parser(
         "index", help="Index a file as a context doc under a stable key.")

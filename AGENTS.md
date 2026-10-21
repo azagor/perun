@@ -4,42 +4,38 @@
 > OpenCode projects. It is itself an OpenCode project, so agents working *in*
 > this repo should follow the conventions below.
 
-## What Perun is
+A single machine-wide Python service (FastAPI + SQLite + a static SPA) that
+registers every OpenCode project it can find, stores unified
+project-namespaced memory, orchestrates `opencode run` sessions, serves a web
+dashboard and a REST/SSE API, and runs one shared Telegram bridge. The
+module-by-module breakdown is retrievable as `perun.context.overview`.
 
-A single machine-wide Python service (FastAPI + SQLite + a static SPA) that:
+## Read first
 
-1. **Registers** every OpenCode project it can find (`discovery.py`), including
-   itself (`register_self()`).
-2. Stores **unified, project-namespaced memory** — facts + indexed docs with
-   Ollama embeddings (`memory.py`, `embeddings.py`).
-3. **Orchestrates** `opencode run` sessions in any project (`orchestrator.py`),
-   injecting per-project **custom instructions** on new sessions.
-4. Serves a **web dashboard** and a **REST/SSE API** (`server.py`, `web/`) with a
-   **project creation wizard**, a **folder browser**, and **per-project Git**.
-5. Runs **one shared Telegram bridge** with per-chat project routing
-   (`telegram.py`).
-6. Reads a self-describing **project manifest** — `perun.md` (YAML front matter +
-   Markdown body) with a `perun.json` fallback (`manifest.py`).
-7. Ships a global **MCP server** (`mcp/perun_mcp.py`) so every project inherits
-   Perun's tools.
-8. Provides an **always-available orchestrator** — the "control plane"
-   (`control.py`), reachable with **zero** projects registered, with a dashboard
-   chat (`#/orchestrator`) and its own Settings.
-9. Has native **PerunChat** support — connects Perun agents to the federated
-   agent-to-agent chat network at `peruninthemachine.com` via the sibling
-   `perun_chat` project. The local dashboard (`#/perunchat`) provides a UI for
-   credentials, social graph management (friends, blocks, friend requests, online
-   status), and a lightweight chat panel; REST calls are proxied through
-   `/api/perunchat/*` and the WebSocket connects directly to the gateway. Chat
-   messages are untrusted data; any proposed action requires a cryptographically
-   signed human approval token. With `perunchat_auto_reply` enabled, the local
-   Orchestrator joins configured rooms (`perunchat_auto_join`) and replies
-   autonomously to incoming messages through a dedicated `perunchat` OpenCode
-   agent. The bridge injects the participant roster and recent room history into
-   the prompt so replies answer questions directly, retries empty replies, waits
-   for still-running runs, and stores every outbound frame in a durable
-   write-ahead outbox that is flushed idempotently after reconnects so no reply
-   is lost.
+| What | Where |
+|---|---|
+| Navigation source of truth | `docs/CODEMAP.md` |
+| Architecture, API and data model | `docs/TECHNICAL_DOCUMENTATION.md` |
+| Project identity, anchors, commands | `perun.md` |
+| Release history | `docs/CHANGELOG.md` |
+
+## Context (retrievable, not ambient)
+
+Reference material was moved out of this file into the Context layer, so a
+session only pays for what it actually uses. Ask for it by key:
+
+| Key | Covers |
+|---|---|
+| `perun.agents.full` | this file in full, as it was before the distillation |
+| `perun.context.overview` | what the project is, module by module |
+| `perun.context.contributing` | adding a source file, a REST endpoint, an MCP tool |
+| `perun.context.commands` | syntax check, test suite, dev server, UI dump, install |
+| `perun.context.credentials` | Git push credentials and the `workflow` scope trap |
+| `perun.context.releasing` | the release procedure: version bump, tag, signed installer |
+
+In an OpenCode TUI session, call `perun_context("<what you are about to do>")`
+before you start. An orchestrated Perun run pre-fetches the matching context
+automatically.
 
 ## Cross-project references
 
@@ -104,108 +100,6 @@ python tools/normalize_line_endings.py
 
 It rewrites tracked text files to LF while leaving Windows scripts (`.cmd`,
 `.ps1`, `.bat`, `.iss`) as CRLF.
-
-## Adding a new source file
-
-Any new module under `perun/` is picked up automatically (the package is
-imported, not copied), but two things must stay in sync:
-
-1. `docs/CODEMAP.md` — add the file + its key identifiers.
-2. `pyproject.toml` `[tool.setuptools] packages` if you add a new subpackage.
-
-New web assets just live under `web/` and are served statically.
-
-## Adding a new REST endpoint
-
-1. Implement it in `perun/server.py` as a `def` (sync) or `async def` (SSE)
-   function with a `@app.get`/`@app.post`/… decorator.
-2. Return `_ok(...)`-shaped JSON (`{"ok": true, ...}`); raise `HTTPException`
-   for errors.
-3. Add a row to the endpoint table in `docs/TECHNICAL_DOCUMENTATION.md`.
-
-## Adding a new MCP tool
-
-1. Add a `@mcp.tool`-decorated function in `mcp/perun_mcp.py`.
-2. Resolve the project with `_resolve_project(project)` (cwd-aware).
-3. Document it in the tools table in `mcp/perun_mcp.py`'s docstring *and* in
-   `perun/integrations/templates/INSTRUCTIONS.md`.
-
-## Commands
-
-```bash
-# syntax check
-python -c "import py_compile,glob; [py_compile.compile(f,doraise=True) for f in glob.glob('perun/**/*.py',recursive=True)+glob.glob('mcp/*.py')]"
-
-# run the test suite
-python -m pytest tests/ -q
-
-# boot the dashboard (temp state dir)
-$env:PERUN_HOME="$env:TEMP\perun_dev"; python -m perun serve
-
-# verify the rendered UI (models can't read screenshots — dump the DOM instead)
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" --headless=new `
-  --virtual-time-budget=8000 --dump-dom "http://127.0.0.1:8760/#/telegram"
-
-# one-click launcher (Windows; idempotent, opens the browser)
-.\Perun.cmd
-
-# install / repair the whole machine (prereqs + deps + global install; add --task for PerunBridge)
-.\bootstrap.ps1
-#   ... or directly, from a Python that can import `perun`:
-python -m perun install --machine
-
-# regenerate the app icon (web/assets/perun.ico + .png)
-python tools/make_icon.py
-
-# discover + index everything
-python -m perun discover --index
-
-# report manifest docs/anchors pointing at missing files (and /update-docs
-# refreshes the three default docs — see the global slash commands)
-python -m perun validate-docs --all
-```
-
-## Git push credentials
-
-Pushing changes that include or modify `.github/workflows/*.yml` requires a
-GitHub personal access token with the **`workflow`** scope in addition to
-`repo`. On this machine the token is stored in **Git Credential Manager**
-(`git credential-manager`), so ordinary `git push origin <branch>` and
-`git push origin <tag>` work without re-entering credentials.
-
-If a push is rejected with:
-
-```text
-refusing to allow an OAuth App to create or update workflow `.github/workflows/...` without `workflow` scope
-```
-
-regenerate a classic token with **repo + workflow** scopes and re-store it:
-
-```powershell
-$token = '<TOKEN>'
-$cred = "protocol=https`nhost=github.com`nusername=azagor`npassword=$token`n"
-$cred | git credential-manager store
-```
-
-## Releasing
-
-1. Make sure `perun/__init__.py`, `pyproject.toml`, and
-   `installer/PerunSetup.iss` all agree on the new version.
-2. Move `## Unreleased` entries in `docs/CHANGELOG.md` into a new dated
-   `## vX.Y.Z` section and update the **Latest release** line in
-   `docs/TECHNICAL_DOCUMENTATION.md`.
-3. Commit, tag, and push:
-
-   ```bash
-   git add -A
-   git commit -m "Release vX.Y.Z: ..."
-   git tag vX.Y.Z
-   git push origin master vX.Y.Z
-   ```
-
-4. GitHub Actions builds `installer/Output/PerunSetup.exe`, signs it (trusted
-   cert if `PERUN_SIGN_PFX_BASE64`/`PERUN_SIGN_PASSWORD` secrets are set,
-   otherwise self-signed), and attaches it to the release page.
 
 ## Versioning
 

@@ -1,15 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.20 (see §15). This release adds full provider
-management to the dashboard: API-key and local providers can be added,
-connected, and disconnected directly from the UI, with credentials written to
-the user's `opencode.json[c]` and OpenCode asked to reload its config. Presets
-include OpenCode Console, OpenCode Go, Ollama, Ollama Cloud, OpenAI,
-Anthropic, DeepSeek, and local endpoints; non-built-in presets are configured
-with the OpenAI-compatible runtime package and a known base URL. OAuth
-providers still open a terminal for `opencode auth login`. The provider and
-embeddings stat cards on the Dashboard now refresh automatically every 10
-seconds. `perun.__version__` reports `0.7.20`.
+**Latest release:** v0.7.21 (see §15). This release introduces the Perun Context layer: a bounded, keyed, retrievable replacement for the ever-growing `AGENTS.md` ambient context. Reference material is moved into project-scoped context docs (`perun.context.*`, `trading-bot.context.*`, etc.), the complete original `AGENTS.md` is retained verbatim as `<slug>.agents.full`, and a machine-checkable losslessness proof (the context map in `.perun/context-map.json`) is enforced by `perun context verify`. All five managed projects have been migrated. The release also ships the encrypted secret store (`perun_secret`) and the generated global `AGENTS.md` kernel (~1.4 KB). `perun.__version__` reports `0.7.21`.
 
 **In development — Perun Context (see §3).** `AGENTS.md` is ambient context: it
 is paid for in full on every request of every session, and it grows without
@@ -201,7 +192,7 @@ discovery path is a silent capability loss, so four mechanisms guarantee parity:
 | **P1** | Nothing is deleted — the complete original `AGENTS.md` is retained verbatim as a context doc and stays reachable in one call | `perun.agents.full` |
 | **P2** | The key inventory is always visible, so the agent always knows what it does *not* currently have | `context.list_keys()` / `render_inventory()` |
 | **P3** | Relevant material is **pre-fetched by task**, not requested — the agent does not have to know a doc exists | `orchestrator._prefetch_blocks()` |
-| **P4** | Every migration is gated by a parity harness | `perun context verify` |
+| **P4** | Every migration is gated by a parity harness — the **context map** records where each section went, and `perun context verify` proves it | `perun/context_map.py`, `perun context verify` |
 
 **Storage.** The `context_docs` table — deliberately **not** `doc_chunks`, so a
 project-scoped context doc never leaks into another project's cross-project
@@ -251,11 +242,82 @@ perun context list                 # the key inventory (P2)
 perun context get <key>            # one doc, verbatim
 perun context search "<topic>"     # resolve a topic into docs (--k 1-8)
 perun context sync                 # re-index the handbook + refresh the global kernel
+                                  #   + index each project's AGENTS.md and context docs
+perun context map [--project SLUG] # the section inventory of a project's AGENTS.md
+perun context map --write          # ... and draft .perun/context-map.json
 perun context index <file> --key <key> [--title T] [--summary S] [--scope project|global]
 perun context verify               # parity check (P4): kernel drift, handbook
-                                   # coverage, memory:-bound anchors, secret anchors
+                                   # coverage, memory:-bound anchors, secret anchors,
+                                   # losslessness of every migrated project
 perun context stats                # AGENTS.md sizes, token estimates, duplicates
 ```
+
+**Examples of migrated projects.** The context-map mechanism is in production
+use inside Perun's own repo (`perun.context.*`, `perun.agents.full`) and in
+`trading_bot` (`trading-bot.context.build`, `trading-bot.context.commands`,
+`trading-bot.context.debugging`, `trading-bot.context.version_history`,
+`trading-bot.context.inlined_modules`).
+
+#### The context map — the losslessness contract (`perun/context_map.py`)
+
+Moving material is only safe if you can prove that **nothing was lost**. "I read
+the file and moved the obvious bits" is not a proof: a section can be dropped by
+accident, a rule can be paraphrased into meaninglessness, and a credential can
+be moved into a document that will be embedded and leave the machine.
+
+The **context map** is the proof. It is a small JSON file in the project
+(`.perun/context-map.json`) that records, **for every section of the original
+`AGENTS.md`, where that content went**:
+
+```json
+{
+  "version": 1,
+  "project": "perun",
+  "source": "AGENTS.md",
+  "source_hash": "…",
+  "retained": "perun.agents.full",
+  "sections": [
+    {"heading": "Core rules for working here", "hash": "…", "bytes": 1945,
+     "dest": [{"kind": "inline",
+               "required": ["CODEMAP-first.", "Never block the event loop."]}]},
+    {"heading": "Commands", "hash": "…", "bytes": 1181,
+     "dest": [{"kind": "context", "key": "perun.context.commands"}]}
+  ]
+}
+```
+
+| Destination | Meaning | The check |
+|---|---|---|
+| `inline` | It stays in the project's `AGENTS.md` — the behavioural rules that must never move | every `required` fragment is still there |
+| `context` | It was relocated **verbatim** to a Context-layer doc | the doc exists and still contains the original section |
+| `secret` | It moved to the encrypted secret store | the secret exists (its value is never checked) |
+| `retained` | It lives only in the retained original | the section is still in the retained original |
+
+`context_map.check()` proves three things, and each one has a test that it
+**fails** when broken:
+
+1. **Nothing was deleted** — the retained original is still in the store and
+   still hashes to the map's `source_hash`.
+2. **Nothing is unaccounted for** — every section of that original appears in
+   the map.
+3. **Every destination holds its content** — each `required` fragment is found
+   where it was put, and a relocated section is present *verbatim* (a paraphrase
+   is a silent loss).
+
+The map is a plain file in the project, so it is reviewable in a pull request
+and a change to it is a visible, deliberate act — which is exactly what a
+losslessness proof has to be.
+
+**The retained original is a snapshot, not a live mirror.** Once a map pins
+`<slug>.agents.full`, `perun context sync` will not overwrite it: the
+pre-migration file is the thing P1 promises to keep, and re-syncing after a
+migration must not be able to destroy it.
+
+**Per-project context docs** live as Markdown files under
+`<project>/.perun/context/<name>.md` and are indexed as
+`<slug>.context.<name>` — the same dot-directory convention as
+`.perun/instructions/`. The file is the source of truth; the store is the
+retrieval index.
 
 ### The secret store (`perun/secret_store.py`)
 

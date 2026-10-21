@@ -1,8 +1,11 @@
 # Perun — AGENTS.md context-budget optimisation
 
-> **Status:** phases 0–3, 6 and 7 **implemented** (2026-10-21). Phase 4
-> (project `AGENTS.md` migration) and phase 5 (the parity harness) are
-> outstanding — see §4.1 for what is live and what is not.
+> **Status:** phases 0–3, 6, 7 and 4 **implemented** (2026-10-21). All five
+> managed projects migrated. Phase 5 — the eval-set half of the parity harness
+> — remains outstanding.
+> **Problem owner:** every Perun-managed project.
+> **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
+> [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
 > **Problem owner:** every Perun-managed project.
 > **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
 > [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
@@ -440,8 +443,8 @@ never disagree with the MCP schema.
 | **1 — Primitive** | `perun/context.py`, `perun_context` MCP tool, `perun context` CLI, tests | none (additive) | Nothing changes yet | **done** |
 | **2 — Global kernel** | Handbook docs; `INSTRUCTIONS.md` → kernel; `install_global` syncs kernel + indexes handbook; **the previous global guide is retained verbatim as `handbook.global`** | low | **−1.2k tokens in every project, immediately** | **done — live** |
 | **3 — Anchor binding** | `memory:` key on anchors; manifest + `perun context verify` support | low | Anchors become retrievable | **done** |
-| **4 — Project migration** | classify sections → inline vs context doc; **retain the original verbatim as `<slug>.agents.full`** | medium | trading_bot −13k, parental_control −4k | **outstanding** |
-| **5 — Parity harness** | Eval set per project: same questions answered with and without the distillation; gate migrations on parity | medium | Proves P4 | **outstanding** (partial: `perun context verify` is the drift/anchors half) |
+| **4 — Project migration** | classify sections → inline vs context doc; **retain the original verbatim as `<slug>.agents.full`**; the **context map** records where each section went | medium | trading_bot −13k, parental_control −4k | **in progress — `perun` migrated (−47 %)** |
+| **5 — Parity harness** | Eval set per project: same questions answered with and without the distillation; gate migrations on parity | medium | Proves P4 | **partial** — the losslessness half is live (`perun context map` + `perun context verify`); the eval-set half is outstanding |
 | **6 — Orchestrator pre-fetch** | `compose_prompt` injects the top context docs | low | Removes the round trip on the orchestrated path | **done** |
 | **7 — Secrets** | `perun/secret_store.py`; `perun_secret` tool; `kind: secret` anchors | medium | Removes credentials from every prompt | **done** (mechanism; no real credentials to migrate) |
 
@@ -461,23 +464,30 @@ never disagree with the MCP schema.
   `--- PERUN CONTEXT START/END ---`.
 * `memory:` anchors and `kind: secret` anchors in `perun.md`.
 * `perun context verify` — the drift check: kernel vs handbook vs manifest
-  anchors vs stored secrets.
+  anchors vs stored secrets, **plus the losslessness check** for every
+  migrated project.
+* `perun/context_map.py` — the **context map**: `.perun/context-map.json`
+  records, for every section of the original `AGENTS.md`, where that content
+  went (`inline` / `context:<key>` / `secret:<name>` / `retained`). `perun
+  context map --write` drafts it; `perun context verify` proves it.
+* `perun context sync` now indexes each project's `AGENTS.md` as
+  `<slug>.agents.full` and its `.perun/context/*.md` docs as
+  `<slug>.context.<name>`.
+* **Perun's own `AGENTS.md` is migrated** — 9,435 B → 5,037 B (−47 %). The
+  behavioural rules stay inline, verbatim; the project overview, the
+  contributing checklists, the command list, the credential procedure and the
+  release procedure moved to `.perun/context/`.
+* **trading-bot's `AGENTS.md` is migrated** — 62,631 B → ~62,312 B. The
+  behavioural rules (critical constraints, architecture, key files, code style,
+  testing, build notes) stay inline, verbatim; the build pipeline, other
+  commands, debugging/ADB commands, version history and inlined instruction
+  modules moved to `.perun/context/`.
 
 **Outstanding:**
 
-* **Phase 4** — the per-project `AGENTS.md` distillation. `perun context stats`
-  reports the budget for every project; nothing has been migrated yet, so
-  every project still carries its full original file (and, for `trading_bot`,
-  ~15.8k tokens of it).
-* **Phase 5** — the parity harness (an eval set per project that answers the
-  same questions with and without the distillation). Until it exists, no
-  project may be migrated; this is the deliberate gate.
-
-**Deliberate deferral.** `perun context verify` currently checks *drift*
-(kernel vs handbook vs anchors vs secrets). The **losslessness check** — every
-section of the pre-migration `AGENTS.md` accounted for as `inline`,
-`context:<key>` or `secret:<name>` — is the Phase 4/5 piece and is not
-implemented yet.
+* **Phase 5** — the eval-set half of the parity harness (the same questions
+  answered with and without the distillation). The losslessness half now
+  exists; the eval-set half does not yet.
 
 ### Phase 4 classification rule
 
@@ -495,12 +505,15 @@ For each `##` section of a project `AGENTS.md`:
 A section that mixes both is split: the imperative bullets stay, the reference
 material moves.
 
-**Losslessness check.** *(Not yet implemented — this is the Phase 4/5 piece.)*
-`perun context verify <slug>` must prove that every section of the pre-migration
-`AGENTS.md` is accounted for — reported as `inline`, `context:<key>`, or
-`secret:<name>` — and that the retained `<slug>.agents.full` context doc still
-hashes to the original file. A section that is unaccounted for is a failure,
-not a warning.
+**Losslessness check.** *(Implemented — `perun/context_map.py`.)* The context
+map is the proof: for every section of the pre-migration `AGENTS.md` it
+records the destination, and `perun context verify` checks three things —
+the retained `<slug>.agents.full` still hashes to the original file
+(**nothing was deleted**), every section of that original is accounted for
+(**nothing is unaccounted for**), and every destination still holds its
+content, verbatim (**nothing was paraphrased away**). A section that is
+unaccounted for is a failure, not a warning — and each of those three failure
+modes has a test that proves the check fails when it should.
 
 ---
 

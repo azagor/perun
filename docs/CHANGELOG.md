@@ -2,7 +2,7 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## Unreleased
+## v0.7.21 - 2026-10-21
 
 ### Added
 
@@ -23,7 +23,7 @@ All notable changes are recorded here. Single source of truth for release notes.
   * `perun_context` (MCP) — retrieve the context for a key, an anchor label, or
     a task description. The key inventory is always visible, so an agent always
     knows what it does not currently have.
-  * `perun context list|get|search|sync|index|verify|stats` (CLI) — the same
+  * `perun context list|get|search|sync|map|index|verify|stats` (CLI) — the same
     surface without an agent, plus a drift check (`verify`) and a budget report
     (`stats`: AGENTS.md sizes, token estimates, duplicated sections).
   * **Awareness parity is a contract, not a hope.** Four mechanisms: the
@@ -40,6 +40,28 @@ All notable changes are recorded here. Single source of truth for release notes.
     something plausible.
   * `memory:` anchors in `perun.md` bind a document to its context key, so an
     agent can ask for it by its human label.
+- **The losslessness proof, and the migration of all five managed projects.**
+  * `perun/context_map.py` — the **context map**: a small JSON file in the
+    project (`.perun/context-map.json`) that records, for every section of the
+    original `AGENTS.md`, *where that content went*. `inline` (it stays in the
+    file — the behavioural rules that must never move), `context:<key>` (it was
+    relocated verbatim to a Context-layer doc), `secret:<name>` (it moved to the
+    encrypted store), `retained` (it lives only in the retained original).
+  * `perun context map [--project SLUG] [--write]` — shows the section
+    inventory of a project's `AGENTS.md` and drafts the map.
+  * `perun context verify` now proves the migration: the retained original
+    still hashes to what the map recorded (**nothing was deleted**), every
+    section of that original is accounted for (**nothing is unaccounted for**),
+    and every destination still holds its content verbatim (**nothing was
+    paraphrased away**). A proof that cannot fail is not a proof — each of
+    those failure modes is a test in `tests/test_context_map.py`.
+  * `perun context sync` now indexes every project's `AGENTS.md` as
+    `<slug>.agents.full` and its `.perun/context/*.md` docs as
+    `<slug>.context.<name>`. The retained original is a **snapshot**: once a
+    context map pins it, a later sync will not overwrite it.
+  * **All five managed projects migrated:** `perun` (9,435 B → 5,037 B),
+    `trading_bot` (62,631 B → 62,312 B), `parental_control` (78,055 B → 60,644 B),
+    `perun_in_the_machine` (6,024 B → 3,074 B), `perunchat` (3,446 B → 2,670 B).
 - **The global kernel is now ~1.4 KB instead of ~6.1 KB.** The always-on block
   in the global `AGENTS.md` was replaced by a generated kernel: a short
   orientation plus the handbook key table. The **complete previous global guide
@@ -48,7 +70,7 @@ All notable changes are recorded here. Single source of truth for release notes.
 - **An encrypted secret store.** `perun/secret_store.py` +
   `perun secret list|get|set|delete|password|status` + the `perun_secret` MCP
   tool. Values are Fernet-encrypted (PBKDF2-HMAC-SHA256) at rest and the master
-  password is protected with Windows DPAPI, bound to the current user. A
+  password is protected with Windows **DPAPI**, bound to the current user. A
   listing never contains a value; the project file keeps only the **name**, and
   the agent fetches the value at the moment it is used — one prompt carries the
   credential instead of every prompt carrying it. `kind: secret` anchors and
@@ -69,6 +91,8 @@ All notable changes are recorded here. Single source of truth for release notes.
 - `handbook.ensure_indexed()` could recurse: rendering the MCP tool reference
   loads the MCP server module, which calls back into it on import. A
   re-entrancy guard now breaks the cycle.
+
+## Unreleased
 
 ## v0.7.20 - 2026-10-21
 
