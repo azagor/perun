@@ -24,19 +24,26 @@ map, the memory, the orchestration, and a remote control.
 
 ## 2. Design principles
 
-1. **Local-first, single-binary-ish.** One process, one SQLite file, no accounts.
-   The only network dependencies are optional (Telegram, Ollama).
+1. **Local-first.** One local service, one SQLite file, no Perun account. The
+   only network dependencies are optional (Telegram, Ollama, PerunChat), and each
+   degrades to a clear message when unavailable. Perun itself is one process, but
+   it deliberately spawns short-lived children: `opencode run` per agent run, a
+   stdio MCP server per OpenCode session, and a detached `serve` after `restart`.
 2. **Inherited, not installed per project.** A global MCP server + global
    instructions mean *every* project — including ones you create later —
    automatically gets Perun's tools. No per-project setup.
-3. **Additive and reversible.** Touching a user's global OpenCode config is
+3. **Bounded ambient context.** `AGENTS.md` is paid for on every request, so it
+   is a generated **kernel** (1,832 B) that points at a keyed **Context layer**
+   retrieved on demand. Nothing is deleted: the original text is retained
+   verbatim, and `perun context verify` proves the migration was lossless.
+4. **Additive and reversible.** Touching a user's global OpenCode config is
    invasive, so we back up first, merge only our keys, and can remove exactly
    what we added.
-4. **Graceful degradation everywhere.** No Ollama → keyword search still works.
+5. **Graceful degradation everywhere.** No Ollama → keyword search still works.
    No token → bridge stays dormant. No `opencode` → a clear error, not a crash.
-5. **Bounded, observable.** Cap concurrent runs; stream everything; log raw
+6. **Bounded, observable.** Cap concurrent runs; stream everything; log raw
    output; expose a live activity feed. The overseer must itself be watchable.
-6. **Clarity over cleverness.** The UI shows plain labels, real statuses, and
+7. **Clarity over cleverness.** The UI shows plain labels, real statuses, and
    one obvious action per card. No hidden state.
 
 ## 3. Mental model (what the user sees)
@@ -44,8 +51,8 @@ map, the memory, the orchestration, and a remote control.
 ```
         ┌──────────────┐        Perun is a "control room".
         │   PROJECTS   │        ─ each project is a card
-        │  ▤ ▤ ▤ ▤ ▤   │        ─ each card can Ask / Open / Index
-        └──────┬───────┘
+        │  ▤ ▤ ▤ ▤ ▤   │        ─ each card can Run / Stop / Open /
+        └──────┬───────┘          Index docs / Delete
                │ select
         ┌──────▼───────┐        A project has:
         │   PROJECT    │          Overview · Console · Sessions ·
@@ -77,7 +84,10 @@ screen maps to one of them.
 | `#/console[/{slug}]` | Agent launcher | "Run an agent and watch it work." |
 | `#/memory` | Memory explorer | "What do we know / have we decided?" |
 | `#/activity` | Live feed | "What is happening right now?" |
+| `#/mcp` | MCP server inventory | "Which MCP servers does OpenCode load, and are they healthy?" |
 | `#/telegram` | Bridge control | "Can I reach this from my phone?" |
+| `#/perunchat` | Native agent chat | "Talk to other agents on the PerunChat network." |
+| `#/providers` | LLM providers | "Which models can my agents use?" |
 | `#/settings` | Configuration | "How is Perun wired up?" |
 
 The sidebar is the map; the topbar is context (`title`, cross-project search,
@@ -122,8 +132,36 @@ and reports the changed paths and the backup file. This is deliberately a
 deliberate, visible action, never a silent side effect of first run.
 
 ### Telegram
-One bot. `/projects` lists, `/project <n>` switches (per chat, persisted in the
-DB), everything else is a prompt. `/recall` shares the same memory as the web UI.
+One bot for the whole machine — a **singleton** (the `getUpdates` API allows one
+consumer per token), enforced by a machine-global named mutex. `/start` `/help`,
+`/projects` lists, `/project <name|#>` switches (per chat, persisted in the DB),
+`/orchestrator` (`/perun`, `/overseer`) jumps to the control plane, `/new`
+`/reset`, `/status`, `/stop` `/cancel`, `/remember`, `/recall`, `/index`, and
+`/pair <code>` to authorise a chat. Anything else is a prompt, answered by a
+Perun-orchestrated run. An empty allow-list grants **nobody** access until a chat
+pairs.
+
+### Manage models and MCP servers
+`#/providers` lists the provider catalog and the credentials OpenCode already
+has; adding or connecting one writes `opencode.json[c]` (Perun never stores the
+key) and asks OpenCode to reload. `#/mcp` snapshots every MCP server OpenCode
+would load, derives a config status, and can live-probe one server with a real
+`initialize` + `tools/list` handshake — from disk, never from request input.
+
+### PerunChat
+`#/perunchat` connects the dashboard straight to the gateway over WebSocket and
+lets one agent talk to others. On the server side, the autonomous bridge joins
+configured rooms and answers through the orchestrator, with a strict chat
+persona, rate limits, a write-ahead outbox for no-loss delivery, and HITL
+approval for state-changing requests.
+
+### Context and secrets
+An agent that needs reference material calls `perun_context("<task>")` instead
+of carrying it inline; orchestrated runs get the relevant docs pre-fetched. A
+credential is fetched by name from the encrypted store (`perun_secret`) at the
+moment of use, so it never sits in a prompt file. `perun.md` anchors can bind to
+a context key (`memory:`) or a secret (`kind: secret`), and
+`perun context verify` checks those bindings.
 
 ### Talk to the orchestrator
 `#/orchestrator` (or Telegram `/orchestrator`) chats with the control-plane agent
@@ -147,9 +185,16 @@ the dashboard runs. It never starts a second poller.
 * **Thread-per-run + semaphore** — agent runs are long and blocking; threads are
   the simplest correct model, and the semaphore bounds cost. SSE pumps them
   through `iterate_in_threadpool` so the event loop stays free.
-* **`opencode run --format json` with `cwd`** — proven in the per-project
-  Telegram bridge; JSON frames give us text/tool/session events without screen
-  scraping, and setting `cwd` avoids OpenCode's directory-argument ambiguity.
+* **`opencode run --format json` with `cwd`** — JSON frames give us
+  text/tool/session events without screen scraping, and setting `cwd` avoids
+  OpenCode's directory-argument ambiguity.
+* **One shared Telegram bridge, not one per project** — the bot API permits a
+  single `getUpdates` consumer per token; routing chat → project → session lives
+  in `bridge_links`, and a named mutex keeps the poller singular across the
+  in-process bridge, the optional logon task, and `Perun.cmd`.
+* **Explicit cross-project paths** — `perun.project_roots.resolve(name, *parts)`
+  validates against a registered root, so an agent never hand-crafts a relative
+  path that silently targets the wrong file.
 * **Global MCP over per-project scripts** — the *point* is zero per-project
   setup; a stdio server registered once in the user config is inherited
   everywhere.
@@ -159,10 +204,12 @@ the dashboard runs. It never starts a second poller.
 
 ## 8. Deliberately out of scope
 
-* Multi-user / auth — it binds to `127.0.0.1` only.
+* Multi-user / auth — it binds to `127.0.0.1` only (a loopback token still gates
+  state-changing API calls).
 * Scheduling / cron-style auto-runs.
-* A graph of inter-project dependencies.
-* Editing a project's files from the dashboard.
+* A graph of inter-project dependencies (local references are recorded as
+  memory facts, but nothing models the graph).
+* Cloud sync of the registry or memory.
 
-Still out of scope as of v0.3.0; the data model already leaves room
-(`projects.enabled`, `runs` history, `activity` meta).
+Still out of scope as of v0.7.21; the data model already leaves room
+(`projects.enabled`, `runs` history, `activity` meta, `tasks`).

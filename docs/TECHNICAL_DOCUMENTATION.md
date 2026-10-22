@@ -738,6 +738,21 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET/POST/DELETE | `/api/perunchat/trusted[/{agent_id}]` | local trust list (`perunchat_trusted`) — internal context is shared only with these agents, and only in private/group rooms |
 | GET | `/` etc. | static dashboard from `web/` |
 
+### Self-update
+
+The dashboard can check GitHub releases and install a newer Perun in place.
+`perun/updater.py` queries the GitHub releases API (`check()`, cached 30 minutes),
+detects the local install shape (`install_mode()` — git checkout, Windows
+installer, or unsupported), and prepares the update while the server is still
+live. `apply()` downloads and SHA-256-verifies `PerunSetup.exe` for installer
+deployments, or runs `git fetch` for git checkouts (refusing when tracked files
+are dirty). It then launches a detached `perun update runner` process that waits
+for the server port to be released, applies the update, starts a fresh Perun
+server, and polls `/api/health` until the new version responds. Job state and a
+progress log are persisted to `~/.perun/update-state.json` so the dashboard can
+stream status across restarts. Server shutdown prefers uvicorn's
+`should_exit`, falls back to `SIGINT`, and only force-exits as a last resort.
+
 `GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
 literal path is not swallowed by the parameterised route.
 

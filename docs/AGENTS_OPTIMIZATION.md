@@ -1,11 +1,8 @@
 # Perun — AGENTS.md context-budget optimisation
 
-> **Status:** phases 0–3, 6, 7 and 4 **implemented** (2026-10-21). All five
+> **Status:** phases 0–4, 6 and 7 **implemented** (2026-10-21). All five
 > managed projects migrated. Phase 5 — the eval-set half of the parity harness
 > — remains outstanding.
-> **Problem owner:** every Perun-managed project.
-> **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
-> [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
 > **Problem owner:** every Perun-managed project.
 > **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
 > [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
@@ -16,18 +13,18 @@
 
 OpenCode loads **two** `AGENTS.md` files into every session: the global one
 (`~/.config/opencode/AGENTS.md`) and the project one. Both are paid in full,
-on every request, in every project. On this machine today:
+on every request, in every project. On this machine **before the migration** (2026-10-21):
 
 | File | Bytes | ~tokens (chars/4) | Loaded in |
 |---|---|---|---|
 | `~/.config/opencode/AGENTS.md` (Perun managed block) | 6,100 | ~1,525 | **every** project |
 | `perun/AGENTS.md` | 9,435 | ~2,359 | the Perun project |
-| `trading_bot/AGENTS.md` | 63,195 | ~15,800 | trading_bot |
-| `parental_control/AGENTS.md` | 23,132 | ~5,780 | parental_control |
+| `trading_bot/AGENTS.md` | 62,631 | ~15,658 | trading_bot |
+| `parental_control/AGENTS.md` | 78,055 | ~19,514 | parental_control |
 | `perun_in_the_machine/AGENTS.md` | 6,024 | ~1,510 | perun_in_the_machine |
 | `perun_chat/AGENTS.md` | 3,446 | ~860 | perun_chat |
 
-Worst case (a `trading_bot` session) starts with **~17.3k tokens of ambient
+Worst case (a `parental_control` session) starts with **~20.9k tokens of ambient
 instructions** before the user has typed a word. The average is bad; the trend
 is worse: every project adds its own copy of the same material, so the total
 grows linearly with the number of projects while each session pays for one
@@ -215,8 +212,8 @@ anchors:
 * `memory` is optional; an anchor without it behaves exactly as today.
 * `perun_get_manifest` returns anchors **with** their `memory` key, so the
   chain is: read manifest → see an anchor → `perun_context(anchor.memory)`.
-* The dashboard marks which anchors are memory-backed, and `perun_context`
-  resolves anchor labels, so the agent can use whichever name it has.
+  `perun_context` resolves anchor labels, so the agent can use whichever name it
+  has.
 * `perun context verify` checks that an anchor that declares `memory` has that
   key present in the store, and vice-versa. *(Implemented; the `validate-docs`
   variant was folded into `perun context verify`.)*
@@ -254,7 +251,8 @@ original document; nothing was deleted.
 ```
 
 and the **global** kernel (the managed block in
-`~/.config/opencode/AGENTS.md`) shrinks to:
+`~/.config/opencode/AGENTS.md`) shrinks to the text below — 1,832 B including
+the two marker lines:
 
 ```markdown
 <!-- BEGIN perun (managed) -->
@@ -267,20 +265,22 @@ search, and agent-run orchestration.
 **First action in any Perun-managed project:** before reading or editing code,
 call `perun_context("<what you are about to do>")`. It resolves your intent
 into the reference material you need — build commands, server access, key
-files, conventions. Do not guess at these; they are retrievable.
+files, conventions, the tool surface. Do not guess at these; they are
+retrievable, and a guess costs a wrong turn.
 
 Perun's reference material lives in *context docs* with stable keys:
 
 | Key | Covers |
 |---|---|
-| `handbook.tools` | every `perun_*` MCP tool, arguments, return shapes |
-| `handbook.search` | which search tool to use, and when |
-| `handbook.memory` | facts vs docs, scoping, freshness, secret guard |
-| `handbook.commands` | the global slash commands |
-| `handbook.cross-project` | resolving paths in sibling repos |
-| `handbook.sessions` | starting/inspecting agent runs, models, agents |
-| `handbook.onboarding` | fresh-machine setup and repair |
-| `handbook.global` | the complete previous global guide, verbatim |
+| `handbook.tools` | every perun_* tool, its arguments and what it returns |
+| `handbook.search` | grep / ast-grep / unified search, RRF ranking, fallbacks |
+| `handbook.memory` | facts vs docs, scoping, freshness, the sensitive-data guard |
+| `handbook.commands` | /perun-projects, /perun-ask, /logwork, /update-docs |
+| `handbook.cross-project` | perun.project_roots.resolve, sibling repos, why not hand-crafted paths |
+| `handbook.sessions` | starting runs, models, agents, streaming, cancellation |
+| `handbook.onboarding` | dashboard, Telegram bridge, fresh-machine setup and repair |
+| `handbook.secrets` | named credentials, encrypted at rest, pulled on demand |
+| `handbook.global` | the complete previous global AGENTS.md block, verbatim |
 
 Always true, never retrieved away:
 
@@ -291,6 +291,9 @@ Always true, never retrieved away:
 - Read the project's `perun.md` manifest before acting on its structure.
 <!-- END perun (managed) -->
 ```
+
+The key table has one row per handbook doc — nine today — and is rendered by
+`handbook.render_key_table()`, so it cannot drift from the store.
 
 Two properties make this work:
 
@@ -414,11 +417,11 @@ because the embedding is the only part that leaves the machine. Such a row is
 marked `embedded_hash == content_hash` with a NULL vector, so the repair path
 (`reembed_missing()`) never selects it.
 
-**Handbook sources** (in-repo, git-tracked):
+**Handbook sources** (in-repo; all except `tools.md` are git-tracked):
 
 ```
 perun/integrations/templates/handbook/
-  tools.md          # generated from the MCP tool registry — zero drift
+  tools.md          # GENERATED at run time from the MCP registry — not on disk
   search.md
   memory.md
   commands.md
@@ -429,9 +432,9 @@ perun/integrations/templates/handbook/
   global.md         # the COMPLETE previous global guide, verbatim (P1)
 ```
 
-`handbook/tools.md` is **generated by introspecting the FastMCP server**, so a
-new tool appears in the handbook automatically and the AGENTS.md tool table can
-never disagree with the MCP schema.
+`handbook/tools.md` is **generated by introspecting the FastMCP server** (it is
+not tracked in git), so a new tool appears in the handbook automatically and the
+AGENTS.md tool table can never disagree with the MCP schema.
 
 ---
 
@@ -441,9 +444,9 @@ never disagree with the MCP schema.
 |---|---|---|---|---|
 | **0 — Instrument** | `perun context stats`: per-project AGENTS.md bytes/tokens, cross-project duplicate blocks | none | Baseline; proves the win | **done** |
 | **1 — Primitive** | `perun/context.py`, `perun_context` MCP tool, `perun context` CLI, tests | none (additive) | Nothing changes yet | **done** |
-| **2 — Global kernel** | Handbook docs; `INSTRUCTIONS.md` → kernel; `install_global` syncs kernel + indexes handbook; **the previous global guide is retained verbatim as `handbook.global`** | low | **−1.2k tokens in every project, immediately** | **done — live** |
+| **2 — Global kernel** | Handbook docs; `INSTRUCTIONS.md` → kernel; `install_global` syncs kernel + indexes handbook; **the previous global guide is retained verbatim as `handbook.global`** | low | **-1.07k tokens in every project, immediately** | **done - live** |
 | **3 — Anchor binding** | `memory:` key on anchors; manifest + `perun context verify` support | low | Anchors become retrievable | **done** |
-| **4 — Project migration** | classify sections → inline vs context doc; **retain the original verbatim as `<slug>.agents.full`**; the **context map** records where each section went | medium | trading_bot −13k, parental_control −4k | **in progress — `perun` migrated (−47 %)** |
+| **4 — Project migration** | classify sections → inline vs context doc; **retain the original verbatim as `<slug>.agents.full`**; the **context map** records where each section went | medium | trading_bot −319 B, parental_control −17.4k, perun −47 % | **done — all five migrated** |
 | **5 — Parity harness** | Eval set per project: same questions answered with and without the distillation; gate migrations on parity | medium | Proves P4 | **partial** — the losslessness half is live (`perun context map` + `perun context verify`); the eval-set half is outstanding |
 | **6 — Orchestrator pre-fetch** | `compose_prompt` injects the top context docs | low | Removes the round trip on the orchestrated path | **done** |
 | **7 — Secrets** | `perun/secret_store.py`; `perun_secret` tool; `kind: secret` anchors | medium | Removes credentials from every prompt | **done** (mechanism; no real credentials to migrate) |
@@ -456,13 +459,14 @@ never disagree with the MCP schema.
 * `perun/handbook.py` + `perun/integrations/templates/handbook/` — nine
   reference docs, `tools.md` generated from the live MCP registry.
 * The **global kernel** is live in `~/.config/opencode/AGENTS.md`: the managed
-  block is ≈1.4 KB (was ≈6.1 KB), and the previous guide is retained verbatim
+  block is 1,832 B (was ≈6.1 KB), and the previous guide is retained verbatim
   as `handbook.global`.
 * `perun_context` and `perun_secret` MCP tools (25 tools in total).
 * `perun context …` and `perun secret …` CLI groups.
 * `orchestrator.compose_prompt()` pre-fetch, injected as
   `--- PERUN CONTEXT START/END ---`.
-* `memory:` anchors and `kind: secret` anchors in `perun.md`.
+* `memory:` anchors in `perun.md` (seven of them), and `kind: secret` anchor
+  support in the manifest + verifier.
 * `perun context verify` — the drift check: kernel vs handbook vs manifest
   anchors vs stored secrets, **plus the losslessness check** for every
   migrated project.
@@ -477,11 +481,17 @@ never disagree with the MCP schema.
   behavioural rules stay inline, verbatim; the project overview, the
   contributing checklists, the command list, the credential procedure and the
   release procedure moved to `.perun/context/`.
-* **trading-bot's `AGENTS.md` is migrated** — 62,631 B → ~62,312 B. The
+* **trading-bot's `AGENTS.md` is migrated** — 62,631 B → 62,312 B (−319 B). The
   behavioural rules (critical constraints, architecture, key files, code style,
   testing, build notes) stay inline, verbatim; the build pipeline, other
   commands, debugging/ADB commands, version history and inlined instruction
   modules moved to `.perun/context/`.
+* **parental-control's `AGENTS.md` is migrated** — 78,055 B → 60,644 B
+  (−17.4 KB).
+* **perun-in-the-machine's `AGENTS.md` is migrated** — 6,024 B → 3,074 B.
+* **perunchat's `AGENTS.md` is migrated** — 3,446 B → 2,670 B.
+* **All five migrations verified** — `perun context verify` reports
+  `lossless: ok (5 migrated project(s))`.
 
 **Outstanding:**
 
@@ -536,13 +546,13 @@ modes has a test that proves the check fails when it should.
 
 ### Token / cost
 
-| Metric | Today | Target |
-|---|---|---|
-| Global `AGENTS.md` managed block | 6,100 B (~1,525 tok) | ≤ 1,500 B (~380 tok) |
-| Worst-case per-project `AGENTS.md` | 63,195 B (~15,800 tok) | ≤ 3,000 B (~750 tok) |
-| Ambient instructions per session | up to ~17.3k tok | ≤ 1.2k tok |
-| MCP tool table copies in the repo | 3+ | 1 (generated) |
-| Credentials in any prompt | yes | none |
+| Metric | Baseline | Target | Achieved |
+|---|---|---|---|
+| Global `AGENTS.md` managed block | 6,100 B (~1,525 tok) | ≤ 1,500 B (~380 tok) | 1,832 B (≈3.3× smaller; target missed) |
+| Worst-case per-project `AGENTS.md` | 78,055 B (~19,514 tok) | ≤ 3,000 B (~750 tok) | 60,644 B (parental-control) |
+| Ambient instructions per session | up to ~20.9k tok | ≤ 1.2k tok | per project (see migrations) |
+| MCP tool table copies in the repo | 3+ | 1 (generated) | 1 (generated `handbook.tools`) |
+| Credentials in any prompt | yes (paths/hosts) | none | mechanism shipped; nothing to migrate |
 
 ### Awareness parity (the non-negotiable)
 
@@ -570,8 +580,8 @@ A migration that cannot show parity is reverted. The token saving is the
    are the behavioural contract and should be reviewable in PRs.
 3. **Should the key table live in the kernel, or should the kernel just say
    "call `perun_context('list')`"?** Recommendation: keep a short key table
-   (7 rows ≈ 350 B). Discovery without a round trip is worth more than the
-   350 B it costs.
+   (nine rows ≈ 800 B). Discovery without a round trip is worth more than the
+   cost it adds.
 4. **Scope of Phase 4.** Migrate all five projects now, or land the
    infrastructure and migrate opportunistically?
 5. **Does `perun_context` replace `perun_memory_search`, or sit beside it?**
@@ -586,7 +596,7 @@ A migration that cannot show parity is reverted. The token saving is the
 | Current global `AGENTS.md` section | Destination | Why |
 |---|---|---|
 | "What Perun is" prose (5 bullets) | `handbook.onboarding` | Reference |
-| "MCP tools" table (23 rows) | `handbook.tools` (generated) | Duplicated by MCP tool schemas |
+| "MCP tools" table (25 rows) | `handbook.tools` (generated) | Duplicated by MCP tool schemas |
 | "When to use Perun" | `handbook.search` / `handbook.memory` | Reference |
 | "Working inside a Perun-managed project" | `handbook.onboarding` | Reference |
 | "Global slash commands" table | `handbook.commands` | Duplicated by command definitions |

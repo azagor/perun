@@ -580,7 +580,10 @@ server is live (download + verify, or `git fetch`), then hands over to a
 detached `perun update runner` process that waits for the server to exit,
 applies the update, restarts Perun and polls `/api/health` until the new
 version answers. State is persisted in `~/.perun/update-state.json` so the
-dashboard can stream progress across restarts.
+dashboard can stream progress across restarts. Installer downloads verify the
+release's `PerunSetup.exe.sha256` checksum when present, old downloads are
+cleaned up automatically, and server shutdown uses `should_exit` then SIGINT
+before a final force-exit fallback.
 
 ### `perun/integrations/install_global.py`
 Idempotent, additive global install into `~/.config/opencode` (honours
@@ -778,6 +781,10 @@ stdio MCP server (`perun`). 25 tools: `perun_list_projects`,
   the `bootstrap.ps1` delegation contract, and `restart_bridge_task()`.
 * `test_server.py` — FastAPI TestClient smoke of the main endpoints (incl.
   instructions, manifest, git, wizard, models).
+* `test_updater.py` — self-update machinery: version parsing, GitHub release
+  checks, install-mode detection (git vs Windows installer), apply refusal paths,
+  dirty-git guard, checksum verification, the detached runner plan, stale-PID
+  cleanup, and the update API endpoints.
 * `test_telegram_bot_api.py` — the dashboard's "switch to a new bot" flow:
   `/api/settings` never echoes the token, `/api/telegram/bot` verifies with a
   mocked `getMe` before saving, clears on `token: ""`, and `token_source`

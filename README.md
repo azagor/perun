@@ -48,6 +48,16 @@ them all — no matter which folder you happened to open.
   history), retries empty replies, and persists replies in a write-ahead outbox
   so no message is lost across reconnects. Chat messages are untrusted data;
   state-changing actions require human approval tokens.
+* **A bounded context budget.** `AGENTS.md` no longer has to grow without limit.
+  Reference material moves into a **Context layer** — keyed, retrievable
+  documents — and the agent pulls what it needs (`perun_context("<task>")`)
+  instead of paying for the whole file on every request. Nothing is deleted:
+  the original `AGENTS.md` is retained verbatim, and `perun context verify`
+  proves the migration lost nothing.
+* **Secrets that stay out of prompts.** Credentials live in an encrypted store
+  (Fernet at rest, DPAPI-protected master password), are fetched **by name at
+  the moment of use**, and never appear in a listing — so one prompt carries
+  the credential instead of every prompt carrying it.
 * **Zero per-project setup.** `python -m perun install` wires the `perun` MCP
   server and instructions into your user-level OpenCode config, so every future
   project inherits it automatically.
@@ -95,9 +105,10 @@ If you already have projects registered, run:
 python -m perun backfill-docs --all
 ```
 
-This creates the current scaffold files (`perun.md`, `AGENTS.md`,
-`docs/CHANGELOG.md`, `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CODEMAP.md`) only
-where they are missing, so it is safe to run on every project.
+This creates the current scaffold files (`perun.md`, `AGENTS.md`, `README.md`,
+`opencode.json`, `.gitignore`, `.opencode/`, `docs/CHANGELOG.md`,
+`docs/TECHNICAL_DOCUMENTATION.md`, `docs/CODEMAP.md`) only where they are
+missing, so it is safe to run on every project.
 
 ## Install on a new machine
 
@@ -106,8 +117,9 @@ where they are missing, so it is safe to run on every project.
 Download `PerunSetup.exe` from the latest release and run it. The wizard
 installs any missing prerequisites (Python, git, OpenCode CLI, Ollama),
 installs Perun, wires the global OpenCode integration, and creates a desktop
-shortcut. The Telegram bridge starts with the dashboard; the optional
-`PerunBridge` logon task is not registered unless the installer opts in.
+shortcut. The Telegram bridge starts with the dashboard; the GUI installer has no
+opt-in for the `PerunBridge` logon task — register it from the command line with
+`python -m perun install --machine --task` (or `setup.ps1 -Task`).
 
 To build it from source:
 
@@ -184,9 +196,9 @@ For details see `docs/TECHNICAL_DOCUMENTATION.md`.
 |---|---|---|
 | **Dashboard** | `http://127.0.0.1:8760` | Gold/dark SPA styled after peruninthemachine.com |
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
-| **Live streams** | `/api/runs/{id}/stream`, `/api/stream` | Server-Sent Events |
+| **Live streams** | `/api/runs/{run_uid}/stream`, `/api/stream` | Server-Sent Events |
 | **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
-| **MCP server** | stdio, tool namespace `perun` | 23 tools, installed globally |
+| **MCP server** | stdio, tool namespace `perun` | 25 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL approval for actions |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
@@ -197,15 +209,20 @@ For details see `docs/TECHNICAL_DOCUMENTATION.md`.
 
 ```
 python -m perun serve [--host H] [--port P] [--reload] [--bridge]
+python -m perun stop [--timeout S] [--force]
+python -m perun restart [--host H] [--port P] [--reload] [--bridge] [--detach|--foreground]
 python -m perun bridge
-python -m perun discover [--roots a;b] [--index]
+python -m perun discover [--roots a;b] [--depth N] [--index]
 python -m perun projects
 python -m perun add <name> <path> [--model M] [--agent A]
-python -m perun status
+python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
+python -m perun status [--json]
 python -m perun remember <text> [--project SLUG] [--global] [--topic T]
 python -m perun recall <query> [--project SLUG] [--k N] [--all]
 python -m perun index <slug> | --all
 python -m perun run <slug> [prompt] [--model M] [--agent A] [--wait]
+python -m perun context <list|get|search|sync|map|index|verify|stats> [...]
+python -m perun secret <list|get|set|delete|password|status> [...]
 python -m perun encrypt-config [--password P]
 python -m perun global-instructions [text] [--clear]
 python -m perun import-legacy-memory [--path P]
@@ -226,6 +243,10 @@ perun/                     the Python package
   control.py               the always-present orchestrator (control plane)
   projects.py              shared project creation (wizard + MCP)
   memory.py                unified facts + doc-chunk store + search
+  context.py               keyed retrievable context docs (bounded AGENTS.md)
+  context_map.py           losslessness map for AGENTS.md migrations
+  secret_store.py          encrypted named secrets (pulled on demand)
+  handbook.py              Perun reference material as context docs
   embeddings.py            Ollama transport + vector math
   discovery.py             find projects under configured roots
   orchestrator.py          start/stream/cancel `opencode run`
@@ -233,6 +254,7 @@ perun/                     the Python package
   server.py                FastAPI + SSE + static dashboard
   providers.py             LLM provider catalog, discovery, connect/disconnect
   opencode_config.py       safe read/write of the user's OpenCode config
+  project_roots.py         explicit cross-project path resolution
   __main__.py              CLI
   integrations/            global install into ~/.config/opencode
   installer.py             machine install: prerequisites, deps, optional PerunBridge task
@@ -247,7 +269,7 @@ setup.sh                   Unix web installer (clone + deps + global install)
 bootstrap.ps1              Windows cold-start installer (delegates to install --machine)
 Perun.cmd                  Windows one-click launcher
 tools/                     make_icon · normalize_line_endings · check_line_endings · migrate_global_facts
-docs/                      CODEMAP · TECHNICAL · CHANGELOG · DESIGN
+docs/                      CODEMAP · TECHNICAL · CHANGELOG · DESIGN · AGENTS_OPTIMIZATION
 tests/                     pytest suite
 ```
 
@@ -327,8 +349,8 @@ budgeted.
   and returns only the best **k = 6** — you pay for the answer, not for whole
   documents.
 * **Stale facts age out of the results.** Fact scores carry a 30-day freshness
-  half-life, so old memories drift down the ranking instead of being re-surfaced
-  and re-read forever.
+  half-life (365 days for global facts) so old memories drift down the ranking
+  instead of being re-surfaced and re-read forever.
 * **Incremental indexing.** `index_text()` upserts only the sections that
   actually changed, and facts are deduped on insert by `content_hash` —
   re-indexing a project re-embeds new content, not the whole doc set.
@@ -338,6 +360,63 @@ budgeted.
   long agent cannot balloon the database or the dashboard.
 * **No wasted embedding calls.** With Ollama unreachable, search falls back to
   keyword + recency rather than issuing calls that would fail.
+
+### The Context layer (bounded ambient context)
+
+`AGENTS.md` is *ambient* context: paid for in full on every request of every
+session, and it grows without bound because every project keeps its own copy of
+the same reference material. The **Context layer** (`perun/context.py`) is the
+alternative — keyed, vector-backed reference documents that are **retrieved on
+demand** instead of being inlined.
+
+* **Awareness parity is a contract, not a hope.** The original `AGENTS.md` is
+  retained verbatim (`<slug>.agents.full`), the key inventory is always visible,
+  relevant material is pre-fetched **by task** on the orchestrated path, and
+  `perun context verify` gates every migration.
+* **Retrieval is layered.** Exact key → anchor label (a `memory:`-bound anchor
+  in `perun.md`) → key substring → semantic. A manifest anchor can name the
+  context key it binds to, so an agent can ask for a document the way a human
+  would name it.
+* **The losslessness proof.** `perun context map` records, for every section of
+  the original `AGENTS.md`, *where that content went* (`inline` / `context` /
+  `secret` / `retained`). `perun context verify` then proves: nothing was
+  deleted, nothing is unaccounted for, and every destination still holds its
+  content verbatim. A proof that cannot fail is not a proof — each failure mode
+  has a test.
+* **The global kernel is ~1.8 KB, not ~6.1 KB.** The always-on global
+  `AGENTS.md` block is generated from the handbook manifest; the complete
+  previous global guide is kept verbatim as `handbook.global` and stays
+  reachable in one call.
+* **Sensitive bodies are never embedded.** A context doc that trips the
+  sensitive-data guard is still stored verbatim (dropping it would break the
+  parity contract) but is never sent to the embedding endpoint.
+
+```
+perun context list                 # the key inventory
+perun context get <key>            # one doc, verbatim
+perun context search "<topic>"     # resolve a topic into docs
+perun context sync                 # re-index the handbook + refresh the kernel
+perun context map --write          # draft .perun/context-map.json
+perun context verify               # the parity check
+perun context stats                # AGENTS.md sizes, token estimates, duplicates
+```
+
+### Secrets on demand
+
+Credentials do not belong in a prompt file. `perun/secret_store.py` stores them
+**by name**, encrypted at rest (Fernet; the master password is protected with
+Windows DPAPI), and the agent pulls the value at the moment it is used:
+
+```
+perun secret list                  # names + hints, never values
+perun secret get <name>            # decrypt one value on demand
+perun secret set <name>            # store (--value, or read from stdin)
+perun secret password              # store the master password (DPAPI-protected)
+perun secret status                # is the store unlocked?
+```
+
+A `perun.md` anchor with `kind: secret` names a secret, and `perun context
+verify` checks that it actually exists.
 
 ### Memory management
 
@@ -362,8 +441,9 @@ budgeted.
 
 ## Design principles
 
-* **Local-first.** Everything except the OAuth dance and an optional Telegram
-  bot runs on your machine. No cloud, no accounts.
+* **Local-first.** Everything except the OAuth dance, an optional Telegram bot,
+  and the optional PerunChat federation runs on your machine. No Perun account,
+  no Perun-hosted data.
 * **Additive & reversible.** The global install merges into your OpenCode
   config and backs it up first; `--uninstall` removes exactly what it added.
 * **Graceful degradation.** If Ollama is down, memory still stores and searches

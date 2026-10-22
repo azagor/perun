@@ -16,7 +16,9 @@ module-by-module breakdown is retrievable as `perun.context.overview`.
 |---|---|
 | Navigation source of truth | `docs/CODEMAP.md` |
 | Architecture, API and data model | `docs/TECHNICAL_DOCUMENTATION.md` |
+| Product design and principles | `docs/DESIGN.md` |
 | Project identity, anchors, commands | `perun.md` |
+| Migration losslessness map | `.perun/context-map.json` |
 | Release history | `docs/CHANGELOG.md` |
 
 ## Context (retrievable, not ambient)
@@ -35,7 +37,10 @@ session only pays for what it actually uses. Ask for it by key:
 
 In an OpenCode TUI session, call `perun_context("<what you are about to do>")`
 before you start. An orchestrated Perun run pre-fetches the matching context
-automatically.
+automatically. The nine machine-wide `handbook.*` keys (`tools`, `search`,
+`memory`, `commands`, `cross-project`, `sessions`, `onboarding`, `secrets`,
+`global`) are visible from every project; `perun context list` prints the full
+inventory.
 
 ## Cross-project references
 
@@ -57,10 +62,13 @@ with `python -m perun project-roots --add <name> <path>`.
 
 * **CODEMAP-first.** `docs/CODEMAP.md` is the navigation source of truth. Read it
   (and the relevant `docs/TECHNICAL_DOCUMENTATION.md` section) before grepping.
-  Use `ast-grep` for structural code search and `mcp-grep`/`rg` only to confirm.
+  Use `perun_ast_grep` for structural code search and `perun_grep` (ripgrep) only
+  to confirm.
 * **Keep the layers separate.** `registry.py`/`db.py` = persistence;
-  `memory.py` = facts + docs; `orchestrator.py` = process/streaming;
-  `server.py` = HTTP only (no business logic); `web/` = presentation only.
+  `memory.py` = facts + docs; `context.py` = keyed reference docs;
+  `secret_store.py` = encrypted named secrets; `orchestrator.py` =
+  process/streaming; `server.py` = HTTP only (no business logic); `web/` =
+  presentation only.
 * **SQLite access is per-operation.** Always use the `db.db()` context manager;
   never hold a connection across a network call. WAL mode is required.
 * **Never block the event loop.** Synchronous FastAPI endpoints run in the
