@@ -39,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
 from . import (__version__, config, context, control, db, discovery, git, manifest,
-               memory, projects, providers, registry, scaffold, updater)
+               memory, projects, providers, registry, scaffold)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -466,16 +466,19 @@ def health() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @app.get("/api/update/check")
 def api_update_check(refresh: bool = False) -> dict[str, Any]:
+    from . import updater
     return updater.check(refresh=refresh)
 
 
 @app.get("/api/update/status")
 def api_update_status() -> dict[str, Any]:
+    from . import updater
     return updater.status()
 
 
 @app.post("/api/update/apply")
 def api_update_apply(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    from . import updater
     try:
         return updater.apply(confirm=True, force=bool(payload.get("force")),
                              restart=bool(payload.get("restart", True)))
@@ -485,6 +488,7 @@ def api_update_apply(payload: dict[str, Any] = Body(default={})) -> dict[str, An
 
 @app.post("/api/update/dismiss")
 def api_update_dismiss() -> dict[str, Any]:
+    from . import updater
     try:
         return updater.dismiss()
     except updater.UpdateError as exc:
