@@ -64,7 +64,6 @@ ACTIVE_STATES = frozenset({
 
 _STATE_LOCK = threading.RLock()
 _CHECK_LOCK = threading.Lock()
-_DOWNLOAD_LOCK = threading.Lock()
 
 _LOG_LIMIT = 200
 
@@ -376,7 +375,6 @@ def _write_state(patch: dict[str, Any]) -> dict[str, Any]:
         return state
 
 
-
 def _set_state(**patch: Any) -> dict[str, Any]:
     """Merge *patch* into the persisted job state."""
     with _STATE_LOCK:
@@ -582,6 +580,7 @@ def _download_installer(job: str, release: dict[str, Any]) -> Path:
                message=f"Downloading {asset['name']} ({_human_bytes(size)})…")
     _log(f"Downloading {asset['url']}")
     _download(asset["url"], dest, label=asset["name"], on_progress=progress)
+    cleanup_old_downloads()
 
     _set_state(state="verifying", progress=0.92, message="Verifying the download…")
     checksum_asset = _pick_checksum(release, asset)
@@ -726,8 +725,15 @@ def _launch_runner(plan: dict[str, Any]) -> int:
     return daemon.start_detached(argv, cwd=str(root), env=env)
 
 
-def _shutdown_soon(delay: float = 0.8) -> None:
-    """Let the HTTP response flush, then ask uvicorn to exit."""
+def _shutdown_soon(delay: float = 0.8, signal_timeout: float = 30.0) -> None:
+    """Let the HTTP response flush, then ask uvicorn to exit gracefully.
+
+    First we set ``should_exit`` on the live uvicorn ``Server`` instance. If
+    that succeeds we trust uvicorn to run its lifespan shutdown handlers and
+    exit the process. If no server handle is found, or if we are still alive
+    after sending SIGINT, we clear the PID file and force-exit as a last
+    resort so the detached update runner can take over the port.
+    """
 
     def _go() -> None:
         time.sleep(delay)
@@ -735,9 +741,21 @@ def _shutdown_soon(delay: float = 0.8) -> None:
             from . import server
 
             if server.request_shutdown():
-                return
-        except Exception:  # noqa: BLE001 - fall through to a hard exit
+                # Uvicorn will exit on its own; give it a bounded window before
+                # any harder fallback. If the process exits in the meantime this
+                # daemon thread is simply terminated.
+                time.sleep(signal_timeout)
+        except Exception:  # noqa: BLE001 - fall through to signal fallback
             pass
+
+        try:
+            import signal
+
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(signal_timeout)
+        except Exception:  # noqa: BLE001 - last resort
+            pass
+
         try:
             daemon.clear_pid()
         finally:

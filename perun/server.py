@@ -39,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
 from . import (__version__, config, context, control, db, discovery, git, manifest,
-               memory, projects, providers, registry, scaffold)
+               memory, projects, providers, registry, scaffold, updater)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -466,37 +466,29 @@ def health() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @app.get("/api/update/check")
 def api_update_check(refresh: bool = False) -> dict[str, Any]:
-    from . import updater
     return updater.check(refresh=refresh)
 
 
 @app.get("/api/update/status")
 def api_update_status() -> dict[str, Any]:
-    from . import updater
     return updater.status()
 
 
 @app.post("/api/update/apply")
 def api_update_apply(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-    from . import updater
     try:
         return updater.apply(confirm=True, force=bool(payload.get("force")),
                              restart=bool(payload.get("restart", True)))
-    except Exception as exc:
-        if type(exc).__name__ == "UpdateError":
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        raise
+    except updater.UpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/update/dismiss")
 def api_update_dismiss() -> dict[str, Any]:
-    from . import updater
     try:
         return updater.dismiss()
-    except Exception as exc:
-        if type(exc).__name__ == "UpdateError":
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        raise
+    except updater.UpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 _MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
@@ -2736,30 +2728,23 @@ else:  # pragma: no cover
 
 
 def request_shutdown() -> bool:
-    """Ask uvicorn to exit gracefully. Uvicorn in server mode is harder to signal
-    from another thread; the update runner falls back to waiting for the port to
-    be released and starting fresh."""
-    # Try to set should_exit on any running Server instances.
+    """Ask uvicorn to exit gracefully by setting ``should_exit`` on the running
+    ``Server`` instance(s). Returns ``True`` when at least one server was told to
+    stop; ``False`` when no handle was found and the caller should fall back to
+    sending a signal."""
     try:
         from uvicorn.server import Server
 
+        stopped = False
         for server in list(getattr(Server, "servers", [])):
             try:
                 server.should_exit = True
-                return True
+                stopped = True
             except Exception:
                 continue
+        return stopped
     except Exception:
-        pass
-    try:
-        import asyncio
-
-        for task in asyncio.all_tasks():
-            # Best effort only; uvicorn doesn't expose a global handle here.
-            pass
-    except Exception:
-        pass
-    return False
+        return False
 
 
 def serve(host: str | None = None, port: int | None = None, *,

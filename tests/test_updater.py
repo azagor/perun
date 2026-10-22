@@ -278,3 +278,88 @@ try:
         assert "up to date" in r.json()["detail"].lower()
 except ImportError:
     pass
+
+
+def test_apply_git_pull_and_installs_requirements(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    (repo / "requirements.txt").write_text("fastapi\n")
+    calls = []
+
+    def fake_git(root, *args, **kw):
+        class R:
+            returncode = 0
+            stdout = "Already up to date."
+            stderr = ""
+        calls.append(args)
+        if args[:2] == ("pull", "--ff-only"):
+            (root / "requirements.txt").write_text("fastapi>=0.110\n")
+        return R()
+
+    monkeypatch.setattr(updater, "_git", fake_git)
+    pip_calls = []
+
+    def fake_pip(args, **kw):
+        pip_calls.append(args)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_pip)
+    plan = {"root": str(repo), "job": "j1"}
+    updater._apply_git(plan)
+    assert ("pull", "--ff-only") in calls
+    assert any("pip" in str(a) for a in pip_calls)
+
+
+def test_apply_installer_fails_logs_error(monkeypatch, tmp_path):
+    installer = tmp_path / "PerunSetup.exe"
+    installer.write_text("fake")
+
+    def fake_run(args, **kw):
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "installer failed"
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(updater, "updates_dir", lambda: tmp_path)
+    plan = {"installer": str(installer), "job": "j1"}
+    with pytest.raises(updater.UpdateError) as exc:
+        updater._apply_installer(plan)
+    assert "exited with code 1" in str(exc.value)
+
+
+def test_wait_for_pid_stops_stale_process(monkeypatch):
+    calls = []
+    monkeypatch.setattr(updater.daemon, "is_running", lambda pid: True)
+    monkeypatch.setattr(updater.daemon, "stop", lambda pid, timeout: (calls.append(("stop", pid)) or False))
+    monkeypatch.setattr(updater.daemon, "kill", lambda pid: calls.append(("kill", pid)))
+    updater._wait_for_pid(1234, lambda msg: None, timeout=0.1)
+    assert ("stop", 1234) in calls
+    assert ("kill", 1234) in calls
+
+
+def test_apply_rejects_concurrent_update(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    monkeypatch.setattr(config, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(updater, "__version__", "0.7.21")
+    monkeypatch.setattr(updater, "check", lambda refresh=False: {
+        "ok": True, "current": "0.7.21", "latest": "0.8.0", "update_available": True,
+        "release": {"version": "0.8.0", "assets": []},
+    })
+    updater._write_json(tmp_path / "state.json", {"state": "downloading"})
+    old_path = updater._state_path
+    updater._state_path = lambda: tmp_path / "state.json"
+    try:
+        with pytest.raises(updater.UpdateError) as exc:
+            updater.apply(confirm=True)
+        assert "already in progress" in str(exc.value)
+    finally:
+        updater._state_path = old_path

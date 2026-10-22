@@ -794,6 +794,7 @@ function parseHash() {
 function closeStreams() {
     if (state.runSource) { state.runSource.close(); state.runSource = null; }
     if (state.activitySource) { state.activitySource.close(); state.activitySource = null; }
+    stopUpdatePoll();
 }
 
 async function router() {
@@ -4552,7 +4553,11 @@ function stopUpdatePoll() {
 }
 
 function renderUpdateLog(lines) {
-    return lines.map((l) => `<div class="log-line ${esc(l.level || 'info')}">${esc(l.at ? l.at.split('T')[1].split('.')[0] : '')} ${esc(l.line)}</div>`).join('');
+    return lines.map((l) => {
+        let stamp = '';
+        try { stamp = l.at ? l.at.split('T')[1].split('.')[0] : ''; } catch (_) {}
+        return `<div class="log-line ${esc(l.level || 'info')}">${esc(stamp)} ${esc(l.line)}</div>`;
+    }).join('');
 }
 
 let _unlockPromptDismissed = false;
