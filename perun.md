@@ -27,7 +27,7 @@ commands:
   install: python -m perun install --machine
   test: python -m pytest tests/ -q
 links:
-  repository: C:\my_apps\perun
+  repository: https://github.com/azagor/perun
 anchors:
 - label: Dashboard
   kind: url
@@ -44,7 +44,7 @@ anchors:
 - label: Product design
   kind: doc
   path: docs/DESIGN.md
-- label: AGENTS.md context-budget optimisation (design proposal)
+- label: AGENTS.md context-budget optimisation
   kind: doc
   path: docs/AGENTS_OPTIMIZATION.md
 - label: Perun agent reference (verbatim, retrievable)
@@ -90,6 +90,21 @@ anchors:
 - label: perun.memory
   kind: file
   path: perun/memory.py
+- label: perun.context
+  kind: file
+  path: perun/context.py
+- label: perun.context_map
+  kind: file
+  path: perun/context_map.py
+- label: perun.secret_store
+  kind: file
+  path: perun/secret_store.py
+- label: perun.updater
+  kind: file
+  path: perun/updater.py
+- label: perun.handbook
+  kind: file
+  path: perun/handbook.py
 - label: perun.telegram
   kind: file
   path: perun/telegram.py
@@ -105,9 +120,9 @@ anchors:
 - label: pyproject.toml
   kind: file
   path: pyproject.toml
-- label: .github/workflows
+- label: .github/workflows/release.yml
   kind: file
-  path: .github/workflows
+  path: .github/workflows/release.yml
 - label: PerunChat local UI
   kind: url
   url: http://127.0.0.1:8760/#/perunchat
@@ -126,6 +141,9 @@ anchors:
 - label: perun_chat repo
   kind: url
   url: https://github.com/azagor/perun_chat
+- label: .github/workflows
+  kind: file
+  path: .github/workflows
 version: 1
 ---
 

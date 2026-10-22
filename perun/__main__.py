@@ -40,6 +40,7 @@ from typing import Any
 from . import (config, context, daemon, db, discovery, handbook, memory,
                project_roots, registry, secret_store)
 from . import secrets as crypto
+from . import updater
 
 
 # --------------------------------------------------------------------------- #
@@ -1451,7 +1452,61 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")
     p.set_defaults(func=cmd_mcp)
 
+    p_up = sub.add_parser("update", help="check for and apply Perun updates from GitHub")
+    up_sub = p_up.add_subparsers(dest="action")
+    pu_check = up_sub.add_parser("check", help="check for a newer release")
+    pu_check.add_argument("--refresh", action="store_true")
+    pu_apply = up_sub.add_parser("apply", help="download and apply the update")
+    pu_apply.add_argument("--force", action="store_true")
+    pu_apply.add_argument("--no-restart", action="store_true")
+    pu_runner = up_sub.add_parser("runner", help="internal runner")
+    pu_runner.add_argument("--plan", required=True)
+    pu_status = up_sub.add_parser("status", help="update job status")
+    pu_dismiss = up_sub.add_parser("dismiss", help="dismiss finished update job")
+    p_up.set_defaults(func=cmd_update)
+
     return parser
+
+
+
+def cmd_update(args):
+    action = getattr(args, 'action', None) or 'check'
+    if action == 'check':
+        data = __import__('perun.updater', fromlist=['check']).check(refresh=getattr(args,'refresh',False))
+        import json
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get('ok') else 1
+    if action == 'apply':
+        try:
+            from perun import updater
+            res = updater.apply(confirm=True, force=getattr(args,'force',False), restart=not getattr(args,'no_restart',False))
+        except Exception as exc:
+            import json
+            print(json.dumps({'ok':False,'error':str(exc)}))
+            return 1
+        import json
+        print(json.dumps(res, indent=2, default=str))
+        return 0
+    if action == 'status':
+        from perun import updater
+        import json
+        print(json.dumps(updater.status(), indent=2, default=str))
+        return 0
+    if action == 'dismiss':
+        try:
+            from perun import updater
+            import json
+            print(json.dumps(updater.dismiss(), indent=2, default=str))
+            return 0
+        except Exception as exc:
+            import json
+            print(json.dumps({'ok':False,'error':str(exc)}))
+            return 1
+    if action == 'runner':
+        from perun import updater
+        return updater.run_runner(getattr(args,'plan'))
+    print('[perun] unknown update action: ' + str(action))
+    return 2
 
 
 def cmd_project_roots(args) -> int:

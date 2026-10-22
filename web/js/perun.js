@@ -36,6 +36,7 @@ const state = {
     activitySource: null,
     // Orchestrator chat continuity (session per dashboard visit).
     orchestrator: { sessionPk: null, ocSid: '' },
+    update: null,
 };
 
 /* ---------------------------------------------------------------- api ---- */
@@ -780,6 +781,7 @@ const routes = {
     '#/perunchat': viewPerunChat,
     '#/providers': viewProviders,
     '#/settings': viewSettings,
+    '#/updates': viewUpdates,
 };
 let currentRoute = '';
 
@@ -835,6 +837,7 @@ async function viewDashboard() {
         `<span class="lg working"><i class="lg-eye"></i> Working — an agent is executing right now</span>
          <span class="lg awake"><i class="lg-eye"></i> Awake — active in the last 15 min</span>
          <span class="lg"><i class="lg-eye"></i> Idle — registered, quiet</span>`));
+    v.appendChild(updateBanner());
 
     const grid = el('div', { class: 'grid stats-grid' });
     const stat = (label, value, foot, id) => el('div', { class: 'card stat', ...(id ? { id } : {}) },
@@ -4307,12 +4310,21 @@ async function viewSettings() {
     $('#s-uninstall').addEventListener('click', () => confirmDialog('Uninstall globally', 'Remove the perun MCP server and commands from your global OpenCode config? Runtime data is kept.', async () => {
         toast('Run `python -m perun install --uninstall` in a terminal', 'ok');
     }, 'OK'));
+
+    // ---- about / updates ----
+    v.appendChild(sectionTitle('About Perun'));
+    const aboutCard = el('div', { class: 'card' },
+        `<p class="secondary">Version <b>v${esc(state.health ? state.health.version : '?')}</b> · ${esc((state.update && state.update.latest) ? `latest: v${state.update.latest}` : 'checking releases…')}</p>
+         <div class="form-actions"><button class="btn ghost" id="s-updates">↗ Updates</button></div>`);
+    v.appendChild(aboutCard);
+    $('#s-updates').addEventListener('click', () => goto('#/updates'));
 }
 
 /* ========================================================== BOOT ======= */
 function wireChrome() {
     document.querySelectorAll('.nav-item').forEach((n) => n.addEventListener('click', () => goto(n.dataset.route)));
     $('#btn-refresh').addEventListener('click', router);
+    $('#btn-update').addEventListener('click', () => goto('#/updates'));
     $('#btn-quick-run').addEventListener('click', () => goto('#/console'));
     $('#global-search').addEventListener('submit', (e) => {
         e.preventDefault();
@@ -4364,6 +4376,183 @@ async function refreshDashboardStats() {
     } catch (e) {
         // Silent best-effort refresh; the next poll will retry.
     }
+}
+
+/* ========================================================= UPDATES ==== */
+let _updatePollInterval = null;
+
+async function checkForUpdate(refresh = false) {
+    try {
+        const info = await api('/api/update/check' + (refresh ? '?refresh=1' : ''));
+        state.update = info;
+        renderUpdatePill();
+        return info;
+    } catch (e) {
+        // Keep any previous cached state; do not spam errors.
+        if (!state.update) state.update = { ok: false, error: e.message };
+        renderUpdatePill();
+        return state.update;
+    }
+}
+
+function renderUpdatePill() {
+    const btn = $('#btn-update');
+    if (!btn) return;
+    const info = state.update;
+    if (info && info.update_available && info.latest) {
+        btn.classList.remove('hidden');
+        btn.textContent = `↑ v${info.latest} available`;
+        btn.title = `A new Perun release is available: v${info.latest}`;
+    } else {
+        btn.classList.add('hidden');
+    }
+}
+
+function updateBanner() {
+    const info = state.update;
+    if (!info || !info.update_available || !info.latest) return el('div');
+    const wrap = el('div', { class: 'update-banner' });
+    wrap.appendChild(el('div', { class: 'info' },
+        `<strong>Perun v${esc(info.latest)} is available</strong>
+         <span class="muted">Current version: v${esc(info.current)}${info.stale ? ' · last check failed' : ''}</span>`));
+    const actions = el('div', { class: 'actions' });
+    actions.appendChild(el('button', { class: 'btn primary', onclick: () => goto('#/updates') }, 'View update'));
+    if (info.stale && info.error) {
+        actions.appendChild(el('span', { class: 'muted', title: esc(info.error) }, '(could not reach GitHub)'));
+    }
+    wrap.appendChild(actions);
+    return wrap;
+}
+
+async function viewUpdates() {
+    $('#topbar-title').textContent = 'Updates';
+    const v = $('#view');
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow">Perun</div><h1>Self-update</h1>
+         <div class="sub">Check for new releases and install them from the dashboard.</div></div>`));
+
+    const info = await checkForUpdate();
+    const status = await api('/api/update/status');
+    const job = status.job || {};
+
+    const card = el('div', { class: 'card' });
+    card.innerHTML = `
+        <div class="card-head"><h4>Current version</h4><span class="badge">v${esc(info.current)}</span></div>
+        <div class="form-row">
+            <div>
+                <div class="stat-label">Installed from</div>
+                <div class="mono">${esc((info.mode || {}).label || 'unknown')}</div>
+            </div>
+            <div>
+                <div class="stat-label">Latest release</div>
+                <div class="mono">${info.latest ? `v${esc(info.latest)}` : '—'}</div>
+            </div>
+        </div>
+        <p class="secondary" id="update-message">${esc(job.message || infoMessage(info))}</p>
+        <div class="form-actions">
+            <button class="btn primary" id="btn-check-update">⟳ Check for updates</button>
+            <button class="btn ${info.update_available ? 'primary' : 'ghost'}" id="btn-install-update" ${info.update_available ? '' : 'disabled'}>Install update</button>
+            <button class="btn ghost" id="btn-dismiss-update" ${job.state === 'done' || job.state === 'failed' ? '' : 'disabled'}>Dismiss</button>
+        </div>
+        <div class="mt" id="update-progress"></div>
+        <div class="mt update-log" id="update-log" style="display:${job.log && job.log.length ? 'block' : 'none'}">${renderUpdateLog(job.log || [])}</div>`;
+    v.appendChild(card);
+
+    if (info.release && info.release.notes) {
+        v.appendChild(el('div', { class: 'card' },
+            `<div class="card-head"><h4>Release notes</h4><span class="muted">${esc(timeAgo(info.release.published_at))}</span></div>
+             <div class="md-body">${renderMarkdown(info.release.notes)}</div>`));
+    }
+
+    $('#btn-check-update').addEventListener('click', async () => {
+        $('#btn-check-update').disabled = true;
+        $('#update-message').textContent = 'Checking GitHub…';
+        await checkForUpdate(true);
+        await viewUpdates();
+    });
+    $('#btn-install-update').addEventListener('click', () => confirmUpdate());
+    $('#btn-dismiss-update').addEventListener('click', async () => {
+        await api('/api/update/dismiss', { method: 'POST' });
+        state.update = null;
+        renderUpdatePill();
+        await viewUpdates();
+    });
+
+    startUpdatePoll();
+}
+
+function infoMessage(info) {
+    if (!info.ok && info.error) return `Could not check for updates: ${info.error}`;
+    if (info.update_available) return `Perun v${info.latest} is available.`;
+    return 'Perun is up to date.';
+}
+
+function confirmUpdate(force = false) {
+    const info = state.update;
+    if (!info || !info.update_available) return;
+    confirmDialog('Install update',
+        `This will update Perun from v${info.current} to v${info.latest}. The dashboard will restart automatically when the update finishes.`,
+        () => doUpdate(force),
+        'Install update');
+}
+
+async function doUpdate(force = false) {
+    try {
+        const res = await api('/api/update/apply', { method: 'POST', body: { force } });
+        $('#update-message').textContent = res.job ? res.job.message : 'Update started…';
+        $('#btn-install-update').disabled = true;
+        startUpdatePoll();
+        toast('Update started — the dashboard will restart shortly', 'ok');
+    } catch (e) {
+        toast(e.message, 'err');
+    }
+}
+
+function startUpdatePoll() {
+    if (_updatePollInterval) return;
+    _updatePollInterval = setInterval(async () => {
+        try {
+            const st = await api('/api/update/status');
+            if (!st) return;
+            const job = st.job || {};
+            const msg = $('#update-message');
+            if (msg) msg.textContent = job.message || '';
+            const bar = $('#update-progress');
+            if (bar && job.progress > 0) {
+                bar.innerHTML = `<div style="background:var(--bg-inset);border-radius:var(--radius-sm);overflow:hidden;height:10px;"><div style="width:${Math.round(job.progress * 100)}%;background:var(--gold-light);height:100%;transition:width .2s;"></div></div>`;
+            }
+            const logBox = $('#update-log');
+            if (logBox && job.log && job.log.length) {
+                logBox.style.display = 'block';
+                logBox.innerHTML = renderUpdateLog(job.log);
+            }
+            if (job.state === 'done') {
+                stopUpdatePoll();
+                toast(`Updated to v${esc(job.to_version)} — refreshing`, 'ok');
+                setTimeout(() => location.reload(), 1200);
+            } else if (job.state === 'failed') {
+                stopUpdatePoll();
+                toast(`Update failed: ${job.error || job.message}`, 'err');
+                const btn = $('#btn-install-update');
+                if (btn) btn.disabled = false;
+            }
+        } catch (e) {
+            // Server may be restarting — keep polling for a while.
+            const msg = $('#update-message');
+            if (msg && msg.textContent !== 'Waiting for Perun to come back…') {
+                msg.textContent = 'Waiting for Perun to come back…';
+            }
+        }
+    }, 1200);
+}
+
+function stopUpdatePoll() {
+    if (_updatePollInterval) { clearInterval(_updatePollInterval); _updatePollInterval = null; }
+}
+
+function renderUpdateLog(lines) {
+    return lines.map((l) => `<div class="log-line ${esc(l.level || 'info')}">${esc(l.at ? l.at.split('T')[1].split('.')[0] : '')} ${esc(l.line)}</div>`).join('');
 }
 
 let _unlockPromptDismissed = false;
@@ -4435,9 +4624,11 @@ async function boot() {
     await router();
     promptForUnlockPassword();
     refreshDashboardStats();
+    checkForUpdate();
     setInterval(refreshHealth, 15000);
     setInterval(refreshPresence, 4000);
     setInterval(refreshDashboardStats, 10000);
+    setInterval(checkForUpdate, 600000);  // 10 min
     window.addEventListener('hashchange', router);
 }
 

@@ -2,6 +2,59 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## Unreleased
+
+### Added
+
+- **Dashboard self-update.** Perun can now check GitHub releases and install a
+  newer version directly from the dashboard.
+  * `perun/updater.py` — `check()` queries the GitHub releases API (cached),
+    `install_mode()` detects whether this copy is a git checkout or a Windows
+    installer, and `apply()` prepares the update while the server is still
+    live.
+  * Updates are applied by a **detached runner** (`perun update runner`) that
+    waits for the server to exit, runs `git pull --ff-only` or the release
+    installer, restarts Perun, then polls `/api/health` until the new version
+    answers. The job state is persisted in `~/.perun/update-state.json` so the
+    dashboard can stream progress across restarts.
+  * `perun update check|status|apply|dismiss` (CLI) — the same surface without
+    the dashboard.
+  * New REST endpoints: `GET /api/update/check`, `GET /api/update/status`,
+    `POST /api/update/apply`, `POST /api/update/dismiss`.
+  * Dashboard UI: an update pill in the topbar, a banner on the Dashboard, a
+    dedicated `#/updates` view with release notes and an install button, plus
+    an "About Perun" card in Settings.
+  * GitHub Actions now publishes a `PerunSetup.exe.sha256` checksum asset; the
+    installer download verifies it when present.
+
+### Docs
+
+- Documentation refreshed against the v0.7.21 codebase (no code change):
+  * `docs/CODEMAP.md` — `__version__` bumped, the `tasks` table and
+    `doc_chunks.embedded_hash` noted, the eight missing test files
+    (`test_context`, `test_context_map`, `test_secret_store`, `test_daemon`,
+    `test_project_roots`, `test_perunchat_bridge`, `test_perunchat_proxy`,
+    `test_prompt_chain.js`) added, and stale identifiers corrected
+    (`git.status()` → `validate_remote()`, `server._register_project()` →
+    `_sync_manifest()`).
+  * `docs/TECHNICAL_DOCUMENTATION.md` — the `tasks` table, the perunchat
+    `bridge/status` and `rooms` endpoints, the `agent_id` field on
+    `/api/perunchat/status`, the `embed_dim` / `telegram_pair_code` /
+    `perunchat_*` settings, and the full environment-override list. The stale
+    "empty `telegram_allowed_chats` = pair-on-first-message" claim is
+    corrected: an empty allow-list grants **nobody** until `/pair <code>`.
+    The v0.7.21 entry is dated and the kernel size corrected to 1,832 B.
+  * `README.md` — MCP tool count 25, the `context` / `secret` / `stop` /
+    `restart` / `project-roots` CLI groups, the Context-layer and secret-store
+    subsystems in the layout and feature list.
+  * `docs/DESIGN.md` — brought up to date for the Context layer, secret store,
+    provider management, PerunChat, `project_roots`, and the single shared
+    Telegram bridge.
+  * `docs/AGENTS_OPTIMIZATION.md` — status table, kernel size, and baseline
+    measurements reconciled with the shipped implementation.
+  * `perun.md` / `AGENTS.md` — anchors for the Context-layer modules; the
+    `mcp-grep` reference replaced with `perun_grep` / `perun_ast_grep`.
+
 ## v0.7.21 - 2026-10-21
 
 ### Added
@@ -62,7 +115,7 @@ All notable changes are recorded here. Single source of truth for release notes.
   * **All five managed projects migrated:** `perun` (9,435 B → 5,037 B),
     `trading_bot` (62,631 B → 62,312 B), `parental_control` (78,055 B → 60,644 B),
     `perun_in_the_machine` (6,024 B → 3,074 B), `perunchat` (3,446 B → 2,670 B).
-- **The global kernel is now ~1.4 KB instead of ~6.1 KB.** The always-on block
+- **The global kernel is now 1,832 B instead of ~6.1 KB.** The always-on block
   in the global `AGENTS.md` was replaced by a generated kernel: a short
   orientation plus the handbook key table. The **complete previous global guide
   is kept verbatim** as `handbook.global` and stays reachable in one call —

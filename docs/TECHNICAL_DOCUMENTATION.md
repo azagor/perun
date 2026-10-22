@@ -1,24 +1,23 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.21 (see §15). This release introduces the Perun Context layer: a bounded, keyed, retrievable replacement for the ever-growing `AGENTS.md` ambient context. Reference material is moved into project-scoped context docs (`perun.context.*`, `trading-bot.context.*`, etc.), the complete original `AGENTS.md` is retained verbatim as `<slug>.agents.full`, and a machine-checkable losslessness proof (the context map in `.perun/context-map.json`) is enforced by `perun context verify`. All five managed projects have been migrated. The release also ships the encrypted secret store (`perun_secret`) and the generated global `AGENTS.md` kernel (~1.4 KB). `perun.__version__` reports `0.7.21`.
+**Latest release:** v0.7.21 (see §15). This release introduces the Perun Context layer: a bounded, keyed, retrievable replacement for the ever-growing `AGENTS.md` ambient context. Reference material is moved into project-scoped context docs (`perun.context.*`, `trading-bot.context.*`, etc.), the complete original `AGENTS.md` is retained verbatim as `<slug>.agents.full`, and a machine-checkable losslessness proof (the context map in `.perun/context-map.json`) is enforced by `perun context verify`. All five managed projects have been migrated. The release also ships the encrypted secret store (`perun_secret`) and the generated global `AGENTS.md` kernel (1,832 B). `perun.__version__` reports `0.7.21`.
 
-**In development — Perun Context (see §3).** `AGENTS.md` is ambient context: it
-is paid for in full on every request of every session, and it grows without
-bound because every project carries its own copy of the same reference
-material. The **Context layer** (`perun/context.py`) stores reference material
-as keyed, vector-backed documents that are retrieved on demand instead of being
-inlined. The always-on global `AGENTS.md` block is now a generated **kernel**
-of ≈1.4 KB (down from ≈6.1 KB), and the complete previous global guide is kept
-verbatim as the `handbook.global` context doc — nothing was deleted, only
-relocated. Awareness parity is a contract with four mechanisms: the original
-`AGENTS.md` is retained verbatim, the key inventory is always visible,
-reference material is **pre-fetched by task** on the orchestrated path, and
-`perun context verify` gates every migration. Credentials moved to an
-**encrypted secret store** (`perun/secret_store.py`, `perun_secret` MCP tool,
-`perun secret` CLI) — encrypted at rest, pulled by name at the moment of use,
-never listed.
+**The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
+for in full on every request of every session, and it grows without bound
+because every project carries its own copy of the same reference material. The
+**Context layer** (`perun/context.py`) stores reference material as keyed,
+vector-backed documents that are retrieved on demand instead of being inlined.
+The always-on global `AGENTS.md` block is now a generated **kernel** of 1,832 B
+(down from ≈6.1 KB), and the complete previous global guide is kept verbatim as
+the `handbook.global` context doc — nothing was deleted, only relocated.
+Awareness parity is a contract with four mechanisms: the original `AGENTS.md` is
+retained verbatim, the key inventory is always visible, reference material is
+**pre-fetched by task** on the orchestrated path, and `perun context verify`
+gates every migration. Credentials moved to an **encrypted secret store**
+(`perun/secret_store.py`, `perun_secret` MCP tool, `perun secret` CLI) —
+encrypted at rest, pulled by name at the moment of use, never listed.
 
-**Release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
+**Earlier release details (v0.6.4):** instruction text lives *only* on disk. Projects keep custom
 instructions as Markdown files under `.perun/instructions/`, each with YAML front matter
 (`name`, `enabled`); enabled files are injected into new agent sessions in sorted filename
 order. The legacy `projects.instructions` / `projects.instructions_path` columns and both
@@ -125,22 +124,26 @@ can all write concurrently.
 
 | Table | Purpose | Notes |
 |---|---|---|
-| `projects` | registry | `slug` unique, `path` unique, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch` |
-| `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `message_count`, `status` |
-| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 whenever a model was resolved and is forwarded as `--model`), `agent`, `output`, `error` |
+| `projects` | registry | `slug` unique, `path` unique, `root`, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `color`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch`, `git_provider`, `last_seen_at` |
+| `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `title`, `status`, `message_count`, `last_error` |
+| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 whenever a model was resolved and is forwarded as `--model`), `agent`, `prompt`, `exit_code`, `output`, `error` |
+| `tasks` | reusable per-project tasks | `kind` (default `prompt`), `prompt`, `tools`/`skills` (JSON arrays), `enabled`, `sort_order`; re-runnable presets surfaced in the dashboard |
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
 | `memory` | facts | `scope` ∈ {global,project}; **`scope='global'` rows use `project_id=0`**; `UNIQUE(scope,project_id,content_hash)` |
-| `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)` |
+| `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)`, `embedded_hash` (which content the stored vector was computed from) |
 | `context_docs` | **Context layer** — keyed reference docs | `key` unique per scope, `scope` ∈ {global,project}, `content_hash`, `embedded_hash`, `embedding` (nullable blob), `body`; global rows use `project_id=0` |
 | `secret_store` | encrypted secrets | `name` unique per scope, `value` holds an `enc:<base64>` Fernet blob (never plaintext), `hint` (metadata only) |
 | `settings` | key/value scratch | |
-| `bridge_links` | Telegram routing | `chat_id` → `project_id` + `session_pk` |
+| `bridge_links` | Telegram routing | `chat_id` unique → `project_id` + `session_pk`, `updated_at` |
 
-Column additions after v0.1.0 are applied idempotently by `db._ADDED_COLUMNS`
-(`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`, `runs.model_explicit`), so existing
-databases migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
+Column additions after the first release are applied idempotently by
+`db._ADDED_COLUMNS` (`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
+`runs.model_explicit`, `doc_chunks.embedded_hash`), so existing databases
+migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
 `projects.instructions_path`) are dropped idempotently by `db._REMOVED_COLUMNS` on next start, so
 fresh and upgraded schemas converge. Instruction text is never stored in the database.
+`db.SCHEMA_VERSION` (currently `2`) is written to `PRAGMA user_version` on every
+start, so future non-additive migrations can tell what already ran.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
 `UNIQUE(scope, project_id, content_hash)` constraint would not dedupe global
@@ -221,7 +224,7 @@ the default is to inject nothing rather than something plausible.
 **The two surfaces.**
 
 * **OpenCode TUI** — the always-on global `AGENTS.md` holds a generated
-  **kernel** (≈1.4 KB, down from ≈6.1 KB): a short orientation plus the
+  **kernel** (1,832 B, down from ≈6.1 KB): a short orientation plus the
   handbook key table. The agent pulls the rest with `perun_context("<task>")`.
 * **Orchestrated runs** — Perun pre-fetches and injects automatically in a
   `--- PERUN CONTEXT START/END ---` envelope (`orchestrator.compose_prompt()`),
@@ -587,7 +590,8 @@ passes only flags accepted by the TUI (`--prompt` and `--session`); `--model` an
 `--agent` are omitted because they belong to `opencode run`, not the base
 `opencode` command. Model and agent resolution for TUI sessions is delegated to
 OpenCode's own project defaults (including the values mirrored into
-`opencode.json` by `sync_opencode_config()`).
+`opencode.json` by `sync_opencode_config()`) — the TUI cannot be told
+`--model`/`--agent` directly.
 
 `--model` is passed whenever a non-empty model was resolved (so `model_explicit`
 is `1`); `--agent` is passed only when an agent value is set. With `cwd` set to the
@@ -639,6 +643,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
+| GET | `/api/update/check` | latest GitHub release vs running version; `update_available`, `release`, install `mode`; cached 30 min |
+| GET | `/api/update/status` | persisted update job (`state`, `progress`, `log`, `from_version`, `to_version`) plus live `current` version |
+| POST | `/api/update/apply` | start the update; requires `{}` and the API token; refuses if no update, unsupported install mode, or dirty git checkout |
+| POST | `/api/update/dismiss` | clear a finished (`done`/`failed`) update job from the dashboard |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
 | GET | `/api/providers` | LLM providers merged from `opencode auth list` and `opencode.json[c]`, each with `connected`/`configured`/`status`, plus a `catalog` of well-known providers, the `config_file` path, and `config_had_comments` (true when comments/trailing commas will be lost on rewrite) |
 | POST | `/api/providers/{provider_id}/logout` | disconnect a provider via `opencode auth logout`; returns `{ok, error}` |
@@ -651,7 +659,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/mcp/servers` | every MCP server OpenCode loads (global `~/.config/opencode/opencode.json[c]` + per-project `opencode.json[c]`) with a config-derived `status`, transport, resolved executable, and `shadowed_by` (+ `count`, `counts`); duplicate names across config-file variants collapse to one and unparseable files appear in `parse_errors`; config only, nothing is spawned |
 | POST | `/api/mcp/servers/probe` | live-probe one configured MCP server `{name,scope:"global"\|"project",project?}` — spawns a local server (or calls a remote URL) and runs the MCP `initialize` + `tools/list` handshake, returning `status`, `tools`, `latency_ms`, and any `stderr`; the command is read from disk, never the request. Gated and timeout-capped, so a probe may return `status:"busy"` when too many run at once |
 | GET | `/api/projects` | list projects |
-| POST | `/api/projects` | wizard: register / create / clone `{method,path,…}` |
+| POST | `/api/projects` | wizard: register / create / clone `{method,path,…}`; also accepts `clone_url`, `root`, `bootstrap`, `description`, `kind`, `tags`, `color`, `instructions`, `sort_order` |
 | GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
 | PATCH | `/api/projects/{slug}` | update fields; when `model`/`agent` change, also mirrors them into the project's `opencode.json[c]` and returns the result in `opencode_config` |
 | DELETE | `/api/projects/{slug}` | unregister (refuses the control project) |
@@ -678,7 +686,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/search/global-grep` | regex content search across all registered projects (`pattern`, optional `projects`, `case_sensitive`, `whole_word`, `include`, `max_results`) — uses ripgrep with Python fallback |
 | POST | `/api/search/global/ast-grep` | structural code search across all registered projects (`rule`, optional `projects`, `max_results`) — uses ast-grep with Python-AST fallback |
 | POST | `/api/search/unified` | unified cross-project search (`query` for memory, `pattern` for grep, `rule` for ast-grep); fuses and re-ranks results |
-| GET | `/api/projects/{slug}/manifest` | manifest (`?live=true` reads disk) |
+| GET | `/api/projects/{slug}/manifest` | manifest (`?live=true` is the default and reads disk; `live=false` returns the stored snapshot) |
 | POST | `/api/projects/{slug}/manifest/refresh` | re-read disk, merge to registry |
 | POST | `/api/projects/{slug}/manifest/export` | generate manifest from registry (409 if exists) |
 | PUT | `/api/projects/{slug}/manifest` | write manifest `{content}` or `{data,body}` |
@@ -722,8 +730,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the optional `PerunBridge` task re-reads the bot |
 | POST | `/api/telegram/unlock` | `{password,remember?}` — decrypt and unlock an encrypted stored token, set `PERUN_PASSWORD` for the running process, optionally persist it (Windows DPAPI-encrypted in `<PERUN_HOME>/secret`), then start/reload the bridge; if another process owns the bridge lock and `remember` is false, `bridge.reason` explains why |
 | POST | `/api/telegram/send` | send a message |
-| GET | `/api/perunchat/status` | `{configured, endpoint, rest_base}` — reports whether a PerunChat API key is configured |
+| GET | `/api/perunchat/status` | `{configured, endpoint, rest_base, agent_id}` — reports whether a PerunChat API key is configured and, when the gateway is reachable, the agent id resolved from `GET /api/v1/me` (failures are swallowed) |
 | GET | `/api/perunchat/key` | loopback only — returns the configured PerunChat API key so the dashboard can open a WebSocket directly |
+| GET | `/api/perunchat/bridge/status` | the autonomous chat bridge's state: `{available, enabled, running, ...bridge.status}` — or all-false when no bridge exists |
+| GET | `/api/perunchat/rooms` | proxies the gateway's `/api/v1/rooms` room discovery (active, joined, well-known public rooms) to feed the dashboard auto-join picker |
 | GET/POST/DELETE | `/api/perunchat/social/*` | proxied social graph endpoints (friends, requests, blocked, status) forwarded to the PerunChat gateway |
 | GET/POST/DELETE | `/api/perunchat/trusted[/{agent_id}]` | local trust list (`perunchat_trusted`) — internal context is shared only with these agents, and only in private/group rooms |
 | GET | `/` etc. | static dashboard from `web/` |
@@ -956,7 +966,7 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
 generated by `install_global.kernel_text()` from
 `perun/integrations/templates/INSTRUCTIONS.md`, with `{{KEY_TABLE}}` filled
 from `handbook.render_key_table()`. It is a short orientation plus the handbook
-key table — ≈1.4 KB instead of the previous ≈6.1 KB block. Only the block
+key table — 1,832 B instead of the previous ≈6.1 KB block. Only the block
 between the `BEGIN perun (managed)` / `END perun (managed)` markers is
 rewritten; anything the user wrote around it is preserved. The complete
 previous global guide is retained verbatim as the `handbook.global` context
@@ -1232,20 +1242,33 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `max_concurrent_runs` | `3` | orchestrator semaphore |
 | `run_timeout` | `1800` | seconds per run |
 | `ollama_host` | `http://127.0.0.1:11434` | embeddings provider |
-| `embed_model` | `nomic-embed-text` | 768-dim |
-| `telegram_token` | `""` | never echoed by the API; falls back to `TELEGRAM_BOT_TOKEN` |
+| `embed_model` | `nomic-embed-text` | embedding model |
+| `embed_dim` | `768` | embedding vector width (`nomic-embed-text`'s dimension) |
+| `telegram_token` | `""` | never echoed by the API; falls back to `PERUN_TELEGRAM_TOKEN` → `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN` |
 | `telegram_bot_name` | `""` | local label to tell bots apart (dashboard only; not pushed to Telegram) |
-| `telegram_allowed_chats` | `[]` | falls back to `TELEGRAM_CHAT_ID`; empty = pair-on-first-message |
+| `telegram_allowed_chats` | `[]` | falls back to `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`; **empty grants nobody** — the chat must complete `/pair <code>` first |
+| `telegram_pair_code` | `""` | one-time pairing code minted at bridge startup, shown to loopback callers, cleared as soon as a chat pairs |
+| `perunchat_api_key` | `""` | never echoed; may be `enc:<base64>`; falls back to `PERUNCHAT_API_KEY` |
+| `perunchat_api_endpoint` | `wss://peruninthemachine.com/v1/chat/ws` | gateway WebSocket ingress; `PERUNCHAT_API_ENDPOINT` overrides |
+| `perunchat_auto_reply` | `false` | run the autonomous chat bridge (requires a key) |
+| `perunchat_auto_join` | `["pub:global:general"]` | rooms joined on bridge start |
+| `perunchat_chat_model` | `""` | room-reply model; falls back to `orchestrator_model` |
+| `perunchat_chat_agent` | `perunchat` | OpenCode agent used for room replies (a chat persona with no tools) |
+| `perunchat_trusted` | `[]` | agents allowed internal/private context in private/group rooms (never in public rooms) |
 | `auto_discover_on_start` | `true` | discovery on service startup |
 | `index_docs_on_discover` | `false` | index new projects' docs on discover |
 | `terminal` | `""` | preferred terminal emulator for `Run in Terminal` / TUI launches. Empty = OS default (`pwsh`/`powershell` on Windows, `$SHELL` elsewhere). Accepts an alias (`cmd`, `pwsh`, `wt`) or a full path. The dashboard Settings page edits this value; it only affects future launches. |
 
-Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_CHAT_ID`, and `PERUN_TELEGRAM_TOKEN` (injected by the orchestrator into
-agent subprocesses so the MCP server can send Telegram messages without seeing
-the raw bot token). `Settings.telegram_sources()` reports which source is
-actually in force (surfaced as `token_source` / `chats_source` so the dashboard
-can explain it).
+Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `PERUN_API_TOKEN`,
+`PERUN_PASSWORD`, `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID` / `TG_CHAT_ID`, `PERUN_TELEGRAM_TOKEN` (injected by the
+orchestrator into agent subprocesses so the MCP server can send Telegram
+messages without seeing the raw bot token), `PERUNCHAT_API_KEY`,
+`PERUNCHAT_API_ENDPOINT`, `XDG_CONFIG_HOME` / `OPENCODE_CONFIG` (OpenCode config
+location), and `SHELL` (POSIX default shell).
+`Settings.telegram_sources()` and `Settings.perunchat_sources()` report which
+source is actually in force (surfaced as `token_source` / `chats_source` so the
+dashboard can explain it).
 
 ### Terminal selection and duplicate TUI windows
 
@@ -1263,7 +1286,17 @@ setting.
 
 ## 15. Revision history
 
-### Unreleased — Perun Context and the ambient-context budget
+### 2026-10-22 — documentation refresh (no release)
+
+* CODEMAP, technical documentation, README, DESIGN and AGENTS_OPTIMIZATION
+  brought back in line with the v0.7.21 codebase: the missing `tasks` table and
+  `doc_chunks.embedded_hash` are documented, the `/api/perunchat/bridge/status`
+  and `/api/perunchat/rooms` endpoints are listed, the `Settings` table covers
+  `embed_dim`, `telegram_pair_code` and the seven `perunchat_*` fields, and the
+  stale "pair-on-first-message" description of an empty
+  `telegram_allowed_chats` (it grants **nobody** until `/pair`) is corrected.
+
+### 2026-10-21 — v0.7.21: Perun Context and the ambient-context budget
 
 * **The Context layer (`perun/context.py`).** Keyed, vector-backed reference
   docs replace inlined ambient context. A new `context_docs` table — separate
@@ -1279,7 +1312,7 @@ setting.
   `--- PERUN CONTEXT START/END ---` envelope. The gate is deterministic and
   Ollama-free, so a run never depends on an embedding service.
 * **The global kernel.** The always-on global `AGENTS.md` block is generated
-  from the handbook manifest: ≈1.4 KB instead of ≈6.1 KB. The complete
+  from the handbook manifest: 1,832 B instead of ≈6.1 KB. The complete
   previous global guide is kept verbatim as `handbook.global`.
 * **The encrypted secret store (`perun/secret_store.py`).** Values are
   Fernet-encrypted at rest, the master password is DPAPI-protected, a listing

@@ -461,6 +461,44 @@ def health() -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Self-update
+# --------------------------------------------------------------------------- #
+@app.get("/api/update/check")
+def api_update_check(refresh: bool = False) -> dict[str, Any]:
+    from . import updater
+    return updater.check(refresh=refresh)
+
+
+@app.get("/api/update/status")
+def api_update_status() -> dict[str, Any]:
+    from . import updater
+    return updater.status()
+
+
+@app.post("/api/update/apply")
+def api_update_apply(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    from . import updater
+    try:
+        return updater.apply(confirm=True, force=bool(payload.get("force")),
+                             restart=bool(payload.get("restart", True)))
+    except Exception as exc:
+        if type(exc).__name__ == "UpdateError":
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise
+
+
+@app.post("/api/update/dismiss")
+def api_update_dismiss() -> dict[str, Any]:
+    from . import updater
+    try:
+        return updater.dismiss()
+    except Exception as exc:
+        if type(exc).__name__ == "UpdateError":
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise
+
+
 _MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 _MODELS_TTL = 300.0
 _AGENTS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
@@ -2697,6 +2735,33 @@ else:  # pragma: no cover
                              "home": str(config.HOME)})
 
 
+def request_shutdown() -> bool:
+    """Ask uvicorn to exit gracefully. Uvicorn in server mode is harder to signal
+    from another thread; the update runner falls back to waiting for the port to
+    be released and starting fresh."""
+    # Try to set should_exit on any running Server instances.
+    try:
+        from uvicorn.server import Server
+
+        for server in list(getattr(Server, "servers", [])):
+            try:
+                server.should_exit = True
+                return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        import asyncio
+
+        for task in asyncio.all_tasks():
+            # Best effort only; uvicorn doesn't expose a global handle here.
+            pass
+    except Exception:
+        pass
+    return False
+
+
 def serve(host: str | None = None, port: int | None = None, *,
           reload: bool = False) -> None:
     import uvicorn
@@ -2710,5 +2775,26 @@ def serve(host: str | None = None, port: int | None = None, *,
             "trusted network.",
             flush=True,
         )
+    try:
+        from uvicorn.server import Server
+
+        original_run = Server.run
+
+        def _patched_run(self):
+            try:
+                if not hasattr(Server, "servers"):
+                    Server.servers = set()
+                Server.servers.add(self)
+                return original_run(self)
+            finally:
+                try:
+                    Server.servers.discard(self)
+                except Exception:
+                    pass
+
+        Server.run = _patched_run
+    except Exception:
+        pass
     uvicorn.run("perun.server:app", host=host, port=port, reload=reload,
                 log_level="info")
+
