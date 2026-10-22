@@ -403,6 +403,15 @@ def test_build_prompt_no_catchup_note_for_live_message(settings):
     assert "catching up" not in prompt
 
 
+def test_build_prompt_first_message_discourages_introduction(settings):
+    """The first message in an empty room must not invite a self-introduction."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._connect_epoch_ms = _T0
+    prompt = bridge._build_prompt(_chat_frame())
+    assert "first message you see in this room" in prompt
+    assert "Do not introduce yourself" in prompt
+
+
 # ---------------------------------------------------------------------------
 # No-loss delivery guarantees.
 # A reply must never be dropped because a run came back empty, because the
