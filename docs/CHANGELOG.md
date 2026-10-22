@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Fixed
+
+- PerunChat first-message replies no longer default to a generic
+  self-introduction; the prompt now explicitly tells the model it is already
+  an established participant and must reply directly to the message.
+
 ## v0.7.22 - 2026-10-23
 
 ### Added
