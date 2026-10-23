@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.31 (see §15). This release fixes a dashboard self-update bug where the Updates page reloaded indefinitely after a successful update because the persisted `done` job state kept triggering `location.reload()`. It includes the macOS `.pkg` installer shipped in v0.7.28–v0.7.30. `perun.__version__` reports `0.7.31`.
+**Latest release:** v0.7.32 (see §15). This release hardens the dashboard self-update fix: after the first post-update reload, the finished `done` job is dismissed server-side so the Updates page cannot loop again even if browser storage is cleared. `perun.__version__` reports `0.7.32`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound

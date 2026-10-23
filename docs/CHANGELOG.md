@@ -17,8 +17,9 @@ All notable changes are recorded here. Single source of truth for release notes.
 ### Fixed
 
 - Dashboard self-update: stop the Updates page from reloading forever after a
-  successful update. A `sessionStorage` flag now ensures the auto-refresh
-  happens only once per update.
+  successful update. A `sessionStorage` flag ensures the auto-refresh happens
+  only once, and the finished job is dismissed server-side after the reload
+  so the loop cannot resume even if browser storage is cleared.
 - macOS installer: use the `gui/<UID>` launchctl domain for LaunchAgent load
   /enable/kickstart instead of the incorrect `user/<UID>` domain.
 - macOS installer: replace an undefined `log` call in `uninstall.sh` with
