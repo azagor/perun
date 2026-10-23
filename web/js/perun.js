@@ -4530,7 +4530,15 @@ function startUpdatePoll() {
             }
             if (job.state === 'done') {
                 stopUpdatePoll();
+                // Guard against an infinite reload loop: only auto-reload once
+                // per update. The flag is cleared from sessionStorage after the
+                // first reload so a later update can still trigger a reload.
+                if (sessionStorage.getItem('perun_update_reloaded')) {
+                    sessionStorage.removeItem('perun_update_reloaded');
+                    return;
+                }
                 toast(`Updated to v${esc(job.to_version)} — refreshing`, 'ok');
+                sessionStorage.setItem('perun_update_reloaded', '1');
                 setTimeout(() => location.reload(), 1200);
             } else if (job.state === 'failed') {
                 stopUpdatePoll();
