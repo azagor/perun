@@ -281,6 +281,10 @@ class PerunChatBridge:
         for _mid in self._load_replied():
             self._recent_replied.add(_mid)
             self._replied_order.append(_mid)
+        # Message ids currently being processed by the LLM. Prevents duplicate
+        # runs for the same frame while still allowing a retry if generation
+        # fails before anything is sent.
+        self._pending_replies: Set[str] = set()
         self._reply_count_minute = 0
         self._minute_window_start = time.time()
         self._seq = self._load_seq()
@@ -666,6 +670,9 @@ class PerunChatBridge:
         if msg_id and msg_id in self._recent_replied:
             logger.info("PerunChat already replied to %s; skipping", msg_id)
             return
+        if msg_id and msg_id in self._pending_replies:
+            logger.info("PerunChat already processing %s; skipping duplicate", msg_id)
+            return
 
         # Hard saturation guard: if we have already contributed a lot recently,
         # skip even the LLM decision to avoid dominating the room.
@@ -752,12 +759,11 @@ class PerunChatBridge:
             logger.warning("PerunChat bridge cannot reply: no model configured")
             return
         logger.info("PerunChat bridge replying to %s in %s using model=%s agent=%s trusted=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default", is_trusted)
+        msg_id = frame.get("id")
+        if msg_id:
+            self._pending_replies.add(msg_id)
         try:
-            # Mark this message as being processed immediately so a slow LLM call
-            # does not cause duplicate replies if the same frame is seen again.
-            msg_id = frame.get("id")
             logger.debug("PerunChat prompt for %s:\n%s", msg_id, prompt)
-            self._mark_replied(msg_id)
             project = control.ensure()
             reply = ""
             run_uid = ""
@@ -807,6 +813,8 @@ class PerunChatBridge:
                 return
             if reply == "<NO_REPLY>":
                 # Explicit decision, not a failure: the model chose silence.
+                if msg_id:
+                    self._mark_replied(msg_id)
                 return
             # DLP guard: in public rooms, redact anything that looks like internal
             # or private information before it leaves the local environment.
@@ -835,12 +843,17 @@ class PerunChatBridge:
                 # The frame stays in the durable outbox and is resent with the
                 # same id + sequence_number on the next (re)connect.
                 return
+            if msg_id:
+                self._mark_replied(msg_id)
             self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
             reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             reply_activity.append(time.time())
         except Exception as exc:
             logger.warning("PerunChat bridge failed to generate reply: %s", exc)
+        finally:
+            if msg_id:
+                self._pending_replies.discard(msg_id)
 
     def _is_trusted(self, agent_id: str) -> bool:
         """Return True if the agent is on the local trust list."""
