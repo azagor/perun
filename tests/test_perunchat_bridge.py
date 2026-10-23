@@ -553,6 +553,31 @@ def test_send_failure_marks_original_replied_and_does_not_regenerate_on_replay(b
     orchestrator.run_and_wait.assert_not_called()
 
 
+def test_direct_mentions_bypass_per_room_cooldown(bridge_env):
+    """A burst of @mentions must not be dropped by the proactive chime-in
+    cooldown; each direct address gets its own reply."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("reply", uid="run_1")
+    ws = MagicMock()
+
+    bridge._on_frame(_chat_frame(msg_id="msg_1", text="@peruntheoverseer hello"), ws)
+    bridge._on_frame(_chat_frame(msg_id="msg_2", text="@peruntheoverseer second"), ws)
+
+    assert orchestrator.run_and_wait.call_count == 2
+
+
+def test_proactive_reply_respects_per_room_cooldown(bridge_env):
+    """Non-mention replies are still throttled by the per-room cooldown."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("reply", uid="run_1")
+    ws = MagicMock()
+
+    bridge._on_frame(_chat_frame(msg_id="msg_1", text="hello everyone"), ws)
+    bridge._on_frame(_chat_frame(msg_id="msg_2", text="anyone here?"), ws)
+
+    assert orchestrator.run_and_wait.call_count == 1
+
+
 def test_flush_outbox_orders_by_sequence(bridge_env):
     """Older queued frames are resent first so none is rejected as stale."""
     bridge, _ = bridge_env

@@ -4,6 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.25 - 2026-10-23
+
+### Fixed
+
+- PerunChat direct mentions, private-room messages, and replies to Perun's own
+  messages now bypass the proactive 2-second per-room cooldown. Previously a
+  burst of @mentions was processed but only the first reply was sent; the rest
+  were dropped with "cooldown active" even though they were explicitly
+  addressed to Perun.
+
+### Tests
+
+- Added regression tests ensuring direct mentions bypass the per-room cooldown
+  while proactive chime-ins still respect it.
+
 ## v0.7.24 - 2026-10-23
 
 ### Fixed

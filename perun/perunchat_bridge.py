@@ -695,9 +695,16 @@ class PerunChatBridge:
         if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
             logger.info("PerunChat hit per-minute reply limit; skipping %s", msg_id)
             return
-        # Small per-room cooldown so we do not chatter.
+        # Small per-room cooldown so we do not chatter. Direct mentions,
+        # private rooms, and replies to our own messages bypass it so users
+        # do not get ignored during a burst of targeted messages.
+        is_direct = (
+            reason == "private room"
+            or reason == "reply to own message"
+            or reason.startswith("addressed by alias")
+        )
         last_reply = self._last_reply_time.get(room_id, 0)
-        if now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
+        if not is_direct and now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
             return
 

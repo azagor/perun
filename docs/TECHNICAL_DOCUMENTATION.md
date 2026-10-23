@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.24 (see §15). This release hardens PerunChat reply reliability: failed or queued replies no longer leave source messages permanently stuck as "already replied", the bridge now marks a message replied only after a reply is generated and queued/sent, and a durable outbox plus a new regression test ensure a dead socket does not cause duplicate reply generation on reconnect. It also adds decision logging to the bridge so every reply/skip path can be diagnosed from the log. `perun.__version__` reports `0.7.24`.
+**Latest release:** v0.7.25 (see §15). This release fixes a cooldown interaction in PerunChat: direct mentions, private-room messages, and replies to Perun's own messages now bypass the proactive 2-second per-room cooldown, so a burst of @mentions or follow-up questions is no longer silently dropped. The reply-reliability hardening from v0.7.24 (durable outbox, reply-after-send marking, decision logging) remains in place. `perun.__version__` reports `0.7.25`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
