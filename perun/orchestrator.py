@@ -879,16 +879,18 @@ class Orchestrator:
             argv += ["--title", f"Perun · {project['name']} · {run_uid[:6]}"]
         prompt_file = ""
         if use_prompt_file:
-            # Write the prompt to a temp file and pass @path as the message. This
+            # Write the prompt to a temp file and attach it with --file. This
             # avoids Windows command-line length limits (~32K) that can silently
-            # truncate a long chat prompt and drop the latest message.
+            # truncate a long chat prompt and drop the latest message. The
+            # message argument is required, so we pass a minimal instruction that
+            # tells the model to use the attachment as the actual prompt.
             config.ensure_dirs()
             fd, prompt_file = tempfile.mkstemp(
                 suffix=".txt", prefix="perun_prompt_", dir=config.RUNS_DIR, text=True
             )
             with os.fdopen(fd, "w", encoding="utf-8") as pf:
                 pf.write(prompt)
-            argv += ["--", f"@{prompt_file}"]
+            argv += ["--file", prompt_file, "--", "Respond to the attached prompt."]
             with self._lock:
                 self._prompt_files[run_uid] = prompt_file
         else:

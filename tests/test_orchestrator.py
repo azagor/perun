@@ -142,6 +142,60 @@ def test_orchestrator_explicit_model_is_passed(monkeypatch):
     assert run["model_explicit"] == 1
 
 
+def test_orchestrator_use_prompt_file_attaches_prompt_as_file(monkeypatch, tmp_path):
+    """When use_prompt_file=True, the prompt is written to a temp file and
+    passed via --file so the Windows command-line length limit never truncates it.
+    """
+    import subprocess
+    from pathlib import Path
+    from perun import orchestrator, registry
+
+    project_path = tmp_path / "pfile"
+    project_path.mkdir()
+    project = registry.add_project("PFile", str(project_path))
+    run = registry.create_run("filerun123", project["id"], "the prompt text")
+    run["skip_instructions"] = True  # skip filesystem instruction lookups
+
+    o = orchestrator.Orchestrator()
+    captured: dict[str, Any] = {}
+
+    class FakeProc:
+        stdout: list[str] = []
+        stderr: list[str] = []
+        returncode = 0
+        def poll(self):
+            return 0
+        def terminate(self):
+            pass
+        def kill(self):
+            pass
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, **kwargs):
+        captured["argv"] = list(argv)
+        # Capture the prompt file content before _finalize deletes it.
+        try:
+            file_idx = argv.index("--file")
+            prompt_path = Path(argv[file_idx + 1])
+            captured["prompt_content"] = prompt_path.read_text(encoding="utf-8")
+        except (ValueError, IndexError, OSError):
+            pass
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    o._execute("filerun123", project, "the prompt text", run, use_prompt_file=True)
+
+    assert "--file" in captured["argv"]
+    file_idx = captured["argv"].index("--file")
+    prompt_path = Path(captured["argv"][file_idx + 1])
+    assert "perun_prompt_" in prompt_path.name
+    assert "the prompt text" in captured["prompt_content"]
+    # A minimal required message is supplied alongside the attachment.
+    dash_idx = captured["argv"].index("--")
+    assert captured["argv"][dash_idx + 1] == "Respond to the attached prompt."
+
+
 def test_orchestrator_project_model_is_explicit(monkeypatch):
     """A project's own model override must be forwarded to `opencode run`.
 

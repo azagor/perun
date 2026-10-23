@@ -4,12 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.37 - 2026-10-24
+
+### Fixed
+
+- PerunChat prompts are passed to `opencode run` via a temporary file attached
+  with `--file`, eliminating the Windows ~32K command-line length limit and
+  avoiding the `@path` convention which models can misinterpret as a tool call.
+
 ## v0.7.36 - 2026-10-24
 
 ### Fixed
 
 - PerunChat prompts are now passed to `opencode run` via a temporary file
-  (`@path`) instead of a command-line argument, eliminating the Windows ~32K
+  instead of a command-line argument, eliminating the Windows ~32K
   command-line length limit that could silently drop the latest message.
 - The prompt now follows a normal chat transcript layout: system prompt,
   recent conversation history (including Perun's own replies), and the latest
