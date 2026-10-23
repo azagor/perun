@@ -84,6 +84,27 @@ def test_bridge_ignores_own_messages(settings):
         mock_reply.assert_not_called()
 
 
+def test_bridge_operator_messages_are_not_swallowed_as_own(settings):
+    """A frame from the dashboard human operator shares our agent_id but uses
+    runtime 'perun-operator'. It must be kept in room history and not added to
+    the own-message set, so replies to it are processed normally."""
+    mock_orchestrator = MagicMock(settings=settings)
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "type": "CHAT",
+        "id": "msg_operator_1",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "perun-local", "runtime": "perun-operator"},
+        "payload": "hello everyone",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+    hist_ids = [f.get("id") for f in bridge._room_history.get("pub:global:test", [])]
+    assert "msg_operator_1" in hist_ids
+    assert "msg_operator_1" not in bridge._own_message_ids
+
+
 def test_bridge_replies_to_other_messages(settings):
     mock_orchestrator = MagicMock(settings=settings)
     mock_orchestrator.run_and_wait.return_value = {"reply": "Hi there"}

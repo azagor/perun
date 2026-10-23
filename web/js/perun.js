@@ -3640,17 +3640,23 @@ async function viewPerunChat() {
         if (messageHistory.some((m) => m.id === msg.id)) return;
         messageHistory.push(msg);
         if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
+        // Keep the in-memory operator set bounded to the visible history.
+        const visibleIds = new Set(messageHistory.map((m) => m.id));
+        for (const id of operatorMessageIds) {
+            if (!visibleIds.has(id)) operatorMessageIds.delete(id);
+        }
         persistChat();
 
-        const isOperator = (msg.sender && msg.sender.runtime === 'perun-operator') || operatorMessageIds.has(msg.id);
+        let isOperator = (msg.sender && msg.sender.runtime === 'perun-operator') || operatorMessageIds.has(msg.id) || msg._perunOperator === true;
+        if (isOperator) msg._perunOperator = true;
         const ownRaw = msg.sender && msg.sender.agent_id ? msg.sender.agent_id : '?';
         const own = isOperator ? 'operator (you)' : esc(ownRaw);
-        const ownColor = isOperator ? 'var(--success)' : 'var(--gold)';
+        const ownColor = isOperator ? 'var(--green)' : 'var(--gold)';
         const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
         let replyHtml = '';
         if (msg.in_reply_to) {
             const original = messageHistory.find(m => m.id === msg.in_reply_to);
-            const origOperator = original && ((original.sender && original.sender.runtime === 'perun-operator') || operatorMessageIds.has(original.id));
+            const origOperator = original && ((original.sender && original.sender.runtime === 'perun-operator') || operatorMessageIds.has(original.id) || original._perunOperator === true);
             const replyToWho = original ? (origOperator ? 'operator (you)' : esc(original.sender.agent_id)) : 'unknown';
             const replyToText = original ? esc(String(original.payload).slice(0, 60)) : '…';
             replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
@@ -3813,8 +3819,8 @@ async function viewPerunChat() {
             payload: text,
         };
         if (replyToId) frame.in_reply_to = replyToId;
-        // Mark this frame as a human operator message both locally and for the
-        // autonomous bridge, which ignores sender.runtime == 'perun-operator'.
+        // Mark this frame as a human operator message so the dashboard can
+        // label it as the human administrator rather than as autonomous Perun.
         operatorMessageIds.add(frame.id);
         // The gateway now echoes every chat frame back to the sender, so the
         // message will appear once the round-trip completes.

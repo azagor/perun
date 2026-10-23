@@ -4,6 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Fixed
+
+- PerunChat operator label now uses the existing `--green` CSS variable instead
+  of the non-existent `--success`.
+
+### Changed
+
+- Dashboard PerunChat operator-message tracking is now pruned with the chat
+  history, and the operator flag is persisted in `localStorage` so restored
+  history keeps the correct label after a reload.
+
+### Added
+
+- Regression test ensuring a frame with `sender.runtime == "perun-operator"`
+  and the bridge's own `agent_id` is not swallowed as an own message.
+
 ## v0.7.33 - 2026-10-23
 
 ### Added
