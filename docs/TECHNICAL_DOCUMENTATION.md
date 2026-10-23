@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.30 (see §15). This release ships the macOS `.pkg` installer with user-specific LaunchAgent logging (`~/Library/Logs/perun`), an Xcode Command Line Tools warning, CI linting of the installer scripts/plist, and a README with build/install/uninstall instructions. It retains the v0.7.29 fixes for the `gui/` launchctl domain, the `uninstall.sh` log bug, and best-effort pip upgrade. `perun.__version__` reports `0.7.30`.
+**Latest release:** v0.7.31 (see §15). This release fixes a dashboard self-update bug where the Updates page reloaded indefinitely after a successful update because the persisted `done` job state kept triggering `location.reload()`. It includes the macOS `.pkg` installer shipped in v0.7.28–v0.7.30. `perun.__version__` reports `0.7.31`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
