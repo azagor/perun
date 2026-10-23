@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.27 (see §15). This release refactors PerunChat's reply-decision logic into a structured `_ReplyDecision` object so direct-mention, private-room, and reply-to-own-message bypasses are explicit and cannot drift out of sync with the reason strings. It preserves the v0.7.26 behavior where direct messages bypass the proactive cooldown and saturation guards while unsolicited chime-ins remain throttled. `perun.__version__` reports `0.7.27`.
+**Latest release:** v0.7.28 (see §15). This release adds an unsigned macOS `.pkg` installer that installs Perun to `/opt/perun`, creates an isolated Python venv, wires the global OpenCode integration for the logged-in console user, installs a `/usr/local/bin/perun` wrapper, and registers a LaunchAgent that starts `perun serve --bridge` at login. It preserves the PerunChat v0.7.27 reply-decision refactor and the v0.7.26 cooldown/saturation bypasses. `perun.__version__` reports `0.7.28`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
