@@ -76,7 +76,8 @@ _MAX_RECENT_REPLIED = 250
 _REPLIED_TRIM_TO = 150
 _MAX_REPLY_CHARS = 320
 _ROOM_HISTORY_LEN = 40
-_MAX_CONTEXT_MESSAGES = 12
+_MAX_CONTEXT_MESSAGES = 6
+
 _MIN_REPLY_INTERVAL_SECONDS = 2.0
 _TYPING_DELAY_MIN = 0.6
 _TYPING_DELAY_MAX = 1.8
@@ -755,11 +756,16 @@ class PerunChatBridge:
         participants = self._room_participants.get(room_id, {})
         return sum(1 for ts in participants.values() if now - ts < window)
 
+
+
     def _participant_roster(self, room_id: str) -> List[str]:
-        """Return sorted distinct agent ids seen in the room (excluding Perun)."""
+        """Return sorted distinct agent ids seen in the room (excluding Perun).
+
+        Capped at 10 so busy public rooms do not blow up the prompt length.
+        """
         participants = self._room_participants.get(room_id, {})
         self_id = self._agent_id or "perun"
-        return sorted({aid for aid in participants if aid and aid.lower() != self_id.lower()})
+        return sorted({aid for aid in participants if aid and aid.lower() != self_id.lower()})[:10]
 
     def _recent_message_count(self, room_id: str, window: float = 60.0) -> int:
         """Count messages in the room within the last window."""
@@ -806,6 +812,7 @@ class PerunChatBridge:
             return
         logger.info("PerunChat bridge replying to %s in %s using model=%s agent=%s trusted=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default", is_trusted)
         msg_id = frame.get("id")
+        logger.info("PerunChat prompt length for %s: %d chars", msg_id, len(prompt))
         if msg_id:
             self._pending_replies.add(msg_id)
         try:
@@ -1121,7 +1128,7 @@ class PerunChatBridge:
         if roster:
             roster_note = (
                 f"\nParticipants you have seen in this room: {', '.join(roster)} "
-                f"({len(roster)} total, excluding yourself)."
+                f"({len(roster)} shown, excluding yourself)."
             )
 
         return (

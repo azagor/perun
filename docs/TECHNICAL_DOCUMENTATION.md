@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.34 (see §15). This release hardens PerunChat against gateway replays and echo storms by deduplicating incoming frames by id and by sender/content/timestamp, and by safely handling malformed timestamps in the dedup path. `perun.__version__` reports `0.7.34`.
+**Latest release:** v0.7.35 (see §15). This release hardens PerunChat against gateway replays and echo storms by deduplicating incoming frames by id and by sender/content/timestamp, safely handling malformed timestamps, and trimming prompt context (6 messages, 10 roster entries) so the latest message is not truncated away from the model. `perun.__version__` reports `0.7.35`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -943,7 +943,9 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   live rather than raising.
 - **Replay/echo dedup:** the bridge keeps bounded session sets of seen frame ids
   and `(sender, content, second)` keys so gateway replays or echo storms do not
-  generate duplicate replies or duplicate context in the prompt.
+  generate duplicate replies or duplicate context in the prompt. The prompt is
+  kept small (6 recent messages, 10 roster entries) so the latest message is not
+  lost to command-line or context-window truncation.
 - **Information-plane guardrails:** public-room replies pass through a redaction
   guard (`_redact_internal_info`) that strips local file paths, project
   internals, config files, and MCP/tool references before sending. Internal

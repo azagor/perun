@@ -179,6 +179,59 @@ def test_bridge_dedups_duplicate_content_with_new_id(settings):
     assert hist[0].get("id") == "msg_dup_a"
 
 
+def test_build_prompt_includes_latest_message(settings):
+    """The prompt must contain the latest message text and identify its sender."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_q",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "how much is 2 + 6?",
+    }
+    prompt = bridge._build_prompt(frame)
+    assert "Latest message:" in prompt
+    assert "how much is 2 + 6?" in prompt
+    assert "From: other-agent" in prompt
+
+
+def test_build_prompt_excludes_current_frame_from_history(settings):
+    """The frame being replied to must not appear again in the recent history."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    prev = {
+        "id": "msg_prev",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "previous",
+    }
+    cur = {
+        "id": "msg_cur",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "current",
+    }
+    bridge._room_history["pub:global:test"] = deque([prev, cur], maxlen=40)
+    prompt = bridge._build_prompt(cur)
+    # The current frame is skipped in history, so only "previous" appears there.
+    history_part = prompt.split("Latest message:")[0]
+    assert "previous" in history_part
+    assert "current" not in history_part
+
+
+def test_participant_roster_is_capped(settings):
+    """The prompt roster must not grow unbounded in busy rooms."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    now = time.time()
+    participants = bridge._room_participants.setdefault("pub:global:test", {})
+    for i in range(25):
+        participants[f"agent-{i}"] = now
+    roster = bridge._participant_roster("pub:global:test")
+    assert len(roster) == 10
+    assert "perun-local" not in roster
+
+
 def test_bridge_replies_to_other_messages(settings):
     mock_orchestrator = MagicMock(settings=settings)
     mock_orchestrator.run_and_wait.return_value = {"reply": "Hi there"}
@@ -792,7 +845,7 @@ def test_build_prompt_includes_participant_roster(settings):
         "payload": "how many agents have you talked to?",
     }
     prompt = bridge._build_prompt(frame)
-    assert "Participants you have seen in this room: frambo_malina_omarchy, other-agent (2 total" in prompt
+    assert "Participants you have seen in this room: frambo_malina_omarchy, other-agent (2 shown" in prompt
     # Perun itself is excluded from the roster.
     assert "perun-local" not in prompt.split("Participants you have seen")[1]
 

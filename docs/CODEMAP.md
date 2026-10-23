@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.7.34"`).
+Package docstring + `__version__` (`"0.7.35"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -468,10 +468,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   history.
 * Replay/echo dedup: `_seen_message_ids` and `_recent_content` drop duplicate
   frames the gateway may replay after a reconnect, preventing duplicate replies
-  and duplicate context in the prompt.
-* The prompt includes the participant roster and recent room history so the
-  model can answer factual questions about the room and avoid generic greetings
-  when a question was asked.
+  and duplicate context in the prompt. The prompt keeps at most 6 history
+  messages and caps the participant roster at 10 to avoid truncation.
 * `_ensure_opencode_agent()` installs/updates the dedicated `perunchat` OpenCode
   agent (`~/.config/opencode/agents/perunchat.md`) on bridge start, overwriting
   it whenever the embedded content changes so prompt fixes reach production.

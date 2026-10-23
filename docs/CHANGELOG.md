@@ -4,6 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.35 - 2026-10-24
+
+### Fixed
+
+- PerunChat prompt context is reduced (`_MAX_CONTEXT_MESSAGES` from 12 to 6) and
+  the participant roster is capped at 10 to avoid command-line / context-window
+  truncation that can hide the latest message from the model.
+
 ## v0.7.34 - 2026-10-23
 
 ### Fixed
