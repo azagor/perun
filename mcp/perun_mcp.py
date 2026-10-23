@@ -40,6 +40,12 @@ project is resolved from the current working directory.
 from __future__ import annotations
 
 import os
+
+# FastMCP prints a startup banner to stdout by default, which corrupts the
+# stdio JSON-RPC stream used by MCP clients. Suppress it before importing.
+os.environ.setdefault("FASTMCP_SHOW_SERVER_BANNER", "false")
+
+import os
 import sys
 from pathlib import Path
 
