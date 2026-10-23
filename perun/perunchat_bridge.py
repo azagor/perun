@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
@@ -122,6 +123,16 @@ _INTERNAL_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("dotfile", re.compile(r"\.[a-z]+\.json|\.env|\.ssh|\.perun\b", re.IGNORECASE)),
     ("mcp_tools", re.compile(r"\bMCP tools?\b|\bmcp server\b", re.IGNORECASE)),
 ]
+
+
+@dataclass(frozen=True)
+class _ReplyDecision:
+    """Structured decision from `_should_reply_to`."""
+
+    should_reply: bool
+    reason: str
+    is_direct: bool = False
+
 
 _DEFAULT_CHAT_PROMPT = """You are Perun, an AI agent chatting in a PerunChat room with other agents and humans.
 
@@ -677,24 +688,17 @@ class PerunChatBridge:
         # Decide whether to reply like a human would: direct mentions always
         # get an answer; general messages depend on room size, questions, and
         # quietness so Perun feels present without spamming.
-        should_reply, reason = self._should_reply_to(frame)
-        if not should_reply:
-            logger.info("PerunChat decided not to reply to %s: %s", msg_id, reason)
+        decision = self._should_reply_to(frame)
+        if not decision.should_reply:
+            logger.info("PerunChat decided not to reply to %s: %s", msg_id, decision.reason)
             return
-        logger.info("PerunChat decided to reply to %s: %s", msg_id, reason)
-
-        # Direct mentions, private rooms, and replies to our own messages bypass
-        # the proactive saturation/cooldown guards so users are not ignored when
-        # they explicitly address Perun. The per-minute rate limit still applies.
-        is_direct = (
-            reason == "private room"
-            or reason == "reply to own message"
-            or reason.startswith("addressed by alias")
-        )
+        logger.info("PerunChat decided to reply to %s: %s", msg_id, decision.reason)
 
         # Hard saturation guard: if we have already contributed a lot recently,
-        # skip even the LLM decision to avoid dominating the room.
-        if not is_direct and self._is_room_saturated(room_id):
+        # skip even the LLM decision to avoid dominating the room. Direct
+        # mentions, private rooms, and replies to our own messages bypass this
+        # guard so users are not ignored when they explicitly address Perun.
+        if not decision.is_direct and self._is_room_saturated(room_id):
             logger.info("PerunChat room %s saturated; skipping reply to %s", room_id, msg_id)
             return
 
@@ -706,7 +710,7 @@ class PerunChatBridge:
             return
         # Small per-room cooldown so we do not chatter.
         last_reply = self._last_reply_time.get(room_id, 0)
-        if not is_direct and now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
+        if not decision.is_direct and now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
             return
 
@@ -883,11 +887,8 @@ class PerunChatBridge:
                 text = pattern.sub("[redacted]", text)
         return text
 
-    def _should_reply_to(self, frame: Dict[str, Any]) -> tuple[bool, str]:
-        """Decide whether Perun should reply, mimicking human attentiveness.
-
-        Returns (should_reply, reason) so the caller can log the decision.
-        """
+    def _should_reply_to(self, frame: Dict[str, Any]) -> _ReplyDecision:
+        """Decide whether Perun should reply, mimicking human attentiveness."""
         room_id = frame.get("room_id", "")
         text = (frame.get("payload", "") or "").strip()
         in_reply_to = frame.get("in_reply_to")
@@ -895,18 +896,20 @@ class PerunChatBridge:
 
         # Always reply in private 1:1 rooms.
         if room_id.startswith("priv:"):
-            return True, "private room"
+            return _ReplyDecision(True, "private room", is_direct=True)
 
         # Reply when someone directly responds to one of our messages.
         if in_reply_to and in_reply_to in self._own_message_ids:
-            return True, "reply to own message"
+            return _ReplyDecision(True, "reply to own message", is_direct=True)
 
         # Reply when addressed by name or a common alias.
         name = (self._agent_id or "perun").lower()
         aliases = {name, "perun", "overseer", "peruntheoverseer"}
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}\b", lowered):
-                return True, f"addressed by alias '{alias}'"
+                return _ReplyDecision(
+                    True, f"addressed by alias '{alias}'", is_direct=True
+                )
 
         # Beyond direct mentions, behave like a naturally attentive participant:
         # answer questions, greet in quiet rooms, and chime in on open messages
@@ -916,33 +919,33 @@ class PerunChatBridge:
 
         if self._is_question(text):
             if saturated:
-                return False, "question but room is saturated"
-            return True, "open question"
+                return _ReplyDecision(False, "question but room is saturated")
+            return _ReplyDecision(True, "open question")
 
         if self._is_greeting(text) and self._room_quiet_for(room_id, 45):
             if saturated:
-                return False, "greeting but room is saturated"
-            return True, "greeting in quiet room"
+                return _ReplyDecision(False, "greeting but room is saturated")
+            return _ReplyDecision(True, "greeting in quiet room")
 
         # General open message: be more conversational in small rooms, more
         # reserved in larger/busy rooms.
         if saturated:
-            return False, "room is saturated"
+            return _ReplyDecision(False, "room is saturated")
         if active_humans <= 3:
             if random.random() < 0.70:
-                return True, "small room, random chime-in"
-            return False, "small room, random chime-in declined"
+                return _ReplyDecision(True, "small room, random chime-in")
+            return _ReplyDecision(False, "small room, random chime-in declined")
         if active_humans <= 7:
             if random.random() < 0.35:
-                return True, "medium room, random chime-in"
-            return False, "medium room, random chime-in declined"
+                return _ReplyDecision(True, "medium room, random chime-in")
+            return _ReplyDecision(False, "medium room, random chime-in declined")
         # Busy room: only reply to open messages if it has been quiet a while.
         if self._room_quiet_for(room_id, 120):
             if random.random() < 0.15:
-                return True, "busy quiet room, random chime-in"
-            return False, "busy quiet room, random chime-in declined"
+                return _ReplyDecision(True, "busy quiet room, random chime-in")
+            return _ReplyDecision(False, "busy quiet room, random chime-in declined")
 
-        return False, "no trigger matched"
+        return _ReplyDecision(False, "no trigger matched")
 
     def _is_question(self, text: str) -> bool:
         """Detect explicit or implicit questions."""
