@@ -45,7 +45,6 @@ import os
 # stdio JSON-RPC stream used by MCP clients. Suppress it before importing.
 os.environ.setdefault("FASTMCP_SHOW_SERVER_BANNER", "false")
 
-import os
 import sys
 from pathlib import Path
 

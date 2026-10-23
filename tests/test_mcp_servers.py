@@ -156,6 +156,40 @@ def test_probe_unknown_server_raises(opencode_dir):
         mcp_servers.probe("nope")
 
 
+def test_perun_mcp_server_suppresses_startup_banner():
+    """The real perun MCP server must not print a banner before JSON-RPC."""
+    import subprocess
+
+    server_path = Path(__file__).resolve().parent.parent / "mcp" / "perun_mcp.py"
+    init = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1.0"},
+        },
+    })
+    proc = subprocess.Popen(
+        [sys.executable, str(server_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        out, err = proc.communicate(input=init + "\n", timeout=15)
+        first_line = out.splitlines()[0] if out.strip() else ""
+        msg = json.loads(first_line)
+        assert msg["jsonrpc"] == "2.0"
+        assert msg["id"] == 1
+        assert msg["result"]["serverInfo"]["name"] == "Perun"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
 # --------------------------------------------------------------------------- #
 # HTTP endpoints
 # --------------------------------------------------------------------------- #
