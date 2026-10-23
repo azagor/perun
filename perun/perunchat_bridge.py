@@ -108,6 +108,10 @@ _OUTBOX_FLUSH_DELAY_SECONDS = 0.3
 # Persisted so a bridge restart cannot reply twice to replayed history.
 _REPLIED_FILE_NAME = "perunchat_replied.json"
 _OUTBOX_FILE_NAME = "perunchat_outbox.json"
+# Session duplicate-detection limits. The gateway may replay history after a
+# reconnect; these bounds stop the same message from being processed twice.
+_MAX_SEEN_MESSAGE_IDS = 500
+_MAX_RECENT_CONTENT = 200
 
 # Patterns that may reveal internal/private information. Used as a last-line
 # guard before broadcasting a reply, especially in public rooms.
@@ -312,6 +316,9 @@ class PerunChatBridge:
         self._room_participants: Dict[str, Dict[str, float]] = {}
         self._own_message_ids: Set[str] = set()
         self._last_reply_time: Dict[str, float] = {}
+        # Session-level duplicate detection for gateway replays / echo storms.
+        self._seen_message_ids: Set[str] = set()
+        self._recent_content: Set[str] = set()
 
     @property
     def available(self) -> bool:
@@ -647,6 +654,30 @@ class PerunChatBridge:
         text = frame.get("payload", "")
         msg_id = frame.get("id")
 
+        # Drop duplicate frames that the gateway may replay after a reconnect or
+        # that echo back through multiple paths. Id-based dedup catches exact
+        # replays; content-based dedup catches the same message under a new id.
+        if msg_id:
+            if msg_id in self._seen_message_ids:
+                logger.info("PerunChat ignoring already-seen frame %s", msg_id)
+                return
+            self._seen_message_ids.add(msg_id)
+            if len(self._seen_message_ids) > _MAX_SEEN_MESSAGE_IDS:
+                self._seen_message_ids = set(list(self._seen_message_ids)[-_MAX_SEEN_MESSAGE_IDS // 2:])
+        if isinstance(text, str):
+            ts = frame.get("timestamp")
+            try:
+                ts_sec = round(float(ts) / 1000) if ts is not None else 0
+            except (TypeError, ValueError):
+                ts_sec = 0
+            content_key = f"{sender}:{text}:{ts_sec}"
+            if content_key in self._recent_content:
+                logger.info("PerunChat ignoring duplicate content for frame %s", msg_id)
+                return
+            self._recent_content.add(content_key)
+            if len(self._recent_content) > _MAX_RECENT_CONTENT:
+                self._recent_content = set(list(self._recent_content)[-_MAX_RECENT_CONTENT // 2:])
+
         # Remember our own messages so we do not reply to ourselves and so we
         # can detect replies directed at us. We identify our own messages by
         # agent_id AND runtime "perun". The dashboard marks manual operator
@@ -665,7 +696,9 @@ class PerunChatBridge:
         now = time.time()
         if room_id and msg_id:
             hist = self._room_history.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
-            hist.append(frame)
+            # Avoid polluting the prompt with exact replays of the same frame id.
+            if not any(m.get("id") == msg_id for m in hist):
+                hist.append(frame)
             activity = self._room_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             activity.append(now)
             # Track active human participants so Perun can be more chatty in

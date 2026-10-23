@@ -466,6 +466,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   starting a duplicate. Replied-message ids are persisted
   (`perunchat_replied.json`) so bridge restarts do not reply twice to replayed
   history.
+* Replay/echo dedup: `_seen_message_ids` and `_recent_content` drop duplicate
+  frames the gateway may replay after a reconnect, preventing duplicate replies
+  and duplicate context in the prompt.
 * The prompt includes the participant roster and recent room history so the
   model can answer factual questions about the room and avoid generic greetings
   when a question was asked.

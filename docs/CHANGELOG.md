@@ -8,6 +8,9 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 - PerunChat operator label now uses the existing `--green` CSS variable instead
   of the non-existent `--success`.
+- PerunChat bridge now deduplicates incoming frames by id and by
+  sender/content/timestamp so gateway replays or echo storms do not pollute the
+  conversation context or trigger multiple replies.
 
 ### Changed
 

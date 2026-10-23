@@ -105,6 +105,80 @@ def test_bridge_operator_messages_are_not_swallowed_as_own(settings):
     assert "msg_operator_1" not in bridge._own_message_ids
 
 
+def test_bridge_dedups_duplicate_frame_ids(settings):
+    """Exact replays of the same frame id must not be processed twice or
+    create duplicate history entries."""
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "type": "CHAT",
+        "id": "msg_dup_1",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "hello @perun",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+        bridge._on_frame(frame, None)
+    mock_reply.assert_called_once()
+    assert len(bridge._room_history.get("pub:global:test", [])) == 1
+
+
+def test_bridge_duplicate_detection_handles_malformed_timestamp(settings):
+    """A non-numeric timestamp must not crash the duplicate-detection path."""
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "type": "CHAT",
+        "id": "msg_bad_ts",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "timestamp": "not-a-number",
+        "payload": "hello @perun",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+    mock_reply.assert_called_once()
+    assert "msg_bad_ts" in [f.get("id") for f in bridge._room_history.get("pub:global:test", [])]
+
+
+def test_bridge_dedups_duplicate_content_with_new_id(settings):
+    """The same content from the same sender within the same second, even with
+    a fresh id, must be treated as a duplicate."""
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    ts = 1712345678000
+    frame1 = {
+        "type": "CHAT",
+        "id": "msg_dup_a",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "timestamp": ts,
+        "payload": "hello @perun",
+    }
+    frame2 = {
+        "type": "CHAT",
+        "id": "msg_dup_b",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "timestamp": ts,
+        "payload": "hello @perun",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame1, None)
+        bridge._on_frame(frame2, None)
+    mock_reply.assert_called_once()
+    hist = bridge._room_history.get("pub:global:test", [])
+    assert len(hist) == 1
+    assert hist[0].get("id") == "msg_dup_a"
+
+
 def test_bridge_replies_to_other_messages(settings):
     mock_orchestrator = MagicMock(settings=settings)
     mock_orchestrator.run_and_wait.return_value = {"reply": "Hi there"}

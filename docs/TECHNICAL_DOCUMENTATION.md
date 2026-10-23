@@ -941,6 +941,9 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   instead of pretending the message just arrived. Frames with missing or
   malformed timestamps (non-numeric, `NaN`, `Infinity`, boolean) are treated as
   live rather than raising.
+- **Replay/echo dedup:** the bridge keeps bounded session sets of seen frame ids
+  and `(sender, content, second)` keys so gateway replays or echo storms do not
+  generate duplicate replies or duplicate context in the prompt.
 - **Information-plane guardrails:** public-room replies pass through a redaction
   guard (`_redact_internal_info`) that strips local file paths, project
   internals, config files, and MCP/tool references before sending. Internal
