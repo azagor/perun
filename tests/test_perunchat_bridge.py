@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import deque
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -576,6 +577,27 @@ def test_proactive_reply_respects_per_room_cooldown(bridge_env):
     bridge._on_frame(_chat_frame(msg_id="msg_2", text="anyone here?"), ws)
 
     assert orchestrator.run_and_wait.call_count == 1
+
+
+def test_direct_mentions_bypass_room_saturation(bridge_env):
+    """Direct mentions are answered even when the proactive saturation guard
+    would block further unsolicited replies."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("reply", uid="run_1")
+    ws = MagicMock()
+    room_id = "pub:global:test"
+
+    # Artificially saturate the room with 3 recent Perun replies.
+    for _ in range(3):
+        bridge._room_reply_activity.setdefault(room_id, deque(maxlen=40)).append(time.time())
+
+    bridge._on_frame(_chat_frame(msg_id="dir_1", room=room_id, text="@peruntheoverseer hello"), ws)
+    orchestrator.run_and_wait.assert_called_once()
+
+    # A proactive message is still blocked by saturation.
+    orchestrator.run_and_wait.reset_mock()
+    bridge._on_frame(_chat_frame(msg_id="pro_1", room=room_id, text="hello everyone"), ws)
+    orchestrator.run_and_wait.assert_not_called()
 
 
 def test_flush_outbox_orders_by_sequence(bridge_env):

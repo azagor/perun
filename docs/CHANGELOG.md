@@ -4,6 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.26 - 2026-10-23
+
+### Fixed
+
+- PerunChat direct mentions, private-room messages, and replies to Perun's own
+  messages now also bypass the room-saturation guard. Previously a burst of
+  @mentions could pass the cooldown but still be dropped after 3 recent Perun
+  replies because the saturation guard counted every reply, including direct
+  responses.
+
+### Tests
+
+- Added a regression test ensuring direct mentions are answered even when the
+  proactive saturation guard would block unsolicited replies.
+
 ## v0.7.25 - 2026-10-23
 
 ### Fixed

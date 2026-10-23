@@ -674,12 +674,6 @@ class PerunChatBridge:
             logger.info("PerunChat already processing %s; skipping duplicate", msg_id)
             return
 
-        # Hard saturation guard: if we have already contributed a lot recently,
-        # skip even the LLM decision to avoid dominating the room.
-        if self._is_room_saturated(room_id):
-            logger.info("PerunChat room %s saturated; skipping reply to %s", room_id, msg_id)
-            return
-
         # Decide whether to reply like a human would: direct mentions always
         # get an answer; general messages depend on room size, questions, and
         # quietness so Perun feels present without spamming.
@@ -689,20 +683,28 @@ class PerunChatBridge:
             return
         logger.info("PerunChat decided to reply to %s: %s", msg_id, reason)
 
+        # Direct mentions, private rooms, and replies to our own messages bypass
+        # the proactive saturation/cooldown guards so users are not ignored when
+        # they explicitly address Perun. The per-minute rate limit still applies.
+        is_direct = (
+            reason == "private room"
+            or reason == "reply to own message"
+            or reason.startswith("addressed by alias")
+        )
+
+        # Hard saturation guard: if we have already contributed a lot recently,
+        # skip even the LLM decision to avoid dominating the room.
+        if not is_direct and self._is_room_saturated(room_id):
+            logger.info("PerunChat room %s saturated; skipping reply to %s", room_id, msg_id)
+            return
+
         if now - self._minute_window_start > 60:
             self._minute_window_start = now
             self._reply_count_minute = 0
         if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
             logger.info("PerunChat hit per-minute reply limit; skipping %s", msg_id)
             return
-        # Small per-room cooldown so we do not chatter. Direct mentions,
-        # private rooms, and replies to our own messages bypass it so users
-        # do not get ignored during a burst of targeted messages.
-        is_direct = (
-            reason == "private room"
-            or reason == "reply to own message"
-            or reason.startswith("addressed by alias")
-        )
+        # Small per-room cooldown so we do not chatter.
         last_reply = self._last_reply_time.get(room_id, 0)
         if not is_direct and now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
