@@ -839,12 +839,14 @@ class PerunChatBridge:
                 "payload": reply,
                 "in_reply_to": frame.get("id"),
             }
-            if not self._send_frame(ws, reply_frame):
-                # The frame stays in the durable outbox and is resent with the
-                # same id + sequence_number on the next (re)connect.
-                return
             if msg_id:
                 self._mark_replied(msg_id)
+            if not self._send_frame(ws, reply_frame):
+                # The frame stays in the durable outbox and is resent with the
+                # same id + sequence_number on the next (re)connect. The original
+                # message is still marked as replied because the reply was
+                # generated and queued; we must not regenerate it on reconnect.
+                return
             self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
             reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
