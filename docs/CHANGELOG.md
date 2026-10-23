@@ -4,11 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.23 - 2026-10-23
+
 ### Fixed
 
 - PerunChat first-message replies no longer default to a generic
   self-introduction; the prompt now explicitly tells the model it is already
   an established participant and must reply directly to the message.
+- Perun MCP server startup banner suppressed. FastMCP 4.0.3 was printing a
+  banner to stdout, corrupting the stdio JSON-RPC stream and causing MCP
+  clients to fail; the banner is now disabled and a stdio smoke test guards
+  the fix.
+
+### Docs
+
+- Project documentation refreshed for the Context layer, secret store,
+  `project_roots`, dashboard self-update, and the `context`/`secret` CLI.
 
 ## v0.7.22 - 2026-10-23
 
