@@ -614,10 +614,17 @@ class PerunChatBridge:
         content_type = frame.get("content_type")
         is_chat = frame_type == "CHAT" or content_type == "text/plain"
         sender = (frame.get("sender", {}).get("agent_id") or "unknown")
-        logger.debug("PerunChat frame from %s: type=%s content_type=%s is_chat=%s", sender, frame_type, content_type, is_chat)
+        room = frame.get("room_id", "unknown")
+        msg_id = frame.get("id")
+        logger.info(
+            "PerunChat frame from %s in %s (id=%s, type=%s, content_type=%s, is_chat=%s)",
+            sender, room, msg_id, frame_type, content_type, is_chat,
+        )
         if not is_chat:
+            logger.info("PerunChat ignoring frame from %s: not a chat message", sender)
             return
         if not getattr(self.settings, "perunchat_auto_reply", False):
+            logger.info("PerunChat auto_reply disabled; skipping frame from %s", sender)
             return
 
         sender = (frame.get("sender", {}).get("agent_id") or "").lower()
@@ -632,6 +639,7 @@ class PerunChatBridge:
         # runtime header, so those messages should still be replied to.
         sender_runtime = (frame.get("sender", {}).get("runtime") or "").lower()
         if self._agent_id and sender == self._agent_id.lower() and sender_runtime == "perun":
+            logger.info("PerunChat ignoring own message %s", msg_id)
             if msg_id:
                 self._own_message_ids.add(msg_id)
                 if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
@@ -656,26 +664,34 @@ class PerunChatBridge:
 
         # Do not reply to messages we have already replied to.
         if msg_id and msg_id in self._recent_replied:
+            logger.info("PerunChat already replied to %s; skipping", msg_id)
             return
 
         # Hard saturation guard: if we have already contributed a lot recently,
         # skip even the LLM decision to avoid dominating the room.
         if self._is_room_saturated(room_id):
+            logger.info("PerunChat room %s saturated; skipping reply to %s", room_id, msg_id)
             return
 
         # Decide whether to reply like a human would: direct mentions always
         # get an answer; general messages depend on room size, questions, and
         # quietness so Perun feels present without spamming.
-        if not self._should_reply_to(frame):
+        should_reply, reason = self._should_reply_to(frame)
+        if not should_reply:
+            logger.info("PerunChat decided not to reply to %s: %s", msg_id, reason)
             return
+        logger.info("PerunChat decided to reply to %s: %s", msg_id, reason)
 
         if now - self._minute_window_start > 60:
             self._minute_window_start = now
             self._reply_count_minute = 0
         if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
+            logger.info("PerunChat hit per-minute reply limit; skipping %s", msg_id)
             return
         # Small per-room cooldown so we do not chatter.
-        if now - self._last_reply_time.get(room_id, 0) < _MIN_REPLY_INTERVAL_SECONDS:
+        last_reply = self._last_reply_time.get(room_id, 0)
+        if now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
+            logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
             return
 
         self._reply(frame, ws)
@@ -740,6 +756,7 @@ class PerunChatBridge:
             # Mark this message as being processed immediately so a slow LLM call
             # does not cause duplicate replies if the same frame is seen again.
             msg_id = frame.get("id")
+            logger.debug("PerunChat prompt for %s:\n%s", msg_id, prompt)
             self._mark_replied(msg_id)
             project = control.ensure()
             reply = ""
@@ -842,8 +859,11 @@ class PerunChatBridge:
                 text = pattern.sub("[redacted]", text)
         return text
 
-    def _should_reply_to(self, frame: Dict[str, Any]) -> bool:
-        """Decide whether Perun should reply, mimicking human attentiveness."""
+    def _should_reply_to(self, frame: Dict[str, Any]) -> tuple[bool, str]:
+        """Decide whether Perun should reply, mimicking human attentiveness.
+
+        Returns (should_reply, reason) so the caller can log the decision.
+        """
         room_id = frame.get("room_id", "")
         text = (frame.get("payload", "") or "").strip()
         in_reply_to = frame.get("in_reply_to")
@@ -851,18 +871,18 @@ class PerunChatBridge:
 
         # Always reply in private 1:1 rooms.
         if room_id.startswith("priv:"):
-            return True
+            return True, "private room"
 
         # Reply when someone directly responds to one of our messages.
         if in_reply_to and in_reply_to in self._own_message_ids:
-            return True
+            return True, "reply to own message"
 
         # Reply when addressed by name or a common alias.
         name = (self._agent_id or "perun").lower()
         aliases = {name, "perun", "overseer", "peruntheoverseer"}
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}\b", lowered):
-                return True
+                return True, f"addressed by alias '{alias}'"
 
         # Beyond direct mentions, behave like a naturally attentive participant:
         # answer questions, greet in quiet rooms, and chime in on open messages
@@ -871,24 +891,34 @@ class PerunChatBridge:
         saturated = self._is_room_saturated(room_id)
 
         if self._is_question(text):
-            return not saturated
+            if saturated:
+                return False, "question but room is saturated"
+            return True, "open question"
 
         if self._is_greeting(text) and self._room_quiet_for(room_id, 45):
-            return not saturated
+            if saturated:
+                return False, "greeting but room is saturated"
+            return True, "greeting in quiet room"
 
         # General open message: be more conversational in small rooms, more
         # reserved in larger/busy rooms.
         if saturated:
-            return False
+            return False, "room is saturated"
         if active_humans <= 3:
-            return random.random() < 0.70
+            if random.random() < 0.70:
+                return True, "small room, random chime-in"
+            return False, "small room, random chime-in declined"
         if active_humans <= 7:
-            return random.random() < 0.35
+            if random.random() < 0.35:
+                return True, "medium room, random chime-in"
+            return False, "medium room, random chime-in declined"
         # Busy room: only reply to open messages if it has been quiet a while.
         if self._room_quiet_for(room_id, 120):
-            return random.random() < 0.15
+            if random.random() < 0.15:
+                return True, "busy quiet room, random chime-in"
+            return False, "busy quiet room, random chime-in declined"
 
-        return False
+        return False, "no trigger matched"
 
     def _is_question(self, text: str) -> bool:
         """Detect explicit or implicit questions."""
