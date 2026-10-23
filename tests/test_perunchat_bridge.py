@@ -531,6 +531,28 @@ def test_send_failure_keeps_frame_and_flush_resends_same_id_and_seq(bridge_env):
     assert bridge._load_outbox() == []
 
 
+def test_send_failure_marks_original_replied_and_does_not_regenerate_on_replay(bridge_env):
+    """A failed send still marks the source message replied so a gateway replay
+    does not spawn a second LLM run while the queued reply is pending."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("hello there", uid="run_1")
+    frame = _chat_frame(text="@peruntheoverseer hello")
+    failing_ws = MagicMock()
+    failing_ws.send.side_effect = OSError("connection dropped")
+
+    bridge._on_frame(frame, failing_ws)
+
+    # The reply was generated once and queued.
+    orchestrator.run_and_wait.assert_called_once()
+    assert frame["id"] in bridge._recent_replied
+
+    # Replaying the same frame must not trigger another reply generation.
+    orchestrator.run_and_wait.reset_mock()
+    replay_ws = MagicMock()
+    bridge._on_frame(frame, replay_ws)
+    orchestrator.run_and_wait.assert_not_called()
+
+
 def test_flush_outbox_orders_by_sequence(bridge_env):
     """Older queued frames are resent first so none is rejected as stale."""
     bridge, _ = bridge_env
