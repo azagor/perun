@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.26 (see §15). This release hardens PerunChat responsiveness: direct mentions, private-room messages, and replies to Perun's own messages now bypass both the proactive 2-second per-room cooldown and the room-saturation guard, so explicitly addressed messages are never silently dropped while unsolicited chime-ins remain throttled. Earlier v0.7.24/v0.7.25 hardening (durable outbox, reply-after-send marking, cooldown bypass) is preserved. `perun.__version__` reports `0.7.26`.
+**Latest release:** v0.7.27 (see §15). This release refactors PerunChat's reply-decision logic into a structured `_ReplyDecision` object so direct-mention, private-room, and reply-to-own-message bypasses are explicit and cannot drift out of sync with the reason strings. It preserves the v0.7.26 behavior where direct messages bypass the proactive cooldown and saturation guards while unsolicited chime-ins remain throttled. `perun.__version__` reports `0.7.27`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound

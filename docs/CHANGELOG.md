@@ -4,6 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.27 - 2026-10-23
+
+### Changed
+
+- Refactored PerunChat reply decision logic. `_should_reply_to()` now returns a
+  structured `_ReplyDecision` with an explicit `is_direct` flag, instead of a
+  `(bool, str)` tuple that callers had to re-parse. This makes the bypass rules
+  for cooldown and saturation self-documenting and prevents future drift.
+
 ## v0.7.26 - 2026-10-23
 
 ### Fixed
