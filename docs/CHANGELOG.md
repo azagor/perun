@@ -4,6 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.33 - 2026-10-23
+
+### Added
+
+- Dashboard PerunChat manual messages now carry `sender.runtime: "perun-operator"`
+  so the chat log can distinguish a human operator message from autonomous
+  Perun traffic.
+
+### Changed
+
+- The dashboard chat log labels operator-sent messages as `operator (you)`
+  instead of `@peruntheoverseer`.
+
 ## v0.7.32 - 2026-10-23
 
 ### Added

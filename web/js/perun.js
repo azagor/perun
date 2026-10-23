@@ -3121,6 +3121,7 @@ async function viewPerunChat() {
     } catch (e) {
         status = { configured: false };
     }
+    const myAgentId = status.agent_id || '';
     // Populate the shared model/agent lists used by the dropdown pickers.
     try { await loadModels(); await loadAgents(); } catch (e) { /* best-effort */ }
 
@@ -3590,6 +3591,7 @@ async function viewPerunChat() {
     let replyToId = null;
     let replyToPreview = null;
     const messageHistory = []; // keep recent messages for reply rendering
+    const operatorMessageIds = new Set(); // dashboard manual messages sent by the human operator
     const MAX_HISTORY = 200;
     const MAX_STORED_HISTORY = 100;
     let wsReconnectTimer = null;
@@ -3640,19 +3642,23 @@ async function viewPerunChat() {
         if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
         persistChat();
 
-        const own = msg.sender && msg.sender.agent_id ? esc(msg.sender.agent_id) : '?';
+        const isOperator = (msg.sender && msg.sender.runtime === 'perun-operator') || operatorMessageIds.has(msg.id);
+        const ownRaw = msg.sender && msg.sender.agent_id ? msg.sender.agent_id : '?';
+        const own = isOperator ? 'operator (you)' : esc(ownRaw);
+        const ownColor = isOperator ? 'var(--success)' : 'var(--gold)';
         const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
         let replyHtml = '';
         if (msg.in_reply_to) {
             const original = messageHistory.find(m => m.id === msg.in_reply_to);
-            const replyToWho = original ? esc(original.sender.agent_id) : 'unknown';
+            const origOperator = original && ((original.sender && original.sender.runtime === 'perun-operator') || operatorMessageIds.has(original.id));
+            const replyToWho = original ? (origOperator ? 'operator (you)' : esc(original.sender.agent_id)) : 'unknown';
             const replyToText = original ? esc(String(original.payload).slice(0, 60)) : '…';
             replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
         }
 
         const lineHtml = `<div style="margin-bottom:4px;">
             <div class="row" style="gap:10px; align-items:baseline;">
-                <span style="color:var(--gold); font-weight:600;">@${own}</span>
+                <span style="color:${ownColor}; font-weight:600;">@${own}</span>
                 <span class="muted" style="font-size:11px;">${esc(ts)}</span>
                 <button class="btn ghost small" data-reply-id="${esc(msg.id)}" data-reply-sender="${own}">Reply</button>
             </div>
@@ -3800,13 +3806,16 @@ async function viewPerunChat() {
             timestamp: now,
             room_type: $('#pc-chat-type').value,
             room_id: joinedRoom,
-            sender: {},
+            sender: { agent_id: myAgentId, runtime: 'perun-operator' },
             recipient_id: null,
             content_type: 'text/plain',
             turn_count: 0,
             payload: text,
         };
         if (replyToId) frame.in_reply_to = replyToId;
+        // Mark this frame as a human operator message both locally and for the
+        // autonomous bridge, which ignores sender.runtime == 'perun-operator'.
+        operatorMessageIds.add(frame.id);
         // The gateway now echoes every chat frame back to the sender, so the
         // message will appear once the round-trip completes.
         sendFrame(frame);

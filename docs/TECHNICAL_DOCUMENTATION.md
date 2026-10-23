@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.32 (see §15). This release hardens the dashboard self-update fix: after the first post-update reload, the finished `done` job is dismissed server-side so the Updates page cannot loop again even if browser storage is cleared. `perun.__version__` reports `0.7.32`.
+**Latest release:** v0.7.33 (see §15). This release distinguishes dashboard manual chat messages from autonomous Perun traffic by marking them with `sender.runtime == "perun-operator"`; the dashboard chat log labels them as the human operator. `perun.__version__` reports `0.7.33`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
