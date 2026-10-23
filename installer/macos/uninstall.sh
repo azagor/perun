@@ -13,8 +13,8 @@ LABEL="com.peruninthemachine.perun"
 USER_UID=$(stat -f '%Du' /dev/console 2>/dev/null || echo "")
 
 if [[ -n "$USER_UID" ]]; then
-    log "stopping LaunchAgent ..."
-    launchctl bootout "user/$USER_UID/$LABEL" 2>/dev/null || true
+    echo "[perun] stopping LaunchAgent ..."
+    launchctl bootout "gui/$USER_UID/$LABEL" 2>/dev/null || true
 fi
 
 rm -f "/Library/LaunchAgents/$LABEL.plist"

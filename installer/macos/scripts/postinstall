@@ -44,8 +44,8 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     "$PY" -m venv "$VENV_DIR"
 fi
 
-log "upgrading pip ..."
-"$VENV_DIR/bin/python" -m pip install --upgrade pip
+log "upgrading pip (best effort) ..."
+"$VENV_DIR/bin/python" -m pip install --upgrade pip || log "WARN: pip upgrade failed; continuing"
 
 log "installing Perun dependencies ..."
 if [[ -f "$PERUN_DIR/requirements.txt" ]]; then
@@ -60,9 +60,15 @@ if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
     CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || true)
 fi
 
+run_as_user() {
+    local user="$1"
+    shift
+    sudo -u "$user" /bin/bash -lc "$*"
+}
+
 if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && -n "$CONSOLE_UID" ]]; then
     log "installing OpenCode integration for user $CONSOLE_USER ..."
-    if su - "$CONSOLE_USER" -c "export PATH=\"$VENV_DIR/bin:\$PATH\"; \"$VENV_DIR/bin/python\" -m perun install --no-index"; then
+    if run_as_user "$CONSOLE_USER" "export PATH=\"$VENV_DIR/bin:\$PATH\"; \"$VENV_DIR/bin/python\" -m perun install --no-index"; then
         log "OpenCode integration installed for $CONSOLE_USER"
     else
         log "WARN: OpenCode integration failed for $CONSOLE_USER"
@@ -80,9 +86,9 @@ if [[ -f "$LAUNCHAGENT_SRC" ]]; then
 
     if [[ -n "${CONSOLE_UID:-}" && -n "${CONSOLE_USER:-}" ]]; then
         log "loading LaunchAgent for user $CONSOLE_USER ..."
-        su - "$CONSOLE_USER" -c "launchctl bootstrap user/$CONSOLE_UID $LAUNCHAGENT_DEST" || true
-        su - "$CONSOLE_USER" -c "launchctl enable user/$CONSOLE_UID/com.peruninthemachine.perun" || true
-        su - "$CONSOLE_USER" -c "launchctl kickstart -k user/$CONSOLE_UID/com.peruninthemachine.perun" || true
+        run_as_user "$CONSOLE_USER" launchctl bootstrap "gui/$CONSOLE_UID" "$LAUNCHAGENT_DEST" || true
+        run_as_user "$CONSOLE_USER" launchctl enable "gui/$CONSOLE_UID/com.peruninthemachine.perun" || true
+        run_as_user "$CONSOLE_USER" launchctl kickstart -k "gui/$CONSOLE_UID/com.peruninthemachine.perun" || true
     fi
 else
     log "WARN: LaunchAgent source not found at $LAUNCHAGENT_SRC"

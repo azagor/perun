@@ -27,6 +27,7 @@ rsync -a \
     --exclude='.pytest_cache' \
     --exclude='node_modules' \
     --exclude='installer/Output' \
+    --exclude='installer/macos/Output' \
     --exclude='installer/*.exe' \
     --exclude='installer/*.iss' \
     --exclude='installer/certs' \
