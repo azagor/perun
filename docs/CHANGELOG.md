@@ -4,6 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- macOS `.pkg` installer (`installer/macos/`). Builds an unsigned package that
+  installs Perun to `/opt/perun`, creates a dedicated Python venv, wires the
+  global OpenCode integration for the logged-in console user, installs a
+  `/usr/local/bin/perun` wrapper, and registers a LaunchAgent that starts
+  `perun serve --bridge` at login. The release workflow now builds
+  `PerunSetup.pkg` on `macos-latest` and attaches it to GitHub releases
+  alongside the Windows installer.
+
 ## v0.7.27 - 2026-10-23
 
 ### Changed

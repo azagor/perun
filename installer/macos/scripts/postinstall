@@ -1,0 +1,92 @@
+#!/bin/bash
+# Perun macOS .pkg postinstall script.
+# Runs as root. Installs the Python venv, dependencies, OpenCode integration
+# for the logged-in console user, and the LaunchAgent.
+
+set -euo pipefail
+
+PERUN_DIR="/opt/perun"
+VENV_DIR="$PERUN_DIR/.venv"
+LAUNCHAGENT_SRC="$PERUN_DIR/installer/macos/com.peruninthemachine.perun.plist"
+LAUNCHAGENT_DEST="/Library/LaunchAgents/com.peruninthemachine.perun.plist"
+LOG_FILE="/tmp/perun_postinstall.log"
+
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+log() { echo "[perun-postinstall] $*"; }
+
+find_python() {
+    for cmd in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            local ver
+            ver=$("$cmd" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)
+            if [[ "$ver" =~ ^3\.([0-9]+)$ ]]; then
+                local minor="${BASH_REMATCH[1]}"
+                if [[ "$minor" -ge 10 ]]; then
+                    echo "$cmd"
+                    return 0
+                fi
+            fi
+        fi
+    done
+    return 1
+}
+
+PY=$(find_python) || {
+    log "ERROR: Python 3.10+ is required but was not found."
+    log "Install Python 3.10+ (e.g. via python.org or Homebrew) and re-run this installer."
+    exit 1
+}
+log "using Python: $PY ($($PY --version))"
+
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+    log "creating Python virtual environment at $VENV_DIR ..."
+    "$PY" -m venv "$VENV_DIR"
+fi
+
+log "upgrading pip ..."
+"$VENV_DIR/bin/python" -m pip install --upgrade pip
+
+log "installing Perun dependencies ..."
+if [[ -f "$PERUN_DIR/requirements.txt" ]]; then
+    "$VENV_DIR/bin/python" -m pip install -r "$PERUN_DIR/requirements.txt"
+else
+    log "WARN: $PERUN_DIR/requirements.txt not found; skipping dependency install"
+fi
+
+CONSOLE_USER=$(stat -f '%Su' /dev/console 2>/dev/null || true)
+CONSOLE_UID=""
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+    CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || true)
+fi
+
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && -n "$CONSOLE_UID" ]]; then
+    log "installing OpenCode integration for user $CONSOLE_USER ..."
+    if su - "$CONSOLE_USER" -c "export PATH=\"$VENV_DIR/bin:\$PATH\"; \"$VENV_DIR/bin/python\" -m perun install --no-index"; then
+        log "OpenCode integration installed for $CONSOLE_USER"
+    else
+        log "WARN: OpenCode integration failed for $CONSOLE_USER"
+        log "       Run 'perun install' manually after first login."
+    fi
+else
+    log "WARN: could not detect a non-root console user"
+    log "       Run 'perun install' manually after first login."
+fi
+
+if [[ -f "$LAUNCHAGENT_SRC" ]]; then
+    log "installing LaunchAgent ..."
+    cp "$LAUNCHAGENT_SRC" "$LAUNCHAGENT_DEST"
+    chmod 644 "$LAUNCHAGENT_DEST"
+
+    if [[ -n "${CONSOLE_UID:-}" && -n "${CONSOLE_USER:-}" ]]; then
+        log "loading LaunchAgent for user $CONSOLE_USER ..."
+        su - "$CONSOLE_USER" -c "launchctl bootstrap user/$CONSOLE_UID $LAUNCHAGENT_DEST" || true
+        su - "$CONSOLE_USER" -c "launchctl enable user/$CONSOLE_UID/com.peruninthemachine.perun" || true
+        su - "$CONSOLE_USER" -c "launchctl kickstart -k user/$CONSOLE_UID/com.peruninthemachine.perun" || true
+    fi
+else
+    log "WARN: LaunchAgent source not found at $LAUNCHAGENT_SRC"
+fi
+
+log "postinstall complete"
+exit 0

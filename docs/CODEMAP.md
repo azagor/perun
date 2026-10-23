@@ -698,7 +698,7 @@ stdio MCP server (`perun`). 25 tools: `perun_list_projects`,
 
 ## Root files
 
-* `installer/` — Windows installer source.
+* `installer/` — installer source.
   * `PerunSetup.iss` — Inno Setup script that produces `PerunSetup.exe`.
   * `install-prereqs.ps1` — prerequisite installer (Python, git, OpenCode CLI,
     Ollama) and Perun machine setup; invoked by the wizard.
@@ -710,8 +710,17 @@ stdio MCP server (`perun`). 25 tools: `perun_list_projects`,
     `PERUN_SIGN_PASSWORD` environment variables; when none is provided it
     creates a self-signed certificate on demand (`New-SelfSignedCertificate` →
     export → sign), so no `.pfx` needs to exist in the repo for CI to pass.
-* `.github/workflows/release.yml` — GitHub Actions workflow that builds and
-  signs `PerunSetup.exe` on `v*` tags and attaches it to the release.
+  * `macos/` — unsigned `.pkg` installer for macOS.
+    * `build.sh` — builds `installer/macos/Output/PerunSetup.pkg` with `pkgbuild`.
+    * `perun.sh` — `/usr/local/bin/perun` wrapper that uses the installed venv.
+    * `com.peruninthemachine.perun.plist` — system LaunchAgent plist that starts
+      `perun serve --bridge` at user login.
+    * `scripts/postinstall` — creates the venv, installs dependencies, wires the
+      OpenCode integration for the console user, and loads the LaunchAgent.
+    * `uninstall.sh` — manual uninstall script for pkg installs.
+* `.github/workflows/release.yml` — GitHub Actions workflow that builds
+  `PerunSetup.exe` (Windows) and `PerunSetup.pkg` (macOS) on `v*` tags and
+  attaches them to the release.
 * `setup.ps1` — Windows web installer: clones (or reuses) the repo and
   delegates to `bootstrap.ps1`. Designed to be run with
   `iwr ... | iex` straight from GitHub.

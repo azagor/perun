@@ -1062,9 +1062,37 @@ For open-source releases, a free trusted signing option is available from
 [SignPath Foundation](https://signpath.org). A low-cost paid option is
 [Certum Open Source Code Signing in the Cloud](https://certum.store/open-source-code-signing-on-simplysign.html).
 The repository includes a GitHub Actions workflow
-(`.github/workflows/release.yml`) that builds `PerunSetup.exe` and signs it
-using `PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets,
-then attaches the signed installer to the GitHub release.
+(`.github/workflows/release.yml`) that builds `PerunSetup.exe` (Windows) and
+`PerunSetup.pkg` (macOS), signs the Windows installer using
+`PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets, and
+attaches both installers to the GitHub release.
+
+### macOS installer (`installer/macos/`)
+
+For end-user distribution on macOS, the repo ships an **unsigned `.pkg`**
+installer built with `pkgbuild`. The package:
+
+1. Installs Perun to `/opt/perun`.
+2. Creates a Python virtual environment at `/opt/perun/.venv` and installs
+   `requirements.txt` into it.
+3. Installs a `/usr/local/bin/perun` wrapper that delegates to the venv.
+4. Runs `python -m perun install --no-index` for the currently logged-in
+   console user to wire the global OpenCode integration.
+5. Installs a system LaunchAgent (`com.peruninthemachine.perun`) that starts
+   `perun serve --bridge` when the user logs in.
+
+Because the package is **not signed**, users must right-click the `.pkg` and
+choose **Open** the first time, or disable Gatekeeper, unless an Apple
+Developer ID Installer certificate is added to the workflow later.
+
+Build it with:
+
+```bash
+./installer/macos/build.sh
+```
+
+The resulting installer is written to `installer/macos/Output/PerunSetup.pkg`.
+Uninstall with `sudo installer/macos/uninstall.sh`.
 
 ### Machine install (`perun install --machine`, `perun/installer.py`)
 
