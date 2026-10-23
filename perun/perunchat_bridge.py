@@ -77,6 +77,9 @@ _REPLIED_TRIM_TO = 150
 _MAX_REPLY_CHARS = 320
 _ROOM_HISTORY_LEN = 40
 _MAX_CONTEXT_MESSAGES = 6
+# Absolute prompt-size guard. We pass prompts via a temp file, so the real limit
+# is the model's context window; this cap keeps us well within common windows.
+_MAX_PROMPT_CHARS = 100_000
 
 _MIN_REPLY_INTERVAL_SECONDS = 2.0
 _TYPING_DELAY_MIN = 0.6
@@ -317,6 +320,10 @@ class PerunChatBridge:
         self._room_participants: Dict[str, Dict[str, float]] = {}
         self._own_message_ids: Set[str] = set()
         self._last_reply_time: Dict[str, float] = {}
+        # Per-room locks serialize replies so only one message per room is
+        # processed at a time, preserving order and avoiding races between
+        # overlapping model calls.
+        self._room_locks: Dict[str, threading.Lock] = {}
         # Session-level duplicate detection for gateway replays / echo storms.
         self._seen_message_ids: Set[str] = set()
         self._recent_content: Set[str] = set()
@@ -618,6 +625,7 @@ class PerunChatBridge:
             time.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
 
+
     def _on_frame(self, frame: Dict[str, Any], ws: Any) -> None:
         # A malformed payload (JSON array/scalar instead of an object, or a
         # `sender: null`) must never take the receive loop down; frames are
@@ -679,22 +687,10 @@ class PerunChatBridge:
             if len(self._recent_content) > _MAX_RECENT_CONTENT:
                 self._recent_content = set(list(self._recent_content)[-_MAX_RECENT_CONTENT // 2:])
 
-        # Remember our own messages so we do not reply to ourselves and so we
-        # can detect replies directed at us. We identify our own messages by
-        # agent_id AND runtime "perun". The dashboard marks manual operator
-        # messages with runtime "perun-operator" so the UI can show them as the
-        # human administrator; the bridge otherwise processes them normally.
-        sender_runtime = (frame.get("sender", {}).get("runtime") or "").lower()
-        if self._agent_id and sender == self._agent_id.lower() and sender_runtime == "perun":
-            logger.info("PerunChat ignoring own message %s", msg_id)
-            if msg_id:
-                self._own_message_ids.add(msg_id)
-                if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
-                    self._own_message_ids = set(list(self._own_message_ids)[-_REPLIED_TRIM_TO:])
-            return
-
         # Keep a rolling window of recent room history for contextual replies.
+        # Own replies are included too so the model sees a normal chat transcript.
         now = time.time()
+        sender_runtime = (frame.get("sender", {}).get("runtime") or "").lower()
         if room_id and msg_id:
             hist = self._room_history.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             # Avoid polluting the prompt with exact replays of the same frame id.
@@ -703,10 +699,23 @@ class PerunChatBridge:
             activity = self._room_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             activity.append(now)
             # Track active human participants so Perun can be more chatty in
-            # small rooms and more reserved in busy ones.
-            if sender:
+            # small rooms and more reserved in busy ones. Skip ourselves.
+            if sender and (not self._agent_id or sender != self._agent_id.lower()):
                 participants = self._room_participants.setdefault(room_id, {})
                 participants[sender] = now
+
+        # Remember our own messages so we do not reply to ourselves and so we
+        # can detect replies directed at us. We identify our own messages by
+        # agent_id AND runtime "perun". The dashboard marks manual operator
+        # messages with runtime "perun-operator" so the UI can show them as the
+        # human administrator; the bridge otherwise processes them normally.
+        if self._agent_id and sender == self._agent_id.lower() and sender_runtime == "perun":
+            logger.info("PerunChat ignoring own message %s", msg_id)
+            if msg_id:
+                self._own_message_ids.add(msg_id)
+                if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
+                    self._own_message_ids = set(list(self._own_message_ids)[-_REPLIED_TRIM_TO:])
+            return
 
         if not room_id or not isinstance(text, str) or not text.strip():
             return
@@ -748,7 +757,12 @@ class PerunChatBridge:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
             return
 
-        self._reply(frame, ws)
+        # Serialize replies per room so only one model call is in flight at a
+        # time for a given room. This preserves ordering and prevents races
+        # between overlapping replies.
+        room_lock = self._room_locks.setdefault(room_id, threading.Lock())
+        with room_lock:
+            self._reply(frame, ws)
 
     def _active_participant_count(self, room_id: str, window: float = 300.0) -> int:
         """Count unique human agents seen in the room within the last window."""
@@ -833,6 +847,7 @@ class PerunChatBridge:
                     agent=agent,
                     timeout=_RUN_WAIT_TIMEOUT_SECONDS,
                     skip_instructions=skip_instructions,
+                    use_prompt_file=True,
                 )
                 run = result.get("run") or {}
                 run_uid = run.get("run_uid") or ""
@@ -1076,7 +1091,7 @@ class PerunChatBridge:
 
         context = ""
         if history_lines:
-            context = "\n\nRecent conversation:\n" + "\n".join(history_lines)
+            context = "\n\nRecent conversation (for context only):\n" + "\n".join(history_lines)
 
         first_message_note = ""
         if not history_lines:
@@ -1088,8 +1103,9 @@ class PerunChatBridge:
             )
 
         in_reply_to = frame.get("in_reply_to")
+        reply_to_note = ""
         if in_reply_to and in_reply_to in self._own_message_ids:
-            context += "\n\nThis message is a reply to something you said."
+            reply_to_note = "\n\nThis message is a reply to something you said."
 
         active_humans = self._active_participant_count(room)
         recent_msgs = self._recent_message_count(room, 60)
@@ -1131,15 +1147,33 @@ class PerunChatBridge:
                 f"({len(roster)} shown, excluding yourself)."
             )
 
-        return (
-            f"{CHAT_SYSTEM_PROMPT}{context}{first_message_note}{saturation_note}{trust_note}{catchup_note}{roster_note}\n\n"
-            f"Room: {room}\n"
-            f"Active participants (last 5 min): {active_humans}\n"
-            f"Messages in last minute: {recent_msgs}\n"
-            f"From: {sender}\n"
-            f"Latest message:\n{text}\n\n"
-            f"Your reply:"
-        )
+        # Normal chat layout: system prompt + recent conversation + latest message.
+        # If the prompt is still too long, drop the oldest history lines until it
+        # fits. The latest message stays at the end so it is never truncated away.
+        while True:
+            prompt = (
+                f"{CHAT_SYSTEM_PROMPT}{context}{first_message_note}{saturation_note}"
+                f"{trust_note}{reply_to_note}{catchup_note}{roster_note}\n\n"
+                f"Room: {room}\n"
+                f"Active participants (last 5 min): {active_humans}\n"
+                f"Messages in last minute: {recent_msgs}\n"
+                f"From: {sender}\n"
+                f"Latest message:\n{text}\n\n"
+                f"Your reply:"
+            )
+            if len(prompt) <= _MAX_PROMPT_CHARS:
+                break
+            if history_lines:
+                history_lines.pop(0)
+                if history_lines:
+                    context = "\n\nRecent conversation:\n" + "\n".join(history_lines)
+                else:
+                    context = ""
+                continue
+            # Nothing left to trim except metadata; keep latest message at all costs.
+            logger.warning("PerunChat prompt for %s still exceeds %d chars after dropping history", frame.get("id"), _MAX_PROMPT_CHARS)
+            break
+        return prompt
 
 
 # Module-level singleton: Perun server attaches its orchestrator here.

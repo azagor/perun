@@ -17,6 +17,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -669,6 +670,9 @@ class Orchestrator:
         # Runs that already published a terminal "end" event (so cancel() and
         # _finalize() cannot both emit one).
         self._ended: set[str] = set()
+        # Temporary prompt files when a caller asks to pass the prompt via file
+        # instead of a command-line argument (avoids shell length limits).
+        self._prompt_files: dict[str, str] = {}
         # Seed the default global guidance file once, when an orchestrator is
         # actually being used — never on mere import (tests and tooling import
         # this module constantly and must not write to ~/.config/opencode).
@@ -688,7 +692,8 @@ class Orchestrator:
                   model: str = "",
                   agent: str = "",
                   title: str = "",
-                  skip_instructions: bool = False) -> dict[str, Any]:
+                  skip_instructions: bool = False,
+                  use_prompt_file: bool = False) -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
@@ -730,9 +735,11 @@ class Orchestrator:
             session_pk=session_pk, opencode_session_id=opencode_session_id,
             model=model, model_explicit=model_explicit, agent=agent,
         )
-        # Carry skip_instructions in memory (not persisted to DB) so chat-like
-        # runs can bypass project-instruction injection.
+        # Carry skip_instructions and prompt-file mode in memory (not persisted
+        # to DB) so chat-like runs can bypass project-instruction injection and
+        # avoid command-line length limits.
         run["skip_instructions"] = skip_instructions
+        run["use_prompt_file"] = use_prompt_file
         registry.log_activity(project["id"], "run",
                               f"Started agent run ({run_uid})",
                               {"prompt": prompt[:200]})
@@ -823,7 +830,8 @@ class Orchestrator:
                 self._finalize(run_uid, "cancelled", None, "cancelled by user",
                                cancelled=True)
                 return
-            self._execute(run_uid, project, prompt, run)
+            use_prompt_file = run.get("use_prompt_file", False)
+            self._execute(run_uid, project, prompt, run, use_prompt_file=use_prompt_file)
         except Exception as exc:  # pragma: no cover - defensive
             self._publish_text(run_uid, f"\n[perun] internal error: {exc}\n")
             self._finalize(run_uid, "failed", None, str(exc), cancelled=False)
@@ -831,7 +839,7 @@ class Orchestrator:
             self._sem.release()
 
     def _execute(self, run_uid: str, project: dict[str, Any], prompt: str,
-                 run: dict[str, Any]) -> None:
+                 run: dict[str, Any], *, use_prompt_file: bool = False) -> None:
         cwd = project["path"]
         oc_sid = run.get("opencode_session_id") or ""
         # Refuse to nest agents without bound: an agent spawned by Perun inherits
@@ -869,7 +877,22 @@ class Orchestrator:
             argv += ["--session", oc_sid]
         if run_uid:
             argv += ["--title", f"Perun · {project['name']} · {run_uid[:6]}"]
-        argv += ["--", prompt]
+        prompt_file = ""
+        if use_prompt_file:
+            # Write the prompt to a temp file and pass @path as the message. This
+            # avoids Windows command-line length limits (~32K) that can silently
+            # truncate a long chat prompt and drop the latest message.
+            config.ensure_dirs()
+            fd, prompt_file = tempfile.mkstemp(
+                suffix=".txt", prefix="perun_prompt_", dir=config.RUNS_DIR, text=True
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as pf:
+                pf.write(prompt)
+            argv += ["--", f"@{prompt_file}"]
+            with self._lock:
+                self._prompt_files[run_uid] = prompt_file
+        else:
+            argv += ["--", prompt]
 
         log_path = config.RUNS_DIR / f"{run_uid}.log"
         config.ensure_dirs()
@@ -1117,6 +1140,12 @@ class Orchestrator:
             self._cancelled.discard(run_uid)
             self._procs.pop(run_uid, None)
             self._ended.discard(run_uid)
+            prompt_file = self._prompt_files.pop(run_uid, None)
+        if prompt_file:
+            try:
+                os.unlink(prompt_file)
+            except OSError:
+                pass
         # Replay history is kept briefly for late dashboard clients, then freed:
         # otherwise every run ever executed stays in memory for the process's
         # lifetime.

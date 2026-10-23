@@ -4,6 +4,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.36 - 2026-10-24
+
+### Fixed
+
+- PerunChat prompts are now passed to `opencode run` via a temporary file
+  (`@path`) instead of a command-line argument, eliminating the Windows ~32K
+  command-line length limit that could silently drop the latest message.
+- The prompt now follows a normal chat transcript layout: system prompt,
+  recent conversation history (including Perun's own replies), and the latest
+  message at the end. If the prompt is too long, the oldest history lines are
+  dropped first so the latest message is always preserved.
+- Per-room reply serialization is enforced with a dedicated lock so only one
+  message per room is processed at a time, preserving order and preventing
+  overlapping model calls.
+- PerunChat bridge keeps its own outbound replies in room history so the model
+  sees a coherent conversation rather than a series of disconnected questions.
+
 ## v0.7.35 - 2026-10-24
 
 ### Fixed

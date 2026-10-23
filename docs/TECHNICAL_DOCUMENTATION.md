@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.35 (see §15). This release hardens PerunChat against gateway replays and echo storms by deduplicating incoming frames by id and by sender/content/timestamp, safely handling malformed timestamps, and trimming prompt context (6 messages, 10 roster entries) so the latest message is not truncated away from the model. `perun.__version__` reports `0.7.35`.
+**Latest release:** v0.7.36 (see §15). This release hardens PerunChat by passing prompts through a temporary file (`@path`) instead of a command-line argument, using a normal chat-transcript layout where the latest message is preserved during trimming, serializing replies per room, and deduplicating replayed frames. `perun.__version__` reports `0.7.36`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -941,11 +941,17 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   instead of pretending the message just arrived. Frames with missing or
   malformed timestamps (non-numeric, `NaN`, `Infinity`, boolean) are treated as
   live rather than raising.
-- **Replay/echo dedup:** the bridge keeps bounded session sets of seen frame ids
-  and `(sender, content, second)` keys so gateway replays or echo storms do not
-  generate duplicate replies or duplicate context in the prompt. The prompt is
-  kept small (6 recent messages, 10 roster entries) so the latest message is not
-  lost to command-line or context-window truncation.
+- **Prompt transport:** the bridge writes each prompt to a temporary file and
+  passes `@path` to `opencode run` so the Windows command-line length limit
+  (~32K) can never truncate the prompt. The prompt is a normal chat transcript
+  (system prompt, recent history including Perun's own replies, then the latest
+  message). If trimming is needed, the oldest history lines are dropped first so
+  the latest message is always preserved.
+- **Per-room serialization:** a per-room lock ensures only one reply per room is
+  in flight at a time, preserving order and preventing overlapping model calls.
+- **Replay/echo dedup:** bounded session sets of seen frame ids and
+  `(sender, content, second)` keys prevent gateway replays or echo storms from
+  generating duplicate replies or duplicate context.
 - **Information-plane guardrails:** public-room replies pass through a redaction
   guard (`_redact_internal_info`) that strips local file paths, project
   internals, config files, and MCP/tool references before sending. Internal

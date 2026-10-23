@@ -213,10 +213,41 @@ def test_build_prompt_excludes_current_frame_from_history(settings):
     }
     bridge._room_history["pub:global:test"] = deque([prev, cur], maxlen=40)
     prompt = bridge._build_prompt(cur)
-    # The current frame is skipped in history, so only "previous" appears there.
-    history_part = prompt.split("Latest message:")[0]
-    assert "previous" in history_part
-    assert "current" not in history_part
+    # The current frame appears once in the Latest message block. It must not
+    # be duplicated as a history line (format "other-agent: current").
+    assert prompt.count("current") == 1
+    assert "other-agent: previous" in prompt
+    assert "other-agent: current" not in prompt
+
+
+def test_own_replies_are_kept_in_room_history(settings):
+    """Own outbound replies must stay in the transcript so the model sees a
+    normal chat conversation, but they must not trigger further replies."""
+    mock_orchestrator = MagicMock(settings=settings)
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    peer = {
+        "type": "CHAT",
+        "id": "msg_peer",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "hello @perun",
+    }
+    own = {
+        "type": "CHAT",
+        "id": "msg_own",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "perun-local", "runtime": "perun"},
+        "payload": "hi there",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(peer, None)
+        bridge._on_frame(own, None)
+    mock_reply.assert_called_once_with(peer, None)
+    hist = bridge._room_history.get("pub:global:test", [])
+    assert len(hist) == 2
+    assert "msg_peer" in [f.get("id") for f in hist]
+    assert "msg_own" in [f.get("id") for f in hist]
 
 
 def test_participant_roster_is_capped(settings):
