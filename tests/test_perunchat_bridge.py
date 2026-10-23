@@ -600,6 +600,44 @@ def test_direct_mentions_bypass_room_saturation(bridge_env):
     orchestrator.run_and_wait.assert_not_called()
 
 
+def test_private_room_bypasses_cooldown_and_saturation(bridge_env):
+    """Private-room messages bypass the proactive cooldown and saturation
+    guards so 1:1 conversations are not throttled."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("reply", uid="run_1")
+    ws = MagicMock()
+    room_id = "priv:user1:user2"
+
+    # Force both cooldown and saturation.
+    bridge._last_reply_time[room_id] = time.time()
+    for _ in range(3):
+        bridge._room_reply_activity.setdefault(room_id, deque(maxlen=40)).append(time.time())
+
+    bridge._on_frame(_chat_frame(msg_id="priv_1", room=room_id, text="hello"), ws)
+    orchestrator.run_and_wait.assert_called_once()
+
+
+def test_reply_to_own_message_bypasses_cooldown_and_saturation(bridge_env):
+    """Replies directed at one of our own messages bypass the proactive
+    cooldown and saturation guards."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("reply", uid="run_1")
+    ws = MagicMock()
+    room_id = "pub:global:test"
+    own_msg_id = "msg_own_1"
+    bridge._own_message_ids.add(own_msg_id)
+
+    # Force both cooldown and saturation.
+    bridge._last_reply_time[room_id] = time.time()
+    for _ in range(3):
+        bridge._room_reply_activity.setdefault(room_id, deque(maxlen=40)).append(time.time())
+
+    frame = _chat_frame(msg_id="reply_1", room=room_id, text="yes exactly")
+    frame["in_reply_to"] = own_msg_id
+    bridge._on_frame(frame, ws)
+    orchestrator.run_and_wait.assert_called_once()
+
+
 def test_flush_outbox_orders_by_sequence(bridge_env):
     """Older queued frames are resent first so none is rejected as stale."""
     bridge, _ = bridge_env
