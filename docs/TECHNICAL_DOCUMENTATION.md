@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.33 (see §15). This release distinguishes dashboard manual chat messages from autonomous Perun traffic by marking them with `sender.runtime == "perun-operator"`; the dashboard chat log labels them as the human operator. `perun.__version__` reports `0.7.33`.
+**Latest release:** v0.7.34 (see §15). This release hardens PerunChat against gateway replays and echo storms by deduplicating incoming frames by id and by sender/content/timestamp, and by safely handling malformed timestamps in the dedup path. `perun.__version__` reports `0.7.34`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound

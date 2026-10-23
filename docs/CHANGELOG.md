@@ -4,6 +4,8 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.34 - 2026-10-23
+
 ### Fixed
 
 - PerunChat operator label now uses the existing `--green` CSS variable instead
