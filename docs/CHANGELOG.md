@@ -14,6 +14,15 @@ All notable changes are recorded here. Single source of truth for release notes.
   `PerunSetup.pkg` on `macos-latest` and attaches it to GitHub releases
   alongside the Windows installer.
 
+### Fixed
+
+- macOS installer: use the `gui/<UID>` launchctl domain for LaunchAgent load
+  /enable/kickstart instead of the incorrect `user/<UID>` domain.
+- macOS installer: replace an undefined `log` call in `uninstall.sh` with
+  `echo`.
+- macOS installer: make the pip upgrade step best-effort so a missing network
+  does not abort an otherwise working install.
+
 ## v0.7.27 - 2026-10-23
 
 ### Changed

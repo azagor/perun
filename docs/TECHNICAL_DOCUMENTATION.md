@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.28 (see §15). This release adds an unsigned macOS `.pkg` installer that installs Perun to `/opt/perun`, creates an isolated Python venv, wires the global OpenCode integration for the logged-in console user, installs a `/usr/local/bin/perun` wrapper, and registers a LaunchAgent that starts `perun serve --bridge` at login. It preserves the PerunChat v0.7.27 reply-decision refactor and the v0.7.26 cooldown/saturation bypasses. `perun.__version__` reports `0.7.28`.
+**Latest release:** v0.7.29 (see §15). This release ships the first macOS `.pkg` installer. It installs Perun to `/opt/perun`, creates an isolated Python venv, wires the global OpenCode integration for the logged-in console user, installs a `/usr/local/bin/perun` wrapper, and registers a LaunchAgent that starts `perun serve --bridge` at login. v0.7.29 fixes launchctl domain (`gui/` instead of `user/`), an undefined `log` call in `uninstall.sh`, and makes pip upgrade best-effort. `perun.__version__` reports `0.7.29`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
