@@ -4531,10 +4531,15 @@ function startUpdatePoll() {
             if (job.state === 'done') {
                 stopUpdatePoll();
                 // Guard against an infinite reload loop: only auto-reload once
-                // per update. The flag is cleared from sessionStorage after the
-                // first reload so a later update can still trigger a reload.
+                // per update. If we already reloaded, dismiss the finished job
+                // server-side so a later page load cannot loop again.
                 if (sessionStorage.getItem('perun_update_reloaded')) {
                     sessionStorage.removeItem('perun_update_reloaded');
+                    try {
+                        await api('/api/update/dismiss', { method: 'POST' });
+                    } catch (_) {
+                        // Ignore: the important thing is that we stop reloading.
+                    }
                     return;
                 }
                 toast(`Updated to v${esc(job.to_version)} — refreshing`, 'ok');
