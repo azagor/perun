@@ -22,6 +22,15 @@ All notable changes are recorded here. Single source of truth for release notes.
   `echo`.
 - macOS installer: make the pip upgrade step best-effort so a missing network
   does not abort an otherwise working install.
+- macOS installer: generate a user-specific log path
+  (`~/Library/Logs/perun/perun.log`) in the LaunchAgent plist instead of
+  writing to world-readable `/tmp/perun.log`.
+- macOS installer: warn when Xcode Command Line Tools are missing.
+
+### Changed
+
+- macOS installer: added CI lint step (`bash -n`, `plutil -lint`) and a
+  `installer/macos/README.md` with build/install/uninstall instructions.
 
 ## v0.7.27 - 2026-10-23
 

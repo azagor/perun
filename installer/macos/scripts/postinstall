@@ -39,6 +39,12 @@ PY=$(find_python) || {
 }
 log "using Python: $PY ($($PY --version))"
 
+if ! xcode-select -p >/dev/null 2>&1; then
+    log "WARN: Xcode Command Line Tools not found."
+    log "       Some Python dependencies may fail to compile; install them with:"
+    log "         xcode-select --install"
+fi
+
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     log "creating Python virtual environment at $VENV_DIR ..."
     "$PY" -m venv "$VENV_DIR"
@@ -81,7 +87,14 @@ fi
 
 if [[ -f "$LAUNCHAGENT_SRC" ]]; then
     log "installing LaunchAgent ..."
-    cp "$LAUNCHAGENT_SRC" "$LAUNCHAGENT_DEST"
+
+    if [[ -n "${CONSOLE_USER:-}" && "$CONSOLE_USER" != "root" ]]; then
+        USER_LOG_DIR="/Users/$CONSOLE_USER/Library/Logs/perun"
+        run_as_user "$CONSOLE_USER" "mkdir -p '$USER_LOG_DIR'" || true
+        sed -e "s|/tmp/perun.log|$USER_LOG_DIR/perun.log|g" "$LAUNCHAGENT_SRC" > "$LAUNCHAGENT_DEST"
+    else
+        cp "$LAUNCHAGENT_SRC" "$LAUNCHAGENT_DEST"
+    fi
     chmod 644 "$LAUNCHAGENT_DEST"
 
     if [[ -n "${CONSOLE_UID:-}" && -n "${CONSOLE_USER:-}" ]]; then

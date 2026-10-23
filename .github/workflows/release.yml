@@ -66,6 +66,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Lint macOS installer scripts
+        run: |
+          bash -n installer/macos/perun.sh
+          bash -n installer/macos/scripts/postinstall
+          bash -n installer/macos/uninstall.sh
+          bash -n installer/macos/build.sh
+          plutil -lint installer/macos/com.peruninthemachine.perun.plist
+
       - name: Build macOS installer
         run: |
           chmod +x installer/macos/build.sh
