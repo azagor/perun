@@ -4,6 +4,8 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.32 - 2026-10-23
+
 ### Added
 
 - macOS `.pkg` installer (`installer/macos/`). Builds an unsigned package that

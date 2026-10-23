@@ -146,7 +146,22 @@ If you already have a local copy of the repo:
 .\bootstrap.ps1
 ```
 
-### 3. Linux / macOS command-line installer
+### 3. macOS GUI installer
+
+Download `PerunSetup.pkg` from the latest release and double-click it. The
+unsigned package installs Perun to `/opt/perun`, creates a dedicated Python
+venv, wires the global OpenCode integration for the logged-in user, installs a
+`/usr/local/bin/perun` wrapper, and registers a LaunchAgent that starts Perun
+at login. Because it is unsigned, right-click the `.pkg` and choose **Open** the
+first time.
+
+To build it from source on macOS:
+
+```bash
+./installer/macos/build.sh          # produces installer/macos/Output/PerunSetup.pkg
+```
+
+### 4. Linux / macOS command-line installer
 
 Open a terminal and run:
 
@@ -160,7 +175,7 @@ Then start the dashboard:
 python3 -m perun serve
 ```
 
-### 4. Manual install (any platform)
+### 5. Manual install (any platform)
 
 ```bash
 pip install -r requirements.txt
@@ -182,13 +197,14 @@ it is only *started* once a Telegram token is configured in `~/.perun/config.jso
 
 ### Code signing for releases
 
-The installer can be signed with a trusted certificate. The GitHub Actions
-workflow in `.github/workflows/release.yml` supports signing via the
+The Windows installer can be signed with a trusted certificate. The GitHub
+Actions workflow in `.github/workflows/release.yml` supports signing via the
 `PERUN_SIGN_PFX_BASE64` and `PERUN_SIGN_PASSWORD` repository secrets; when
 those are not set, `installer/sign.ps1` creates a self-signed certificate on
 dev machines and in CI instead, so every tag build publishes a signed
 `PerunSetup.exe` (self-signed signatures are not trusted by default elsewhere).
-For details see `docs/TECHNICAL_DOCUMENTATION.md`.
+The macOS `.pkg` is currently unsigned; see `docs/TECHNICAL_DOCUMENTATION.md`
+for details.
 
 ## What you get
 
@@ -203,7 +219,7 @@ For details see `docs/TECHNICAL_DOCUMENTATION.md`.
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL approval for actions |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
-| **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard) or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + optional `PerunBridge` task |
+| **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard), `installer/macos/Output/PerunSetup.pkg` (macOS), or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + optional `PerunBridge` task |
 
 ## CLI
 
