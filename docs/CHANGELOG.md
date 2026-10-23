@@ -4,6 +4,26 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.24 - 2026-10-23
+
+### Fixed
+
+- PerunChat reply reliability: a message is now marked as replied only after a
+  reply is generated and queued/sent. Previously, failed LLM runs caused the
+  source message to be marked as replied before any reply was delivered,
+  making the bridge skip the message forever on subsequent gateway reconnects.
+- PerunChat outbox consistency: when a socket send fails and the reply is
+  queued for later resend, the source message is still marked as replied so
+  the gateway replay does not generate a duplicate reply.
+- PerunChat decision logging: every frame receive/reply/skip path is now
+  logged at INFO level for easier debugging.
+
+### Tests
+
+- Added a regression test ensuring a failed socket send still marks the
+  original message replied and does not trigger a second LLM run when the
+  gateway replays the message.
+
 ## v0.7.23 - 2026-10-23
 
 ### Fixed

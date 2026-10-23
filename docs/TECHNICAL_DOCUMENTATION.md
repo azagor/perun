@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.23 (see §15). This release fixes the PerunChat first-message self-introduction issue by adding explicit "do not introduce yourself" instructions and a runtime contextual note when there is no room history. It also fixes the Perun MCP server failure caused by FastMCP printing a startup banner to stdout, which corrupted the stdio JSON-RPC stream, and adds a regression test that spawns the real MCP server and verifies the handshake starts with valid JSON. The documentation has been refreshed for the Context layer, secret store, project roots, and self-update subsystems. `perun.__version__` reports `0.7.23`.
+**Latest release:** v0.7.24 (see §15). This release hardens PerunChat reply reliability: failed or queued replies no longer leave source messages permanently stuck as "already replied", the bridge now marks a message replied only after a reply is generated and queued/sent, and a durable outbox plus a new regression test ensure a dead socket does not cause duplicate reply generation on reconnect. It also adds decision logging to the bridge so every reply/skip path can be diagnosed from the log. `perun.__version__` reports `0.7.24`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
