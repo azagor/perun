@@ -4,6 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.51 - 2026-10-24
+
+### Fixed
+
+- PerunChat hard timeout now cancels the underlying orchestrator run when reply
+  generation exceeds 60 seconds. Previously the foreground worker abandoned the
+  reply but the background thread continued, causing delayed replies to be sent
+  minutes later after a hung model/provider call finally finished.
+
 ## v0.7.50 - 2026-10-24
 
 ### Added

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.50 (see §15). This release fixes a critical PerunChat typing-indicator bug where the typing frame reused the same `sequence_number` as the following reply, causing the gateway to drop the reply as `non_monotonic_sequence` and leaving users stuck at "typing…". It also adds a regression test for sequence-number monotonicity, hardens reply timeouts to 60 seconds with idle-frame cleanup on every path, and ships the private-room management UI and conversational memory integration introduced in v0.7.42–v0.7.43. `perun.__version__` reports `0.7.50`.
+**Latest release:** v0.7.51 (see §15). This release fixes a PerunChat hard-timeout bug where the foreground worker abandoned a slow reply after 60 seconds but the background generation thread kept running, often sending a stale reply minutes later when the model/provider call finally finished. The timeout handler now cancels the underlying orchestrator run so the slot is freed and no delayed reply is sent. It also includes the v0.7.50 sequence-number collision fix, the v0.7.42–v0.7.43 private-room UI and conversational memory work, and the v0.7.44 60-second reply timeout. `perun.__version__` reports `0.7.51`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -988,7 +988,9 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   so it cannot collide with the following reply and cause a gateway
   `non_monotonic_sequence` rejection.
 - **Reply timeout:** a hard wall-clock timeout of 60 seconds caps reply
-  generation so a hung model/provider call cannot stall the whole room.
+  generation so a hung model/provider call cannot stall the whole room. When
+  the timeout fires, the underlying orchestrator run is cancelled so the slot
+  is freed and the background generation thread cannot send a delayed reply.
 - **Conversational memory:** the bridge stores typed facts extracted from
   messages in vector memory, tagged with sender, room, and fact type, and
   injects relevant facts into reply prompts. The chat agent instructions

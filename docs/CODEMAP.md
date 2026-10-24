@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.7.50"`).
+Package docstring + `__version__` (`"0.7.51"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -479,8 +479,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   no-reply, timeout, or failure. The frame increments and persists `_seq` before
   sending so the following reply cannot reuse the same `sequence_number` and be
   rejected by the gateway as non-monotonic.
-* Reply timeout: a hard 60-second wall-clock timeout wraps generation so a hung
-  model/provider call cannot stall the room.
+* Reply timeout: a hard 60-second wall-clock timeout wraps generation. When it
+  fires, the timeout handler cancels the underlying orchestrator run so the
+  slot is freed and the background `_reply` thread cannot send a stale reply.
 * Conversational memory: extracted facts are stored via `memory.remember()`
   with `room_id`, `sender`, and `type` metadata; `_search_room_memory()` and
   `_maybe_store_facts()` inject relevant context into prompts and apply
