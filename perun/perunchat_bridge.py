@@ -103,6 +103,11 @@ _RECONNECT_CLOCK_SKEW_MS = 60_000
 _REPLY_GENERATION_ATTEMPTS = 2
 _REPLY_RETRY_DELAY_SECONDS = 2.0
 _RUN_WAIT_TIMEOUT_SECONDS = 300
+# Hard wall-clock cap for a single chat reply. Chat must stay responsive; if the
+# model/provider hangs beyond this, the worker abandons the call and continues
+# with the next message. The abandoned LLM thread may still run in the
+# background, but it cannot block the room indefinitely.
+_MAX_REPLY_WALL_SECONDS = 90.0
 # Write-ahead outbox: every outbound frame is persisted before it is sent and
 # only removed after a successful send. Frames are resent after a reconnect with
 # their ORIGINAL id + sequence_number, which is idempotent at the gateway: if the
@@ -837,7 +842,19 @@ class PerunChatBridge:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
             return
 
-        self._reply(frame, ws)
+        # Run the actual reply generation with a hard wall-clock timeout so a
+        # single hung model/provider call cannot stall the whole room.
+        reply_thread = threading.Thread(target=self._reply, args=(frame, ws), name=f"perunchat-reply-{room_id}-{msg_id}")
+        reply_thread.start()
+        reply_thread.join(timeout=_MAX_REPLY_WALL_SECONDS)
+        if reply_thread.is_alive():
+            logger.error(
+                "PerunChat reply generation for %s in %s exceeded %s seconds; abandoning to keep room responsive. "
+                "The model call may still finish in the background but will not be sent.",
+                msg_id, room_id, _MAX_REPLY_WALL_SECONDS,
+            )
+            if msg_id:
+                self._pending_replies.discard(msg_id)
 
     def _drain_room_queues(self) -> None:
         """Synchronous helper for tests: process every queued frame now.
