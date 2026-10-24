@@ -3635,6 +3635,25 @@ async function viewPerunChat() {
         badge.className = 'badge ' + (cls || '');
     };
 
+    const isOperatorRuntime = (rt) => rt === 'perun-operator' || (typeof rt === 'string' && rt.endsWith('-operator'));
+
+    function formatSenderLabel(sender, forceOperator = false) {
+        const operator = forceOperator || (sender && isOperatorRuntime(sender.runtime));
+        if (!operator) {
+            return sender && sender.agent_id ? esc(sender.agent_id) : '?';
+        }
+        let label;
+        if (sender && isOperatorRuntime(sender.runtime)) {
+            label = esc(sender.runtime);
+        } else if (myAgentId) {
+            label = esc(`${myAgentId}-operator`);
+        } else {
+            label = 'perun-operator';
+        }
+        const isOwn = sender && sender.agent_id === myAgentId;
+        return isOwn ? `${label} (you)` : label;
+    }
+
     function renderMessage(msg) {
         if (!msg.id) return;
         if (messageHistory.some((m) => m.id === msg.id)) return;
@@ -3647,18 +3666,16 @@ async function viewPerunChat() {
         }
         persistChat();
 
-        const isOperatorRuntime = (rt) => rt === 'perun-operator' || (typeof rt === 'string' && rt.endsWith('-operator'));
         let isOperator = (msg.sender && isOperatorRuntime(msg.sender.runtime)) || operatorMessageIds.has(msg.id) || msg._perunOperator === true;
         if (isOperator) msg._perunOperator = true;
-        const ownRaw = msg.sender && msg.sender.agent_id ? msg.sender.agent_id : '?';
-        const own = isOperator ? 'operator (you)' : esc(ownRaw);
+        const own = formatSenderLabel(msg.sender, isOperator);
         const ownColor = isOperator ? 'var(--green)' : 'var(--gold)';
         const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
         let replyHtml = '';
         if (msg.in_reply_to) {
             const original = messageHistory.find(m => m.id === msg.in_reply_to);
             const origOperator = original && ((original.sender && isOperatorRuntime(original.sender.runtime)) || operatorMessageIds.has(original.id) || original._perunOperator === true);
-            const replyToWho = original ? (origOperator ? 'operator (you)' : esc(original.sender.agent_id)) : 'unknown';
+            const replyToWho = original ? formatSenderLabel(original.sender, origOperator) : 'unknown';
             const replyToText = original ? esc(String(original.payload).slice(0, 60)) : '…';
             replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
         }

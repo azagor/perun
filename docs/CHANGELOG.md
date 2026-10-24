@@ -4,6 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.41 - 2026-10-24
+
+### Changed
+
+- PerunChat dashboard operator messages now show the full runtime label
+  (e.g. `peruntheoverseer-operator`) with `(you)` only for the current user's
+  operator messages.
+
 ## v0.7.40 - 2026-10-24
 
 ### Fixed
