@@ -3202,9 +3202,17 @@ async function viewPerunChat() {
         } catch (e) { /* room catalog is optional */ }
     }
 
+    function isValidRoomId(rid) {
+        return /^(priv|private|grp|pub):[a-zA-Z0-9._:-]+$/.test(rid);
+    }
+
     $('#pc-add-room').addEventListener('click', () => {
         const rid = $('#pc-custom-room').value.trim();
         if (!rid) return;
+        if (!isValidRoomId(rid)) {
+            toast('Invalid room id. Must start with priv:/grp:/pub: and contain only letters, numbers, dots, underscores, colons and hyphens.', 'err');
+            return;
+        }
         if (!roomCatalog.some((x) => x.value === rid)) {
             roomCatalog.push({ value: rid, label: rid, description: 'custom' });
             joinSel.setItems(roomCatalog);
@@ -3334,6 +3342,10 @@ async function viewPerunChat() {
     document.getElementById('pc-priv-create').addEventListener('click', async () => {
         const membersStr = document.getElementById('pc-priv-members').value;
         const roomId = document.getElementById('pc-priv-room-id').value.trim();
+        if (roomId && !isValidRoomId(roomId)) {
+            toast('Invalid custom room id. Must start with priv: and contain only letters, numbers, dots, underscores, colons and hyphens.', 'err');
+            return;
+        }
         const members = membersStr.split(',').map(s => s.trim()).filter(Boolean);
         try {
             const res = await api('/api/perunchat/rooms/private', { method: 'POST', body: { members, room_id: roomId || null } });
