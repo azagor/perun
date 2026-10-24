@@ -1965,3 +1965,7 @@ OpenCode projects.
 ## [0.7.42] - 2026-10-24
 - PerunChat bridge: memory integration (facts tagged by room/sender, injected into prompts, heuristic extraction)
 - Dashboard: private room management UI (create multi-party rooms, invite/remove members)
+---
+## [0.7.43] - 2026-10-24
+- Server: proxy PerunChat private room management endpoints
+- Dashboard: validate room ids before adding/creating; quieter private-rooms load
