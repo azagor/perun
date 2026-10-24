@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS memory (
     source        TEXT DEFAULT 'manual',
     content_hash  TEXT NOT NULL,
     ts            TEXT NOT NULL,
+    meta          TEXT DEFAULT '{}',
     UNIQUE(scope, project_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project_id);
@@ -241,6 +242,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "doc_chunks": [
         ("embedded_hash", "TEXT DEFAULT ''"),
     ],
+    "memory": [
+        ("meta", "TEXT DEFAULT '{}'"),
+    ],
 }
 
 # Columns retired after project instructions moved fully to files on disk
@@ -287,7 +291,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def init_db() -> None:

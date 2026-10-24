@@ -1961,3 +1961,7 @@ OpenCode projects.
   an excerpt contained a character the console code page could not encode — e.g.
   the `→` arrow in Perun's own docs. `main()` now reconfigures stdout/stderr to
   UTF-8 (`errors="replace"`). Regression tests in `tests/test_cli.py`.
+---
+## [0.7.42] - 2026-10-24
+- PerunChat bridge: memory integration (facts tagged by room/sender, injected into prompts, heuristic extraction)
+- Dashboard: private room management UI (create multi-party rooms, invite/remove members)

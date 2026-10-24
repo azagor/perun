@@ -127,7 +127,8 @@ def _embed(text: str, prefix: str) -> bytes | None:
 # Facts
 # --------------------------------------------------------------------------- #
 def remember(content: str, *, project_id: int = 0, scope: str | None = None,
-             topic: str = "general", source: str = "manual") -> dict[str, Any]:
+             topic: str = "general", source: str = "manual",
+             meta: dict[str, Any] | None = None) -> dict[str, Any]:
     content = (content or "").strip()
     if not content:
         return {"ok": False, "reason": "empty"}
@@ -142,17 +143,28 @@ def remember(content: str, *, project_id: int = 0, scope: str | None = None,
     pid = 0 if scope == "global" else project_id
     h = content_hash(content)
     ts = registry.now_iso()
+    import json
+    meta_json = json.dumps(meta or {})
     # Compute the embedding before opening the connection: _embed performs an
     # HTTP call and a DB connection must never be held across a network call.
     emb = _embed(content, QUERY_PREFIX)
     with db.db() as conn:
-        cur = conn.execute(
-            """INSERT INTO memory
-               (project_id,scope,topic,content,embedding,source,content_hash,ts)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT(scope, project_id, content_hash) DO NOTHING""",
-            (pid, scope, topic, content, emb, source, h, ts),
-        )
+        try:
+            cur = conn.execute(
+                """INSERT INTO memory
+                   (project_id,scope,topic,content,embedding,source,content_hash,ts,meta)
+                   VALUES (?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(scope, project_id, content_hash) DO NOTHING""",
+                (pid, scope, topic, content, emb, source, h, ts, meta_json),
+            )
+        except sqlite3.OperationalError:
+            cur = conn.execute(
+                """INSERT INTO memory
+                   (project_id,scope,topic,content,embedding,source,content_hash,ts)
+                   VALUES (?,?,?,?,?,?,?,?)
+                   ON CONFLICT(scope, project_id, content_hash) DO NOTHING""",
+                (pid, scope, topic, content, emb, source, h, ts),
+            )
         if cur.lastrowid:
             return {"ok": True, "id": cur.lastrowid, "embedded": emb is not None}
         existing = db.one(
@@ -240,6 +252,13 @@ def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
             half_life = (GLOBAL_FRESHNESS_HALF_LIFE_DAYS
                          if r["scope"] == "global" else None)
             freshness = _freshness_weight(r["ts"], half_life_days=half_life)
+            import json as _json
+            meta = {}
+            try:
+                if "meta" in r.keys() and r["meta"]:
+                    meta = _json.loads(r["meta"]) if isinstance(r["meta"], str) else (r["meta"] or {})
+            except Exception:
+                meta = {}
             scored.append({
                 "id": r["id"],
                 "source_type": "fact",
@@ -249,6 +268,7 @@ def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
                 "content": content,
                 "source": r["source"],
                 "ts": r["ts"],
+                "meta": meta,
                 "score": round(raw * freshness, 4),
                 "_rank": raw * freshness,
             })

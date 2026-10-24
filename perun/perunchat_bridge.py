@@ -42,7 +42,7 @@ try:
 except Exception:  # pragma: no cover
     _HAS_HTTPX = False
 
-from . import config, control
+from . import config, control, memory, registry
 
 if False:  # type: ignore
     # Circular-import-safe type hint for the orchestrator.
@@ -1016,6 +1016,10 @@ class PerunChatBridge:
             self._last_reply_time[room_id] = time.time()
             reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             reply_activity.append(time.time())
+            try:
+                self._maybe_store_facts(frame, reply, room_id)
+            except Exception:
+                logger.debug("PerunChat failed to extract/store facts", exc_info=True)
         except Exception as exc:
             logger.warning("PerunChat bridge failed to generate reply: %s", exc)
         finally:
@@ -1173,6 +1177,20 @@ class PerunChatBridge:
         sender = frame.get("sender", {}).get("agent_id", "unknown")
         room = frame.get("room_id", "unknown")
         text = frame.get("payload", "")
+        memory_context = ""
+        try:
+            pid = 0
+            facts = memory.search_facts(f"{sender} {room} {text}", project_id=pid, top_k=4, include_global=True)
+            if facts:
+                lines = []
+                for f in facts:
+                    meta = f.get("meta") or {}
+                    tag = f" [from:{meta.get('sender','?')}/room:{meta.get('room','?')}]" if meta else ""
+                    lines.append(f"- {f['content']}{tag}")
+                if lines:
+                    memory_context = "\n\nRelevant long-term facts (use if helpful):\n" + "\n".join(lines)
+        except Exception:
+            memory_context = ""
 
         # Include recent room history so the model can decide contextually
         # whether to reply and what to say.
@@ -1249,7 +1267,7 @@ class PerunChatBridge:
         # fits. The latest message stays at the end so it is never truncated away.
         while True:
             prompt = (
-                f"{CHAT_SYSTEM_PROMPT}{context}{first_message_note}{saturation_note}"
+                f"{CHAT_SYSTEM_PROMPT}{context}{memory_context}{first_message_note}{saturation_note}"
                 f"{trust_note}{reply_to_note}{catchup_note}{roster_note}\n\n"
                 f"Room: {room}\n"
                 f"Active participants (last 5 min): {active_humans}\n"
@@ -1275,6 +1293,33 @@ class PerunChatBridge:
             logger.warning("PerunChat prompt for %s still exceeds %d chars after dropping history", frame.get("id"), _MAX_PROMPT_CHARS)
             break
         return prompt
+
+    def _maybe_store_facts(self, frame: Dict[str, Any], reply: str, room_id: str) -> None:
+        try:
+            sender = frame.get("sender", {}).get("agent_id") or "unknown"
+            text = frame.get("payload") or ""
+            if not isinstance(text, str) or not text.strip():
+                return
+            if not isinstance(reply, str) or not reply.strip():
+                return
+            t = text.strip()
+            tl = t.lower()
+            store = False
+            candidate = None
+            if any(k in tl for k in ["i am ", "my name is ", "i'm ", "we use ", "i prefer ", "i work ", "my timezone", "i live in", "we live in"]):
+                store = True
+                candidate = f"{sender}: {t}"
+            if store and candidate and len(candidate) < 500:
+                memory.remember(
+                    candidate,
+                    project_id=0,
+                    scope="global",
+                    topic="perunchat",
+                    source="perunchat",
+                    meta={"room": room_id, "sender": sender},
+                )
+        except Exception:
+            pass
 
 
 # Module-level singleton: Perun server attaches its orchestrator here.

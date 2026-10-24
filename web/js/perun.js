@@ -3276,6 +3276,149 @@ async function viewPerunChat() {
         refreshRooms();
     }
 
+    // ---- Private Rooms management -------------------------------------------
+    const privateRoomsCard = el('div', { class: 'card mt' },
+        `<div class="card-head"><h4>Private Rooms</h4><span class="badge">manage</span></div>
+         <p class="secondary" style="font-size:12px; margin:-4px 0 10px 0;">Create private rooms (bilateral or multi-party), invite/remove members.</p>
+         <div class="form-row">
+             <label class="field" style="flex:1"><span class="lab">Members (comma separated, include yourself optional)</span>
+                 <input type="text" id="pc-priv-members" placeholder="agent-a, agent-b"></label>
+         </div>
+         <div class="form-row">
+             <label class="field" style="flex:1"><span class="lab">Custom room id <span class="muted">(optional, must start with priv:)</span></span>
+                 <input type="text" id="pc-priv-room-id" placeholder="leave empty for auto"></label>
+             <div style="align-self:flex-end"><button class="btn primary" id="pc-priv-create">Create / Join</button></div>
+         </div>
+         <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px">
+             <label class="field" style="flex:1; min-width:200px"><span class="lab">Your private rooms</span>
+                 <select id="pc-priv-select"><option value="">— select —</option></select></label>
+             <button class="btn ghost" id="pc-priv-refresh">Refresh</button>
+             <button class="btn ghost" id="pc-priv-join-chat">Join in chat</button>
+         </div>
+         <div id="pc-priv-members-box" style="margin-top:10px"></div>
+         <div class="form-row" style="margin-top:10px">
+             <label class="field" style="flex:1"><span class="lab">Invite agent</span>
+                 <input type="text" id="pc-priv-invite" placeholder="agent_id"></label>
+             <div style="align-self:flex-end"><button class="btn success" id="pc-priv-invite-btn">Invite</button></div>
+         </div>`);
+    v.appendChild(privateRoomsCard);
+
+    async function refreshPrivateRooms() {
+        if (!pcConfigured) {
+            const sel = document.getElementById('pc-priv-select');
+            if (sel) sel.innerHTML = '<option value="">— select —</option>';
+            const box = document.getElementById('pc-priv-members-box');
+            if (box) box.innerHTML = '<p class="muted">Add API key to manage private rooms.</p>';
+            return;
+        }
+        try {
+            const res = await api('/api/perunchat/rooms/private');
+            const rooms = res.rooms || [];
+            const sel = document.getElementById('pc-priv-select');
+            if (sel) {
+                sel.innerHTML = '<option value="">— select —</option>';
+                for (const r of rooms) {
+                    const opt = el('option', { value: r }, esc(r));
+                    sel.appendChild(opt);
+                }
+            }
+            const box = document.getElementById('pc-priv-members-box');
+            if (box) box.innerHTML = rooms.length ? '<p class="muted">Select a room to view members.</p>' : '<p class="muted">No private rooms yet.</p>';
+        } catch (e) {
+            toast('Failed to load private rooms: ' + e.message, 'err');
+        }
+    }
+
+    document.getElementById('pc-priv-refresh').addEventListener('click', refreshPrivateRooms);
+
+    document.getElementById('pc-priv-create').addEventListener('click', async () => {
+        const membersStr = document.getElementById('pc-priv-members').value;
+        const roomId = document.getElementById('pc-priv-room-id').value.trim();
+        const members = membersStr.split(',').map(s => s.trim()).filter(Boolean);
+        try {
+            const res = await api('/api/perunchat/rooms/private', { method: 'POST', body: { members, room_id: roomId || null } });
+            toast('Private room created/joined', 'ok');
+            document.getElementById('pc-priv-members').value = '';
+            document.getElementById('pc-priv-room-id').value = '';
+            await refreshPrivateRooms();
+            if (res.room_id) {
+                const sel = document.getElementById('pc-priv-select');
+                if (sel) sel.value = res.room_id;
+                await loadPrivateRoomMembers(res.room_id);
+            }
+            await refreshRooms();
+        } catch (e) {
+            toast(e.message, 'err');
+        }
+    });
+
+    async function loadPrivateRoomMembers(roomId) {
+        const box = document.getElementById('pc-priv-members-box');
+        if (!box || !roomId) return;
+        box.innerHTML = '<p class="muted">Loading members…</p>';
+        try {
+            const res = await api(`/api/perunchat/rooms/${encodeURIComponent(roomId)}/members`);
+            const members = res.members || [];
+            let html = `<div class="row" style="justify-content:space-between; align-items:center"><span class="lab">Members</span><span class="muted">${esc(roomId)}</span></div>`;
+            if (!members.length) {
+                html += '<p class="muted">No members.</p>';
+            } else {
+                for (const m of members) {
+                    html += `<div class="row" style="justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border)"><span>${esc(m)}</span><button class="btn ghost danger small" data-remove-mem="${esc(m)}">Remove</button></div>`;
+                }
+            }
+            box.innerHTML = html;
+            box.querySelectorAll('[data-remove-mem]').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const mid = btn.getAttribute('data-remove-mem');
+                    try {
+                        await api(`/api/perunchat/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(mid)}`, { method: 'DELETE' });
+                        toast('Member removed', 'ok');
+                        await loadPrivateRoomMembers(roomId);
+                        await refreshRooms();
+                    } catch (e) {
+                        toast(e.message, 'err');
+                    }
+                });
+            });
+        } catch (e) {
+            box.innerHTML = `<p class="muted">Failed to load members: ${esc(e.message)}</p>`;
+        }
+    }
+
+    document.getElementById('pc-priv-select').addEventListener('change', (e) => {
+        loadPrivateRoomMembers(e.target.value);
+    });
+
+    document.getElementById('pc-priv-invite-btn').addEventListener('click', async () => {
+        const roomId = document.getElementById('pc-priv-select').value;
+        const agentId = document.getElementById('pc-priv-invite').value.trim();
+        if (!roomId) { toast('Select a private room first', 'err'); return; }
+        if (!agentId) { toast('Enter agent_id to invite', 'err'); return; }
+        try {
+            await api(`/api/perunchat/rooms/${encodeURIComponent(roomId)}/members`, { method: 'POST', body: { agent_id: agentId } });
+            toast('Member invited', 'ok');
+            document.getElementById('pc-priv-invite').value = '';
+            await loadPrivateRoomMembers(roomId);
+            await refreshRooms();
+        } catch (e) {
+            toast(e.message, 'err');
+        }
+    });
+
+    document.getElementById('pc-priv-join-chat').addEventListener('click', () => {
+        const roomId = document.getElementById('pc-priv-select').value;
+        if (!roomId) { toast('Select a private room first', 'err'); return; }
+        const typeSel = document.getElementById('pc-chat-type');
+        if (typeSel) typeSel.value = 'PRIVATE';
+        refreshRoomSelect();
+        setCurrentRoomId(roomId);
+        joinCurrentRoom();
+        toast('Joined private room in chat', 'ok');
+    });
+
+    refreshPrivateRooms();
+
     // ---- Social grid -------------------------------------------------------
     const grid = el('div', { class: 'grid', style: 'grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px;' });
 
