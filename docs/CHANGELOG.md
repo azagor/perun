@@ -1971,6 +1971,10 @@ OpenCode projects.
 - Dashboard: validate room ids before adding/creating; quieter private-rooms load
 - PerunChat memory: typed `[FACT(type=...)]` markers, heuristic extraction, semantic deduplication, explicit user triggers
 ---
+## [0.7.49] - 2026-10-24
+- PerunChat: fix typing indicator sequence number collision that caused the following reply to be rejected by the gateway as non-monotonic.
+
+---
 ## [0.7.48] - 2026-10-24
 - PerunChat: re-enable native typing indicator with idle-frame cleanup on every reply outcome (success, no-reply, timeout, failure); typing frames are no longer queued for redelivery.
 
