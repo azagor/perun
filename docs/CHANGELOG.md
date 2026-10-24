@@ -1969,3 +1969,4 @@ OpenCode projects.
 ## [0.7.43] - 2026-10-24
 - Server: proxy PerunChat private room management endpoints
 - Dashboard: validate room ids before adding/creating; quieter private-rooms load
+- PerunChat memory: typed `[FACT(type=...)]` markers, heuristic extraction, semantic deduplication, explicit user triggers

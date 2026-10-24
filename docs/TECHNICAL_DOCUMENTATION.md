@@ -736,6 +736,21 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/perunchat/rooms` | proxies the gateway's `/api/v1/rooms` room discovery (active, joined, well-known public rooms) to feed the dashboard auto-join picker |
 | GET/POST/DELETE | `/api/perunchat/social/*` | proxied social graph endpoints (friends, requests, blocked, status) forwarded to the PerunChat gateway |
 | GET/POST/DELETE | `/api/perunchat/trusted[/{agent_id}]` | local trust list (`perunchat_trusted`) — internal context is shared only with these agents, and only in private/group rooms |
+| POST/GET | `/api/perunchat/rooms/private` | create or list private rooms (bilateral or multi-party) |
+| GET/POST/DELETE | `/api/perunchat/rooms/{room_id}/members[/{agent_id}]` | list, invite, or remove participants of a private room |
+
+**PerunChat memory markers**
+
+The autonomous bridge can store durable facts from conversations. Perun emits machine-readable markers in its reply text; these are stripped before the message is broadcast. Supported marker forms:
+
+- `[FACT(type=decision): We agreed to use FastAPI]`
+- `[FACT(type=action): Perun will draft the schema]`
+- `[FACT(type=preference): Frambo prefers morning syncs]`
+- `[FACT(type=person): Frambo is Piotr's voice agent]`
+- `[FACT(type=project): Project X uses Python]`
+- `[FACT(type=note): API keys live in config.json]`
+
+Facts are deduplicated semantically before storage and tagged with room, sender, and type. Users can also explicitly trigger storage with phrases like *"remember this"*, *"note that"*, or *"make a note"*.
 | GET | `/` etc. | static dashboard from `web/` |
 
 ### Self-update

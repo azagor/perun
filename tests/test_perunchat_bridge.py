@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -549,6 +550,72 @@ def test_chat_system_prompt_loads_from_file():
         ):
             body = _load_chat_instructions()
     assert body == "Strict chat prompt from file."
+
+
+def test_heuristic_facts_extracts_identity_and_preferences(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    facts = bridge._heuristic_facts("My name is Frambo and I prefer morning standups.", "frambo", "priv:test")
+    texts = [f[0] for f in facts]
+    types = [f[1] for f in facts]
+    assert any("Frambo" in t for t in texts)
+    assert any("morning standups" in t for t in texts)
+    assert "person" in types
+    assert "preference" in types
+
+
+def test_heuristic_facts_extracts_decisions_and_actions(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    facts = bridge._heuristic_facts("We decided to use FastAPI. We should deploy next week.", "frambo", "priv:test")
+    types = [f[1] for f in facts]
+    assert "decision" in types
+    assert "action" in types
+
+
+def test_store_fact_deduped_skips_near_duplicates(settings, monkeypatch):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    calls = []
+
+    def fake_search(query, project_id=0, top_k=4, include_global=True):
+        return [{"source_type": "fact", "score": 0.95, "content": "existing"}]
+
+    def fake_remember(content, **kwargs):
+        calls.append(content)
+
+    monkeypatch.setattr("perun.perunchat_bridge.memory.search_facts", fake_search)
+    monkeypatch.setattr("perun.perunchat_bridge.memory.remember", fake_remember)
+
+    bridge._store_fact_deduped("We use FastAPI", "project", {"room": "priv:test", "sender": "frambo"})
+    assert len(calls) == 0
+
+
+def test_store_fact_deduped_stores_new_facts(settings, monkeypatch):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    calls = []
+
+    def fake_search(query, project_id=0, top_k=4, include_global=True):
+        return [{"source_type": "fact", "score": 0.75, "content": "other"}]
+
+    def fake_remember(content, **kwargs):
+        calls.append((content, kwargs.get("meta")))
+
+    monkeypatch.setattr("perun.perunchat_bridge.memory.search_facts", fake_search)
+    monkeypatch.setattr("perun.perunchat_bridge.memory.remember", fake_remember)
+
+    bridge._store_fact_deduped("We use FastAPI", "project", {"room": "priv:test", "sender": "frambo"})
+    assert len(calls) == 1
+    assert calls[0][0] == "We use FastAPI"
+    assert calls[0][1]["type"] == "project"
+
+
+def test_fact_markers_stripped_from_reply_payload(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    reply = "Let's do it. [FACT(type=action): Deploy the API] And more text."
+    clean = re.sub(r"\s*\[FACT(?:\([^)]*\))?:\s*.+?\]\s*", " ", reply, flags=re.IGNORECASE)
+    clean = re.sub(r"\s{2,}", " ", clean).strip()
+    assert "[FACT" not in clean
+    assert "Deploy the API" not in clean
+    assert "Let's do it." in clean
+    assert "And more text." in clean
 
 
 def _frame_at_ts(ts_ms: int) -> dict:

@@ -990,9 +990,11 @@ class PerunChatBridge:
             if len(reply) > _MAX_REPLY_CHARS:
                 reply = reply[:_MAX_REPLY_CHARS].rsplit(" ", 1)[0] + "…"
             logger.info("PerunChat bridge sending reply (%d chars) in %s", len(reply), room_id)
-            # Strip any [FACT: ...] markers from the outgoing payload so users
-            # don't see the machine-readable memory annotations.
-            clean_reply = re.sub(r"\s*\[FACT:\s*.+?\]\s*$", "", reply, flags=re.IGNORECASE).strip()
+            # Strip any [FACT: ...] / [FACT(type=...): ...] markers from the
+            # outgoing payload so users don't see the machine-readable memory
+            # annotations, regardless of where the model placed them.
+            clean_reply = re.sub(r"\s*\[FACT(?:\([^)]*\))?:\s*.+?\]\s*", " ", reply, flags=re.IGNORECASE).strip()
+            clean_reply = re.sub(r"\s{2,}", " ", clean_reply).strip()
             self._seq += 1
             self._save_seq()
             reply_frame = {
