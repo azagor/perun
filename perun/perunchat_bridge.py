@@ -863,6 +863,10 @@ class PerunChatBridge:
         def _reply_wrapper():
             try:
                 self._reply(frame, ws)
+            except Exception:
+                # If we announced typing, clear it when generation fails.
+                if typing_sent.is_set():
+                    self._send_typing_indicator(frame, ws, typing=False)
             finally:
                 reply_done.set()
 
@@ -876,6 +880,8 @@ class PerunChatBridge:
                 "The model call may still finish in the background but will not be sent.",
                 msg_id, room_id, _MAX_REPLY_WALL_SECONDS,
             )
+            if typing_sent.is_set():
+                self._send_typing_indicator(frame, ws, typing=False)
             if msg_id:
                 self._pending_replies.discard(msg_id)
 
@@ -932,8 +938,8 @@ class PerunChatBridge:
         # If we have replied to 3+ messages in the last minute, let others talk.
         return recent_replies >= 3
 
-    def _send_typing_indicator(self, frame: Dict[str, Any], ws: Any) -> None:
-        """Send a transient 'Perun is typing...' frame to the room."""
+    def _send_typing_indicator(self, frame: Dict[str, Any], ws: Any, typing: bool = True) -> None:
+        """Send a transient 'Perun is typing...' (or stopped typing) frame."""
         room_id = frame.get("room_id")
         if not room_id or not self._agent_id:
             return
@@ -947,7 +953,7 @@ class PerunChatBridge:
                 "room_id": room_id,
                 "sender": {"agent_id": self._agent_id, "runtime": "perun"},
                 "content_type": "application/perun-typing",
-                "payload": "typing",
+                "payload": "typing" if typing else "idle",
                 "in_reply_to": frame.get("id"),
             }
             self._send_frame(ws, typing_frame)

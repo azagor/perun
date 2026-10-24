@@ -3788,19 +3788,31 @@ async function viewPerunChat() {
     };
 
     let typingIndicatorEl = null;
+    let typingTimeoutId = null;
     function showTypingIndicator(msg) {
+        const payload = msg && msg.payload;
+        // An explicit idle/cancel payload removes the indicator.
+        if (payload === 'idle' || payload === false || payload === 'false') {
+            removeTypingIndicator();
+            return;
+        }
         removeTypingIndicator();
         const box = $('#pc-chat-log');
         const who = (msg.sender && msg.sender.agent_id) || 'Perun';
         // Treat any payload safely; ignore object payloads from older builds.
-        const payload = msg.payload;
-        const label = (typeof payload === 'string' && payload.trim()) ? esc(payload) : 'typing…';
+        const label = (typeof payload === 'string' && payload.trim() && payload !== 'typing') ? esc(payload) : 'typing…';
         typingIndicatorEl = el('div', { class: 'perunchat-typing', id: 'pc-typing-indicator' },
             `<span class="muted" style="font-size:12px;font-style:italic">${esc(who)} is ${label}</span>`);
         box.appendChild(typingIndicatorEl);
         box.scrollTop = box.scrollHeight;
+        // Hard client-side cap so a lost/lagging indicator never persists forever.
+        typingTimeoutId = window.setTimeout(removeTypingIndicator, 60000);
     }
     function removeTypingIndicator() {
+        if (typingTimeoutId) {
+            window.clearTimeout(typingTimeoutId);
+            typingTimeoutId = null;
+        }
         if (typingIndicatorEl) {
             typingIndicatorEl.remove();
             typingIndicatorEl = null;
