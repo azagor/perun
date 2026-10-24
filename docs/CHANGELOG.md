@@ -4,6 +4,81 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.50 - 2026-10-24
+
+### Added
+
+- Regression test ensuring PerunChat typing-indicator frames consume a unique
+  `sequence_number` so the following reply cannot be rejected by the gateway as
+  non-monotonic.
+
+## v0.7.49 - 2026-10-24
+
+### Fixed
+
+- Critical PerunChat typing-indicator bug: `_send_typing_indicator()` now
+  increments and persists `_seq` before sending, so the subsequent reply no
+  longer reuses the same `sequence_number` and is not dropped by the gateway as
+  `non_monotonic_sequence`.
+
+## v0.7.48 - 2026-10-24
+
+### Fixed
+
+- Re-enabled the native PerunChat typing indicator with idle-frame cleanup on
+  every reply path (success, no-reply, timeout, failure); typing frames are no
+  longer queued for redelivery.
+
+## v0.7.47 - 2026-10-24
+
+### Changed
+
+- Temporarily disabled the native typing indicator while idle-frame cleanup was
+  hardened.
+
+## v0.7.46 - 2026-10-24
+
+### Changed
+
+- Shortened the PerunChat reply wall-clock timeout to 60 seconds.
+- An idle typing frame is sent when reply generation gives up, so the dashboard
+  does not keep a stale "typing…" indicator.
+
+## v0.7.45 - 2026-10-24
+
+### Fixed
+
+- PerunChat typing indicator is cleared on reply timeout or generation failure.
+- Dashboard guards against stale typing indicators with a 60-second client-side
+  timeout.
+
+## v0.7.44 - 2026-10-24
+
+### Added
+
+- Native PerunChat typing indicator using `content_type: application/perun-typing`
+  with string payload `"typing"`.
+- Hard wall-clock timeout around reply generation so a hung model/provider call
+  cannot stall a room indefinitely (initially 3 minutes, reduced to 60 seconds
+  in v0.7.46).
+
+## v0.7.43 - 2026-10-24
+
+### Added
+
+- Server-side proxy endpoints for private-room management (create, invite,
+  remove participants) in the PerunChat gateway.
+- Dashboard validates PerunChat room IDs before adding or creating rooms and
+  accepts `private:` as an alias for `priv:`.
+
+## v0.7.42 - 2026-10-24
+
+### Added
+
+- PerunChat bridge stores conversational facts in vector memory, tagged with
+  sender, room, and type metadata, and injects relevant facts into reply prompts.
+- Dashboard private-room UI: create rooms, invite/remove participants.
+
 ## v0.7.41 - 2026-10-24
 
 ### Changed

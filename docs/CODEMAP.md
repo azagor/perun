@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.7.38"`).
+Package docstring + `__version__` (`"0.7.50"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -473,6 +473,21 @@ Autonomous PerunChat chat participant for the Orchestrator.
   (`--file`) to avoid command-line length limits; history includes Perun's own
   replies so the model sees a normal chat transcript, and the latest message is
   preserved when trimming.
+* Native typing indicator: `_send_typing_indicator()` emits
+  `application/perun-typing` frames with `"typing"` / `"idle"` payloads. The
+  indicator is shown after ~1.5 s of generation and cleared on success,
+  no-reply, timeout, or failure. The frame increments and persists `_seq` before
+  sending so the following reply cannot reuse the same `sequence_number` and be
+  rejected by the gateway as non-monotonic.
+* Reply timeout: a hard 60-second wall-clock timeout wraps generation so a hung
+  model/provider call cannot stall the room.
+* Conversational memory: extracted facts are stored via `memory.remember()`
+  with `room_id`, `sender`, and `type` metadata; `_search_room_memory()` and
+  `_maybe_store_facts()` inject relevant context into prompts and apply
+  heuristic + explicit `[FACT(type=...)]` extraction with semantic deduplication.
+* Private-room support: `_is_private_room()` and `_room_type()` accept `priv:`
+  and `private:` prefixes; the dashboard proxies create/invite/remove calls to
+  the gateway.
 * `_ensure_opencode_agent()` installs/updates the dedicated `perunchat` OpenCode
   agent (`~/.config/opencode/agents/perunchat.md`) on bridge start, overwriting
   it whenever the embedded content changes so prompt fixes reach production.
@@ -823,7 +838,9 @@ stdio MCP server (`perun`). 25 tools: `perun_list_projects`,
   auto-select, control-plane fallback, `/orchestrator`).
 * `test_perunchat_bridge.py` — the autonomous PerunChat participant: start/stop
   lifecycle, room auto-join, reply dedupe, the write-ahead outbox and its
-  reconnect flush, empty-reply retry, and the `perunchat` agent installer.
+  reconnect flush, empty-reply retry, typing/reply sequence-number monotonicity,
+  private-room alias handling, memory fact extraction, and the `perunchat`
+  agent installer.
 * `test_perunchat_proxy.py` — the `/api/perunchat/*` proxy layer: status
   (`agent_id`), key reveal restricted to loopback, room discovery, the trusted
   list, and gateway-failure degradation.
