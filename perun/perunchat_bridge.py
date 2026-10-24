@@ -110,7 +110,8 @@ _RUN_WAIT_TIMEOUT_SECONDS = 55
 _MAX_REPLY_WALL_SECONDS = 60.0
 # After this many seconds of generation, send a transient typing indicator so
 # the other participants know Perun is working on a reply.
-_TYPING_INDICATOR_DELAY_SECONDS = 2.0
+# Temporarily disabled while the indicator-clear logic is being hardened.
+_TYPING_INDICATOR_DELAY_SECONDS = 999999.0
 # Write-ahead outbox: every outbound frame is persisted before it is sent and
 # only removed after a successful send. Frames are resent after a reconnect with
 # their ORIGINAL id + sequence_number, which is idempotent at the gateway: if the
