@@ -858,6 +858,34 @@ def test_send_failure_marks_original_replied_and_does_not_regenerate_on_replay(b
     orchestrator.run_and_wait.assert_not_called()
 
 
+def test_typing_indicator_and_reply_have_monotonic_sequence_numbers(bridge_env):
+    """Typing frames must consume a sequence number so the following reply is not
+    rejected by the gateway as non-monotonic."""
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result("hello there", uid="run_1")
+    frame = _chat_frame()
+    ws = MagicMock()
+    bridge._seq = 10
+
+    sent_frames: list[dict] = []
+
+    def capture_send(sock, f, *, write_ahead=True):
+        sent_frames.append(f)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send):
+        bridge._send_typing_indicator(frame, ws, typing=True)
+        bridge._reply(frame, ws)
+
+    assert len(sent_frames) == 2
+    typing_frame, reply_frame = sent_frames
+    assert typing_frame["content_type"] == "application/perun-typing"
+    assert reply_frame["content_type"] == "text/plain"
+    assert typing_frame["sequence_number"] == 11
+    assert reply_frame["sequence_number"] == 12
+    assert bridge._seq == reply_frame["sequence_number"]
+
+
 def test_direct_mentions_bypass_per_room_cooldown(bridge_env):
     """A burst of @mentions must not be dropped by the proactive chime-in
     cooldown; each direct address gets its own reply."""
