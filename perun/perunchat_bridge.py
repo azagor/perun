@@ -107,7 +107,10 @@ _RUN_WAIT_TIMEOUT_SECONDS = 300
 # model/provider hangs beyond this, the worker abandons the call and continues
 # with the next message. The abandoned LLM thread may still run in the
 # background, but it cannot block the room indefinitely.
-_MAX_REPLY_WALL_SECONDS = 90.0
+_MAX_REPLY_WALL_SECONDS = 180.0
+# After this many seconds of generation, send a transient typing indicator so
+# the other participants know Perun is working on a reply.
+_TYPING_INDICATOR_DELAY_SECONDS = 2.0
 # Write-ahead outbox: every outbound frame is persisted before it is sent and
 # only removed after a successful send. Frames are resent after a reconnect with
 # their ORIGINAL id + sequence_number, which is idempotent at the gateway: if the
@@ -844,9 +847,27 @@ class PerunChatBridge:
 
         # Run the actual reply generation with a hard wall-clock timeout so a
         # single hung model/provider call cannot stall the whole room.
-        reply_thread = threading.Thread(target=self._reply, args=(frame, ws), name=f"perunchat-reply-{room_id}-{msg_id}")
+        reply_done = threading.Event()
+        typing_sent = threading.Event()
+
+        def maybe_send_typing():
+            if not reply_done.wait(timeout=_TYPING_INDICATOR_DELAY_SECONDS) and not typing_sent.is_set():
+                self._send_typing_indicator(frame, ws)
+                typing_sent.set()
+
+        typing_thread = threading.Thread(target=maybe_send_typing, name=f"perunchat-typing-{room_id}-{msg_id}", daemon=True)
+        typing_thread.start()
+
+        def _reply_wrapper():
+            try:
+                self._reply(frame, ws)
+            finally:
+                reply_done.set()
+
+        reply_thread = threading.Thread(target=_reply_wrapper, name=f"perunchat-reply-{room_id}-{msg_id}")
         reply_thread.start()
         reply_thread.join(timeout=_MAX_REPLY_WALL_SECONDS)
+        reply_done.set()
         if reply_thread.is_alive():
             logger.error(
                 "PerunChat reply generation for %s in %s exceeded %s seconds; abandoning to keep room responsive. "
@@ -908,6 +929,28 @@ class PerunChatBridge:
         recent_replies = sum(1 for t in replies if now - t < window)
         # If we have replied to 3+ messages in the last minute, let others talk.
         return recent_replies >= 3
+
+    def _send_typing_indicator(self, frame: Dict[str, Any], ws: Any) -> None:
+        """Send a transient 'Perun is typing...' frame to the room."""
+        room_id = frame.get("room_id")
+        if not room_id or not self._agent_id:
+            return
+        try:
+            typing_frame = {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "thread_id": frame.get("thread_id", "default"),
+                "sequence_number": self._seq + 1,
+                "timestamp": int(time.time() * 1000),
+                "room_type": _room_type(room_id),
+                "room_id": room_id,
+                "sender": {"agent_id": self._agent_id, "runtime": "perun"},
+                "content_type": "application/perun-typing",
+                "payload": {"typing": True, "agent_id": self._agent_id},
+                "in_reply_to": frame.get("id"),
+            }
+            self._send_frame(ws, typing_frame)
+        except Exception:
+            logger.debug("PerunChat failed to send typing indicator", exc_info=True)
 
     def _reply(self, frame: Dict[str, Any], ws: Any) -> None:
         room_id = frame.get("room_id")

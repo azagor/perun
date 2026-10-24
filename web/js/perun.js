@@ -3786,6 +3786,23 @@ async function viewPerunChat() {
         box.appendChild(line);
         box.scrollTop = box.scrollHeight;
     };
+
+    let typingIndicatorEl = null;
+    function showTypingIndicator(msg) {
+        removeTypingIndicator();
+        const box = $('#pc-chat-log');
+        const who = (msg.sender && msg.sender.agent_id) || 'Perun';
+        typingIndicatorEl = el('div', { class: 'perunchat-typing', id: 'pc-typing-indicator' },
+            `<span class="muted" style="font-size:12px;font-style:italic">${esc(who)} is typing…</span>`);
+        box.appendChild(typingIndicatorEl);
+        box.scrollTop = box.scrollHeight;
+    }
+    function removeTypingIndicator() {
+        if (typingIndicatorEl) {
+            typingIndicatorEl.remove();
+            typingIndicatorEl = null;
+        }
+    }
     const setWsStatus = (text, cls) => {
         const badge = $('#pc-ws-status');
         badge.textContent = text;
@@ -3793,6 +3810,10 @@ async function viewPerunChat() {
     };
 
     const isOperatorRuntime = (rt) => rt === 'perun-operator' || (typeof rt === 'string' && rt.endsWith('-operator'));
+
+    function isTypingFrame(msg) {
+        return msg && msg.content_type === 'application/perun-typing';
+    }
 
     function formatSenderLabel(sender, forceOperator = false) {
         const operator = forceOperator || (sender && isOperatorRuntime(sender.runtime));
@@ -3814,6 +3835,12 @@ async function viewPerunChat() {
     function renderMessage(msg) {
         if (!msg.id) return;
         if (messageHistory.some((m) => m.id === msg.id)) return;
+        // Typing indicators are transient UI state, not chat history.
+        if (msg.content_type === 'application/perun-typing') {
+            showTypingIndicator(msg);
+            return;
+        }
+        removeTypingIndicator();
         messageHistory.push(msg);
         if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
         // Keep the in-memory operator set bounded to the visible history.
