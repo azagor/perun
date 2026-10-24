@@ -3792,8 +3792,11 @@ async function viewPerunChat() {
         removeTypingIndicator();
         const box = $('#pc-chat-log');
         const who = (msg.sender && msg.sender.agent_id) || 'Perun';
+        // Treat any payload safely; ignore object payloads from older builds.
+        const payload = msg.payload;
+        const label = (typeof payload === 'string' && payload.trim()) ? esc(payload) : 'typing…';
         typingIndicatorEl = el('div', { class: 'perunchat-typing', id: 'pc-typing-indicator' },
-            `<span class="muted" style="font-size:12px;font-style:italic">${esc(who)} is typing…</span>`);
+            `<span class="muted" style="font-size:12px;font-style:italic">${esc(who)} is ${label}</span>`);
         box.appendChild(typingIndicatorEl);
         box.scrollTop = box.scrollHeight;
     }

@@ -713,9 +713,11 @@ class PerunChatBridge:
 
         # Keep a rolling window of recent room history for contextual replies.
         # Own replies are included too so the model sees a normal chat transcript.
+        # Skip transient typing indicators — they are UI state, not conversation.
         now = time.time()
         sender_runtime = (frame.get("sender", {}).get("runtime") or "").lower()
-        if room_id and msg_id:
+        is_typing = frame.get("content_type") == "application/perun-typing"
+        if room_id and msg_id and not is_typing:
             hist = self._room_history.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             # Avoid polluting the prompt with exact replays of the same frame id.
             if not any(m.get("id") == msg_id for m in hist):
@@ -945,7 +947,7 @@ class PerunChatBridge:
                 "room_id": room_id,
                 "sender": {"agent_id": self._agent_id, "runtime": "perun"},
                 "content_type": "application/perun-typing",
-                "payload": {"typing": True, "agent_id": self._agent_id},
+                "payload": "typing",
                 "in_reply_to": frame.get("id"),
             }
             self._send_frame(ws, typing_frame)
