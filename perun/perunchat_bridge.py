@@ -944,10 +944,12 @@ class PerunChatBridge:
         if not room_id or not self._agent_id:
             return
         try:
+            self._seq += 1
+            self._save_seq()
             typing_frame = {
                 "id": f"msg_{uuid.uuid4().hex}",
                 "thread_id": frame.get("thread_id", "default"),
-                "sequence_number": self._seq + 1,
+                "sequence_number": self._seq,
                 "timestamp": int(time.time() * 1000),
                 "room_type": _room_type(room_id),
                 "room_id": room_id,
