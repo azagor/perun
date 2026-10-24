@@ -1971,6 +1971,10 @@ OpenCode projects.
 - Dashboard: validate room ids before adding/creating; quieter private-rooms load
 - PerunChat memory: typed `[FACT(type=...)]` markers, heuristic extraction, semantic deduplication, explicit user triggers
 ---
+## [0.7.48] - 2026-10-24
+- PerunChat: re-enable native typing indicator with idle-frame cleanup on every reply outcome (success, no-reply, timeout, failure); typing frames are no longer queued for redelivery.
+
+---
 ## [0.7.47] - 2026-10-24
 - PerunChat: temporarily disable the native typing indicator while the clear/stuck-indicator behavior is hardened; add cache-busting to dashboard JS.
 
