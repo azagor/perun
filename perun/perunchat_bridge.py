@@ -278,7 +278,7 @@ def _rest_base(endpoint: str) -> str:
 def _room_type(room_id: str) -> str:
     if room_id.startswith("pub:"):
         return "PUBLIC"
-    if room_id.startswith("priv:"):
+    if room_id.startswith("priv:") or room_id.startswith("private:"):
         return "PRIVATE"
     return "GROUP"
 
@@ -896,6 +896,7 @@ class PerunChatBridge:
         room_id = frame.get("room_id")
         sender = (frame.get("sender", {}).get("agent_id") or "").lower()
         is_public = room_id and room_id.startswith("pub:")
+        is_private = room_id and (room_id.startswith("priv:") or room_id.startswith("private:"))
         is_trusted = self._is_trusted(sender) and not is_public
 
         # The dedicated perunchat agent carries its own persona; Perun project
@@ -1051,7 +1052,7 @@ class PerunChatBridge:
         lowered = text.lower()
 
         # Always reply in private 1:1 rooms.
-        if room_id.startswith("priv:"):
+        if room_id.startswith("priv:") or room_id.startswith("private:"):
             return _ReplyDecision(True, "private room", is_direct=True)
 
         # Reply when someone directly responds to one of our messages.
