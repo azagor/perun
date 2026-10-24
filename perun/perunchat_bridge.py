@@ -102,12 +102,12 @@ _RECONNECT_CLOCK_SKEW_MS = 60_000
 # final state with empty output (e.g. it was cancelled mid-generation).
 _REPLY_GENERATION_ATTEMPTS = 2
 _REPLY_RETRY_DELAY_SECONDS = 2.0
-_RUN_WAIT_TIMEOUT_SECONDS = 300
+_RUN_WAIT_TIMEOUT_SECONDS = 55
 # Hard wall-clock cap for a single chat reply. Chat must stay responsive; if the
 # model/provider hangs beyond this, the worker abandons the call and continues
 # with the next message. The abandoned LLM thread may still run in the
 # background, but it cannot block the room indefinitely.
-_MAX_REPLY_WALL_SECONDS = 180.0
+_MAX_REPLY_WALL_SECONDS = 60.0
 # After this many seconds of generation, send a transient typing indicator so
 # the other participants know Perun is working on a reply.
 _TYPING_INDICATOR_DELAY_SECONDS = 2.0
@@ -1043,6 +1043,7 @@ class PerunChatBridge:
                     "PerunChat bridge giving up on message in %s after %d attempts (run=%s status=%s); the message was NOT answered",
                     room_id, _REPLY_GENERATION_ATTEMPTS, run_uid, run_status,
                 )
+                self._send_typing_indicator(frame, ws, typing=False)
                 return
             if reply == "<NO_REPLY>":
                 # Explicit decision, not a failure: the model chose silence.

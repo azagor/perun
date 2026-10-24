@@ -783,7 +783,7 @@ def test_reply_waits_for_running_run_instead_of_duplicate(bridge_env):
 
 
 def test_reply_gives_up_loudly_after_final_empty_runs(bridge_env):
-    """Two final-empty runs: no send, but a loud log line (not a silent drop)."""
+    """Two final-empty runs: an idle typing frame is sent and a loud log line emitted (not a silent drop)."""
     bridge, orchestrator = bridge_env
     orchestrator.run_and_wait.side_effect = [
         _run_result("", status="cancelled", uid="run_1"),
@@ -792,7 +792,10 @@ def test_reply_gives_up_loudly_after_final_empty_runs(bridge_env):
     ws = MagicMock()
     with patch("perun.perunchat_bridge.logger") as mock_logger:
         bridge._reply(_chat_frame(), ws)
-    ws.send.assert_not_called()
+    # Only the idle typing-indicator clear frame is sent.
+    ws.send.assert_called_once()
+    assert "application/perun-typing" in ws.send.call_args[0][0]
+    assert '"payload": "idle"' in ws.send.call_args[0][0]
     assert mock_logger.error.called
     assert bridge._load_outbox() == []
 
