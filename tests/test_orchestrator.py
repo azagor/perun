@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from perun import orchestrator as orch
 
@@ -852,3 +853,26 @@ def test_compose_prompt_skips_the_pre_fetch_on_a_continuation(tmp_path):
         new_session=False,
     )
     assert out == "which perun tool do I use for cross project code search"
+
+
+def test_prompt_file_sweeper_removes_stale_files(tmp_path, monkeypatch):
+    """_sweep_prompt_files removes temp prompt files older than the max age."""
+    import time
+    from perun import config, orchestrator
+
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    fresh = tmp_path / "perun_prompt_fresh.txt"
+    stale = tmp_path / "perun_prompt_stale.txt"
+    other = tmp_path / "other_file.txt"
+    fresh.write_text("fresh", encoding="utf-8")
+    stale.write_text("stale", encoding="utf-8")
+    other.write_text("other", encoding="utf-8")
+
+    now = time.time()
+    # Backdate the stale file to beyond the retention window.
+    os.utime(stale, (now - 90000, now - 90000))
+    orchestrator._sweep_prompt_files()
+
+    assert fresh.exists()
+    assert not stale.exists()
+    assert other.exists()

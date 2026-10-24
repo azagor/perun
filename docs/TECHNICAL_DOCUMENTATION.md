@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.37 (see §15). This release hardens PerunChat by passing prompts through a temporary file (`--file`) instead of a command-line argument, using a normal chat-transcript layout where the latest message is preserved during trimming, serializing replies per room, and deduplicating replayed frames. `perun.__version__` reports `0.7.36`.
+**Latest release:** v0.7.38 (see §15). This release hardens PerunChat by passing prompts through a temporary file (`--file`) instead of a command-line argument, using a normal chat-transcript layout where the latest message is preserved during trimming, serializing replies per room, and deduplicating replayed frames. `perun.__version__` reports `0.7.36`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound

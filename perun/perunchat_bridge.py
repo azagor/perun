@@ -323,6 +323,9 @@ class PerunChatBridge:
         # Per-room locks serialize replies so only one message per room is
         # processed at a time, preserving order and avoiding races between
         # overlapping model calls.
+        # NOTE: this blocks the WebSocket reader thread for the duration of a
+        # reply. If a single room becomes very busy, consider replacing the lock
+        # with a per-room worker queue so the reader can return immediately.
         self._room_locks: Dict[str, threading.Lock] = {}
         # Session-level duplicate detection for gateway replays / echo storms.
         self._seen_message_ids: Set[str] = set()
@@ -1164,7 +1167,11 @@ class PerunChatBridge:
             if len(prompt) <= _MAX_PROMPT_CHARS:
                 break
             if history_lines:
-                history_lines.pop(0)
+                dropped = history_lines.pop(0)
+                logger.info(
+                    "PerunChat prompt for %s exceeds %d chars; dropping oldest history line: %r",
+                    frame.get("id"), _MAX_PROMPT_CHARS, dropped[:80]
+                )
                 if history_lines:
                     context = "\n\nRecent conversation:\n" + "\n".join(history_lines)
                 else:

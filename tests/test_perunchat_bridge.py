@@ -220,6 +220,72 @@ def test_build_prompt_excludes_current_frame_from_history(settings):
     assert "other-agent: current" not in prompt
 
 
+def test_build_prompt_drops_oldest_history_when_too_long(settings, monkeypatch):
+    """If the prompt exceeds the size cap, the oldest history lines must be
+    dropped first; the latest message is always preserved."""
+    from perun import perunchat_bridge as bridge_mod
+
+    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", 2000)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    room_id = "pub:global:test"
+    history = []
+    for i in range(5):
+        history.append({
+            "id": f"msg_{i}",
+            "room_id": room_id,
+            "sender": {"agent_id": "other-agent"},
+            "payload": f"message number {i} with some padding text",
+        })
+    cur = {
+        "id": "msg_cur",
+        "room_id": room_id,
+        "sender": {"agent_id": "other-agent"},
+        "payload": "this is the latest question",
+    }
+    bridge._room_history[room_id] = deque(history, maxlen=40)
+    prompt = bridge._build_prompt(cur)
+    # Latest message must be present.
+    assert "this is the latest question" in prompt
+    # Oldest messages should have been trimmed away.
+    assert "message number 0" not in prompt
+    assert "message number 1" not in prompt
+    assert "message number 2" not in prompt
+    # Newer history should still be present.
+    assert "message number 3" in prompt
+    assert "message number 4" in prompt
+
+
+def test_own_replies_are_kept_in_room_history(settings):
+    """Own outbound replies must stay in the transcript so the model sees a
+    normal chat conversation, but they must not trigger further replies."""
+    mock_orchestrator = MagicMock(settings=settings)
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    peer = {
+        "type": "CHAT",
+        "id": "msg_peer",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "hello @perun",
+    }
+    own = {
+        "type": "CHAT",
+        "id": "msg_own",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "perun-local", "runtime": "perun"},
+        "payload": "hi there",
+    }
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(peer, None)
+        bridge._on_frame(own, None)
+    mock_reply.assert_called_once_with(peer, None)
+    hist = bridge._room_history.get("pub:global:test", [])
+    assert len(hist) == 2
+    assert "msg_peer" in [f.get("id") for f in hist]
+    assert "msg_own" in [f.get("id") for f in hist]
+
+
 def test_own_replies_are_kept_in_room_history(settings):
     """Own outbound replies must stay in the transcript so the model sees a
     normal chat conversation, but they must not trigger further replies."""

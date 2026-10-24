@@ -4,6 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.38 - 2026-10-24
+
+### Fixed
+
+- Added a background sweeper that removes stale ``perun_prompt_*.txt`` files left behind by crashes.
+- Added logging when the PerunChat prompt exceeds the size cap and history lines are dropped.
+- Added regression tests for prompt-history trimming and stale prompt-file cleanup.
+
 ## v0.7.37 - 2026-10-24
 
 ### Fixed

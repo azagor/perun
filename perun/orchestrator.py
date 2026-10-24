@@ -29,6 +29,10 @@ from . import config, control, registry
 
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
+_PROMPT_FILE_PATTERN = "perun_prompt_*.txt"
+_PROMPT_FILE_MAX_AGE_SECONDS = 24 * 3600
+_prompt_file_sweeper_started = False
+_prompt_file_sweeper_lock = threading.Lock()
 # Subscriber queues are bounded: a slow/disconnected SSE client must never grow
 # memory without limit nor block the publisher.
 SUB_QUEUE_LIMIT = 4096
@@ -657,6 +661,45 @@ def parse_event(line: str) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 # Orchestrator
 # --------------------------------------------------------------------------- #
+
+
+def _sweep_prompt_files() -> None:
+    """Remove stale temporary prompt files left behind by crashes.
+
+    Normally ``_finalize`` deletes the prompt file when a run ends, but a
+    hard crash or an unclean process exit can leave files behind. This
+    function is safe to call from a background sweeper thread.
+    """
+    try:
+        runs_dir = config.RUNS_DIR
+        if not runs_dir.exists():
+            return
+        now = time.time()
+        for path in runs_dir.glob(_PROMPT_FILE_PATTERN):
+            try:
+                if now - path.stat().st_mtime > _PROMPT_FILE_MAX_AGE_SECONDS:
+                    path.unlink()
+            except OSError:
+                pass
+    except Exception:
+        logger.exception("prompt file sweeper failed")
+
+
+def _start_prompt_file_sweeper() -> None:
+    """Start a singleton daemon thread that sweeps stale prompt files hourly."""
+    global _prompt_file_sweeper_started
+    with _prompt_file_sweeper_lock:
+        if _prompt_file_sweeper_started:
+            return
+        _prompt_file_sweeper_started = True
+
+        def _loop() -> None:
+            while True:
+                time.sleep(3600)
+                _sweep_prompt_files()
+
+        threading.Thread(target=_loop, daemon=True).start()
+
 class Orchestrator:
     def __init__(self, settings: config.Settings | None = None) -> None:
         self.settings = settings or config.Settings.load()
@@ -680,6 +723,10 @@ class Orchestrator:
             _seed_default_instructions()
         except OSError:  # pragma: no cover - read-only home, best effort
             pass
+        # Start a background sweeper that cleans up any prompt files left by
+        # crashes. It is a singleton so creating many Orchestrator instances in
+        # tests does not spawn one thread per instance.
+        _start_prompt_file_sweeper()
 
     def set_max_concurrent(self, max_slots: int) -> None:
         """Apply a new ``max_concurrent_runs`` value to a live orchestrator."""
