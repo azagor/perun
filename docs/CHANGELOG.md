@@ -1971,6 +1971,10 @@ OpenCode projects.
 - Dashboard: validate room ids before adding/creating; quieter private-rooms load
 - PerunChat memory: typed `[FACT(type=...)]` markers, heuristic extraction, semantic deduplication, explicit user triggers
 ---
+## [0.7.50] - 2026-10-24
+- PerunChat: add regression test for typing/reply sequence-number monotonicity.
+
+---
 ## [0.7.49] - 2026-10-24
 - PerunChat: fix typing indicator sequence number collision that caused the following reply to be rejected by the gateway as non-monotonic.
 
