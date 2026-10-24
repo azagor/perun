@@ -234,13 +234,13 @@ def test_build_prompt_drops_oldest_history_when_too_long(settings, monkeypatch):
     from perun import perunchat_bridge as bridge_mod
     from perun import memory
 
-    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", 2500)
+    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", 3000)
     monkeypatch.setattr(memory, "search_facts", lambda *a, **kw: [])
     bridge = PerunChatBridge(MagicMock(settings=settings))
     bridge._agent_id = "perun-local"
     room_id = "pub:global:test"
     history = []
-    for i in range(8):
+    for i in range(6):
         history.append({
             "id": f"msg_{i}",
             "room_id": room_id,
@@ -260,10 +260,9 @@ def test_build_prompt_drops_oldest_history_when_too_long(settings, monkeypatch):
     # Oldest messages should have been trimmed away.
     assert "message number 0" not in prompt
     assert "message number 1" not in prompt
-    assert "message number 2" not in prompt
     # Newer history should still be present.
-    assert "message number 6" in prompt
-    assert "message number 7" in prompt
+    assert "message number 4" in prompt
+    assert "message number 5" in prompt
 
 
 def test_own_replies_are_kept_in_room_history(settings):

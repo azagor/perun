@@ -990,6 +990,9 @@ class PerunChatBridge:
             if len(reply) > _MAX_REPLY_CHARS:
                 reply = reply[:_MAX_REPLY_CHARS].rsplit(" ", 1)[0] + "…"
             logger.info("PerunChat bridge sending reply (%d chars) in %s", len(reply), room_id)
+            # Strip any [FACT: ...] markers from the outgoing payload so users
+            # don't see the machine-readable memory annotations.
+            clean_reply = re.sub(r"\s*\[FACT:\s*.+?\]\s*$", "", reply, flags=re.IGNORECASE).strip()
             self._seq += 1
             self._save_seq()
             reply_frame = {
@@ -1001,7 +1004,7 @@ class PerunChatBridge:
                 "room_id": frame["room_id"],
                 "sender": {"agent_id": self._agent_id, "runtime": "perun"},
                 "content_type": "text/plain",
-                "payload": reply,
+                "payload": clean_reply,
                 "in_reply_to": frame.get("id"),
             }
             if msg_id:
@@ -1296,35 +1299,100 @@ class PerunChatBridge:
         return prompt
 
     def _maybe_store_facts(self, frame: Dict[str, Any], reply: str, room_id: str) -> None:
+        """Extract durable facts from the conversation and store them in memory.
+
+        Uses a hybrid "state of the art" approach:
+        - explicit [FACT(type=...): ...] markers from Perun's reply (agent-supervised)
+        - heuristic extraction from the other participant (rule-based)
+        - semantic deduplication before storing (avoids memory spam)
+        - typed facts (decision, preference, person, project, action, note)
+        """
         try:
             sender = frame.get("sender", {}).get("agent_id") or "unknown"
-            text = frame.get("payload") or ""
-            if not isinstance(text, str) or not text.strip():
+            text = (frame.get("payload") or "").strip()
+            reply = (reply or "").strip()
+            if not reply:
                 return
-            if not isinstance(reply, str) or not reply.strip():
-                return
-            t = text.strip()
-            tl = t.lower()
-            store = False
-            candidate = None
-            if any(k in tl for k in ["i am ", "my name is ", "i'm ", "we use ", "i prefer ", "i work ", "my timezone", "i live in", "we live in"]):
-                store = True
-                candidate = f"{sender}: {t}"
-            if store and candidate and len(candidate) < 500:
+
+            facts: list[tuple[str, str, dict[str, Any]]] = []
+
+            # 1) Parse explicit [FACT(type=...): ...] markers from Perun's reply.
+            for match in re.finditer(r"\[FACT\(([^)]+)\):\s*(.+?)\]", reply, flags=re.IGNORECASE):
+                fact_type = match.group(1).strip().lower() or "note"
+                fact_text = match.group(2).strip()
+                if fact_text and len(fact_text) < 500:
+                    facts.append((fact_text, fact_type, {"room": room_id, "sender": self._agent_id or "perun", "context": "explicit"}))
+
+            # Also support legacy untyped [FACT: ...] markers.
+            for match in re.finditer(r"\[FACT:\s*(.+?)\]", reply, flags=re.IGNORECASE):
+                fact_text = match.group(1).strip()
+                if fact_text and len(fact_text) < 500 and not fact_text.lower().startswith("type="):
+                    facts.append((fact_text, "note", {"room": room_id, "sender": self._agent_id or "perun", "context": "explicit"}))
+
+            # 2) Heuristic extraction from the other participant's message.
+            facts.extend(self._heuristic_facts(text, sender, room_id))
+
+            # 3) User-explicit memory trigger.
+            if re.search(r"\b(remember this|make a note|note that|store this)\b", text, flags=re.IGNORECASE):
+                note = text if len(text) <= 450 else text[:447] + "..."
+                facts.append((f"{sender}: {note}", "note", {"room": room_id, "sender": sender, "context": "user_triggered"}))
+
+            # 4) Store with semantic deduplication.
+            for fact_text, fact_type, meta in facts:
+                self._store_fact_deduped(fact_text, fact_type, meta)
+        except Exception:
+            logger.debug("PerunChat failed to extract/store facts", exc_info=True)
+
+    def _heuristic_facts(self, text: str, sender: str, room_id: str) -> list[tuple[str, str, dict[str, Any]]]:
+        """Rule-based fact extraction from a participant's message."""
+        facts: list[tuple[str, str, dict[str, Any]]] = []
+        if not text:
+            return facts
+
+        patterns = [
+            (r"\b([Mm]y name is|[Ii] am|[Ii]'m)\s+([^,.!?]{2,60})", "person"),
+            (r"\b([Ww]e use|[Ii] use)\s+([^,.!?]{2,60})", "project"),
+            (r"\b([Ii] prefer|[Ww]e prefer)\s+([^,.!?]{2,100})", "preference"),
+            (r"\b([Ww]e (?:need|should)|[Ll]et's|[Ll]ets)\s+([^,.!?]{2,120})", "action"),
+            (r"\b([Ww]e agreed|[Ww]e decided|[Dd]ecision is|[Ii]t was decided)\s+([^,.!?]{2,120})", "decision"),
+        ]
+        for pattern, fact_type in patterns:
+            for match in re.finditer(pattern, text):
+                fact = match.group(2).strip()
+                if fact and 5 < len(fact) < 200:
+                    facts.append((f"{sender}: {fact}", fact_type, {"room": room_id, "sender": sender, "context": "heuristic"}))
+        return facts
+
+    def _store_fact_deduped(self, fact_text: str, fact_type: str, meta: dict[str, Any]) -> None:
+        """Store a fact only if no semantically similar fact already exists."""
+        try:
+            similar = memory.search_facts(fact_text, project_id=0, top_k=3, include_global=True)
+            for s in similar:
+                if s.get("source_type") != "fact":
+                    continue
+                if s.get("score", 0) > 0.92:
+                    logger.debug("PerunChat skipped duplicate fact (score %.3f): %r", s.get("score"), fact_text)
+                    return
+            memory.remember(
+                fact_text,
+                project_id=0,
+                scope="global",
+                topic="perunchat",
+                source="perunchat",
+                meta={**meta, "type": fact_type},
+            )
+        except Exception:
+            try:
                 memory.remember(
-                    candidate,
+                    fact_text,
                     project_id=0,
                     scope="global",
                     topic="perunchat",
                     source="perunchat",
-                    meta={"room": room_id, "sender": sender},
+                    meta={**meta, "type": fact_type},
                 )
-        except Exception:
-            pass
-
-
-# Module-level singleton: Perun server attaches its orchestrator here.
-_BRIDGE: Optional[PerunChatBridge] = None
+            except Exception:
+                pass
 
 
 def attach(orchestrator: "Orchestrator") -> PerunChatBridge:
