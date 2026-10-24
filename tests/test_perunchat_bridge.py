@@ -801,12 +801,14 @@ def test_reply_gives_up_loudly_after_final_empty_runs(bridge_env):
 
 
 def test_no_reply_decision_is_not_sent(bridge_env):
-    """An explicit <NO_REPLY> decision is silence, not a delivery failure."""
+    """An explicit <NO_REPLY> decision sends only an idle typing frame, no chat reply."""
     bridge, orchestrator = bridge_env
     orchestrator.run_and_wait.return_value = _run_result("<NO_REPLY>", uid="run_1")
     ws = MagicMock()
     bridge._reply(_chat_frame(), ws)
-    ws.send.assert_not_called()
+    ws.send.assert_called_once()
+    assert "application/perun-typing" in ws.send.call_args[0][0]
+    assert '"payload": "idle"' in ws.send.call_args[0][0]
     assert bridge._load_outbox() == []
 
 
@@ -817,7 +819,8 @@ def test_send_failure_keeps_frame_and_flush_resends_same_id_and_seq(bridge_env):
     failing_ws = MagicMock()
     failing_ws.send.side_effect = OSError("connection dropped")
     bridge._reply(_chat_frame(), failing_ws)
-    failing_ws.send.assert_called_once()
+    # The reply attempt and the subsequent idle typing frame both fail to send.
+    assert failing_ws.send.call_count == 2
     queued = bridge._load_outbox()
     assert len(queued) == 1
     assert "hello there" in queued[0]["payload"]

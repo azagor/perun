@@ -110,8 +110,7 @@ _RUN_WAIT_TIMEOUT_SECONDS = 55
 _MAX_REPLY_WALL_SECONDS = 60.0
 # After this many seconds of generation, send a transient typing indicator so
 # the other participants know Perun is working on a reply.
-# Temporarily disabled while the indicator-clear logic is being hardened.
-_TYPING_INDICATOR_DELAY_SECONDS = 999999.0
+_TYPING_INDICATOR_DELAY_SECONDS = 1.5
 # Write-ahead outbox: every outbound frame is persisted before it is sent and
 # only removed after a successful send. Frames are resent after a reconnect with
 # their ORIGINAL id + sequence_number, which is idempotent at the gateway: if the
@@ -957,7 +956,7 @@ class PerunChatBridge:
                 "payload": "typing" if typing else "idle",
                 "in_reply_to": frame.get("id"),
             }
-            self._send_frame(ws, typing_frame)
+            self._send_frame(ws, typing_frame, write_ahead=False)
         except Exception:
             logger.debug("PerunChat failed to send typing indicator", exc_info=True)
 
@@ -989,6 +988,7 @@ class PerunChatBridge:
         agent = chat_agent or _OPENCODE_AGENT_NAME
         if not model:
             logger.warning("PerunChat bridge cannot reply: no model configured")
+            self._send_typing_indicator(frame, ws, typing=False)
             return
         logger.info("PerunChat bridge replying to %s in %s using model=%s agent=%s trusted=%s", frame.get("sender", {}).get("agent_id"), room_id, model, agent or "default", is_trusted)
         msg_id = frame.get("id")
@@ -1050,6 +1050,7 @@ class PerunChatBridge:
                 # Explicit decision, not a failure: the model chose silence.
                 if msg_id:
                     self._mark_replied(msg_id)
+                self._send_typing_indicator(frame, ws, typing=False)
                 return
             # DLP guard: in public rooms, redact anything that looks like internal
             # or private information before it leaves the local environment.
@@ -1086,6 +1087,7 @@ class PerunChatBridge:
                 # same id + sequence_number on the next (re)connect. The original
                 # message is still marked as replied because the reply was
                 # generated and queued; we must not regenerate it on reconnect.
+                self._send_typing_indicator(frame, ws, typing=False)
                 return
             with self._rate_limit_lock:
                 self._reply_count_minute += 1
