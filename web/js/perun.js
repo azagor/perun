@@ -3333,7 +3333,9 @@ async function viewPerunChat() {
             const box = document.getElementById('pc-priv-members-box');
             if (box) box.innerHTML = rooms.length ? '<p class="muted">Select a room to view members.</p>' : '<p class="muted">No private rooms yet.</p>';
         } catch (e) {
-            toast('Failed to load private rooms: ' + e.message, 'err');
+            // Don't spam error toasts for optional room management.
+            const box = document.getElementById('pc-priv-members-box');
+            if (box) box.innerHTML = `<p class="muted">Private rooms unavailable (${esc(e.message)}).</p>`;
         }
     }
 

@@ -2573,6 +2573,31 @@ def api_perunchat_rooms() -> dict[str, Any]:
     return _perunchat_proxy("GET", "/api/v1/rooms")
 
 
+@app.post("/api/perunchat/rooms/private")
+def api_perunchat_create_private_room(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return _perunchat_proxy("POST", "/api/v1/rooms/private", body=payload)
+
+
+@app.get("/api/perunchat/rooms/private")
+def api_perunchat_list_private_rooms() -> dict[str, Any]:
+    return _perunchat_proxy("GET", "/api/v1/rooms/private")
+
+
+@app.get("/api/perunchat/rooms/{room_id}/members")
+def api_perunchat_room_members(room_id: str) -> dict[str, Any]:
+    return _perunchat_proxy("GET", f"/api/v1/rooms/{room_id}/members")
+
+
+@app.post("/api/perunchat/rooms/{room_id}/members")
+def api_perunchat_room_add_member(room_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return _perunchat_proxy("POST", f"/api/v1/rooms/{room_id}/members", body=payload)
+
+
+@app.delete("/api/perunchat/rooms/{room_id}/members/{agent_id}")
+def api_perunchat_room_remove_member(room_id: str, agent_id: str) -> dict[str, Any]:
+    return _perunchat_proxy("DELETE", f"/api/v1/rooms/{room_id}/members/{agent_id}")
+
+
 @app.get("/api/perunchat/social/friends")
 def api_perunchat_social_friends() -> dict[str, Any]:
     return _perunchat_proxy("GET", "/api/v1/social/friends")
