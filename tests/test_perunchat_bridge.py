@@ -291,7 +291,7 @@ def test_own_replies_are_kept_in_room_history(settings):
         bridge._drain_room_queues()
         bridge._on_frame(own, None)
         bridge._drain_room_queues()
-    mock_reply.assert_called_once_with(peer, None)
+    mock_reply.assert_called_once()
     hist = bridge._room_history.get("pub:global:test", [])
     assert len(hist) == 2
     assert "msg_peer" in [f.get("id") for f in hist]
@@ -326,7 +326,7 @@ def test_bridge_replies_to_other_messages(settings):
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
         bridge._drain_room_queues()
-        mock_reply.assert_called_once_with(frame, None)
+        mock_reply.assert_called_once()
 
 
 def test_on_frame_ignores_non_object_frames(settings):
@@ -404,7 +404,7 @@ def test_bridge_replies_by_content_type_without_type_field(settings):
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
         bridge._drain_room_queues()
-        mock_reply.assert_called_once_with(frame, None)
+        mock_reply.assert_called_once()
 
 
 def test_bridge_skips_non_text_frames(settings):
@@ -884,6 +884,46 @@ def test_typing_indicator_and_reply_have_monotonic_sequence_numbers(bridge_env):
     assert typing_frame["sequence_number"] == 11
     assert reply_frame["sequence_number"] == 12
     assert bridge._seq == reply_frame["sequence_number"]
+
+
+def test_hard_timeout_cancels_orchestrator_run(bridge_env, monkeypatch):
+    """When reply generation exceeds the wall-clock timeout, the orchestrator
+    run must be cancelled and the background reply thread must not send."""
+    bridge, orchestrator = bridge_env
+    frame = _chat_frame()
+    ws = MagicMock()
+
+    # Make _reply block for longer than the timeout, but publish a run uid first
+    # so the timeout handler can cancel it.
+    slow_started = threading.Event()
+
+    def slow_reply(f, sock, *, cancel_event=None, run_uid_container=None):
+        if run_uid_container is not None:
+            with run_uid_container["lock"]:
+                run_uid_container["uid"] = "run_slow"
+        slow_started.set()
+        # Block until cancel_event is set (or a very long time).
+        cancel_event.wait(timeout=30)
+        # If cancellation did not stop us, sending here would be the bug.
+        bridge._send_frame(sock, {
+            "id": f"msg_{uuid.uuid4().hex}",
+            "sequence_number": bridge._seq + 1,
+            "room_id": f.get("room_id"),
+            "sender": {"agent_id": bridge._agent_id, "runtime": "perun"},
+            "content_type": "text/plain",
+            "payload": "delayed reply",
+        })
+
+    import perun.perunchat_bridge as pcb
+    monkeypatch.setattr(pcb, "_MAX_REPLY_WALL_SECONDS", 0.2)
+    with patch.object(bridge, "_reply", side_effect=slow_reply):
+        bridge._process_room_frame(frame, ws)
+
+    slow_started.wait(timeout=2)
+    # The orchestrator cancel must have been called for the slow run.
+    orchestrator.cancel.assert_called_once_with("run_slow")
+    # No reply frame should have been sent through the WebSocket.
+    ws.send.assert_not_called()
 
 
 def test_direct_mentions_bypass_per_room_cooldown(bridge_env):

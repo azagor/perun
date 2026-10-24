@@ -851,6 +851,8 @@ class PerunChatBridge:
         # single hung model/provider call cannot stall the whole room.
         reply_done = threading.Event()
         typing_sent = threading.Event()
+        cancel_event = threading.Event()
+        run_uid_container: Dict[str, Any] = {"uid": None, "lock": threading.Lock()}
 
         def maybe_send_typing():
             if not reply_done.wait(timeout=_TYPING_INDICATOR_DELAY_SECONDS) and not typing_sent.is_set():
@@ -862,7 +864,7 @@ class PerunChatBridge:
 
         def _reply_wrapper():
             try:
-                self._reply(frame, ws)
+                self._reply(frame, ws, cancel_event=cancel_event, run_uid_container=run_uid_container)
             except Exception:
                 # If we announced typing, clear it when generation fails.
                 if typing_sent.is_set():
@@ -876,10 +878,20 @@ class PerunChatBridge:
         reply_done.set()
         if reply_thread.is_alive():
             logger.error(
-                "PerunChat reply generation for %s in %s exceeded %s seconds; abandoning to keep room responsive. "
-                "The model call may still finish in the background but will not be sent.",
+                "PerunChat reply generation for %s in %s exceeded %s seconds; abandoning to keep room responsive.",
                 msg_id, room_id, _MAX_REPLY_WALL_SECONDS,
             )
+            # Signal the background reply loop that it must not send anything,
+            # and cancel the underlying orchestrator run so it cannot hold a
+            # slot or deliver a delayed reply minutes later.
+            cancel_event.set()
+            with run_uid_container["lock"]:
+                run_uid = run_uid_container["uid"]
+            if run_uid:
+                try:
+                    self.orchestrator.cancel(run_uid)
+                except Exception:
+                    logger.debug("PerunChat failed to cancel run %s on timeout", run_uid, exc_info=True)
             if typing_sent.is_set():
                 self._send_typing_indicator(frame, ws, typing=False)
             if msg_id:
@@ -962,7 +974,20 @@ class PerunChatBridge:
         except Exception:
             logger.debug("PerunChat failed to send typing indicator", exc_info=True)
 
-    def _reply(self, frame: Dict[str, Any], ws: Any) -> None:
+    def _reply(
+        self,
+        frame: Dict[str, Any],
+        ws: Any,
+        cancel_event: Optional[threading.Event] = None,
+        run_uid_container: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Generate and send a reply to a single chat frame.
+
+        ``cancel_event`` is set by the caller when the hard wall-clock timeout
+        fires; the reply loop must then stop waiting and must not send a reply.
+        ``run_uid_container`` lets the caller cancel the underlying orchestrator
+        run on timeout.
+        """
         room_id = frame.get("room_id")
         sender = (frame.get("sender", {}).get("agent_id") or "").lower()
         is_public = room_id and room_id.startswith("pub:")
@@ -997,6 +1022,10 @@ class PerunChatBridge:
         logger.info("PerunChat prompt length for %s: %d chars", msg_id, len(prompt))
         if msg_id:
             self._pending_replies.add(msg_id)
+
+        def _check_cancelled() -> bool:
+            return cancel_event is not None and cancel_event.is_set()
+
         try:
             logger.debug("PerunChat prompt for %s:\n%s", msg_id, prompt)
             project = control.ensure()
@@ -1008,6 +1037,9 @@ class PerunChatBridge:
             # duplicate); only a final-empty run (cancelled/failed/timeout) is
             # regenerated once.
             for attempt in range(1, _REPLY_GENERATION_ATTEMPTS + 1):
+                if _check_cancelled():
+                    logger.debug("PerunChat reply loop cancelled for %s", msg_id)
+                    return
                 result = self.orchestrator.run_and_wait(
                     project["slug"],
                     prompt,
@@ -1019,8 +1051,14 @@ class PerunChatBridge:
                 )
                 run = result.get("run") or {}
                 run_uid = run.get("run_uid") or ""
+                if run_uid and run_uid_container is not None:
+                    with run_uid_container["lock"]:
+                        run_uid_container["uid"] = run_uid
                 run_status = run.get("status", "")
                 if run_status in ("queued", "running") and run_uid:
+                    if _check_cancelled():
+                        logger.debug("PerunChat reply loop cancelled while waiting for %s", run_uid)
+                        return
                     result = self.orchestrator.wait_for_run(run_uid, _RUN_WAIT_TIMEOUT_SECONDS)
                     run = result.get("run") or {}
                     run_status = run.get("status", run_status)
@@ -1034,11 +1072,16 @@ class PerunChatBridge:
                     attempt, _REPLY_GENERATION_ATTEMPTS, run_uid, run_status, room_id,
                 )
                 if attempt < _REPLY_GENERATION_ATTEMPTS:
+                    if _check_cancelled():
+                        logger.debug("PerunChat reply loop cancelled before retry for %s", msg_id)
+                        return
                     time.sleep(_REPLY_RETRY_DELAY_SECONDS)
             if not reply:
                 # Last resort after the retry: if the run is still going (slow
                 # provider), keep waiting once more instead of losing the reply.
                 if run_status in ("queued", "running") and run_uid:
+                    if _check_cancelled():
+                        return
                     result = self.orchestrator.wait_for_run(run_uid, _RUN_WAIT_TIMEOUT_SECONDS)
                     reply = _strip_instruction_wrappers((result.get("reply", "") or "").strip())
             if not reply:
@@ -1053,6 +1096,9 @@ class PerunChatBridge:
                 if msg_id:
                     self._mark_replied(msg_id)
                 self._send_typing_indicator(frame, ws, typing=False)
+                return
+            if _check_cancelled():
+                logger.debug("PerunChat reply cancelled before sending for %s", msg_id)
                 return
             # DLP guard: in public rooms, redact anything that looks like internal
             # or private information before it leaves the local environment.
