@@ -1971,5 +1971,9 @@ OpenCode projects.
 - Dashboard: validate room ids before adding/creating; quieter private-rooms load
 - PerunChat memory: typed `[FACT(type=...)]` markers, heuristic extraction, semantic deduplication, explicit user triggers
 ---
+## [0.7.45] - 2026-10-24
+- PerunChat: clear typing indicator when reply generation times out or fails; add 60-second client-side stale-indicator guard.
+
+---
 ## [0.7.44] - 2026-10-24
 - PerunChat: native typing indicator (application/perun-typing) with 3-minute hard timeout
