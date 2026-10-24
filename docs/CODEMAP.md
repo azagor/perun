@@ -467,11 +467,12 @@ Autonomous PerunChat chat participant for the Orchestrator.
   (`perunchat_replied.json`) so bridge restarts do not reply twice to replayed
   history.
 * Replay/echo dedup and per-room serialization: `_seen_message_ids` and
-  `_recent_content` drop duplicate frames; `_room_locks` serialize replies so
-  only one message per room is processed at a time. Prompts are passed via a
-  temp file (`--file`) to avoid command-line length limits; history includes
-  Perun's own replies so the model sees a normal chat transcript, and the
-  latest message is preserved when trimming.
+  `_recent_content` drop duplicate frames; `_room_queues` and `_room_workers`
+  serialize replies so only one message per room is processed at a time while
+  keeping the WebSocket reader thread free. Prompts are passed via a temp file
+  (`--file`) to avoid command-line length limits; history includes Perun's own
+  replies so the model sees a normal chat transcript, and the latest message is
+  preserved when trimming.
 * `_ensure_opencode_agent()` installs/updates the dedicated `perunchat` OpenCode
   agent (`~/.config/opencode/agents/perunchat.md`) on bridge start, overwriting
   it whenever the embedded content changes so prompt fixes reach production.

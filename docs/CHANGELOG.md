@@ -4,6 +4,31 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.7.40 - 2026-10-24
+
+### Fixed
+
+- Added a dedicated lock around the shared per-minute reply counter in the
+  PerunChat bridge so multi-room worker threads cannot race on the global
+  rate-limit state.
+- `_ensure_room_worker` now detects dead worker threads and replaces them,
+  reusing the existing queue so frames are not stranded by a crashed worker.
+
+## v0.7.39 - 2026-10-24
+
+### Fixed
+
+- PerunChat bridge now uses per-room worker queues instead of a blocking lock.
+  Each room has a dedicated thread that processes one message at a time, and
+  the current WebSocket is captured in the queue so reconnects do not lose or
+  misroute replies. Rate-limit and cooldown decisions are evaluated at
+  processing time inside the worker, so earlier replies correctly throttle
+  later messages in the same room.
+- Dashboard operator messages now declare ``sender.runtime`` as
+  ``<agent_id>-operator`` and detect any runtime ending in ``-operator`` when
+  rendering, so operator labels survive page refreshes and coexist with other
+  Perun instances in public rooms.
+
 ## v0.7.38 - 2026-10-24
 
 ### Fixed

@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from queue import Empty, Full, Queue
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
@@ -306,6 +307,7 @@ class PerunChatBridge:
         self._pending_replies: Set[str] = set()
         self._reply_count_minute = 0
         self._minute_window_start = time.time()
+        self._rate_limit_lock = threading.Lock()
         self._seq = self._load_seq()
         # Wall-clock ms of the most recent successful gateway connect. Used to
         # detect messages that predate the connection (the gateway replays
@@ -320,13 +322,11 @@ class PerunChatBridge:
         self._room_participants: Dict[str, Dict[str, float]] = {}
         self._own_message_ids: Set[str] = set()
         self._last_reply_time: Dict[str, float] = {}
-        # Per-room locks serialize replies so only one message per room is
-        # processed at a time, preserving order and avoiding races between
-        # overlapping model calls.
-        # NOTE: this blocks the WebSocket reader thread for the duration of a
-        # reply. If a single room becomes very busy, consider replacing the lock
-        # with a per-room worker queue so the reader can return immediately.
-        self._room_locks: Dict[str, threading.Lock] = {}
+        # Per-room worker queues serialize replies so only one message per room
+        # is processed at a time, preserving order and avoiding races between
+        # overlapping model calls while keeping the WebSocket reader thread free.
+        self._room_queues: Dict[str, Queue] = {}
+        self._room_workers: Dict[str, threading.Thread] = {}
         # Session-level duplicate detection for gateway replays / echo storms.
         self._seen_message_ids: Set[str] = set()
         self._recent_content: Set[str] = set()
@@ -369,6 +369,19 @@ class PerunChatBridge:
 
     def stop(self) -> None:
         self._stop.set()
+        # Signal room workers to exit and wait for them so no reply is lost
+        # mid-flight during a restart.
+        with self._lock:
+            queues = dict(self._room_queues)
+        for q in queues.values():
+            try:
+                q.put_nowait(None)
+            except Full:
+                pass
+        with self._lock:
+            workers = list(self._room_workers.values())
+        for t in workers:
+            t.join(timeout=2.0)
         with self._lock:
             ws = self._ws
             self._ws = None
@@ -731,9 +744,68 @@ class PerunChatBridge:
             logger.info("PerunChat already processing %s; skipping duplicate", msg_id)
             return
 
-        # Decide whether to reply like a human would: direct mentions always
-        # get an answer; general messages depend on room size, questions, and
-        # quietness so Perun feels present without spamming.
+        # Hand the frame and the current WebSocket to the room's dedicated worker
+        # queue. The reader thread returns immediately; the worker decides
+        # whether to reply and applies rate limits at processing time so earlier
+        # replies in the same room correctly affect later decisions.
+        self._ensure_room_worker(room_id)
+        self._room_queues[room_id].put((frame, ws))
+
+
+    def _ensure_room_worker(self, room_id: str) -> None:
+        """Start a dedicated worker thread for *room_id* if none exists.
+
+        If a previous worker died (e.g. due to an uncaught exception), it is
+        replaced so queued frames are not stranded.
+        """
+        with self._lock:
+            worker = self._room_workers.get(room_id)
+            if worker is not None and worker.is_alive():
+                return
+            # The old worker is dead. Drop its reference but keep any existing
+            # queue so messages that were already enqueued are not lost.
+            if worker is not None:
+                self._room_workers.pop(room_id, None)
+            q = self._room_queues.get(room_id)
+            if q is None:
+                q = Queue()
+                self._room_queues[room_id] = q
+            t = threading.Thread(
+                target=self._room_worker,
+                args=(room_id, q),
+                daemon=True,
+            )
+            t.start()
+            self._room_workers[room_id] = t
+
+    def _room_worker(self, room_id: str, q: Queue) -> None:
+        """Process one message per room at a time from the queue."""
+        while not self._stop.is_set():
+            try:
+                try:
+                    item = q.get(timeout=0.5)
+                except Empty:
+                    continue
+                if item is None:
+                    break
+                frame, ws = item
+                try:
+                    self._process_room_frame(frame, ws)
+                except Exception:
+                    logger.exception("PerunChat room worker error in %s", room_id)
+            except Exception:
+                # Never let a queue/get error kill the worker; _ensure_room_worker
+                # will replace it, but staying alive avoids losing the queue.
+                logger.exception("PerunChat room worker loop error in %s", room_id)
+                time.sleep(0.1)
+        with self._lock:
+            self._room_workers.pop(room_id, None)
+            self._room_queues.pop(room_id, None)
+
+    def _process_room_frame(self, frame: Dict[str, Any], ws: Any) -> None:
+        """Decide whether to reply to a queued frame and do so under rate limits."""
+        msg_id = frame.get("id")
+        room_id = frame.get("room_id")
         decision = self._should_reply_to(frame)
         if not decision.should_reply:
             logger.info("PerunChat decided not to reply to %s: %s", msg_id, decision.reason)
@@ -748,24 +820,45 @@ class PerunChatBridge:
             logger.info("PerunChat room %s saturated; skipping reply to %s", room_id, msg_id)
             return
 
-        if now - self._minute_window_start > 60:
-            self._minute_window_start = now
-            self._reply_count_minute = 0
-        if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
-            logger.info("PerunChat hit per-minute reply limit; skipping %s", msg_id)
-            return
+        # Global per-minute rate limit is shared across all rooms; protect the
+        # shared counter/window with a dedicated lock. Per-room cooldown state
+        # is only touched by this room's single worker, so it needs no lock.
+        with self._rate_limit_lock:
+            now = time.time()
+            if now - self._minute_window_start > 60:
+                self._minute_window_start = now
+                self._reply_count_minute = 0
+            if self._reply_count_minute >= _MAX_REPLIES_PER_MINUTE:
+                logger.info("PerunChat hit per-minute reply limit; skipping %s", msg_id)
+                return
         # Small per-room cooldown so we do not chatter.
         last_reply = self._last_reply_time.get(room_id, 0)
         if not decision.is_direct and now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
             return
 
-        # Serialize replies per room so only one model call is in flight at a
-        # time for a given room. This preserves ordering and prevents races
-        # between overlapping replies.
-        room_lock = self._room_locks.setdefault(room_id, threading.Lock())
-        with room_lock:
-            self._reply(frame, ws)
+        self._reply(frame, ws)
+
+    def _drain_room_queues(self) -> None:
+        """Synchronous helper for tests: process every queued frame now.
+
+        Production code never calls this; it exists so tests can keep their
+        assertions deterministic without relying on worker-thread timing.
+        """
+        queues: Dict[str, Queue] = {}
+        with self._lock:
+            queues = dict(self._room_queues)
+        for room_id, q in queues.items():
+            while True:
+                try:
+                    item = q.get_nowait()
+                except Empty:
+                    break
+                frame, ws = item
+                try:
+                    self._process_room_frame(frame, ws)
+                except Exception:
+                    logger.exception("PerunChat room worker error in %s", room_id)
 
     def _active_participant_count(self, room_id: str, window: float = 300.0) -> int:
         """Count unique human agents seen in the room within the last window."""
@@ -918,7 +1011,8 @@ class PerunChatBridge:
                 # message is still marked as replied because the reply was
                 # generated and queued; we must not regenerate it on reconnect.
                 return
-            self._reply_count_minute += 1
+            with self._rate_limit_lock:
+                self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
             reply_activity = self._room_reply_activity.setdefault(room_id, deque(maxlen=_ROOM_HISTORY_LEN))
             reply_activity.append(time.time())

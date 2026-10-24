@@ -694,6 +694,9 @@ def _start_prompt_file_sweeper() -> None:
         _prompt_file_sweeper_started = True
 
         def _loop() -> None:
+            # Sweep once at startup to catch files left by a previous crash,
+            # then hourly thereafter.
+            _sweep_prompt_files()
             while True:
                 time.sleep(3600)
                 _sweep_prompt_files()

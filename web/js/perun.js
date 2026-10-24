@@ -3647,7 +3647,8 @@ async function viewPerunChat() {
         }
         persistChat();
 
-        let isOperator = (msg.sender && msg.sender.runtime === 'perun-operator') || operatorMessageIds.has(msg.id) || msg._perunOperator === true;
+        const isOperatorRuntime = (rt) => rt === 'perun-operator' || (typeof rt === 'string' && rt.endsWith('-operator'));
+        let isOperator = (msg.sender && isOperatorRuntime(msg.sender.runtime)) || operatorMessageIds.has(msg.id) || msg._perunOperator === true;
         if (isOperator) msg._perunOperator = true;
         const ownRaw = msg.sender && msg.sender.agent_id ? msg.sender.agent_id : '?';
         const own = isOperator ? 'operator (you)' : esc(ownRaw);
@@ -3656,7 +3657,7 @@ async function viewPerunChat() {
         let replyHtml = '';
         if (msg.in_reply_to) {
             const original = messageHistory.find(m => m.id === msg.in_reply_to);
-            const origOperator = original && ((original.sender && original.sender.runtime === 'perun-operator') || operatorMessageIds.has(original.id) || original._perunOperator === true);
+            const origOperator = original && ((original.sender && isOperatorRuntime(original.sender.runtime)) || operatorMessageIds.has(original.id) || original._perunOperator === true);
             const replyToWho = original ? (origOperator ? 'operator (you)' : esc(original.sender.agent_id)) : 'unknown';
             const replyToText = original ? esc(String(original.payload).slice(0, 60)) : '…';
             replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
@@ -3812,7 +3813,7 @@ async function viewPerunChat() {
             timestamp: now,
             room_type: $('#pc-chat-type').value,
             room_id: joinedRoom,
-            sender: { agent_id: myAgentId, runtime: 'perun-operator' },
+            sender: { agent_id: myAgentId, runtime: myAgentId ? `${myAgentId}-operator` : 'perun-operator' },
             recipient_id: null,
             content_type: 'text/plain',
             turn_count: 0,

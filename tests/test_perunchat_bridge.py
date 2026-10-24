@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -81,6 +82,7 @@ def test_bridge_ignores_own_messages(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
         mock_reply.assert_not_called()
 
 
@@ -100,6 +102,7 @@ def test_bridge_operator_messages_are_not_swallowed_as_own(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
     hist_ids = [f.get("id") for f in bridge._room_history.get("pub:global:test", [])]
     assert "msg_operator_1" in hist_ids
     assert "msg_operator_1" not in bridge._own_message_ids
@@ -121,7 +124,9 @@ def test_bridge_dedups_duplicate_frame_ids(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
     mock_reply.assert_called_once()
     assert len(bridge._room_history.get("pub:global:test", [])) == 1
 
@@ -142,6 +147,7 @@ def test_bridge_duplicate_detection_handles_malformed_timestamp(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
     mock_reply.assert_called_once()
     assert "msg_bad_ts" in [f.get("id") for f in bridge._room_history.get("pub:global:test", [])]
 
@@ -172,7 +178,9 @@ def test_bridge_dedups_duplicate_content_with_new_id(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame1, None)
+        bridge._drain_room_queues()
         bridge._on_frame(frame2, None)
+        bridge._drain_room_queues()
     mock_reply.assert_called_once()
     hist = bridge._room_history.get("pub:global:test", [])
     assert len(hist) == 1
@@ -278,37 +286,9 @@ def test_own_replies_are_kept_in_room_history(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(peer, None)
+        bridge._drain_room_queues()
         bridge._on_frame(own, None)
-    mock_reply.assert_called_once_with(peer, None)
-    hist = bridge._room_history.get("pub:global:test", [])
-    assert len(hist) == 2
-    assert "msg_peer" in [f.get("id") for f in hist]
-    assert "msg_own" in [f.get("id") for f in hist]
-
-
-def test_own_replies_are_kept_in_room_history(settings):
-    """Own outbound replies must stay in the transcript so the model sees a
-    normal chat conversation, but they must not trigger further replies."""
-    mock_orchestrator = MagicMock(settings=settings)
-    bridge = PerunChatBridge(mock_orchestrator)
-    bridge._agent_id = "perun-local"
-    peer = {
-        "type": "CHAT",
-        "id": "msg_peer",
-        "room_id": "pub:global:test",
-        "sender": {"agent_id": "other-agent"},
-        "payload": "hello @perun",
-    }
-    own = {
-        "type": "CHAT",
-        "id": "msg_own",
-        "room_id": "pub:global:test",
-        "sender": {"agent_id": "perun-local", "runtime": "perun"},
-        "payload": "hi there",
-    }
-    with patch.object(bridge, "_reply") as mock_reply:
-        bridge._on_frame(peer, None)
-        bridge._on_frame(own, None)
+        bridge._drain_room_queues()
     mock_reply.assert_called_once_with(peer, None)
     hist = bridge._room_history.get("pub:global:test", [])
     assert len(hist) == 2
@@ -343,6 +323,7 @@ def test_bridge_replies_to_other_messages(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
         mock_reply.assert_called_once_with(frame, None)
 
 
@@ -420,6 +401,7 @@ def test_bridge_replies_by_content_type_without_type_field(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
         mock_reply.assert_called_once_with(frame, None)
 
 
@@ -436,6 +418,7 @@ def test_bridge_skips_non_text_frames(settings):
     }
     with patch.object(bridge, "_reply") as mock_reply:
         bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
         mock_reply.assert_not_called()
 
 
@@ -787,6 +770,7 @@ def test_send_failure_marks_original_replied_and_does_not_regenerate_on_replay(b
     failing_ws.send.side_effect = OSError("connection dropped")
 
     bridge._on_frame(frame, failing_ws)
+    bridge._drain_room_queues()
 
     # The reply was generated once and queued.
     orchestrator.run_and_wait.assert_called_once()
@@ -796,6 +780,7 @@ def test_send_failure_marks_original_replied_and_does_not_regenerate_on_replay(b
     orchestrator.run_and_wait.reset_mock()
     replay_ws = MagicMock()
     bridge._on_frame(frame, replay_ws)
+    bridge._drain_room_queues()
     orchestrator.run_and_wait.assert_not_called()
 
 
@@ -807,7 +792,9 @@ def test_direct_mentions_bypass_per_room_cooldown(bridge_env):
     ws = MagicMock()
 
     bridge._on_frame(_chat_frame(msg_id="msg_1", text="@peruntheoverseer hello"), ws)
+    bridge._drain_room_queues()
     bridge._on_frame(_chat_frame(msg_id="msg_2", text="@peruntheoverseer second"), ws)
+    bridge._drain_room_queues()
 
     assert orchestrator.run_and_wait.call_count == 2
 
@@ -819,7 +806,9 @@ def test_proactive_reply_respects_per_room_cooldown(bridge_env):
     ws = MagicMock()
 
     bridge._on_frame(_chat_frame(msg_id="msg_1", text="hello everyone"), ws)
+    bridge._drain_room_queues()
     bridge._on_frame(_chat_frame(msg_id="msg_2", text="anyone here?"), ws)
+    bridge._drain_room_queues()
 
     assert orchestrator.run_and_wait.call_count == 1
 
@@ -837,11 +826,13 @@ def test_direct_mentions_bypass_room_saturation(bridge_env):
         bridge._room_reply_activity.setdefault(room_id, deque(maxlen=40)).append(time.time())
 
     bridge._on_frame(_chat_frame(msg_id="dir_1", room=room_id, text="@peruntheoverseer hello"), ws)
+    bridge._drain_room_queues()
     orchestrator.run_and_wait.assert_called_once()
 
     # A proactive message is still blocked by saturation.
     orchestrator.run_and_wait.reset_mock()
     bridge._on_frame(_chat_frame(msg_id="pro_1", room=room_id, text="hello everyone"), ws)
+    bridge._drain_room_queues()
     orchestrator.run_and_wait.assert_not_called()
 
 
@@ -859,6 +850,7 @@ def test_private_room_bypasses_cooldown_and_saturation(bridge_env):
         bridge._room_reply_activity.setdefault(room_id, deque(maxlen=40)).append(time.time())
 
     bridge._on_frame(_chat_frame(msg_id="priv_1", room=room_id, text="hello"), ws)
+    bridge._drain_room_queues()
     orchestrator.run_and_wait.assert_called_once()
 
 
@@ -880,6 +872,7 @@ def test_reply_to_own_message_bypasses_cooldown_and_saturation(bridge_env):
     frame = _chat_frame(msg_id="reply_1", room=room_id, text="yes exactly")
     frame["in_reply_to"] = own_msg_id
     bridge._on_frame(frame, ws)
+    bridge._drain_room_queues()
     orchestrator.run_and_wait.assert_called_once()
 
 
@@ -958,3 +951,32 @@ def test_ensure_opencode_agent_updates_existing_file(monkeypatch, tmp_path):
     agent_file.write_text("old content", encoding="utf-8")
     pb._ensure_opencode_agent()
     assert agent_file.read_text(encoding="utf-8").strip() == pb._OPENCODE_AGENT_MD.strip()
+
+
+def test_dead_room_worker_is_replaced(bridge_env):
+    """A crashed room worker must be detected and replaced so queued frames are
+    not stranded."""
+    bridge, _ = bridge_env
+    room_id = "pub:global:test"
+
+    bridge._ensure_room_worker(room_id)
+    dead_worker = bridge._room_workers[room_id]
+    assert dead_worker.is_alive()
+
+    # Simulate a dead worker that has not run its cleanup yet.
+    class FakeDeadThread:
+        def is_alive(self):  # noqa: D102
+            return False
+
+        def join(self, timeout=None):  # noqa: D102
+            pass
+
+    bridge._room_workers[room_id] = FakeDeadThread()
+    old_queue = bridge._room_queues[room_id]
+
+    bridge._ensure_room_worker(room_id)
+    new_worker = bridge._room_workers[room_id]
+    assert new_worker is not dead_worker
+    assert new_worker.is_alive()
+    # The existing queue should be reused, not dropped.
+    assert bridge._room_queues[room_id] is old_queue
