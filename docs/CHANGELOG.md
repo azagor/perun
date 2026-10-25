@@ -4,6 +4,136 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.8.1 - 2026-10-25
+
+### Added
+
+- The project **Shared tab** now shows the project chat as first-class
+  information: chat name, room id, state, `managed_by`, manifest revision, last
+  sync, and the **expected vs. live members** (unexpected members are flagged
+  before the next sync removes them), plus a **Sync now** control backed by
+  `POST /api/projects/{slug}/shared/sync`.
+- One reusable participant editor is shared by the project-creation wizard and
+  the Shared tab: trust-list chips cycle `rw → ro → removed`, and an inline
+  **Add participant** field trusts a brand-new agent on the spot so adding
+  someone never requires leaving the page.
+- The project wizard's **Default model** and **Agent** fields are now the same
+  searchable dropdowns used elsewhere in the dashboard instead of free-text
+  inputs.
+- Shared-project room ids (`grp:perun:<slug>:chat`) are labelled with the human
+  project name in the dashboard room pickers.
+- **Project chats know which project they are bound to.** The bridge resolves
+  the `project_chats` binding and injects a compact local brief (project
+  metadata, README/CODEMAP/DESIGN/TECHNICAL heads, root listing) capped at 3,600
+  characters. Participants, the managed room owner, and Perun itself receive
+  it; non-members never do. The brief states that "this project" means the
+  bound project, never Perun, and that missing docs must be reported honestly.
+- **One-click autonomous execution.** `POST .../proposals/{id}/approve-and-execute`
+  approves and starts the headless Project Agent in one owner action; the
+  existing `execute` endpoint now also starts it in the background and returns
+  `202` immediately. A new `executing` proposal state, a Cancel control backed
+  by `/api/runs/{proposal_id}/cancel`, automatic Shared-tab polling, and a
+  completion callback that posts the State Digest keep the UI truthful while
+  the agent works without a TUI.
+- **Room owners can propose.** The managed room's owner (`managed_by`) may
+  create a proposal even when they are not a participant row; an explicit
+  approval is still required, so this only removes a configuration dead end.
+- Proposal payloads are bounded (intent 500, targets 50×500, details 8,000
+  characters), details are framed as data rather than instructions in the
+  execution prompt, and the proposal card now shows pending items first, the
+  full details, the execution result, and confirmation dialogs for
+  approve/run/cancel.
+
+### Fixed
+
+- **Shared execution is now contained by a deny-all agent.** Approved proposals
+  run headlessly under the generated `perun-shared` agent, which denies every
+  native tool (shell, edit, read, web, subagent) and allows only the
+  `perun-guard` MCP tools. Guard writes are restricted to the proposal's declared
+  target paths, and credentials, `.env`, VCS metadata, host config, the project
+  manifest, and OpenCode config are denied even inside the project root.
+- **Approval and rejection use SQLite compare-and-set.** A duplicate click,
+  retry, or concurrent approver can no longer overwrite a decided proposal, and
+  a failed orchestrator construction marks the proposal `failed` instead of
+  leaving it `executing`.
+- **Trust is required on every project-chat path.** Participants must still be on
+  the local PerunChat trust list to receive project context, create proposals, or
+  stay in the managed room; revoking trust now removes them from the manifest,
+  bumps `manifest_rev`, and re-syncs the room. The room owner and this machine's
+  own resolved Perun id remain authorized.
+- **PerunChat memory is room/project scoped.** Project-room facts use the real
+  project id, other rooms use a reserved negative id plus room filtering, and
+  public/other-room facts can no longer appear in a project prompt.
+- **Project briefs no longer leak host identity.** The shared-project context
+  omits local absolute paths and Git remotes, shows external dependencies by
+  basename, and lists only participants that are still trusted.
+- **The post-run audit is target-scoped.** Changes outside the approved targets
+  are violations, parent-directory entries are compared for modified/deleted
+  files as well as creations, and heavy/VCS directories are skipped during
+  snapshots.
+- **Perun does not assume another machine's chat id.** Direct-address detection
+  uses this machine's resolved agent id (plus generic `perun`/`overseer`
+  aliases); a foreign id such as `@perun-remote` is not treated as self.
+- **Action proposals no longer return HTTP 500.** Databases created before
+  Shared Projects lacked `action_proposals.expires_at` (`CREATE TABLE IF NOT
+  EXISTS` never adds columns), so every proposals request failed. `db.init_db()`
+  now migrates the column idempotently, backfills pending proposals to their
+  full 24-hour lifetime, and bumps the schema version; `expire_stale()`
+  additionally degrades to an empty result instead of raising on a legacy DB.
+- **Shared-project chats are created again.** The sync derived
+  `https://peruninthemachine.com` for the gateway REST API, but public hosts
+  serve it under `/chat` — so the call returned the SPA's HTML and died with a
+  JSON decode error. The base URL now comes from one shared helper,
+  `config.perunchat_rest_base()`, used by the bridge, the HTTP proxy, and
+  shared-project sync.
+- **Turning a project's shared mode off tears its chat down.** `shared` is now
+  the single authority for the room's existence; leftover participant rows can
+  no longer keep a phantom chat alive, and the UI reports the chat as disabled.
+- **Perun replies in every room it belongs to.** The autonomous bridge now joins
+  the configured/default rooms *plus* all shared-project chats and all private
+  rooms Perun is a member of (discovered over REST) on every connect, refreshing
+  the set every 30 seconds. A join is acknowledged only on `ROOM_JOINED`; an
+  `ERROR` clears it so a room created after the connection is joined on the next
+  refresh. Idle protocol pings and a forced reconnect after 120 seconds of
+  silence keep the socket — and therefore Perun's replies — alive.
+- Shared-project room membership is strict: a managed chat contains exactly the
+  declared participants and Perun, and the "Sync now" path removes anyone else.
+- **Action markers survive a `targets` array.** The old non-greedy regex stopped
+  at the first `]`, so a normal `"targets": ["a", "b"]` envelope was truncated
+  and silently discarded. A brace/bracket-aware scanner now extracts the whole
+  object, and the marker is always stripped from the outgoing chat text.
+- **Relative targets are rooted at the project, not the process cwd.**
+  `path_guard` resolved relative proposal targets (and relative external deps)
+  with `Path.resolve()`, which silently made every target
+  `C:\my_apps\perun\...`; the check now resolves them against the project root,
+  rejects `..` escapes, and keeps relative dependencies project-relative.
+- **Absolute proposal targets survive outbound redaction.** The DLP pass ran
+  before `[ACTION: ...]` parsing, so a legitimate absolute target path became
+  `[redacted]`, broke the JSON, and silently dropped the proposal. The marker is
+  now parsed first; only the human-visible remainder is redacted.
+- **Interrupted proposals no longer stick in `executing`.** Server startup
+  marks orphaned runs `interrupted` and reconciles their proposals to `failed`
+  with an explicit reason, so the owner can retry instead of staring at a
+  permanently busy row.
+- **A filesystem-policy violation fails the proposal.** The post-run audit used
+  to append a warning while still reporting `executed`; it now downgrades the
+  outcome to `failed` and records the offending paths.
+- **Successful headless runs are no longer mislabeled as failures.** The
+  Orchestrator finalizes runs with status `done`, but proposal execution only
+  accepted `completed`; every real run therefore ended as `failed`. Both
+  spellings are accepted now, and the regression test uses the real `done`
+  status.
+- **Audit failures and out-of-root escapes now fail the proposal.** If the
+  post-run audit cannot run, or it detects new entries next to the project root,
+  the proposal is marked `failed` instead of claiming `executed`. The audit also
+  now treats writes and deletions inside a read-only external dependency as
+  violations.
+- **A project description survives enabling sharing.** Turning on shared mode
+  writes `perun.md` with only the shared fields; the next discovery pass treated
+  the omitted description as empty and erased the value entered in the create
+  wizard. Discovery now keeps the configured description unless the manifest or
+  project files actually declare a new one.
+
 ## v0.8.0 - 2026-10-25
 
 ### Added

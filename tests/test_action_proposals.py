@@ -1,4 +1,5 @@
 import time
+import threading
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,124 @@ def test_create_proposal_allows_rw_participant(tmp_path):
     assert proposal["status"] == "pending"
 
 
+def test_room_owner_may_propose_without_being_a_participant(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    target = str(project["path"] / "api.py")
+
+    proposal = action_proposals.create(
+        project,
+        "peruntheoverseer",
+        {"intent": "add validation", "targets": [target], "action_type": "edit"},
+        owner="peruntheoverseer",
+    )
+    assert proposal["status"] == "pending"
+    assert proposal["requester"] == "peruntheoverseer"
+
+    with pytest.raises(ValueError, match="read-only access"):
+        action_proposals.create(
+            project,
+            "intruder",
+            {"intent": "add validation", "targets": [target], "action_type": "edit"},
+            owner="peruntheoverseer",
+        )
+
+
+def test_proposal_bounds_chat_supplied_payloads(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {
+            "intent": "x" * (action_proposals.MAX_INTENT_CHARS + 50),
+            "targets": [target],
+            "action_type": "edit",
+        },
+    )
+    assert len(proposal["intent"]) == action_proposals.MAX_INTENT_CHARS + 1  # + ellipsis
+    assert proposal["intent"].endswith("…")
+
+    with pytest.raises(ValueError, match="more than"):
+        action_proposals.create(
+            project,
+            "frambo",
+            {
+                "intent": "too many",
+                "targets": [target] * (action_proposals.MAX_TARGETS + 1),
+                "action_type": "edit",
+            },
+        )
+
+    with pytest.raises(ValueError, match="details exceed"):
+        action_proposals.create(
+            project,
+            "frambo",
+            {
+                "intent": "too detailed",
+                "targets": [target],
+                "action_type": "edit",
+                "details": {"blob": "x" * (action_proposals.MAX_DETAILS_CHARS + 1)},
+            },
+        )
+
+
+def test_proposal_envelope_rejects_malformed_shapes(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+
+    with pytest.raises(ValueError, match="targets must be a list"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "targets": target, "action_type": "edit"},
+        )
+    with pytest.raises(ValueError, match="details must be an object"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "targets": [target], "action_type": "edit", "details": []},
+        )
+    with pytest.raises(ValueError, match="control characters"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "targets": [target + "\nsecond"], "action_type": "edit"},
+        )
+
+    proposal = action_proposals.create(
+        project, "frambo",
+        {
+            "intent": "x",
+            "targets": [target],
+            "action_type": "edit",
+            "manifest_rev": "not-a-number",
+        },
+    )
+    assert proposal["manifest_rev"] >= 1
+
+
+def test_create_rejects_untrusted_requester_unless_owner(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+
+    with pytest.raises(ValueError, match="not on the PerunChat trust list"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "targets": [target], "action_type": "edit"},
+            trusted=["someone-else"],
+        )
+
+    proposal = action_proposals.create(
+        project, "perun-local",
+        {"intent": "x", "targets": [target], "action_type": "edit"},
+        owner="perun-local",
+        trusted=[],
+    )
+    assert proposal["status"] == "pending"
+
+
 def test_approve_issues_token(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -102,6 +221,68 @@ def test_reject_proposal(tmp_path):
     assert rejected["result"] == "no time"
 
 
+def test_sensitive_targets_are_rejected(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    for name in (".env", "perun.md", "opencode.json", ".git/config"):
+        with pytest.raises(ValueError, match="protected or sensitive"):
+            action_proposals.create(
+                project,
+                "frambo",
+                {
+                    "intent": "read a secret",
+                    "targets": [str(project["path"] / name)],
+                    "action_type": "read",
+                },
+            )
+
+
+def test_cas_rejects_duplicate_approve_and_reject(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    # Simulate a concurrent reader that still sees "pending" after another
+    # approver has already won the CAS. The SQL update must not succeed twice.
+    stale = {**action_proposals.get(proposal["id"]), "status": "pending"}
+    monkeypatch.setattr(action_proposals, "get", lambda _pid: stale)
+    with pytest.raises(ValueError, match="no longer pending"):
+        action_proposals.approve(proposal["id"], "second-approver")
+
+
+def test_cas_rejects_duplicate_reject(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.reject(proposal["id"], "owner", reason="first")
+
+    stale = {**action_proposals.get(proposal["id"]), "status": "pending"}
+    monkeypatch.setattr(action_proposals, "get", lambda _pid: stale)
+    with pytest.raises(ValueError, match="no longer pending"):
+        action_proposals.reject(proposal["id"], "second-owner", reason="second")
+
+
+def test_allowlist_env_includes_resolved_targets(tmp_path):
+    import json
+
+    project = _make_project(tmp_path)
+    _enable_shared(project, deps=[{"path": "../shared-lib", "access": "ro"}])
+    target = str(project["path"] / "api.py")
+
+    cfg = json.loads(action_proposals._build_allowlist_env(project, [target]))
+
+    assert cfg["root"] == str(project["path"].resolve())
+    assert cfg["targets"] == [str(Path(target).resolve())]
+    assert cfg["deps"][0]["access"] == "ro"
+
+
 def test_execute_approved_proposal(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -112,11 +293,246 @@ def test_execute_approved_proposal(tmp_path):
     action_proposals.approve(proposal["id"], "owner")
 
     mock_orchestrator = type("MockOrchestrator", (), {})()
-    mock_orchestrator.run_and_wait = lambda *a, **kw: {"run": {"status": "completed"}, "reply": "done"}
+    # Real Orchestrator runs finalize as "done", not "completed"; this
+    # regression test used to hide that mismatch by faking "completed".
+    mock_orchestrator.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
     executed = action_proposals.execute(proposal["id"], orchestrator_instance=mock_orchestrator)
 
     assert executed["status"] == "executed"
     assert executed["result"] == "done"
+
+
+def test_start_execution_is_non_blocking_and_single_shot(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingOrchestrator:
+        def run_and_wait(self, *args, **kwargs):
+            started.set()
+            assert release.wait(5)
+            return {
+                "run": {"status": "completed", "run_uid": kwargs.get("run_uid")},
+                "reply": "done",
+            }
+
+    completed = []
+    result = action_proposals.start_execution(
+        proposal["id"],
+        orchestrator_instance=BlockingOrchestrator(),
+        on_complete=completed.append,
+    )
+
+    # The HTTP caller gets control back immediately, before the agent finishes.
+    assert result["status"] == "executing"
+    assert started.wait(5)
+
+    # A second click cannot start a second agent.
+    with pytest.raises(ValueError, match="proposal is executing"):
+        action_proposals.start_execution(
+            proposal["id"], orchestrator_instance=BlockingOrchestrator()
+        )
+
+    release.set()
+    deadline = time.time() + 5
+    current = action_proposals.get(proposal["id"])
+    while current["status"] == "executing" and time.time() < deadline:
+        time.sleep(0.05)
+        current = action_proposals.get(proposal["id"])
+
+    assert current["status"] == "executed"
+    assert completed and completed[0]["id"] == proposal["id"]
+
+
+def test_execution_marks_failed_when_audit_finds_a_violation(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    orch = type("OkOrchestrator", (), {})()
+    orch.run_and_wait = lambda *a, **kw: {"run": {"status": "completed"}, "reply": "done"}
+    monkeypatch.setattr(
+        action_proposals.fs_audit,
+        "diff",
+        lambda project, before: {"violations": ["C:/outside/secret.txt"], "changes": []},
+    )
+    monkeypatch.setattr(action_proposals.fs_audit, "log_result", lambda *a, **kw: None)
+
+    executed = action_proposals.execute(proposal["id"], orchestrator_instance=orch)
+
+    assert executed["status"] == "failed"
+    assert "POLICY VIOLATION" in executed["result"]
+
+
+def test_execution_marks_failed_when_audit_detects_an_escape(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    orch = type("OkOrchestrator", (), {})()
+    orch.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
+    monkeypatch.setattr(
+        action_proposals.fs_audit,
+        "diff",
+        lambda project, before: {
+            "violations": [],
+            "escaped": [str(Path(project["path"]).parent / "outside.txt")],
+        },
+    )
+    monkeypatch.setattr(action_proposals.fs_audit, "log_result", lambda *a, **kw: None)
+
+    executed = action_proposals.execute(proposal["id"], orchestrator_instance=orch)
+
+    assert executed["status"] == "failed"
+    assert "1 escape(s) outside the project root" in executed["result"]
+
+
+def test_execution_marks_failed_when_audit_cannot_run(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    orch = type("OkOrchestrator", (), {})()
+    orch.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
+    monkeypatch.setattr(
+        action_proposals.fs_audit,
+        "diff",
+        lambda project, before: (_ for _ in ()).throw(OSError("audit unavailable")),
+    )
+
+    executed = action_proposals.execute(proposal["id"], orchestrator_instance=orch)
+
+    assert executed["status"] == "failed"
+    assert "POLICY AUDIT FAILED" in executed["result"]
+    assert "audit unavailable" in executed["result"]
+
+
+def test_execution_preparation_failure_does_not_leave_executing(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    def boom(*_args):
+        raise RuntimeError("manifest vanished")
+
+    monkeypatch.setattr(action_proposals, "_build_allowlist_env", boom)
+
+    with pytest.raises(ValueError, match="could not prepare execution"):
+        action_proposals.start_execution(
+            proposal["id"], orchestrator_instance=type("Never", (), {})()
+        )
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
+def test_orchestrator_construction_failure_marks_failed(tmp_path, monkeypatch):
+    from perun import orchestrator as orchestrator_module
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    class BrokenOrchestrator:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("engine unavailable")
+
+    monkeypatch.setattr(orchestrator_module, "Orchestrator", BrokenOrchestrator)
+
+    with pytest.raises(ValueError, match="could not start orchestrator"):
+        action_proposals.start_execution(proposal["id"])
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
+def test_missing_shared_agent_fails_preparation(tmp_path, monkeypatch):
+    from perun import shared_agent
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    monkeypatch.setattr(shared_agent, "ensure_shared_agent", lambda: shared_agent.agent_path())
+    monkeypatch.setattr(shared_agent, "agent_path", lambda: tmp_path / "nonexistent" / "perun-shared.md")
+
+    with pytest.raises(ValueError, match="restricted shared-project agent is missing"):
+        action_proposals.start_execution(proposal["id"])
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
+def test_settings_load_failure_does_not_leave_executing(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    class Engine:
+        def validate(self, **kwargs):
+            return True, ""
+
+    def boom():
+        raise RuntimeError("config unreadable")
+
+    # The token itself is valid; only the post-claim Settings.load() fails.
+    monkeypatch.setattr(action_proposals.hitl, "default_engine", lambda: Engine())
+    monkeypatch.setattr(action_proposals.config.Settings, "load", staticmethod(boom))
+
+    with pytest.raises(ValueError, match="could not prepare execution"):
+        action_proposals.start_execution(
+            proposal["id"], orchestrator_instance=type("Never", (), {})()
+        )
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
+def test_reconcile_interrupted_marks_executing_proposals_failed(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET status='executing' WHERE id=?", (proposal["id"],)
+        )
+
+    recovered = action_proposals.reconcile_interrupted()
+
+    assert [p["id"] for p in recovered] == [proposal["id"]]
+    current = action_proposals.get(proposal["id"])
+    assert current["status"] == "failed"
+    assert "interrupted by a Perun restart" in current["result"]
 
 
 def test_list_by_project(tmp_path):

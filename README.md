@@ -48,6 +48,13 @@ them all — no matter which folder you happened to open.
   history), retries empty replies, and persists replies in a write-ahead outbox
   so no message is lost across reconnects. Chat messages are untrusted data;
   state-changing actions require human approval tokens.
+* **Shared Projects (v0.8.0).** Bind a Perun project to a dedicated PerunChat
+  `grp:` room with trusted participants. Chat-originated action proposals are
+  gated by local HMAC-SHA256 HITL approval; one click approves and starts a
+  headless `opencode run` in the background (no TUI), using the
+  policy-enforcing `perun-guard` filesystem MCP server with post-run audits.
+  Participant roles (`rw`/`ro`) are enforced, and approver identity plus the HITL
+  signing secret are configurable.
 * **A bounded context budget.** `AGENTS.md` no longer has to grow without limit.
   Reference material moves into a **Context layer** — keyed, retrievable
   documents — and the agent pulls what it needs (`perun_context("<task>")`)
@@ -217,6 +224,7 @@ for details.
 | **MCP server** | stdio, tool namespace `perun` | 25 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL approval for actions |
+| **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), `perun-guard` MCP + post-run audit, configurable approver/HITL secret |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
 | **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard), `installer/macos/Output/PerunSetup.pkg` (macOS), or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + optional `PerunBridge` task |

@@ -133,3 +133,24 @@ def test_register_seeds_manifest_instructions_once(workdir):
     )
     discovery.register(discovery.detect(p))
     assert "user edits win" in target.read_text(encoding="utf-8")
+
+
+def test_register_preserves_configured_description_when_manifest_omits_it(workdir):
+    """Turning on sharing must not erase a description supplied at creation.
+
+    ``shared_projects.apply_payload()`` saves ``perun.md`` with only the shared
+    fields. Discovery treats that manifest as authoritative for declared fields,
+    but an omitted description must not clear the registry value.
+    """
+    p = _mk(workdir / "described")
+    info = discovery.detect(p)
+    info["description"] = "User supplied description"
+    proj, created = discovery.register(info)
+    assert created is True
+    assert proj["description"] == "User supplied description"
+
+    # Enabling sharing writes a manifest that does not repeat the description.
+    (p / "perun.md").write_text("---\nshared: true\n---\n", encoding="utf-8")
+    proj2, created2 = discovery.register(discovery.detect(p))
+    assert created2 is False
+    assert proj2["description"] == "User supplied description"

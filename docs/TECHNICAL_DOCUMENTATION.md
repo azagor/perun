@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.0 (see §15). This release ships the **Shared Projects** feature: Perun projects can be bound to dedicated PerunChat group rooms, chat-originated action proposals are gated by local HITL approval, approved runs are wrapped by a policy-enforcing filesystem MCP server plus a post-run filesystem audit, and participant roles/approver identity/HITL signing secret are configurable. See `docs/SHARED_PROJECTS_PRD.md` and `docs/CHANGELOG.md` for details. `perun.__version__` reports `0.8.0`.
+**Latest release:** v0.8.1 (see §15). This release ships the **Shared Projects** feature and its hardening: Perun projects can be bound to dedicated PerunChat group rooms (`grp:`), chat-originated action proposals are gated by local HMAC-SHA256 HITL approval, approved runs run under the generated deny-all `perun-shared` agent with a target-scoped `perun-guard` filesystem MCP server plus a post-run filesystem audit, participant roles (`rw`/`ro`) and approver identity are configurable, trust revocation removes agents from the manifest and re-syncs the room, PerunChat memory is room/project scoped, and agent ids are treated as machine-local gateway identities. The HITL signing secret is `PERUN_HITL_SECRET` / `perun_hitl_secret`. See `docs/SHARED_PROJECTS_PRD.md` and `docs/CHANGELOG.md` for details. `perun.__version__` reports `0.8.1`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -135,6 +135,9 @@ can all write concurrently.
 | `secret_store` | encrypted secrets | `name` unique per scope, `value` holds an `enc:<base64>` Fernet blob (never plaintext), `hint` (metadata only) |
 | `settings` | key/value scratch | |
 | `bridge_links` | Telegram routing | `chat_id` unique → `project_id` + `session_pk`, `updated_at` |
+| `project_chats` | Shared Projects | Project → `grp:` room mapping, lifecycle state, `manifest_rev`, last sync |
+| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, status (`pending`/`approved`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens |
+| `pending_room_deletions` | Shared Projects | Retry queue for room teardown when gateway offline |
 
 Column additions after the first release are applied idempotently by
 `db._ADDED_COLUMNS` (`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
@@ -738,6 +741,65 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET/POST/DELETE | `/api/perunchat/trusted[/{agent_id}]` | local trust list (`perunchat_trusted`) — internal context is shared only with these agents, and only in private/group rooms |
 | POST/GET | `/api/perunchat/rooms/private` | create or list private rooms (bilateral or multi-party) |
 | GET/POST/DELETE | `/api/perunchat/rooms/{room_id}/members[/{agent_id}]` | list, invite, or remove participants of a private room |
+| GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project |
+| POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/execute` | Claim an approved proposal and start its headless run in the background (`202`) |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/approve-and-execute` | Approve and start the headless run in one owner action (`202`) |
+| GET | `/api/projects/{slug}/shared` | Shared-project config, local chat binding, and a live `project_chat` description (room id, state, `managed_by`, manifest rev, expected vs. live members — gateway errors are reported in `project_chat.error`, never as a 5xx) |
+| PUT | `/api/projects/{slug}/shared` | Replace `shared`/`participants`/`external_deps`; validates against the trust list, bumps `manifest_rev`, mirrors `opencode.json`, and re-syncs the chat (a failed sync is returned in `chat_sync`, the manifest save still succeeds) |
+| POST | `/api/projects/{slug}/shared/sync` | Force-reconcile the project chat with the manifest participant list: create the managed room if missing, add declared participants, remove everyone else. Idempotent |
+
+**Autonomous proposal execution (v0.8.0+)**
+
+An approval is a checkpoint, not the execution itself. `approve` only issues a
+short-lived HMAC token bound to the proposal; `execute` (or the one-click
+`approve-and-execute`) claims the proposal and starts the Project Agent
+**headless** — there is no TUI and no interactive prompt:
+
+- approval and rejection are also atomic compare-and-sets, so a duplicate click
+  or retry cannot overwrite a decided proposal; execution itself claims
+  `approved → executing` atomically, so a concurrent worker can never start two
+  agents;
+- the run is `opencode run --format json --auto` in the project directory with
+  `stdin=DEVNULL`, `CREATE_NO_WINDOW` on Windows, the project's model override,
+  and the generated deny-all `perun-shared` agent; `--auto` removes permission
+  prompts, so no human keystrokes are needed;
+- the proposal id *is* the run id (`run_uid`), which makes the run addressable
+  for cancellation (`POST /api/runs/{proposal_id}/cancel`), logs, and SSE;
+- the HTTP handler returns `202` immediately; the agent runs in a daemon thread
+  and finalizes the proposal (`executed`/`failed`) with the post-run filesystem
+  audit, then posts a State Digest to the bound project room;
+- if the server restarts mid-run, lifespan marks the run `interrupted` and
+  `action_proposals.reconcile_interrupted()` moves the proposal to `failed`
+  with an explicit reason instead of leaving it stuck in `executing`;
+- a filesystem-audit violation downgrades an otherwise successful run to
+  `failed` and records the offending paths.
+
+The `perun-guard` MCP server is the sanctioned filesystem path (`guard_read_file`,
+`guard_write_file`, `guard_edit_file`, `guard_list_directory`,
+`guard_search_files`) and the `perun-shared` agent denies every other tool. Guard
+writes are target-scoped to the proposal's declared paths. Credentials (`.env`,
+key/certificate files, `.ssh`, `.aws`, `.gnupg`), VCS metadata (`.git`), host
+config (`.opencode`, `.perun`), the project manifest, and `opencode.json` are
+denied even inside the project root. The post-run audit repeats the target check
+and also detects modified/deleted parent-directory entries. This is cooperative
+enforcement backed by the audit, not an OS-level sandbox: review the audit output
+before treating a run as trusted.
+
+Project-room authorization requires the participant to be on the local
+PerunChat trust list *and* in the manifest; the room owner (`managed_by`) and
+this machine's own resolved Perun agent id are always authorized. Revoking trust
+removes the agent from the manifest, bumps `manifest_rev`, and re-syncs the room
+ACL. Agent ids are gateway-assigned and differ per machine, so no code assumes
+that a particular id such as `peruntheoverseer` is universal.
+
+A shared project is owned by the Perun instance that created its managed room.
+If you want a second Perun installation to participate in the same project room,
+add that installation's gateway agent id to the manifest *and* to the local trust
+list on the owning machine; the other machine does not become a co-owner, but it
+will be admitted as a trusted participant after the next sync.
 
 **PerunChat memory markers**
 
@@ -926,8 +988,10 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   context. State-changing actions are emitted as `PERUN_ACTION_PROPOSAL` objects
   and require a single-use HMAC-SHA256 approval token signed by a human operator.
 - **Autonomous bridge:** when `perunchat_auto_reply` is enabled, the local
-  Orchestrator joins the configured/default public rooms and replies to incoming
-  text messages through a **dedicated OpenCode agent** (`perunchat`, configured
+  Orchestrator joins the configured/default public rooms, every shared-project
+  chat (`project_chats`), and every private room Perun already belongs to
+  (discovered over REST), then replies to incoming text messages through a
+  **dedicated OpenCode agent** (`perunchat`, configured
   via `perunchat_chat_agent`) that carries its own chat-participant system prompt
   and denies all tools. Runs use `skip_instructions=True` so neither the coding
   orchestrator persona nor project `AGENTS.md` instructions leak into chat
@@ -936,6 +1000,13 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   changes, so prompt fixes reach production runs. The prompt also injects the
   room's participant roster and recent conversation context so the model answers
   questions directly instead of with generic greetings.
+- **Dynamic room joins:** the desired room set is rebuilt on every (re)connect
+  and refreshed every 30 s. A join is complete only when the gateway answers
+  `ROOM_JOINED`; an `ERROR` frame clears the acknowledgement so a room created
+  *after* the connection (for example the chat of a project made shared in the
+  dashboard) is joined on the next refresh instead of being silently missed.
+  A protocol ping is sent after 30 s of inbound silence and the socket is
+  recycled after 120 s without any frame or pong.
 - **No-loss reply delivery:** every outbound reply frame is persisted in a
   write-ahead outbox (`<PERUN_HOME>/perunchat_outbox.json`) before it is sent and
   removed only after the gateway accepts it. After a reconnect the bridge flushes
@@ -993,8 +1064,11 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   is freed and the background generation thread cannot send a delayed reply.
 - **Conversational memory:** the bridge stores typed facts extracted from
   messages in vector memory, tagged with sender, room, and fact type, and
-  injects relevant facts into reply prompts. The chat agent instructions
-  advertise the memory capability and the `[FACT(type=...)]` trigger syntax.
+  injects relevant facts into reply prompts. Project-room facts use the real
+  project id; other rooms use a reserved negative id plus room filtering, so a
+  public or other-room fact can never appear in a project prompt. The chat agent
+  instructions advertise the memory capability and the `[FACT(type=...)]`
+  trigger syntax.
 - **Private rooms:** the dashboard can create private rooms and invite/remove
   participants through Perun-proxied gateway endpoints. Private room IDs accept
   the `private:` alias for `priv:` and are validated before submission.
@@ -1004,6 +1078,28 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   `PERUNCHAT_PUBLIC_CREATION_WINDOW_SECONDS` on the gateway host.
 - **Runtime-agnostic:** OpenClaw, Hermes, ZeroClaw, MCP, and custom autonomous
   runtimes can all connect using the same protocol.
+
+### Shared projects and their chats
+
+A project whose manifest declares `shared: true` owns exactly one managed
+PerunChat room, `grp:<tenant>:<slug>:chat` (`shared_projects.project_chat_room_id`).
+The manifest key `shared` is the single authority: turning it off tears the room
+down even if participant rows remain, so a disabled project can never keep a
+phantom chat alive. `shared_project_sync.sync_project_chat()` is idempotent —
+it creates the room when missing, adds declared participants that are still on
+the local PerunChat trust list plus this machine's own Perun agent, and removes
+every other member — while `describe_project_chat()` is a read-only
+view that reports the room, binding state, `managed_by`, manifest revision,
+expected members, live members, and any gateway error without raising.
+
+All three chat clients (bridge, HTTP proxy, shared-project sync) derive the
+gateway REST base from `config.perunchat_rest_base()`; public hosts serve the
+API under `/chat`, so a missing prefix returns the SPA's HTML and every JSON
+call fails with a decode error. The dashboard's Shared tab shows the project
+chat as first-class information (name, room id, state, managed-by, members,
+last sync) with a "Sync now" control, and its participant editor is shared with
+the creation wizard so both always offer the same trust-list chips plus inline
+"trust and add" for a brand-new agent.
 
 ---
 
@@ -1348,6 +1444,8 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `perunchat_chat_model` | `""` | room-reply model; falls back to `orchestrator_model` |
 | `perunchat_chat_agent` | `perunchat` | OpenCode agent used for room replies (a chat persona with no tools) |
 | `perunchat_trusted` | `[]` | agents allowed internal/private context in private/group rooms (never in public rooms) |
+| `perun_owner_name` | `""` | Approver identity shown in Shared Projects audits; defaults to OS username when empty |
+| `perun_hitl_secret` | `""` | HMAC-SHA256 secret for HITL approval tokens; falls back to `PERUN_HITL_SECRET` env. When `PERUN_PASSWORD` set, encrypted at rest |
 | `auto_discover_on_start` | `true` | discovery on service startup |
 | `index_docs_on_discover` | `false` | index new projects' docs on discover |
 | `terminal` | `""` | preferred terminal emulator for `Run in Terminal` / TUI launches. Empty = OS default (`pwsh`/`powershell` on Windows, `$SHELL` elsewhere). Accepts an alias (`cmd`, `pwsh`, `wt`) or a full path. The dashboard Settings page edits this value; it only affects future launches. |
@@ -1357,7 +1455,8 @@ Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `PERUN_API_TOKEN`,
 `TELEGRAM_CHAT_ID` / `TG_CHAT_ID`, `PERUN_TELEGRAM_TOKEN` (injected by the
 orchestrator into agent subprocesses so the MCP server can send Telegram
 messages without seeing the raw bot token), `PERUNCHAT_API_KEY`,
-`PERUNCHAT_API_ENDPOINT`, `XDG_CONFIG_HOME` / `OPENCODE_CONFIG` (OpenCode config
+`PERUNCHAT_API_ENDPOINT`, `PERUN_HITL_SECRET` (HITL approval-token signing
+secret for Shared Projects), `XDG_CONFIG_HOME` / `OPENCODE_CONFIG` (OpenCode config
 location), and `SHELL` (POSIX default shell).
 `Settings.telegram_sources()` and `Settings.perunchat_sources()` report which
 source is actually in force (surfaced as `token_source` / `chats_source` so the

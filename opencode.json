@@ -3,11 +3,15 @@
   "mcp": {
     "perun": {
       "type": "local",
-      "command": ["python", "mcp/perun_mcp.py"],
+      "command": [
+        "python",
+        "mcp/perun_mcp.py"
+      ],
       "enabled": true
     }
   },
   "instructions": [
     "AGENTS.md"
-  ]
+  ],
+  "model": "opencode/kimi-k2.7-code"
 }

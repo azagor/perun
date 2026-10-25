@@ -12,6 +12,7 @@ bridge, and the MCP server can all write safely without sharing connections.
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -299,6 +300,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "memory": [
         ("meta", "TEXT DEFAULT '{}'"),
     ],
+    # Added with the Shared Projects release. ``CREATE TABLE IF NOT EXISTS``
+    # cannot add it to a database whose table was created by an earlier build,
+    # and a missing column made ``expire_stale()`` raise on every proposals read.
+    "action_proposals": [
+        ("expires_at", "INTEGER NOT NULL DEFAULT 0"),
+    ],
 }
 
 # Columns retired after project instructions moved fully to files on disk
@@ -329,6 +336,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
                     # the column between our PRAGMA and the ALTER — SQLite has
                     # no ADD COLUMN IF NOT EXISTS. Same tolerance as DROP.
                     pass
+    # ``action_proposals.expires_at`` was added after the Shared Projects
+    # release. Proposals written before the ALTER carry the column default of 0;
+    # give the still-pending ones a normal TTL instead of expiring them on the
+    # first read after the upgrade.
+    try:
+        conn.execute(
+            "UPDATE action_proposals SET expires_at=? "
+            "WHERE expires_at=0 AND status='pending'",
+            (int(time.time()) + 24 * 3600,),
+        )
+    except sqlite3.OperationalError:
+        # Table missing entirely on a very old database; SCHEMA creates it.
+        pass
     for table, columns in _REMOVED_COLUMNS.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         for name in columns:
@@ -345,7 +365,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def init_db() -> None:

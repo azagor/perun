@@ -22,9 +22,18 @@ def _stat_key(path: Path) -> tuple[int, float, int]:
         return (0, 0.0, 0)
 
 
-def snapshot(project: dict[str, Any]) -> dict[str, Any]:
-    """Capture file metadata for the project's allowlisted paths."""
-    cfg = shared_projects.load(project["path"])
+_WALK_SKIP_DIRS = {".git", ".perun", "node_modules", ".venv", "venv", "__pycache__"}
+
+
+def snapshot(
+    project: dict[str, Any], *, targets: list[str] | None = None
+) -> dict[str, Any]:
+    """Capture file metadata for the project's allowlisted paths.
+
+    ``targets`` narrows the write audit to the proposal's declared paths. It is
+    stored in the snapshot so :func:`diff` uses the same scope even though the
+    after-snapshot does not receive the argument.
+    """
     entries = path_guard.from_project(project)
     files: dict[str, tuple[int, float, int]] = {}
     for root, _access in entries:
@@ -35,21 +44,37 @@ def snapshot(project: dict[str, Any]) -> dict[str, Any]:
             if key != (0, 0.0, 0):
                 files[str(root)] = key
         elif root.is_dir():
-            for dirpath, _dirnames, filenames in os.walk(root):
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d.lower() not in _WALK_SKIP_DIRS]
                 for name in filenames:
                     p = Path(dirpath) / name
                     key = _stat_key(p)
                     if key != (0, 0.0, 0):
                         files[str(p)] = key
 
-    # Also snapshot parent directory entries to detect escapes.
-    parent = Path(project["path"]).resolve().parent
-    parent_entries = set(str(p) for p in parent.iterdir()) if parent.exists() else set()
+    # Snapshot the parent's immediate entries with metadata so a modified or
+    # deleted sibling is detected, not only a newly created one. The project
+    # directory itself is excluded: its mtime changes on every legitimate write.
+    root = Path(project["path"]).resolve()
+    parent = root.parent
+    parent_entries: dict[str, tuple[int, float, int]] = {}
+    if parent.exists():
+        for entry in parent.iterdir():
+            if entry.resolve() == root:
+                continue
+            key = _stat_key(entry)
+            if key != (0, 0.0, 0):
+                parent_entries[str(entry)] = key
 
+    resolved_targets = [
+        str(path_guard.resolve_target(project["path"], target))
+        for target in (targets or [])
+    ]
     return {
         "project_slug": project["slug"],
         "files": files,
         "parent_entries": parent_entries,
+        "targets": resolved_targets,
     }
 
 
@@ -75,20 +100,42 @@ def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
         if after_key and after_key != before_key:
             modified.append(p)
 
-    # Detect new entries next to the project root.
-    before_parent = before.get("parent_entries", set())
-    after_parent = after.get("parent_entries", set())
-    escaped = sorted(after_parent - before_parent)
+    # Detect any created, modified, or deleted entry next to the project root.
+    before_parent = before.get("parent_entries", {})
+    after_parent = after.get("parent_entries", {})
+    if isinstance(before_parent, (set, list, tuple)):
+        before_parent = {str(p): None for p in before_parent}
+    if isinstance(after_parent, (set, list, tuple)):
+        after_parent = {str(p): None for p in after_parent}
+    escaped = sorted(
+        str(p)
+        for p in set(before_parent) | set(after_parent)
+        if before_parent.get(p) != after_parent.get(p)
+    )
 
     violations: list[str] = []
     cfg = shared_projects.load(project["path"])
     if cfg.get("shared"):
         allowlist_entries = path_guard.from_project(project)
-        allowlist_paths = [Path(root).resolve() for root, _ in allowlist_entries]
-        for p in created + modified:
+        targets = [Path(t).resolve() for t in before.get("targets", [])]
+        for p in created + modified + deleted:
             target = Path(p).resolve()
-            ok = any(_is_under(target, root) for root in allowlist_paths)
-            if not ok:
+            matches = [
+                (Path(root).resolve(), access)
+                for root, access in allowlist_entries
+                if _is_under(target, Path(root).resolve())
+            ]
+            allowed = False
+            if matches:
+                # The most specific (longest) allowlist entry wins, so a
+                # read-only dependency nested under another entry stays RO.
+                _root, access = max(matches, key=lambda item: len(str(item[0])))
+                allowed = access == "rw"
+            if allowed and targets:
+                # The guard MCP server enforces this at runtime; the audit is
+                # the backstop if a different tool path was used.
+                allowed = any(_is_under(target, t) for t in targets)
+            if not allowed:
                 violations.append(p)
 
     return {

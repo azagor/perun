@@ -744,13 +744,16 @@ class Orchestrator:
                   title: str = "",
                   skip_instructions: bool = False,
                   use_prompt_file: bool = False,
-                  extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+                  extra_env: dict[str, str] | None = None,
+                  run_uid: str = "") -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
         prompt = (prompt or "").strip() or DEFAULT_SESSION_PROMPT
 
-        run_uid = uuid.uuid4().hex[:16]
+        # Callers that need a predictable, externally addressable run id (the
+        # proposal executor) pass one; everything else gets a random id.
+        run_uid = (run_uid or "").strip() or uuid.uuid4().hex[:16]
         # Model/agent precedence: explicit call argument → the project's own
         # override → (control plane only) the dedicated orchestrator model →
         # the global default.

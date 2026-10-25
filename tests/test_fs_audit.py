@@ -42,10 +42,62 @@ def test_diff_reports_escape_next_to_project_root(tmp_path):
     project = _make_shared_project(tmp_path)
     root = Path(project["path"])
     before = fs_audit.snapshot(project)
-    (root.parent / "escape.txt").write_text("escaped")
+    created = root.parent / "escape.txt"
+    modified = root.parent / "sibling.txt"
+    deleted = root.parent / "sibling-gone.txt"
+    modified.write_text("before")
+    deleted.write_text("before")
+    before = fs_audit.snapshot(project)
+    created.write_text("escaped")
+    modified.write_text("changed")
+    deleted.unlink()
 
     result = fs_audit.diff(project, before)
-    assert str(root.parent / "escape.txt") in result["escaped"]
+    assert str(created) in result["escaped"]
+    assert str(modified) in result["escaped"]
+    assert str(deleted) in result["escaped"]
+
+
+def test_target_scope_flags_writes_outside_declared_targets(tmp_path):
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    target = root / "api.py"
+    other = root / "other.py"
+    target.write_text("before")
+    other.write_text("before")
+    before = fs_audit.snapshot(project, targets=[str(target)])
+
+    target.write_text("approved change")
+    other.write_text("unexpected change")
+
+    result = fs_audit.diff(project, before)
+    assert str(target) not in result["violations"]
+    assert str(other) in result["violations"]
+    assert before["targets"] == [str(target.resolve())]
+
+
+def test_diff_flags_writes_and_deletes_in_read_only_dependency(tmp_path):
+    project = _make_shared_project(tmp_path)
+    dep = tmp_path / "read-only-dep"
+    dep.mkdir()
+    (dep / "keep.txt").write_text("keep")
+    (dep / "gone.txt").write_text("gone")
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["participants"] = [{"agent_id": "frambo"}]
+    data["external_deps"] = [{"path": str(dep), "access": "ro"}]
+    manifest.save(project["path"], data, body="# fs-audit")
+
+    before = fs_audit.snapshot(project)
+    (dep / "keep.txt").write_text("changed")
+    (dep / "gone.txt").unlink()
+    (dep / "new.txt").write_text("new")
+
+    result = fs_audit.diff(project, before)
+
+    assert str(dep / "keep.txt") in result["violations"]
+    assert str(dep / "gone.txt") in result["violations"]
+    assert str(dep / "new.txt") in result["violations"]
 
 
 def test_diff_empty_when_nothing_changes(tmp_path):

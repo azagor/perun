@@ -483,9 +483,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   fires, the timeout handler cancels the underlying orchestrator run so the
   slot is freed and the background `_reply` thread cannot send a stale reply.
 * Conversational memory: extracted facts are stored via `memory.remember()`
-  with `room_id`, `sender`, and `type` metadata; `_search_room_memory()` and
-  `_maybe_store_facts()` inject relevant context into prompts and apply
-  heuristic + explicit `[FACT(type=...)]` extraction with semantic deduplication.
+  with `room_id`, `sender`, and `type` metadata. Project rooms use the real
+  project id; other rooms use a reserved negative id plus room filtering, and
+  `_fact_visible_in_room()` prevents public/other-room facts from crossing into
+  project prompts. `_maybe_store_facts()` applies heuristic + explicit
+  `[FACT(type=...)]` extraction with semantic deduplication.
 * Private-room support: `_is_private_room()` and `_room_type()` accept `priv:`
   and `private:` prefixes; the dashboard proxies create/invite/remove calls to
   the gateway.
@@ -494,37 +496,55 @@ Autonomous PerunChat chat participant for the Orchestrator.
   it whenever the embedded content changes so prompt fixes reach production.
 * Chat model/agent precedence: `perunchat_chat_model`/`perunchat_chat_agent` →
   `orchestrator_model`/`orchestrator_agent` → defaults.
-* Shared-project chat flow: `_shared_project_context()` injects the manifest into
-  managed `grp:` rooms; `_extract_action_proposal()` parses `[ACTION: …]` markers
-  from replies and `_create_action_proposal()` stages a HITL-gated proposal in
-  Perun's local proposal store.
+* Shared-project chat flow: `_shared_project_context()` injects a trust-filtered
+  project brief (no local paths or Git remotes) into managed `grp:` rooms;
+  `_extract_action_proposal()` parses `[ACTION: …]` markers from replies and
+  `_create_action_proposal()` stages a HITL-gated proposal only for currently
+  trusted `rw` participants or the local room owner. Direct-address detection
+  uses this machine's resolved agent id, not a hard-coded chat id.
 * `PERUNCHAT_API_KEY`/`PERUNCHAT_API_ENDPOINT` are in `orchestrator._SECRET_ENV` so
   spawned agent subprocesses never inherit them.
 
 ### Shared Projects modules
 
 * `perun/shared_projects.py` — manifest schema normalization (`shared`,
-  `participants`, `external_deps`, `manifest_rev`), trust-list validation,
-  external-dependency path resolution, and the project→room id helper.
-* `perun/shared_project_sync.py` — reconciles the manifest participant list with
-  the PerunChat gateway ACL for managed `grp:` rooms, creating/lazy-creating or
-  tearing down the dedicated project chat on lifecycle events.
+  `participants`, `external_deps`, `manifest_rev`), trust-list/role validation
+  (`rw`/`ro`), manifest-participant removal with a revision bump, external-
+  dependency path resolution, and the project→room id helper.
+* `perun/shared_project_sync.py` — reconciles the trusted subset of the manifest
+  participant list with the PerunChat gateway ACL for managed `grp:` rooms,
+  creating/lazy-creating or tearing down the dedicated project chat on lifecycle
+  events; the room owner is this machine's gateway-assigned agent id, never a
+  hard-coded chat id; retries pending deletions on startup.
+* `perun/shared_agent.py` — installs the generated `perun-shared` OpenCode agent
+  used for approved executions: deny-all permissions with only `perun-guard`
+  tools allowed.
 * `perun/hitl.py` — local HMAC-SHA256 HITL approval-token engine for action
-  proposals (tokens bind proposal id, action hash, expiry, and nonce).
+  proposals (tokens bind proposal id, action hash, expiry, and nonce); signing
+  secret configurable via `PERUN_HITL_SECRET` / `perun_hitl_secret`.
 * `perun/path_guard.py` — resolves the project allowlist (root + declared
-  external deps) and validates proposal targets against it.
+  external deps), resolves relative targets against the project root, validates
+  proposal targets, and denies sensitive paths (credentials, `.env`, VCS/host
+  metadata, manifest/OpenCode config) even inside the root.
 * `perun/guard_mcp.py` — policy-enforcing filesystem MCP server used by the
   Project Agent for shared-project runs; validates every path against the manifest
-  allowlist (`PERUN_ALLOWLIST` env) and falls back to pass-through when unset.
+  allowlist (`PERUN_ALLOWLIST` env), restricts writes to the proposal's declared
+  targets, hides sensitive files/directories, and falls back to pass-through when
+  unset.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
-  before a shared-project run, diffs them after, and logs violations plus parent-
-  directory escapes to the activity table.
-* `perun/action_proposals.py` — proposal lifecycle: create, approve, reject,
-  execute via the Orchestrator, and compose State Digests for the project chat.
-* Dashboard UI (`web/js/perun.js`, `web/css/perun.css`) — project wizard adds a
-  shared-project step with multi-select from the PerunChat trust list; the
-  project detail page gains a "Shared" tab to edit participants/external deps
-  and manage (approve/reject/execute) action proposals.
+  (optionally target-scoped) before a shared-project run, diffs them after, and
+  logs allowlist violations, target-scope violations, and created/modified/
+  deleted parent-directory entries to the activity table.
+* `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
+  CAS approve/reject, atomic `approved → executing` claim, synchronous `execute`
+  and non-blocking `start_execution`, startup `reconcile_interrupted`, post-run
+  audit enforcement, and State Digests for the project chat. Approved runs use
+  the restricted `perun-shared` agent and a target-scoped guard allowlist; the
+  proposal id is also the headless run id.
+* REST endpoints in `perun/server.py` manage proposals (including
+  `approve-and-execute` returning `202`) and apply shared-project manifest fields
+  from the wizard; `perun/projects.py` keeps `opencode.json` in sync to
+  register/remove the `perun-guard` MCP server.
 * Tables: `project_chats`, `action_proposals`, and `pending_room_deletions` in
   `perun/db.py`.
 

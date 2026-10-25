@@ -134,6 +134,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry.update_run(run["run_uid"], status="interrupted",
                             ended_at=registry.now_iso(),
                             error=run.get("error") or "interrupted by a Perun restart")
+    # A proposal whose run was just marked interrupted can never finish; leaving
+    # it in "executing" would make it permanently un-actionable. Mark it failed
+    # now and notify its project room once the bridge is up.
+    try:
+        recovered_proposals = action_proposals.reconcile_interrupted()
+    except Exception:  # pragma: no cover - startup must not depend on this
+        logging.getLogger("perun.server").exception(
+            "Could not reconcile interrupted action proposals"
+        )
+        recovered_proposals = []
     if SETTINGS.auto_discover_on_start:
         try:
             discovery.discover_and_sync(SETTINGS.roots, max_depth=1)
@@ -150,6 +160,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Start the autonomous PerunChat agent bridge when a key is configured.
     if PERUNCHAT_BRIDGE is not None:
         PERUNCHAT_BRIDGE.start()
+        if recovered_proposals:
+            _post_recovered_digests(recovered_proposals)
     try:
         yield
     finally:
@@ -175,6 +187,49 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(_shutdown_sync)
     except Exception:  # pragma: no cover - best effort
         pass
+
+
+def _post_proposal_digest(project: dict[str, Any], proposal: dict[str, Any]) -> None:
+    """Post a compact State Digest for *proposal* to its bound project chat."""
+    chat = registry.get_project_chat(project["id"])
+    if not chat or not chat.get("room_id") or not PERUNCHAT_BRIDGE:
+        return
+    try:
+        digest = action_proposals.state_digest(proposal, project)
+        text = json.dumps(digest, ensure_ascii=False)
+        # The digest leaves the process on the project chat. Redact local paths
+        # and credential-shaped strings even though project participants are
+        # trusted; a run's output may echo something it should not have seen.
+        redact = getattr(PERUNCHAT_BRIDGE, "_redact_internal_info", None)
+        if callable(redact):
+            text = redact(text, chat["room_id"])
+        PERUNCHAT_BRIDGE.post_to_room(
+            chat["room_id"],
+            text,
+            content_type="application/perun-state-digest",
+        )
+    except Exception:  # pragma: no cover - best-effort digest post
+        pass
+
+
+def _post_recovered_digests(recovered: list[dict[str, Any]]) -> None:
+    """Wait briefly for the bridge socket, then report interrupted proposals.
+
+    The bridge connects asynchronously, so posting immediately after ``start()``
+    would silently drop the digest. This is a daemon best-effort notifier, never
+    a startup dependency.
+    """
+    def _work() -> None:
+        for _ in range(60):  # up to 30 s
+            if getattr(PERUNCHAT_BRIDGE, "_ws", None):
+                break
+            time.sleep(0.5)
+        for proposal in recovered:
+            project = registry.get_project(proposal["project_id"])
+            if project:
+                _post_proposal_digest(project, proposal)
+
+    threading.Thread(target=_work, name="proposal-recovery-digest", daemon=True).start()
 
 
 app = FastAPI(title="Perun", version=__version__, docs_url="/api/docs",
@@ -1062,7 +1117,7 @@ def api_add_project(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 result["shared_errors"] = errors
             else:
                 try:
-                    projects.sync_manifest(project)
+                    projects.sync_manifest(project, sync_chat=False)
                     refreshed = registry.get_project(project["slug"])
                     if refreshed:
                         result["project"] = refreshed
@@ -1117,11 +1172,29 @@ def api_update_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[s
 
 @app.get("/api/projects/{slug}/shared")
 def api_get_shared_project(slug: str) -> dict[str, Any]:
-    """Return the shared-project configuration and bound chat state."""
+    """Return the shared-project configuration, binding and live chat state."""
     project = _project_or_404(slug)
     cfg = shared_projects.load(project["path"])
     chat = registry.get_project_chat(project["id"])
-    return _ok(shared=cfg, chat=chat)
+    project_chat = shared_project_sync.describe_project_chat(project, cfg)
+    return _ok(shared=cfg, chat=chat, project_chat=project_chat)
+
+
+@app.post("/api/projects/{slug}/shared/sync")
+def api_sync_shared_project_chat(slug: str) -> dict[str, Any]:
+    """Force-reconcile the project's PerunChat room with its participant list.
+
+    Idempotent: it creates the managed room when missing, adds declared
+    participants, and removes anyone who is not on the manifest. Used by the
+    "Sync now" control and safe to call repeatedly.
+    """
+    project = _project_or_404(slug)
+    cfg = shared_projects.load(project["path"])
+    result = shared_project_sync.sync_project_chat(project, cfg)
+    project = registry.get_project(slug) or project
+    chat = registry.get_project_chat(project["id"])
+    project_chat = shared_project_sync.describe_project_chat(project, cfg)
+    return _ok(result=result, chat=chat, project_chat=project_chat)
 
 
 @app.put("/api/projects/{slug}/shared")
@@ -1138,7 +1211,7 @@ def api_update_shared_project(slug: str, payload: dict[str, Any] = Body(...)) ->
     if errors:
         raise HTTPException(status_code=400, detail="; ".join(errors))
     try:
-        projects.sync_manifest(project)
+        projects.sync_manifest(project, sync_chat=False)
         project = registry.get_project(slug) or project
     except Exception:  # pragma: no cover - best-effort refresh
         pass
@@ -1149,10 +1222,12 @@ def api_update_shared_project(slug: str, payload: dict[str, Any] = Body(...)) ->
         pass
     try:
         chat_sync = shared_project_sync.sync_project_chat(project, cfg)
-    except Exception:  # pragma: no cover - best-effort sync
-        chat_sync = {"ok": False, "error": "sync_failed"}
+    except Exception as exc:  # pragma: no cover - best-effort sync
+        chat_sync = {"ok": False, "error": str(exc)}
     chat = registry.get_project_chat(project["id"])
-    return _ok(shared=cfg, project=project, chat=chat, chat_sync=chat_sync)
+    project_chat = shared_project_sync.describe_project_chat(project, cfg)
+    return _ok(shared=cfg, project=project, chat=chat,
+               chat_sync=chat_sync, project_chat=project_chat)
 
 
 @app.get("/api/projects/{slug}/proposals")
@@ -1170,7 +1245,12 @@ def api_create_proposal(slug: str, payload: dict[str, Any] = Body(...)) -> dict[
     envelope = payload.get("envelope") or payload
     requester = str(payload.get("requester") or "unknown").strip()
     try:
-        proposal = action_proposals.create(project, requester, envelope)
+        chat = registry.get_project_chat(project["id"]) or {}
+        proposal = action_proposals.create(
+            project, requester, envelope,
+            owner=chat.get("managed_by"),
+            trusted=_trusted_agents(),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=proposal)
@@ -1206,28 +1286,47 @@ def api_reject_proposal(
     return _ok(proposal=result)
 
 
-@app.post("/api/projects/{slug}/proposals/{proposal_id}/execute")
-def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+@app.post(
+    "/api/projects/{slug}/proposals/{proposal_id}/approve-and-execute",
+    status_code=202,
+)
+def api_approve_and_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Approve a proposal and start its headless run in one owner action."""
     project = _project_or_404(slug)
     proposal = action_proposals.get(proposal_id)
     if not proposal or proposal["project_id"] != project["id"]:
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
-        result = action_proposals.execute(proposal_id, orchestrator_instance=ORCH)
+        action_proposals.approve(proposal_id, _approver_identity())
+        result = action_proposals.start_execution(
+            proposal_id,
+            orchestrator_instance=ORCH,
+            on_complete=lambda final: _post_proposal_digest(project, final),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    chat = registry.get_project_chat(project["id"])
-    if chat and chat.get("room_id") and PERUNCHAT_BRIDGE:
-        try:
-            digest = action_proposals.state_digest(result, project)
-            PERUNCHAT_BRIDGE.post_to_room(
-                chat["room_id"],
-                json.dumps(digest, ensure_ascii=False),
-                content_type="application/perun-state-digest",
-            )
-        except Exception:  # pragma: no cover - best-effort digest post
-            pass
-    return _ok(proposal=result)
+    return _ok(proposal=result, accepted=True)
+
+
+@app.post(
+    "/api/projects/{slug}/proposals/{proposal_id}/execute",
+    status_code=202,
+)
+def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Start an already-approved proposal without blocking the HTTP request."""
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    try:
+        result = action_proposals.start_execution(
+            proposal_id,
+            orchestrator_instance=ORCH,
+            on_complete=lambda final: _post_proposal_digest(project, final),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result, accepted=True)
 
 
 @app.delete("/api/projects/{slug}")
@@ -2678,21 +2777,11 @@ def _perunchat_rest_base() -> str:
     WebSocket under ``/v1/chat/ws``. Local/dev gateways expose both under the
     same origin with the REST API at ``/api/v1``.
     """
-    from urllib.parse import urlparse
-
     endpoint = SETTINGS.perunchat()[1] or "wss://peruninthemachine.com/v1/chat/ws"
-    try:
-        parsed = urlparse(endpoint)
-        scheme = parsed.scheme.replace("wss", "https").replace("ws", "http")
-        if not scheme or not parsed.hostname:
-            raise ValueError("missing scheme or host")
-        base = f"{scheme}://{parsed.netloc}"
-        # Public deployment routes REST under /chat.
-        if parsed.hostname.lower() in ("peruninthemachine.com", "www.peruninthemachine.com"):
-            return f"{base}/chat"
-        return base
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid perunchat_api_endpoint") from exc
+    base = config.perunchat_rest_base(endpoint)
+    if not base:
+        raise HTTPException(status_code=400, detail="invalid perunchat_api_endpoint")
+    return base
 
 
 def _perunchat_key() -> str:
@@ -2870,15 +2959,26 @@ def _handle_trust_revocations(removed: set[str]) -> None:
         evicted = participants & removed
         if not evicted:
             continue
-        for agent_id in sorted(evicted):
+        updated, actually_removed = shared_projects.remove_participants(
+            project["path"], evicted
+        )
+        if not actually_removed:
+            continue
+        # Refresh the registry snapshot before reconciling the gateway room so
+        # the dashboard, bridge, and ACL all read the same participant list.
+        try:
+            projects.sync_manifest(project, sync_chat=False)
+        except Exception:
+            pass
+        for agent_id in sorted(actually_removed):
             registry.log_activity(
                 project["id"],
                 "trust_revoked",
-                f"Participant '{agent_id}' removed from PerunChat trust list; chat context and ACL updated",
+                f"Participant '{agent_id}' removed from PerunChat trust list and project manifest",
                 {"agent_id": agent_id},
             )
         try:
-            shared_project_sync.sync_project_chat(project, cfg)
+            shared_project_sync.sync_project_chat(project, updated)
         except Exception:
             pass
 

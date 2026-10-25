@@ -119,7 +119,7 @@ def name_from_repo(url: str) -> str:
     return tail[:-4] if tail.endswith(".git") else tail or "project"
 
 
-def sync_manifest(project: dict[str, Any]) -> dict[str, Any]:
+def sync_manifest(project: dict[str, Any], *, sync_chat: bool = True) -> dict[str, Any]:
     """Re-read a project's manifest from disk and merge declared fields.
 
     A manifest's ``instructions`` becomes ``.perun/instructions/default.md``
@@ -143,7 +143,7 @@ def sync_manifest(project: dict[str, Any]) -> dict[str, Any]:
         registry.set_project_manifest(project["slug"], manifest.snapshot(snap),
                                       snap["path"])
         cfg = shared_projects.load(project["path"])
-        if cfg.get("shared") or cfg.get("participants"):
+        if sync_chat and cfg.get("shared"):
             try:
                 shared_project_sync.sync_project_chat(project, cfg)
             except Exception:  # pragma: no cover - best-effort chat sync

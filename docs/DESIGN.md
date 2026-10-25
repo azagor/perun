@@ -155,6 +155,13 @@ configured rooms and answers through the orchestrator, with a strict chat
 persona, rate limits, a write-ahead outbox for no-loss delivery, and HITL
 approval for state-changing requests.
 
+**Shared Projects.** A project can be bound to a dedicated `grp:` PerunChat room
+with trusted participants (`rw`/`ro`). Chat-originated action proposals go
+through local HMAC-SHA256 HITL approval. One click approves and starts the
+Project Agent headless in the background (no TUI, no interactive prompt); the
+run uses the policy-enforcing `perun-guard` filesystem MCP server with post-run
+audits, and the HITL signing secret / approver identity are configurable.
+
 ### Context and secrets
 An agent that needs reference material calls `perun_context("<task>")` instead
 of carrying it inline; orchestrated runs get the relevant docs pre-fetched. A

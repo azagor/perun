@@ -578,7 +578,7 @@ function modelSelect(opts = {}) {
         type: 'text', class: 'mselect-input', autocomplete: 'new-password', spellcheck: 'false',
         placeholder: opts.placeholder || 'provider/model',
     });
-    input.value = opts.value || '';
+    input.value = opts.value || opts.initial || '';
     const toggle = el('button', { type: 'button', class: 'mselect-toggle', tabindex: '-1', title: 'Choose a model' }, '▾');
     const panel = el('div', { class: 'mselect-panel' });
     wrap.appendChild(input); wrap.appendChild(toggle); wrap.appendChild(panel);
@@ -636,7 +636,7 @@ function agentSelect(opts = {}) {
         type: 'text', class: 'mselect-input', autocomplete: 'new-password', spellcheck: 'false',
         placeholder: opts.placeholder || 'agent',
     });
-    input.value = opts.value || '';
+    input.value = opts.value || opts.initial || '';
     const toggle = el('button', { type: 'button', class: 'mselect-toggle', tabindex: '-1', title: 'Choose an agent' }, '▾');
     const panel = el('div', { class: 'mselect-panel' });
     wrap.appendChild(input); wrap.appendChild(toggle); wrap.appendChild(panel);
@@ -1093,6 +1093,133 @@ async function viewProjects() {
     });
 }
 
+/* ---------------------------------------- participant editor (shared) ----
+   The trust list is the pool: participants are a subset of it, and every chip
+   cycles rw → ro → removed. The add field trusts a brand-new agent on the spot
+   (the server rejects participants that are not trusted) and selects it rw, so
+   adding someone never means leaving the page. Used by both the project wizard
+   and the Shared tab so the two cannot drift. */
+function participantEditor(opts = {}) {
+    const trusted = ((opts.trusted || []).map((a) => String(a).toLowerCase()).filter(Boolean));
+    const roleMap = new Map();
+    for (const item of (opts.initial || [])) {
+        const id = String(item && item.agent_id ? item.agent_id : item || '').toLowerCase();
+        if (!id) continue;
+        const roles = (item && item.roles) || (item && item.role ? [item.role] : []);
+        roleMap.set(id, roles.includes('rw') ? 'rw' : (roles.includes('ro') ? 'ro' : null));
+        if (!trusted.includes(id)) trusted.push(id);
+    }
+
+    const wrap = el('div', { class: 'participant-editor' });
+    const pool = el('div', { class: 'trust-pool' });
+    const row = el('div', { class: 'participant-add' });
+    const input = el('input', {
+        type: 'text', autocomplete: 'new-password', spellcheck: 'false',
+        placeholder: 'agent id, e.g. frambo_malina_omarchy',
+    });
+    const addBtn = el('button', { type: 'button', class: 'btn sm ghost' }, '＋ Add participant');
+    row.appendChild(input);
+    row.appendChild(addBtn);
+    wrap.appendChild(pool);
+    wrap.appendChild(row);
+    wrap.appendChild(el('p', { class: 'muted participant-hint' },
+        'Adding an agent trusts it on PerunChat first. Click a chip to cycle rw → ro → removed.'));
+
+    const getValue = () => Array.from(roleMap.entries())
+        .filter(([, role]) => !!role)
+        .map(([agent_id, role]) => ({ agent_id, roles: [role] }));
+    const notify = () => { if (opts.onChange) opts.onChange(getValue()); };
+
+    const render = () => {
+        pool.innerHTML = '';
+        if (!trusted.length) {
+            pool.appendChild(el('span', { class: 'muted' }, 'No trusted agents yet — add one below.'));
+            return;
+        }
+        for (const agent of trusted) {
+            const role = roleMap.get(agent) || null;
+            const chip = el('span', {
+                class: 'trust-chip' + (role ? ' role-' + role : ''),
+                'data-agent': agent,
+                title: role === 'rw' ? 'read-write participant (click for read-only)'
+                    : role === 'ro' ? 'read-only participant (click to remove)'
+                        : 'not a participant (click to add read-write)',
+            }, `${esc(agent)}<span class="role">${role || '—'}</span>`);
+            chip.addEventListener('click', () => {
+                const current = roleMap.get(agent) || null;
+                roleMap.set(agent, current === null ? 'rw' : (current === 'rw' ? 'ro' : null));
+                render();
+                notify();
+            });
+            pool.appendChild(chip);
+        }
+    };
+
+    const adopt = (id) => {
+        const clean = String(id || '').trim().toLowerCase();
+        if (!clean) return;
+        if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(clean)) {
+            toast('Agent ids use letters, numbers, dot, dash and underscore', 'err');
+            return;
+        }
+        if (!trusted.includes(clean)) trusted.push(clean);
+        roleMap.set(clean, 'rw');
+    };
+
+    const add = async () => {
+        const raw = input.value.trim();
+        if (!raw) return;
+        const id = raw.toLowerCase();
+        if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(id)) {
+            toast('Agent ids use letters, numbers, dot, dash and underscore', 'err');
+            return;
+        }
+        if (!trusted.includes(id)) {
+            addBtn.disabled = true;
+            try {
+                if (opts.onTrust) await opts.onTrust(id);
+                else await api('/api/perunchat/trusted', { method: 'POST', body: { agent_id: id } });
+                if (!trusted.includes(id)) trusted.push(id);
+            } catch (e) {
+                toast(e.message || 'Could not trust agent', 'err');
+                addBtn.disabled = false;
+                return;
+            }
+            addBtn.disabled = false;
+        }
+        adopt(id);
+        input.value = '';
+        render();
+        notify();
+    };
+    addBtn.addEventListener('click', add);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); add(); }
+    });
+
+    render();
+    wrap.getValue = getValue;
+    wrap.setValue = (list) => {
+        roleMap.clear();
+        for (const item of (list || [])) {
+            const id = String(item && item.agent_id ? item.agent_id : item || '').toLowerCase();
+            if (!id) continue;
+            const roles = (item && item.roles) || (item && item.role ? [item.role] : []);
+            roleMap.set(id, roles.includes('rw') ? 'rw' : (roles.includes('ro') ? 'ro' : null));
+            if (!trusted.includes(id)) trusted.push(id);
+        }
+        render();
+    };
+    wrap.setTrusted = (list) => {
+        for (const id of (list || [])) {
+            const clean = String(id || '').toLowerCase();
+            if (clean && !trusted.includes(clean)) trusted.push(clean);
+        }
+        render();
+    };
+    return wrap;
+}
+
 /* ---------------------------------------------------- project wizard ---- */
 function projectWizard() {
     loadModels();
@@ -1152,32 +1279,7 @@ function projectWizard() {
         return html;
     };
 
-    const participantRole = (agent) => {
-        const p = wiz.participants.find((x) => (x.agent_id || x) === agent);
-        if (!p) return null;
-        const roles = (p.roles || []);
-        if (roles.includes('rw')) return 'rw';
-        if (roles.includes('ro')) return 'ro';
-        return null;
-    };
-    const setParticipantRole = (agent, role) => {
-        const idx = wiz.participants.findIndex((x) => (x.agent_id || x) === agent);
-        if (!role) {
-            if (idx >= 0) wiz.participants.splice(idx, 1);
-            return;
-        }
-        if (idx >= 0) {
-            wiz.participants[idx].roles = [role];
-        } else {
-            wiz.participants.push({ agent_id: agent, roles: [role] });
-        }
-    };
-
-    const detailsStep = (trusted) => {
-        const participantChips = (trusted || []).map((agent) => {
-            const role = participantRole(agent);
-            return `<span class="trust-chip ${role ? 'role-' + role : ''}" data-agent="${esc(agent)}">${esc(agent)}<span class="role">${role || '—'}</span></span>`;
-        }).join('');
+    const detailsStep = () => {
         return `
         <div class="form-row">
             <label class="field"><span class="lab">Name</span><input type="text" data-field="name" value="${esc(wiz.name)}" placeholder="My Project"></label>
@@ -1189,8 +1291,8 @@ function projectWizard() {
         </div>
         <label class="field"><span class="lab">Description</span><input type="text" data-field="description" value="${esc(wiz.description)}" placeholder="optional"></label>
         <div class="form-row">
-            <label class="field"><span class="lab">Default model</span><input type="text" data-field="model" value="${esc(wiz.model)}" placeholder="provider/model (optional)"></label>
-            <label class="field"><span class="lab">Agent</span><input type="text" data-field="agent" value="${esc(wiz.agent)}" placeholder="build (optional)"></label>
+            <label class="field"><span class="lab">Default model</span><span id="wiz-model-host" class="select-host"></span></label>
+            <label class="field"><span class="lab">Agent</span><span id="wiz-agent-host" class="select-host"></span></label>
         </div>
         <label class="field"><span class="lab">Tags</span><input type="text" data-field="tags" value="${esc(wiz.tags)}" placeholder="python, trading (optional)"></label>
         <div class="wiz-options">
@@ -1206,9 +1308,9 @@ function projectWizard() {
         <hr style="margin:18px 0;border-color:var(--border)">
         <label class="opt"><input type="checkbox" data-field="shared" ${wiz.shared ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
         <div class="shared-section ${wiz.shared ? '' : 'hidden'}">
-            <h4>Participants from PerunChat trust list</h4>
-            <p class="muted" style="font-size:.78rem">Click a chip to cycle role: removed → rw → ro → removed. Only trusted agents can be added.</p>
-            <div class="trust-pool">${participantChips || '<span class="muted">No trusted agents configured. Add agents in Settings → PerunChat.</span>'}</div>
+            <h4>Participants</h4>
+            <p class="muted" style="font-size:.78rem">Only trusted agents can be participants. New agents are trusted automatically when you add them.</p>
+            <div id="wiz-participants"></div>
         </div>`;
     };
 
@@ -1249,8 +1351,46 @@ function projectWizard() {
         if (wiz.step === 2 && !trustedAgents.length) {
             trustedAgents = await loadTrustedAgents();
         }
-        pane.innerHTML = [methodStep, locationStep, () => detailsStep(trustedAgents), reviewStep][wiz.step]();
+        if (wiz.step === 2) {
+            // Both pickers need their option sources before they can open with
+            // a useful list; they are cheap and cached after the first call.
+            await Promise.all([loadModels(), loadAgents()]);
+        }
+        pane.innerHTML = [methodStep, locationStep, detailsStep, reviewStep][wiz.step]();
         body.appendChild(pane);
+
+        if (wiz.step === 2) {
+            const modelHost = pane.querySelector('#wiz-model-host');
+            if (modelHost) {
+                modelHost.appendChild(modelSelect({
+                    value: wiz.model,
+                    placeholder: 'Inherit global default',
+                    onInput: (v) => { wiz.model = v; },
+                    onSelect: (v) => { wiz.model = v; },
+                }));
+            }
+            const agentHost = pane.querySelector('#wiz-agent-host');
+            if (agentHost) {
+                agentHost.appendChild(agentSelect({
+                    value: wiz.agent,
+                    placeholder: 'Inherit project default',
+                    onInput: (v) => { wiz.agent = v; },
+                    onSelect: (v) => { wiz.agent = v; },
+                }));
+            }
+            const participantsHost = pane.querySelector('#wiz-participants');
+            if (participantsHost) {
+                participantsHost.appendChild(participantEditor({
+                    initial: wiz.participants,
+                    trusted: trustedAgents,
+                    onTrust: async (id) => {
+                        await api('/api/perunchat/trusted', { method: 'POST', body: { agent_id: id } });
+                        if (!trustedAgents.includes(id)) trustedAgents.push(id);
+                    },
+                    onChange: (list) => { wiz.participants = list; },
+                }));
+            }
+        }
 
         pane.querySelectorAll('[data-method]').forEach((c) => c.addEventListener('click', () => {
             wiz.method = c.dataset.method; wiz.step = 1; render();
@@ -1269,15 +1409,15 @@ function projectWizard() {
                 toast(r.created ? 'Folder created' : 'Folder already exists', 'ok'); }
             catch (e) { toast(e.message, 'err'); }
         });
-        // Shared-project participant chips: cycle removed → rw → ro → removed.
-        pane.querySelectorAll('.trust-chip').forEach((chip) => chip.addEventListener('click', () => {
-            const agent = chip.dataset.agent;
-            const role = participantRole(agent);
-            const next = role === null ? 'rw' : (role === 'rw' ? 'ro' : null);
-            setParticipantRole(agent, next);
-            render();
-        }));
         bind(pane);
+        // The participants block is hidden until the shared checkbox is on;
+        // toggling it must not require a full re-render (which would drop the
+        // user's focus and any half-typed participant id).
+        const sharedCb = pane.querySelector('[data-field="shared"]');
+        if (sharedCb) sharedCb.addEventListener('change', () => {
+            const section = pane.querySelector('.shared-section');
+            if (section) section.classList.toggle('hidden', !sharedCb.checked);
+        });
 
         const actions = [];
         if (wiz.step > 0) actions.push({ label: '◀ Back', class: 'ghost', onClick: () => { wiz.step--; render(); } });
@@ -1583,28 +1723,48 @@ function projectInstructionsForm(p) {
 
 async function sharedProjectCard(detail) {
     const p = detail.project;
-    const card = el('div', { class: 'card' }, '<div class="card-head"><h4>Shared project</h4></div>');
-    let cfg, chat;
+    const card = el('div', { class: 'card shared-card' });
+    let cfg = {};
+    let chat = null;
+    let projectChat = null;
     try {
         const res = await api(`/api/projects/${p.slug}/shared`);
         cfg = res.shared || {};
         chat = res.chat || null;
+        projectChat = res.project_chat || null;
     } catch (e) {
-        cfg = {};
-        chat = null;
+        card.appendChild(el('div', { class: 'card-head' }, '<h4>Shared project</h4>'));
+        card.appendChild(el('div', { class: 'empty' }, `Could not load shared settings: ${e.message}`));
+        return card;
     }
+    if (!projectChat && chat) {
+        // Older server payload: synthesise the richer shape from the binding.
+        projectChat = {
+            room_id: chat.room_id, state: chat.state, managed_by: chat.managed_by,
+            manifest_rev: chat.manifest_rev, last_sync_at: chat.last_sync_at,
+            expected_members: (cfg.participants || []).map((x) => x.agent_id || x),
+            members: null, error: null, label: `${p.name || p.slug} project chat`,
+        };
+    }
+    const statusOf = (info) => {
+        const state = (info && info.state) || 'disabled';
+        if (state === 'active') return { cls: 'on', text: 'Active' };
+        if (state === 'pending') return { cls: 'pending', text: 'Pending sync' };
+        if (state === 'unbound') return { cls: 'pending', text: 'Not created yet' };
+        return { cls: '', text: 'Disabled' };
+    };
     const enabled = !!cfg.shared;
-    const statusClass = enabled ? (chat && chat.state === 'active' ? 'on' : 'pending') : '';
-    const statusText = enabled ? (chat && chat.state === 'active' ? 'Active' : 'Pending') : 'Disabled';
+    const initialStatus = statusOf(projectChat);
 
     card.innerHTML = `
-        <div class="card-head"><h4>Shared project</h4><span class="shared-status ${statusClass}">${esc(statusText)}</span></div>
+        <div class="card-head"><h4>Shared project</h4>
+            <span class="shared-status ${initialStatus.cls}" id="sp-status">${esc(initialStatus.text)}</span></div>
         <label class="opt"><input type="checkbox" id="sp-enabled" ${enabled ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
+        <div id="sp-chat" class="shared-section sp-chat-panel"></div>
         <div id="sp-form" class="mt ${enabled ? '' : 'hidden'}">
             <div class="shared-section">
                 <h4>Participants</h4>
-                <p class="muted" style="font-size:.78rem">Click a chip to cycle role: removed → rw → ro → removed.</p>
-                <div id="sp-participants" class="trust-pool"></div>
+                <div id="sp-participants"></div>
             </div>
             <div class="shared-section">
                 <h4>External dependencies</h4>
@@ -1613,33 +1773,88 @@ async function sharedProjectCard(detail) {
             </div>
             <button class="btn primary" id="sp-save" type="button">Save shared settings</button>
             <p class="muted" style="font-size:.72rem;margin-top:10px">A post-run filesystem audit logs any changes outside the allowlist. The optional <code>perun-guard</code> MCP tools enforce the allowlist only if the Project Agent chooses them.</p>
-        </div>
-        ${chat ? `<div class="kv mt"><span class="k">Room</span><span class="v mono">${esc(chat.room_id || '—')}</span>
-            <span class="k">State</span><span class="v">${esc(chat.state || '—')}</span>
-            <span class="k">Manifest rev</span><span class="v">${cfg.manifest_rev || 1}</span>
-            <span class="k">Last sync</span><span class="v">${esc(chat.last_sync_at ? timeAgo(chat.last_sync_at) : 'never')}</span></div>` : ''}`;
+        </div>`;
+
+    const statusBadge = card.querySelector('#sp-status');
+    const renderChat = (info) => {
+        projectChat = info || null;
+        const st = statusOf(info);
+        if (statusBadge) {
+            statusBadge.className = 'shared-status ' + st.cls;
+            statusBadge.textContent = st.text;
+        }
+        const host = card.querySelector('#sp-chat');
+        if (!host) return;
+        if (!info) {
+            host.innerHTML = '<h4>Project chat</h4><p class="muted">Project chat state is unavailable.</p>';
+            return;
+        }
+        const expected = new Set([
+            ...((info.expected_members || []).map((m) => String(m).toLowerCase())),
+            String(info.managed_by || '').toLowerCase(),
+        ].filter(Boolean));
+        const members = info.members;
+        const memberHtml = (members === null || members === undefined)
+            ? '<span class="muted">Members unavailable (gateway error)</span>'
+            : (members.length
+                ? members.map((m) => {
+                    const wanted = expected.has(String(m).toLowerCase());
+                    return `<span class="chat-member ${wanted ? 'ok' : 'extra'}" title="${wanted
+                        ? 'declared participant'
+                        : 'not on the project participant list — removed by the next sync'}">${esc(m)}${wanted ? '' : ' ⚠'}</span>`;
+                }).join('')
+                : '<span class="muted">No members yet</span>');
+        const extras = (members || []).filter((m) => !expected.has(String(m).toLowerCase()));
+        host.innerHTML = `
+            <div class="card-head"><h4>Project chat</h4>
+                <span class="shared-status ${st.cls}">${esc(st.text)}</span></div>
+            <p class="muted" style="font-size:.78rem">The dedicated PerunChat room for this project. Membership is reconciled from the participant list on every sync; anyone else is removed.</p>
+            <div class="kv">
+                <span class="k">Chat name</span><span class="v">${esc(info.label || (p.name || p.slug) + ' project chat')}</span>
+                <span class="k">Room id</span><span class="v mono">${esc(info.room_id || '—')}</span>
+                <span class="k">State</span><span class="v">${esc(info.state || '—')}</span>
+                <span class="k">Managed by</span><span class="v mono">${esc(info.managed_by || '—')}</span>
+                <span class="k">Manifest rev</span><span class="v">${esc(info.manifest_rev ?? 1)}</span>
+                <span class="k">Last sync</span><span class="v">${esc(info.last_sync_at ? timeAgo(info.last_sync_at) : 'never')}</span>
+            </div>
+            <div class="chat-members-wrap"><span class="lab">Members</span>
+                <div class="chat-members">${memberHtml}</div></div>
+            ${extras.length ? `<p class="warn-text" style="font-size:.76rem">${extras.length} unexpected member(s) will be removed by the next sync. Use “Sync now” to reconcile immediately.</p>` : ''}
+            ${info.error ? `<p class="warn-text" style="font-size:.76rem">Gateway: ${esc(info.error)}</p>` : ''}
+            <div class="row" style="gap:10px;align-items:center;margin-top:10px">
+                <button class="btn sm ghost" id="sp-sync" type="button">↻ Sync now</button>
+                <span class="muted" id="sp-sync-note" style="font-size:.76rem"></span>
+            </div>`;
+        const syncBtn = host.querySelector('#sp-sync');
+        if (syncBtn) syncBtn.addEventListener('click', async () => {
+            const note = host.querySelector('#sp-sync-note');
+            syncBtn.disabled = true;
+            if (note) note.textContent = 'Syncing…';
+            try {
+                const res = await api(`/api/projects/${p.slug}/shared/sync`, { method: 'POST' });
+                renderChat(res.project_chat);
+                const ok = !!(res.result && res.result.ok);
+                toast(ok ? 'Project chat synchronized'
+                    : `Sync failed: ${(res.result && res.result.error) || 'unknown error'}`,
+                    ok ? 'ok' : 'err');
+            } catch (e) {
+                if (note) note.textContent = e.message;
+                syncBtn.disabled = false;
+                toast(e.message, 'err');
+            }
+        });
+    };
+    renderChat(projectChat);
 
     const trusted = await loadTrustedAgents();
-    const participantPool = card.querySelector('#sp-participants');
-    const participantMap = {};
-    for (const x of (cfg.participants || [])) {
-        const roles = x.roles || [];
-        participantMap[x.agent_id || x] = roles.includes('rw') ? 'rw' : (roles.includes('ro') ? 'ro' : null);
-    }
-    const renderParticipantPool = () => {
-        participantPool.innerHTML = trusted.map((agent) => {
-            const role = participantMap[agent] || null;
-            return `<span class="trust-chip ${role ? 'role-' + role : ''}" data-agent="${esc(agent)}">${esc(agent)}<span class="role">${role || '—'}</span></span>`;
-        }).join('') || '<span class="muted">No trusted agents configured. Add agents in Settings → PerunChat.</span>';
-        participantPool.querySelectorAll('.trust-chip').forEach((chip) => chip.addEventListener('click', () => {
-            const agent = chip.dataset.agent;
-            const role = participantMap[agent] || null;
-            const next = role === null ? 'rw' : (role === 'rw' ? 'ro' : null);
-            participantMap[agent] = next;
-            renderParticipantPool();
-        }));
-    };
-    renderParticipantPool();
+    const editor = participantEditor({
+        initial: cfg.participants || [],
+        trusted,
+        onTrust: async (id) => {
+            await api('/api/perunchat/trusted', { method: 'POST', body: { agent_id: id } });
+        },
+    });
+    card.querySelector('#sp-participants').appendChild(editor);
 
     const depsContainer = card.querySelector('#sp-deps');
     const deps = (cfg.external_deps || []).map((d) => ({ path: d.path || '', access: d.access || 'rw', name: d.name || '' }));
@@ -1666,9 +1881,7 @@ async function sharedProjectCard(detail) {
         card.querySelector('#sp-form').classList.toggle('hidden', !enabledCb.checked);
     });
     card.querySelector('#sp-save').addEventListener('click', async () => {
-        const selected = Object.entries(participantMap)
-            .filter(([, role]) => role)
-            .map(([agent, role]) => ({ agent_id: agent, roles: [role] }));
+        const selected = editor.getValue();
         const depRows = depsContainer.querySelectorAll('.dep-row');
         const newDeps = [];
         depRows.forEach((row) => {
@@ -1676,16 +1889,45 @@ async function sharedProjectCard(detail) {
             if (!path) return;
             newDeps.push({ path, access: row.querySelector('.sp-dep-access').value, name: '' });
         });
+        const saveBtn = card.querySelector('#sp-save');
+        saveBtn.disabled = true;
         try {
-            await api(`/api/projects/${p.slug}/shared`, {
+            const res = await api(`/api/projects/${p.slug}/shared`, {
                 method: 'PUT',
-                body: { shared: enabledCb.checked, participants: selected, external_deps: newDeps }
+                body: { shared: enabledCb.checked, participants: selected, external_deps: newDeps },
             });
-            toast('Shared settings saved', 'ok');
-            viewProject(p.slug, 'shared');
-        } catch (e) { toast(e.message, 'err'); }
+            if (res.project_chat) renderChat(res.project_chat);
+            const sync = res.chat_sync || {};
+            if (sync.ok === false) {
+                toast(`Saved, but the chat sync failed: ${sync.error || 'unknown error'}`, 'err');
+            } else {
+                toast('Shared settings saved', 'ok');
+            }
+        } catch (e) {
+            toast(e.message, 'err');
+        } finally {
+            saveBtn.disabled = false;
+        }
     });
     return card;
+}
+
+let sharedPollTimer = null;
+function scheduleSharedPoll(slug) {
+    if (sharedPollTimer) clearTimeout(sharedPollTimer);
+    sharedPollTimer = setTimeout(async () => {
+        sharedPollTimer = null;
+        if (location.hash !== `#/project/${slug}/shared`) return;
+        try {
+            const res = await api(`/api/projects/${slug}/proposals`);
+            if ((res.proposals || []).some((prop) => prop.status === 'executing')) {
+                viewProject(slug, 'shared');
+            }
+        } catch (e) {
+            // Transient failure: the user can refresh; polling stops rather
+            // than hammering a broken server.
+        }
+    }, 4000);
 }
 
 async function proposalsCard(detail) {
@@ -1703,17 +1945,28 @@ async function proposalsCard(detail) {
         card.innerHTML += '<div class="empty">No action proposals yet.</div>';
         return card;
     }
+    // Pending work first: it is the only thing that needs the owner's attention.
+    proposals = [
+        ...proposals.filter((prop) => prop.status === 'pending'),
+        ...proposals.filter((prop) => prop.status !== 'pending'),
+    ];
     const list = el('div', { class: 'list' });
     for (const prop of proposals) {
         const targets = (prop.targets || []).join(', ');
         const actions = [];
         if (prop.status === 'pending') {
-            actions.push(`<button class="btn sm primary" data-approve="${esc(prop.id)}">Approve</button>`);
+            actions.push(`<button class="btn sm primary" data-approve-run="${esc(prop.id)}">Approve &amp; run</button>`);
+            actions.push(`<button class="btn sm ghost" data-approve="${esc(prop.id)}">Approve only</button>`);
             actions.push(`<button class="btn sm ghost" data-reject="${esc(prop.id)}">Reject</button>`);
         } else if (prop.status === 'approved') {
-            actions.push(`<button class="btn sm primary" data-execute="${esc(prop.id)}">Execute</button>`);
+            actions.push(`<button class="btn sm primary" data-execute="${esc(prop.id)}">Run now</button>`);
+        } else if (prop.status === 'executing') {
+            actions.push(`<button class="btn sm ghost" data-cancel="${esc(prop.id)}">Cancel</button>`);
         }
         let meta = `${esc(prop.requester)} · ${esc(targets)} · ${esc(timeAgo(prop.created_at))}`;
+        if (prop.status === 'executing') {
+            meta += ' · headless run in progress…';
+        }
         if (prop.status === 'approved' || prop.status === 'rejected') {
             const who = prop.approved_by || 'owner';
             meta += ` · ${prop.status === 'rejected' ? 'rejected' : 'approved'} by ${esc(who)}`;
@@ -1721,12 +1974,36 @@ async function proposalsCard(detail) {
                 meta += `: ${esc(prop.result)}`;
             }
         }
+        // The approver must see exactly what they are approving: free-form
+        // details from the chat are hidden nowhere, and the result of an
+        // executed/failed run is visible without opening the run log.
+        const details = prop.details && Object.keys(prop.details).length
+            ? JSON.stringify(prop.details)
+            : '';
+        const outcome = (prop.status === 'executed' || prop.status === 'failed') && prop.result
+            ? prop.result
+            : '';
+        const detailsHtml = details
+            ? `<div class="meta truncate" title="${esc(details)}">details: ${esc(details)}</div>`
+            : '';
+        const outcomeHtml = outcome
+            ? `<div class="meta truncate" title="${esc(outcome)}">result: ${esc(outcome)}</div>`
+            : '';
         const row = el('div', { class: 'list-row' },
-            `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' ? 'blue' : prop.status === 'rejected' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
+            `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' || prop.status === 'executing' ? 'blue' : prop.status === 'rejected' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
              <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
-             <div class="meta">${meta}</div></span>
+             <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}</span>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
+        row.querySelector('[data-approve-run]')?.addEventListener('click', async () => {
+            if (!confirm(`Approve and start the headless run now?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}\n\nThe agent will work in the project without a TUI.`)) return;
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}/approve-and-execute`, { method: 'POST' });
+                toast('Approved — headless run started', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
         row.querySelector('[data-approve]')?.addEventListener('click', async () => {
+            if (!confirm(`Approve this proposal without starting it?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}`)) return;
             try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/approve`, { method: 'POST' }); toast('Approved', 'ok'); viewProject(p.slug, 'shared'); }
             catch (e) { toast(e.message, 'err'); }
         });
@@ -1735,12 +2012,25 @@ async function proposalsCard(detail) {
             catch (e) { toast(e.message, 'err'); }
         });
         row.querySelector('[data-execute]')?.addEventListener('click', async () => {
-            try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/execute`, { method: 'POST' }); toast('Executed', 'ok'); viewProject(p.slug, 'shared'); }
-            catch (e) { toast(e.message, 'err'); }
+            if (!confirm(`Start this approved proposal now?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}\n\nThe agent will work in the project without a TUI.`)) return;
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}/execute`, { method: 'POST' });
+                toast('Headless run started', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-cancel]')?.addEventListener('click', async () => {
+            if (!confirm(`Cancel the running agent for this proposal?\n\n${prop.intent}`)) return;
+            try {
+                await api(`/api/runs/${prop.id}/cancel`, { method: 'POST' });
+                toast('Cancelling…', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
         });
         list.appendChild(row);
     }
     card.appendChild(list);
+    if (proposals.some((prop) => prop.status === 'executing')) scheduleSharedPoll(p.slug);
     return card;
 }
 
@@ -3413,13 +3703,22 @@ async function viewPerunChat() {
     $('#pc-autojoin-host').appendChild(joinSel);
 
     let roomCatalog = [];
+    // Shared-project rooms have machine ids (``grp:perun:<slug>:chat``). Label
+    // them with the human project name so a chat can be identified at a glance
+    // instead of pattern-matching hashes and slugs.
+    function roomDisplayLabel(rid) {
+        const m = /^grp:perun:([^:]+):chat$/.exec(rid || '');
+        if (!m) return '';
+        const proj = (state.projects || []).find((p) => p.slug === m[1]);
+        return `${proj ? proj.name : m[1]} (project chat)`;
+    }
     async function refreshRooms() {
         if (!status.configured) return;
         try {
             const r = await api('/api/perunchat/rooms');
             roomCatalog = (r.rooms || []).map((x) => ({
                 value: x.room_id,
-                label: x.room_id,
+                label: roomDisplayLabel(x.room_id) || x.room_id,
                 description: [
                     x.active ? 'live' : '',
                     x.joined ? 'joined' : '',
@@ -3429,7 +3728,13 @@ async function viewPerunChat() {
             // Keep rooms that are configured but not in the gateway catalog.
             const known = new Set(roomCatalog.map((x) => x.value));
             for (const rid of autoJoinRooms) {
-                if (!known.has(rid)) roomCatalog.push({ value: rid, label: rid, description: 'configured' });
+                if (!known.has(rid)) {
+                    roomCatalog.push({
+                        value: rid,
+                        label: roomDisplayLabel(rid) || rid,
+                        description: 'configured',
+                    });
+                }
             }
             joinSel.setItems(roomCatalog);
             refreshRoomSelect();
@@ -3767,7 +4072,8 @@ async function viewPerunChat() {
             html += `<optgroup label="${type} rooms">`;
             for (const item of filtered) {
                 const active = item.description ? ` (${esc(item.description)})` : '';
-                html += `<option value="${esc(item.value)}">${esc(item.value)}${active}</option>`;
+                const suffix = item.label && item.label !== item.value ? ` — ${esc(item.value)}` : '';
+                html += `<option value="${esc(item.value)}">${esc(item.label)}${suffix}${active}</option>`;
             }
             html += '</optgroup>';
         }

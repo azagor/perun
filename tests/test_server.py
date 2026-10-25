@@ -222,6 +222,84 @@ def test_proposal_api_rejects_read_only_requester(client, tmp_path, monkeypatch)
     assert "read-only" in r.json()["detail"]
 
 
+def test_approve_and_execute_starts_a_background_run(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["run-bot"])
+    target = tmp_path / "shared-run"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedRun", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "run-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "run-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    assert r.status_code == 200, r.text
+    prop_id = r.json()["proposal"]["id"]
+
+    calls = {}
+
+    def fake_start(proposal_id, orchestrator_instance=None, on_complete=None):
+        calls["proposal_id"] = proposal_id
+        current = server.action_proposals.get(proposal_id)
+        return {**current, "status": "executing"}
+
+    monkeypatch.setattr(server.action_proposals, "start_execution", fake_start)
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/approve-and-execute")
+
+    assert r.status_code == 202, r.text
+    assert calls["proposal_id"] == prop_id
+    assert r.json()["proposal"]["status"] == "executing"
+    assert r.json()["accepted"] is True
+
+
+def test_post_proposal_digest_redacts_paths_and_remains_json(client, tmp_path, monkeypatch):
+    from perun import registry, server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["digest-bot"])
+    target = tmp_path / "shared-digest"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedDigest", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "digest-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    project = registry.get_project(slug)
+
+    proposal = {
+        "id": "prop_digest_1",
+        "project_id": project["id"],
+        "action_type": "edit",
+        "status": "executed",
+        "targets": [str(target / "api.py")],
+        "intent": "add logging",
+        "result": f"Wrote to {target / 'api.py'} and C:\\Users\\secret.txt",
+    }
+
+    monkeypatch.setattr(
+        server.registry, "get_project_chat",
+        lambda _pid: {"room_id": f"grp:perun:{slug}:chat"},
+    )
+    posted: list[str] = []
+    if server.PERUNCHAT_BRIDGE is not None:
+        monkeypatch.setattr(
+            server.PERUNCHAT_BRIDGE, "post_to_room",
+            lambda room_id, text, content_type=None: posted.append(text),
+        )
+
+    server._post_proposal_digest(project, proposal)
+
+    assert len(posted) == 1
+    digest = json.loads(posted[0])
+    assert digest["type"] == "state_digest"
+    assert "[redacted]" in digest["targets"][0]
+    assert "[redacted]" in digest["notes"]
+
+
 def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     """Enabling/disabling shared mode mirrors the perun-guard MCP entry in opencode.json."""
     from perun import server

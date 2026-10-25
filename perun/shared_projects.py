@@ -315,6 +315,40 @@ def apply_payload(
     return load(base), []
 
 
+def remove_participants(
+    project_path: str | Path, agent_ids: set[str] | list[str]
+) -> tuple[dict[str, Any], list[str]]:
+    """Remove participants from the manifest and bump its revision.
+
+    Returns ``(updated_config, removed_agent_ids)``. This is used when an agent
+    is revoked from the PerunChat trust list: the manifest is the source of
+    truth, so leaving a revoked agent listed would make the dashboard and the
+    bridge disagree about who is still allowed in the project room.
+    """
+    base = Path(project_path)
+    snap = manifest.load(base)
+    if not snap.get("found"):
+        return load(base), []
+    data = snap.get("data") or {}
+    body = snap.get("body") or ""
+    participants, _ = _normalize_participants(data.get("participants"))
+    revoked = {
+        str(agent_id).strip().lower()
+        for agent_id in (agent_ids or [])
+        if str(agent_id).strip()
+    }
+    if not revoked:
+        return load(base), []
+    kept = [p for p in participants if p["agent_id"] not in revoked]
+    removed = [p["agent_id"] for p in participants if p["agent_id"] in revoked]
+    if not removed:
+        return load(base), []
+    data["participants"] = kept
+    bump_manifest_rev(data)
+    manifest.save(base, data, body)
+    return load(base), removed
+
+
 def project_chat_room_id(tenant_id: str, project_slug: str) -> str:
     """Deterministic PerunChat group room id for a shared project."""
     return f"grp:{tenant_id}:{project_slug}:chat"

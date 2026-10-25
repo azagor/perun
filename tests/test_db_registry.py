@@ -42,6 +42,56 @@ def test_init_db_drops_retired_instruction_columns():
     assert "instructions_path" not in cols
 
 
+def test_init_db_migrates_action_proposals_expires_at():
+    """An older DB without ``expires_at`` is upgraded and pending rows kept.
+
+    ``CREATE TABLE IF NOT EXISTS`` never adds columns to an existing table, and
+    a missing ``expires_at`` made ``action_proposals.expire_stale()`` raise on
+    every proposals request (the dashboard's 500). The backfill also prevents
+    legacy pending rows from being expired instantly by the new DEFAULT 0.
+    """
+    with db.db() as conn:
+        conn.execute("DROP TABLE action_proposals")
+        conn.execute(
+            """CREATE TABLE action_proposals (
+                id TEXT PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                room_id TEXT,
+                requester TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                intent TEXT NOT NULL,
+                targets TEXT NOT NULL,
+                details TEXT NOT NULL,
+                manifest_rev INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'pending',
+                approval_token TEXT,
+                approval_expiry INTEGER,
+                approved_by TEXT,
+                approved_at TEXT,
+                result TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO action_proposals "
+            "(id, project_id, requester, action_type, intent, targets, details, "
+            " status, created_at, updated_at) "
+            "VALUES ('p_legacy', 1, 'frambo', 'edit', 'old', '[]', '{}', "
+            "        'pending', 't', 't')"
+        )
+
+    db.init_db()
+
+    with db.db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(action_proposals)")}
+        row = conn.execute(
+            "SELECT expires_at FROM action_proposals WHERE id='p_legacy'"
+        ).fetchone()
+    assert "expires_at" in cols
+    assert row["expires_at"] > 0, "legacy pending rows must not expire immediately"
+
+
 def test_init_db_is_idempotent():
     """Running init_db twice (with a retired column present) never raises."""
     with db.db() as conn:

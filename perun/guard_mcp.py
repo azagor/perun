@@ -31,8 +31,8 @@ from perun import path_guard, shared_projects  # noqa: E402
 mcp = FastMCP("PerunGuard")
 
 
-def _allowlist() -> tuple[Path, list[tuple[Path, str]]]:
-    """Return (project_root, [(path, access), ...])."""
+def _allowlist() -> tuple[Path, list[tuple[Path, str]], list[Path]]:
+    """Return (project_root, [(path, access), ...], approved_targets)."""
     raw = os.environ.get("PERUN_ALLOWLIST", "").strip()
     if raw:
         try:
@@ -47,7 +47,11 @@ def _allowlist() -> tuple[Path, list[tuple[Path, str]]]:
             if access not in ("rw", "ro"):
                 access = "rw"
             deps.append((p, access))
-        return root, [(root, "rw"), *deps]
+        targets: list[Path] = []
+        for target in cfg.get("targets", []) or []:
+            p = Path(str(target))
+            targets.append((p if p.is_absolute() else root / p).resolve())
+        return root, [(root, "rw"), *deps], targets
 
     project_path = os.environ.get("PERUN_PROJECT_PATH", "").strip()
     if not project_path:
@@ -59,29 +63,34 @@ def _allowlist() -> tuple[Path, list[tuple[Path, str]]]:
     if cfg.get("shared"):
         return Path(project_path).resolve(), path_guard.allowlist(
             project_path, cfg.get("external_deps", [])
-        )
+        ), []
     # Not a shared project: unrestricted pass-through.
     root = Path(project_path).resolve()
-    return root, [(root, "rw")]
+    return root, [(root, "rw")], []
+
+
+def _is_under(target: Path, parent: Path) -> bool:
+    try:
+        target.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def _check(path: str, require_write: bool = False) -> Path:
-    """Resolve *path* and validate it against the allowlist.
+    """Resolve *path* and validate it against the allowlist and targets.
 
     Raises ValueError with a clear message if the path is disallowed.
     """
-    root, entries = _allowlist()
-    target = Path(path)
-    if not target.is_absolute():
-        target = (Path(os.getcwd()) / target).resolve()
-    else:
-        target = target.resolve()
+    root, entries, targets = _allowlist()
+    target = path_guard.resolve_target(root, path)
+
+    if path_guard.is_sensitive_path(target):
+        raise ValueError(f"{target} is a protected or sensitive path")
 
     allowed = False
     for parent, access in entries:
-        try:
-            target.relative_to(parent)
-        except ValueError:
+        if not _is_under(target, parent):
             continue
         if require_write and access == "ro":
             raise ValueError(f"{target} is read-only in the project manifest")
@@ -89,6 +98,8 @@ def _check(path: str, require_write: bool = False) -> Path:
         break
     if not allowed:
         raise ValueError(f"{target} is outside the project allowlist")
+    if require_write and targets and not any(_is_under(target, t) for t in targets):
+        raise ValueError(f"{target} is outside the approved target paths")
     return target
 
 
@@ -120,6 +131,8 @@ def guard_list_directory(path: str = ".") -> list[dict[str, Any]]:
         raise ValueError(f"not a directory: {target}")
     out: list[dict[str, Any]] = []
     for entry in sorted(target.iterdir(), key=lambda e: e.name):
+        if path_guard.is_sensitive_path(entry):
+            continue
         out.append({
             "name": entry.name,
             "type": "directory" if entry.is_dir() else "file",
@@ -160,10 +173,14 @@ def guard_search_files(path: str, pattern: str) -> list[dict[str, Any]]:
     if not target.is_dir():
         raise ValueError(f"not a directory: {target}")
     matches: list[dict[str, Any]] = []
-    for root, _dirs, files in os.walk(target):
+    skip_dirs = {".git", ".perun", "node_modules", ".venv", "venv", "__pycache__"}
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d.lower() not in skip_dirs]
         for name in files:
+            p = Path(root) / name
+            if path_guard.is_sensitive_path(p):
+                continue
             if pattern.lower() in name.lower():
-                p = Path(root) / name
                 matches.append({"path": str(p), "name": name})
     return matches[:100]
 

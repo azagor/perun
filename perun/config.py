@@ -386,6 +386,40 @@ class Settings:
         return {"key": key_src, "endpoint": endpoint_src}
 
 
+PUBLIC_GATEWAY_HOSTS = ("peruninthemachine.com", "www.peruninthemachine.com")
+
+
+def perunchat_rest_base(endpoint: str) -> str:
+    """Derive the PerunChat REST base URL from a WebSocket endpoint.
+
+    The public deployment exposes the REST API under ``/chat/api/v1`` and the
+    WebSocket under ``/v1/chat/ws``. Local/dev gateways expose both under the
+    same origin with the REST API at ``/api/v1``. Returns ``""`` when the
+    endpoint has no usable scheme or host.
+
+    This lives here, next to the endpoint resolution, because the bridge, the
+    HTTP proxy and the shared-project sync must all derive the *same* base.
+    Diverging copies were what made shared-project chat creation fail against
+    the public gateway.
+    """
+    from urllib.parse import urlparse
+
+    raw = (endpoint or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        scheme = parsed.scheme.replace("wss", "https").replace("ws", "http")
+        if not scheme or not parsed.hostname:
+            return ""
+        base = f"{scheme}://{parsed.netloc}"
+        if parsed.hostname.lower() in PUBLIC_GATEWAY_HOSTS:
+            return f"{base}/chat"
+        return base
+    except Exception:
+        return ""
+
+
 def ensure_dirs() -> None:
     for d in (HOME, LOGS_DIR, RUNS_DIR, INSTRUCTIONS_DIR):
         d.mkdir(parents=True, exist_ok=True)

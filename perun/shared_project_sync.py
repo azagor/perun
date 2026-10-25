@@ -32,16 +32,7 @@ class SyncError(Exception):
 
 def _rest_base(endpoint: str) -> str:
     """Derive the REST base URL from a gateway WebSocket endpoint."""
-    url = (endpoint or "").strip()
-    if not url:
-        return ""
-    # Gateway WebSocket endpoints look like wss://host/v1/chat/ws
-    rest = url.replace("/chat/ws", "").replace("/ws", "")
-    if rest.startswith("wss://"):
-        rest = "https://" + rest[6:]
-    elif rest.startswith("ws://"):
-        rest = "http://" + rest[5:]
-    return rest.rstrip("/")
+    return config.perunchat_rest_base(endpoint)
 
 
 class SharedProjectSync:
@@ -172,6 +163,26 @@ def desired_members(cfg: dict[str, Any]) -> list[str]:
     return [p["agent_id"] for p in cfg.get("participants", []) if p.get("agent_id")]
 
 
+def effective_members(cfg: dict[str, Any], trusted: list[str] | None) -> list[str]:
+    """Return participants who are still on the local trust list.
+
+    The manifest is user-editable, so a participant added by hand must not keep
+    room access after ``perunchat_trusted`` revokes them. Filtering here also
+    makes the reconciliation remove their gateway ACL entry even before the
+    next manifest save.
+    """
+    allowed = {
+        str(agent_id).strip().lower()
+        for agent_id in (trusted or [])
+        if str(agent_id).strip()
+    }
+    return [
+        agent_id
+        for agent_id in desired_members(cfg)
+        if agent_id.strip().lower() in allowed
+    ]
+
+
 def sync_project_chat(
     project: dict[str, Any],
     cfg: dict[str, Any] | None = None,
@@ -186,23 +197,20 @@ def sync_project_chat(
     slug = project["slug"]
     cfg = cfg if cfg is not None else shared_projects.load(project["path"])
 
-    if not cfg.get("shared") and not cfg.get("participants"):
-        # Not a shared project; remove any stale binding.
-        chat = registry.get_project_chat(pid)
-        if chat:
-            try:
-                sync = SharedProjectSync()
-                sync.delete_room(chat["room_id"])
-            except Exception as exc:
-                logger.warning("Could not delete stale project chat for %s: %s", slug, exc)
-            registry.delete_project_chat(pid)
-        return {"ok": True, "action": "none", "reason": "not_shared"}
+    if not cfg.get("shared"):
+        # ``shared`` is the authority. Participants may still be listed in the
+        # manifest after a user disables sharing; keeping their room alive then
+        # would leave a phantom chat that nobody administers. Delegating also
+        # queues a retry when the gateway is offline, so the room cannot leak.
+        result = delete_project_chat(project)
+        result.setdefault("reason", "not_shared")
+        return result
 
-    members = desired_members(cfg)
     room_id = shared_projects.project_chat_room_id(tenant, slug)
     manifest_rev = cfg.get("manifest_rev", 1)
 
     sync = SharedProjectSync()
+    members = effective_members(cfg, sync.settings.perunchat_trusted)
     try:
         managed_by = sync.agent_id()
     except Exception as exc:
@@ -243,6 +251,68 @@ def sync_project_chat(
             {"room_id": room_id, "error": str(exc)},
         )
         return {"ok": False, "room_id": room_id, "error": str(exc)}
+
+
+def describe_project_chat(
+    project: dict[str, Any],
+    cfg: dict[str, Any] | None = None,
+    trusted: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return the local chat binding plus live gateway membership.
+
+    This never raises: a gateway outage (or a room that does not exist yet) is
+    reported in ``error`` so the Shared tab can still render everything it
+    knows locally. It is the single shape the dashboard consumes, which keeps
+    the UI from having to understand gateway room-taxonomy details.
+    """
+    pid = int(project["id"])
+    cfg = cfg if cfg is not None else shared_projects.load(project["path"])
+    canonical_room = shared_projects.project_chat_room_id(DEFAULT_TENANT, project["slug"])
+    chat = registry.get_project_chat(pid)
+    enabled = bool(cfg.get("shared"))
+
+    state = "disabled"
+    if enabled:
+        state = (chat or {}).get("state") or "pending"
+        if chat is None:
+            state = "unbound"
+
+    if trusted is None:
+        try:
+            trusted = config.Settings.load().perunchat_trusted
+        except Exception:
+            trusted = []
+
+    info: dict[str, Any] = {
+        "room_id": (chat or {}).get("room_id") or canonical_room,
+        "label": f"{project.get('name') or project['slug']} project chat",
+        "state": state,
+        "managed_by": (chat or {}).get("managed_by") or "",
+        "manifest_rev": (chat or {}).get("manifest_rev") or cfg.get("manifest_rev", 1),
+        "last_sync_at": (chat or {}).get("last_sync_at"),
+        "expected_members": sorted({m.lower() for m in effective_members(cfg, trusted)}),
+        "members": None,
+        "error": None,
+    }
+    if not enabled:
+        return info
+
+    try:
+        sync = SharedProjectSync()
+        info["members"] = sorted(sync.list_members(info["room_id"]))
+        if not info["managed_by"]:
+            # No local binding yet (first sync): ask the gateway who we are so
+            # the UI can distinguish "Perun itself" from an unexpected member.
+            try:
+                info["managed_by"] = sync.agent_id()
+            except Exception:
+                pass
+        # The room is reachable; a locally pending binding is only stale state.
+        if info["state"] == "unbound":
+            info["state"] = "pending"
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
 
 
 def _queue_room_deletion(room_id: str, error: str) -> None:
@@ -304,6 +374,6 @@ def reconcile_all_project_chats() -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for project in registry.list_projects():
         cfg = shared_projects.load(project["path"])
-        if cfg.get("shared") or cfg.get("participants"):
+        if cfg.get("shared"):
             results.append(sync_project_chat(project, cfg))
     return {"ok": True, "results": results}

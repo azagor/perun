@@ -233,6 +233,10 @@ def register(info: dict[str, Any],
 
     instructions = declared.get("instructions", "")
     if existing:
+        # A manifest is authoritative only for the fields it declares. Enabling
+        # sharing writes a perun.md with just the shared fields, so falling back
+        # to "" here would erase a description supplied in the create wizard.
+        description = description or existing.get("description", "")
         updated = registry.update_project(
             existing["slug"],
             name=name,

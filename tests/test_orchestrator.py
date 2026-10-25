@@ -95,6 +95,19 @@ def test_orchestrator_start_run_uses_default_prompt_when_empty(monkeypatch):
     assert run["model_explicit"] == 0
 
 
+def test_orchestrator_start_run_accepts_explicit_run_uid(monkeypatch):
+    from perun import orchestrator, registry
+
+    registry.add_project("P-uid", r"C:\puid")
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+
+    run = o.start_run("p-uid", "hi", run_uid="prop_abc123")
+
+    assert run["run_uid"] == "prop_abc123"
+    assert registry.get_run("prop_abc123") is not None
+
+
 def test_orchestrator_global_model_not_forced_on_projects(monkeypatch):
     from perun import orchestrator, registry, config
 

@@ -28,6 +28,7 @@ def settings(tmp_path):
     s.perunchat_api_endpoint = "ws://127.0.0.1:8765/v1/chat/ws"
     s.perunchat_auto_reply = True
     s.perunchat_auto_join = ["pub:global:test"]
+    s.perunchat_trusted = ["frambo", "peruntheoverseer", "perun-local"]
     return s
 
 
@@ -235,7 +236,11 @@ def test_build_prompt_drops_oldest_history_when_too_long(settings, monkeypatch):
     from perun import perunchat_bridge as bridge_mod
     from perun import memory
 
-    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", 3500)
+    # Derive the cap from the system prompt so this test keeps exercising the
+    # trimming loop (rather than failing whenever the prompt grows). Leave room
+    # for a handful of history lines and the small metadata footer.
+    cap = len(bridge_mod.CHAT_SYSTEM_PROMPT) + 600
+    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", cap)
     monkeypatch.setattr(memory, "search_facts", lambda *a, **kw: [])
     bridge = PerunChatBridge(MagicMock(settings=settings))
     bridge._agent_id = "perun-local"
@@ -388,6 +393,82 @@ def test_rest_base_local_dev():
     assert _rest_base("wss://localhost/v1/chat/ws") == "https://localhost"
 
 
+def test_rest_base_helper_is_shared_with_config():
+    """Bridge, HTTP proxy and shared-project sync must agree on the base URL."""
+    from perun import config
+
+    endpoint = "wss://peruninthemachine.com/v1/chat/ws"
+    assert config.perunchat_rest_base(endpoint) == "https://peruninthemachine.com/chat"
+    assert config.perunchat_rest_base("") == ""
+    assert config.perunchat_rest_base("not a url") == ""
+
+
+def test_shared_project_sync_rest_base_public_host():
+    from perun.shared_project_sync import _rest_base
+    # Regression: this used to return https://peruninthemachine.com (SPA HTML)
+    # and every shared-project chat sync failed with a JSON decode error.
+    assert _rest_base("wss://peruninthemachine.com/v1/chat/ws") == "https://peruninthemachine.com/chat"
+
+
+def test_bridge_joins_project_chat_rooms(settings, tmp_path):
+    """Shared-project chats must be joined even when not in perunchat_auto_join."""
+    from perun import registry
+
+    (tmp_path / "proj-chat").mkdir()
+    project = registry.add_project("proj-chat", str(tmp_path / "proj-chat"))
+    registry.set_project_chat(project["id"], "grp:perun:proj-chat:chat", "perun", "active", 1)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._discovered_private_rooms = []
+    rooms = bridge._rooms()
+    assert "grp:perun:proj-chat:chat" in rooms
+    assert rooms.count("grp:perun:proj-chat:chat") == 1
+
+
+def test_bridge_discovers_private_rooms(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"rooms": ["priv:aaa", "priv:bbb"]}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    client.get.return_value = response
+    with patch("perun.perunchat_bridge.httpx.Client", return_value=client):
+        bridge._refresh_discovered_rooms()
+    assert bridge._discovered_private_rooms == ["priv:aaa", "priv:bbb"]
+    assert "priv:aaa" in bridge._rooms()
+    assert "priv:bbb" in bridge._rooms()
+    # Discovery joins Perun to private rooms it already belongs to; it must not
+    # invent participants or rooms.
+    assert "priv:ccc" not in bridge._rooms()
+
+
+def test_join_room_sends_room_join_frame(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    ws = MagicMock()
+    assert bridge._join_room(ws, "grp:perun:demo:chat") is True
+    payload = json.loads(ws.send.call_args[0][0])
+    assert payload["type"] == "ROOM_JOIN"
+    assert payload["room_id"] == "grp:perun:demo:chat"
+    assert payload["room_type"] == "GROUP"
+
+
+def test_room_join_acknowledgement_is_tracked(settings):
+    """A join is only complete when the gateway says ROOM_JOINED.
+
+    A ``send`` that "succeeds" against a room that does not exist yet must not
+    mark it joined forever; the ERROR frame clears the ack so the next refresh
+    retries the room after it is created.
+    """
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._on_frame({"type": "ROOM_JOINED", "room_id": "grp:perun:demo:chat"}, None)
+    assert "grp:perun:demo:chat" in bridge._acked_rooms
+    bridge._on_frame(
+        {"type": "ERROR", "room_id": "grp:perun:demo:chat", "message": "room_access_denied"},
+        None,
+    )
+    assert "grp:perun:demo:chat" not in bridge._acked_rooms
+
+
 def test_bridge_replies_by_content_type_without_type_field(settings):
     """Gateway CHAT frames may omit 'type' and use content_type='text/plain'."""
     mock_orchestrator = MagicMock(settings=settings)
@@ -530,6 +611,29 @@ def test_public_reply_keeps_plain_ratios(settings):
     assert out == text
 
 
+def test_public_redaction_preserves_json_structure(settings):
+    """Redacting paths and internal terms inside a JSON payload must not
+    consume quotes or break parsing."""
+    import json
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    payload = {
+        "path": "C:\\my_apps\\perun",
+        "unix": "/home/user/project",
+        "url": "https://peruninthemachine.com/perunchat/public_chat.html",
+        "note": "use MCP tools and .env files carefully",
+    }
+    text = json.dumps(payload)
+    out = bridge._redact_internal_info(text, "pub:global:general")
+    data = json.loads(out)
+
+    assert "[redacted]" in data["path"]
+    assert "[redacted]" in data["unix"]
+    assert data["url"] == payload["url"]
+    assert "[redacted]" in data["note"]
+    assert ".env" not in data["note"]
+
+
 def test_trusted_private_reply_keeps_context(settings):
     """Trusted private replies may keep non-path context."""
     settings.perunchat_trusted = ["frambo"]
@@ -560,6 +664,374 @@ def test_chat_instructions_include_shared_project_guidance():
     assert "action_type" in body
     assert "targets" in body
     assert "owner must approve" in body.lower()
+    # A project chat must answer about the bound project, not about Perun.
+    assert "never Perun" in body
+    assert "as the project's purpose" in body
+
+
+def _make_shared_project(
+    tmp_path,
+    slug="ai-playground",
+    *,
+    description="AI playground for experiments",
+    participants=None,
+    room=None,
+):
+    from perun import manifest, registry
+
+    path = tmp_path / slug
+    path.mkdir(parents=True)
+    project = registry.add_project(slug, str(path), description=description)
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["participants"] = participants or [{"agent_id": "frambo", "roles": ["rw"]}]
+    manifest.save(str(path), data, body=f"# {project['name']}")
+    room_id = room or f"grp:perun:{slug}:chat"
+    registry.set_project_chat(project["id"], room_id, "peruntheoverseer", "active", 2)
+    return project, room_id
+
+
+def test_project_binding_resolves_only_bound_shared_chats(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+
+    binding = bridge._project_binding(room)
+    assert binding is not None
+    bound_project, cfg = binding
+    assert bound_project["slug"] == project["slug"]
+    assert cfg["shared"] is True
+
+    assert bridge._project_binding("grp:perun:other:chat") is None
+    assert bridge._project_binding("pub:global:test") is None
+
+    # Turning sharing off removes the binding even if the old row lingers.
+    (tmp_path / "ai-playground" / "perun.md").unlink()
+    from perun import manifest
+
+    data = manifest.from_project(project)
+    data["shared"] = False
+    manifest.save(str(tmp_path / "ai-playground"), data)
+    assert bridge._project_binding(room) is None
+
+
+def test_project_context_names_bound_project_not_perun(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path)
+    (tmp_path / "ai-playground" / "README.md").write_text(
+        "# AI Playground\n\nA sandbox for testing image generation and local models.\n",
+        encoding="utf-8",
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+
+    ctx = bridge._shared_project_context(room)
+
+    assert "[shared-project-context]" in ctx
+    assert "ai-playground" in ctx
+    assert "AI playground for experiments" in ctx
+    assert "A sandbox for testing image generation" in ctx
+    assert "never Perun" in ctx
+    assert "not the project's purpose" in ctx
+    assert "[end-shared-project-context]" in ctx
+    # The prompt may leave this machine for another Perun/agent; local host
+    # paths and remotes are not part of the project identity.
+    assert "Location on this machine" not in ctx
+    assert str(tmp_path).lower() not in ctx.lower()
+
+
+def test_project_context_admits_missing_description_and_docs(settings, tmp_path):
+    project, room = _make_shared_project(
+        tmp_path, slug="empty-project", description=""
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+
+    ctx = bridge._shared_project_context(room)
+
+    assert "Description: not set yet" in ctx
+    assert "Documentation: none found yet" in ctx
+    # Never invent a purpose for a project that documents nothing.
+    assert "say so plainly" in ctx
+
+
+def test_project_member_authorization_covers_participants_owner_and_perun(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "peruntheoverseer"
+
+    assert bridge._is_project_member(room, "frambo") is True       # participant
+    assert bridge._is_project_member(room, "peruntheoverseer") is True  # owner + self
+    assert bridge._is_project_member(room, "stranger") is False
+    assert bridge._is_project_member(room, "") is False
+    assert bridge._is_project_member("grp:other:room", "frambo") is False
+
+
+def test_project_member_requires_current_trust(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path)
+    settings.perunchat_trusted = ["perun-local"]
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+
+    assert bridge._is_project_member(room, "frambo") is False
+    # The local room owner is still authorized; this is not a global trust bypass.
+    assert bridge._is_project_member(room, "peruntheoverseer") is True
+
+
+def test_untrusted_participant_cannot_create_proposal(bridge_env, tmp_path):
+    bridge, _orchestrator = bridge_env
+    bridge.settings.perunchat_trusted = ["perun-local"]
+    bridge._agent_id = "perun-local"
+    _project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}]
+    )
+    envelope = {
+        "requester": "frambo",
+        "intent": "change",
+        "action_type": "edit",
+        "targets": ["api.py"],
+    }
+
+    with pytest.raises(ValueError, match="not on the PerunChat trust list"):
+        bridge._create_action_proposal(room, envelope)
+
+
+def test_foreign_perun_id_is_not_treated_as_self(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "frambo"},
+        "payload": "@perun-other-machine hello",
+    }
+
+    decision = bridge._should_reply_to(frame)
+    assert "addressed by" not in decision.reason
+
+
+def test_build_prompt_injects_project_brief_only_when_authorized(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    frame = {
+        "type": "CHAT",
+        "id": "msg_ctx_1",
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "payload": "o czym jest ten projekt?",
+    }
+
+    authorized = bridge._build_prompt(frame, include_internal_context=True)
+    assert "[end-shared-project-context]" in authorized
+    assert "This room is the dedicated PerunChat chat of project" in authorized
+    assert "ai-playground" in authorized
+
+    denied = bridge._build_prompt(frame, include_internal_context=False)
+    assert "[end-shared-project-context]" not in denied
+    assert "This room is the dedicated PerunChat chat of project" not in denied
+
+
+def test_reply_authorizes_project_owner_without_global_trust(bridge_env, tmp_path):
+    bridge, orchestrator = bridge_env
+    bridge._agent_id = "peruntheoverseer"
+    project, room = _make_shared_project(tmp_path)
+    orchestrator.run_and_wait.return_value = _run_result("ok", uid="run_1")
+    frame = _chat_frame(room=room, text="o czym jest ten projekt?")
+    frame["sender"]["agent_id"] = "peruntheoverseer"
+
+    captured = {}
+    real_build = bridge._build_prompt
+
+    def spy(f, **kwargs):
+        captured.update(kwargs)
+        return real_build(f, **kwargs)
+
+    with patch.object(bridge, "_build_prompt", side_effect=spy):
+        bridge._reply(frame, MagicMock())
+
+    assert captured["include_internal_context"] is True
+    assert captured["project_binding"] is not None
+
+
+def test_reply_denies_project_context_to_non_member(bridge_env, tmp_path):
+    bridge, orchestrator = bridge_env
+    bridge._agent_id = "perun-local"
+    project, room = _make_shared_project(tmp_path)
+    orchestrator.run_and_wait.return_value = _run_result("ok", uid="run_1")
+    frame = _chat_frame(room=room, text="o czym jest ten projekt?")
+    frame["sender"]["agent_id"] = "stranger"
+
+    captured = {}
+    real_build = bridge._build_prompt
+
+    def spy(f, **kwargs):
+        captured.update(kwargs)
+        return real_build(f, **kwargs)
+
+    with patch.object(bridge, "_build_prompt", side_effect=spy):
+        bridge._reply(frame, MagicMock())
+
+    assert captured["include_internal_context"] is False
+    assert captured["project_binding"] is not None
+
+
+def test_split_action_marker_handles_targets_array_and_details():
+    from perun.perunchat_bridge import _split_action_marker
+
+    text = (
+        "I can add that.\n\n"
+        '[ACTION: {"intent": "add a README", "action_type": "create", '
+        '"targets": ["README.md", "docs/notes.md"], "details": {"lang": "en"}}]\n'
+    )
+    envelope, cleaned = _split_action_marker(text)
+
+    assert envelope is not None
+    assert envelope["intent"] == "add a README"
+    # A naive regex stops at the first "]" (the targets array) and breaks JSON.
+    assert envelope["targets"] == ["README.md", "docs/notes.md"]
+    assert envelope["details"] == {"lang": "en"}
+    assert "[ACTION:" not in cleaned
+    assert "I can add that." in cleaned
+
+
+def test_extract_action_proposal_adds_room_and_requester():
+    bridge = PerunChatBridge(MagicMock(settings=MagicMock()))
+    text = '[ACTION: {"intent": "rename", "action_type": "edit", "targets": ["a.txt"]}]'
+    envelope = bridge._extract_action_proposal(text, "grp:perun:demo:chat", "frambo")
+    assert envelope is not None
+    assert envelope["room_id"] == "grp:perun:demo:chat"
+    assert envelope["requester"] == "frambo"
+
+
+def test_reply_creates_proposal_for_rw_participant(bridge_env, tmp_path):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}]
+    )
+    orchestrator.run_and_wait.return_value = _run_result(
+        'Sure.\n[ACTION: {"intent": "add a README", "action_type": "create", '
+        '"targets": ["README.md"], "details": {}}]',
+        uid="run_1",
+    )
+    frame = _chat_frame(room=room, text="please add a README")
+    frame["sender"]["agent_id"] = "frambo"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    proposals = action_proposals.list_by_project(project["id"])
+    sent = ws.send.call_args[0][0]
+    assert len(proposals) == 1, sent
+    assert proposals[0]["requester"] == "frambo"
+    assert proposals[0]["status"] == "pending"
+    sent = ws.send.call_args[0][0]
+    assert "[ACTION:" not in sent
+    assert "awaiting owner approval" in sent
+
+
+def test_reply_preserves_absolute_target_in_action_envelope(bridge_env, tmp_path):
+    """Redaction must not run on the machine-readable ACTION envelope.
+
+    The project brief shows the model an absolute project location, so a
+    legitimate proposal may use an absolute target. Redacting paths before the
+    marker is parsed turns the JSON into invalid syntax and drops the proposal.
+    """
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}]
+    )
+    target = str((Path(project["path"]) / "README.md").resolve())
+    envelope = json.dumps({
+        "intent": "add a README",
+        "action_type": "create",
+        "targets": [target],
+        "details": {},
+    })
+    orchestrator.run_and_wait.return_value = _run_result(
+        f'Sure.\n[ACTION: {envelope}]', uid="run_1"
+    )
+    frame = _chat_frame(room=room, text="please add a README")
+    frame["sender"]["agent_id"] = "frambo"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    proposals = action_proposals.list_by_project(project["id"])
+    assert len(proposals) == 1, ws.send.call_args[0][0]
+    assert proposals[0]["targets"] == [target]
+    sent = ws.send.call_args[0][0]
+    assert "[ACTION:" not in sent
+    assert "awaiting owner approval" in sent
+
+
+def test_reply_lets_room_owner_propose_without_participant_row(bridge_env, tmp_path):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    bridge._agent_id = "peruntheoverseer"
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}]
+    )
+    orchestrator.run_and_wait.return_value = _run_result(
+        '[ACTION: {"intent": "add a README", "action_type": "create", '
+        '"targets": ["README.md"]}]',
+        uid="run_1",
+    )
+    frame = _chat_frame(room=room, text="please add a README")
+    frame["sender"]["agent_id"] = "peruntheoverseer"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    proposals = action_proposals.list_by_project(project["id"])
+    assert len(proposals) == 1
+    assert proposals[0]["requester"] == "peruntheoverseer"
+    assert proposals[0]["status"] == "pending"
+    sent = ws.send.call_args[0][0]
+    assert "[ACTION:" not in sent
+    assert "add a README" in sent
+
+
+def test_reply_strips_action_marker_outside_project_chats(bridge_env):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    orchestrator.run_and_wait.return_value = _run_result(
+        'No.\n[ACTION: {"intent": "x", "action_type": "edit", "targets": ["a.txt"]}]',
+        uid="run_1",
+    )
+    frame = _chat_frame(room="pub:global:test", text="please edit")
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    sent = ws.send.call_args[0][0]
+    assert "[ACTION:" not in sent
+    assert action_proposals.list_by_project(0) == []
+
+
+def test_reply_reports_rejected_action_for_read_only_participant(bridge_env, tmp_path):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["ro"]}]
+    )
+    orchestrator.run_and_wait.return_value = _run_result(
+        '[ACTION: {"intent": "add a README", "action_type": "create", '
+        '"targets": ["README.md"]}]',
+        uid="run_1",
+    )
+    frame = _chat_frame(room=room, text="please add a README")
+    frame["sender"]["agent_id"] = "frambo"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    assert action_proposals.list_by_project(project["id"]) == []
+    sent = ws.send.call_args[0][0]
+    assert "[ACTION:" not in sent
+    assert "Proposal not created" in sent
+    assert "read-only" in sent
 
 
 def test_heuristic_facts_extracts_identity_and_preferences(settings):
@@ -606,7 +1078,7 @@ def test_store_fact_deduped_stores_new_facts(settings, monkeypatch):
         return [{"source_type": "fact", "score": 0.75, "content": "other"}]
 
     def fake_remember(content, **kwargs):
-        calls.append((content, kwargs.get("meta")))
+        calls.append((content, kwargs.get("meta"), kwargs))
 
     monkeypatch.setattr("perun.perunchat_bridge.memory.search_facts", fake_search)
     monkeypatch.setattr("perun.perunchat_bridge.memory.remember", fake_remember)
@@ -615,6 +1087,63 @@ def test_store_fact_deduped_stores_new_facts(settings, monkeypatch):
     assert len(calls) == 1
     assert calls[0][0] == "We use FastAPI"
     assert calls[0][1]["type"] == "project"
+    assert calls[0][2]["project_id"] == -1
+    assert calls[0][2]["scope"] == "room"
+
+
+def test_store_fact_deduped_uses_project_scope_for_project_room(
+    settings, tmp_path, monkeypatch
+):
+    project, room = _make_shared_project(tmp_path, participants=[{"agent_id": "frambo"}])
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    calls = []
+
+    monkeypatch.setattr(
+        "perun.perunchat_bridge.memory.search_facts",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "perun.perunchat_bridge.memory.remember",
+        lambda content, **kw: calls.append(kw),
+    )
+
+    bridge._store_fact_deduped(
+        "The API uses FastAPI", "decision", {"room": room, "sender": "frambo"}
+    )
+
+    assert calls[0]["project_id"] == project["id"]
+    assert calls[0]["scope"] == "project"
+
+
+def test_fact_visibility_is_room_scoped():
+    visible = PerunChatBridge._fact_visible_in_room
+    assert visible({"project_id": -1, "meta": {"room": "priv:a"}}, -1, "priv:a")
+    assert not visible({"project_id": -1, "meta": {"room": "priv:b"}}, -1, "priv:a")
+    assert visible({"project_id": 0, "meta": {}}, 42, "grp:x")
+    assert not visible({"project_id": 0, "meta": {"room": "pub:other"}}, 42, "grp:x")
+    assert visible({"project_id": 42, "meta": {"room": "grp:x"}}, 42, "grp:x")
+    assert not visible({"project_id": 7, "meta": {"room": "grp:y"}}, 42, "grp:x")
+
+
+def test_prompt_memory_filters_other_rooms(settings, monkeypatch):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    facts = [
+        {"content": "same room fact", "project_id": -1, "meta": {"room": "priv:test", "sender": "a"}},
+        {"content": "other room secret", "project_id": -1, "meta": {"room": "priv:other", "sender": "b"}},
+        {"content": "global fact", "project_id": 0, "meta": {}},
+    ]
+    monkeypatch.setattr("perun.perunchat_bridge.memory.search_facts", lambda *a, **kw: facts)
+    frame = {
+        "room_id": "priv:test",
+        "sender": {"agent_id": "frambo"},
+        "payload": "hello",
+    }
+
+    prompt = bridge._build_prompt(frame, include_history=False)
+
+    assert "same room fact" in prompt
+    assert "global fact" in prompt
+    assert "other room secret" not in prompt
 
 
 def test_fact_markers_stripped_from_reply_payload(settings):
@@ -849,7 +1378,7 @@ def test_send_failure_marks_original_replied_and_does_not_regenerate_on_replay(b
     does not spawn a second LLM run while the queued reply is pending."""
     bridge, orchestrator = bridge_env
     orchestrator.run_and_wait.return_value = _run_result("hello there", uid="run_1")
-    frame = _chat_frame(text="@peruntheoverseer hello")
+    frame = _chat_frame(text="@perun-local hello")
     failing_ws = MagicMock()
     failing_ws.send.side_effect = OSError("connection dropped")
 
@@ -943,9 +1472,9 @@ def test_direct_mentions_bypass_per_room_cooldown(bridge_env):
     orchestrator.run_and_wait.return_value = _run_result("reply", uid="run_1")
     ws = MagicMock()
 
-    bridge._on_frame(_chat_frame(msg_id="msg_1", text="@peruntheoverseer hello"), ws)
+    bridge._on_frame(_chat_frame(msg_id="msg_1", text="@perun-local hello"), ws)
     bridge._drain_room_queues()
-    bridge._on_frame(_chat_frame(msg_id="msg_2", text="@peruntheoverseer second"), ws)
+    bridge._on_frame(_chat_frame(msg_id="msg_2", text="@perun-local second"), ws)
     bridge._drain_room_queues()
 
     assert orchestrator.run_and_wait.call_count == 2
@@ -977,7 +1506,7 @@ def test_direct_mentions_bypass_room_saturation(bridge_env):
     for _ in range(3):
         bridge._room_reply_activity.setdefault(room_id, deque(maxlen=40)).append(time.time())
 
-    bridge._on_frame(_chat_frame(msg_id="dir_1", room=room_id, text="@peruntheoverseer hello"), ws)
+    bridge._on_frame(_chat_frame(msg_id="dir_1", room=room_id, text="@perun-local hello"), ws)
     bridge._drain_room_queues()
     orchestrator.run_and_wait.assert_called_once()
 

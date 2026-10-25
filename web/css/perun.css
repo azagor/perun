@@ -295,6 +295,26 @@ select { cursor: pointer; }
 .shared-status.on::before { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .shared-status.pending::before { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
 
+/* Participant editor: trust-list chips plus an inline "trust + add" row. */
+.participant-editor { display: flex; flex-direction: column; gap: 8px; }
+.participant-add { display: flex; gap: 8px; align-items: center; }
+.participant-add input { flex: 1; min-width: 0; }
+.participant-hint { font-size: .72rem; margin: 0; }
+.select-host { display: block; }
+.select-host .mselect { width: 100%; }
+
+/* Project-chat panel on the Shared tab. */
+.sp-chat-panel { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); padding: 14px 16px; }
+.sp-chat-panel .card-head { margin-bottom: 8px; }
+.sp-chat-panel .card-head h4 { font-size: .92rem; margin: 0; color: var(--text-secondary); }
+.chat-members-wrap { margin-top: 12px; }
+.chat-members-wrap .lab { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 6px; }
+.chat-members { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-member { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-card); font-size: .75rem; font-family: 'Cascadia Code', 'Consolas', monospace; }
+.chat-member.ok { border-color: var(--green); color: var(--green); }
+.chat-member.extra { border-color: var(--amber); color: var(--amber); }
+.warn-text { color: var(--amber); margin: 8px 0 0; }
+
 /* ---------- toast ---------- */
 .toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; }
 .toast { background: var(--bg-card); border: 1px solid var(--border-strong); border-left: 3px solid var(--gold); border-radius: var(--radius-sm); padding: 12px 16px; font-size: .85rem; box-shadow: var(--shadow); max-width: 340px; animation: slidein .2s ease; }
