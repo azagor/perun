@@ -171,6 +171,12 @@ class Settings:
     # machine it defaults to a hash of PERUN_HOME; for multi-node deployments
     # set the same value everywhere via PERUN_HITL_SECRET or this setting.
     perun_hitl_secret: str = ""
+    # Autonomous shared-project mode. When true, action proposals created by
+    # chat agents are approved and executed automatically without waiting for a
+    # human click. Humans can still approve or execute proposals manually from
+    # the dashboard. The per-project manifest flag ``shared.auto_approve`` overrides
+    # this global default.
+    shared_auto_approve: bool = False
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
     # Dedicated terminal / command shell. On Windows the value can be a path to

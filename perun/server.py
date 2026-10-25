@@ -1251,6 +1251,12 @@ def api_create_proposal(slug: str, payload: dict[str, Any] = Body(...)) -> dict[
             owner=chat.get("managed_by"),
             trusted=_trusted_agents(),
         )
+        action_proposals.auto_approve_and_execute(
+            project,
+            proposal,
+            orchestrator_instance=ORCH,
+            on_complete=lambda final: _post_proposal_digest(project, final),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=proposal)

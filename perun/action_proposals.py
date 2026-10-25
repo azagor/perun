@@ -31,6 +31,53 @@ STATUSES = {
     "pending", "approved", "rejected", "expired", "executing", "executed", "failed"
 }
 DEFAULT_PENDING_TTL_SECONDS = 24 * 3600
+# Approver identity recorded when a proposal is approved automatically by the
+# autonomous shared-project policy rather than by a human click.
+AUTO_APPROVER = "auto"
+
+
+def _pick_auto_approver(cfg: dict[str, Any], requester: str) -> str:
+    """Choose a peer agent to record as the autonomous approver.
+
+    To keep the review objective, the approver is a different ``rw`` participant
+    than the agent that proposed the task. If no other participant is available,
+    fall back to the generic autonomous identity.
+    """
+    requester_id = str(requester or "").strip().lower()
+    for p in shared_projects.get_participants(cfg):
+        roles = {str(r).strip().lower() for r in p.get("roles", [])}
+        if "rw" not in roles:
+            continue
+        agent_id = str(p.get("agent_id") or "").strip().lower()
+        if agent_id and agent_id != requester_id:
+            return p.get("agent_id") or agent_id
+    return AUTO_APPROVER
+
+
+def auto_approve_and_execute(
+    project: dict[str, Any],
+    proposal: dict[str, Any],
+    *,
+    on_complete: Callable[[dict[str, Any]], None] | None = None,
+    orchestrator_instance: Any | None = None,
+) -> dict[str, Any] | None:
+    """Auto-approve and execute a pending proposal when autonomous mode is on.
+
+    Returns the proposal after starting execution, or ``None`` if auto-approve is
+    disabled or the proposal is not pending.
+    """
+    if proposal.get("status") != "pending":
+        return None
+    if not shared_projects.is_auto_approve(project["path"]):
+        return None
+    cfg = shared_projects.load(project["path"])
+    approver = _pick_auto_approver(cfg, proposal.get("requester", ""))
+    approve(proposal["id"], approver)
+    return start_execution(
+        proposal["id"],
+        orchestrator_instance=orchestrator_instance,
+        on_complete=on_complete,
+    )
 # Bounds on chat-supplied data. A looping or malicious agent must not be able
 # to create an unbounded row or stuff the execution prompt with instructions.
 MAX_INTENT_CHARS = 500

@@ -4,6 +4,32 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- **Autonomous mode for shared projects.** The Shared tab now has an
+  **Autonomous mode** toggle. When enabled, action proposals created by chat
+  agents are automatically approved by a peer `rw` participant agent and
+  executed without waiting for a human click. If no other `rw` participant
+  exists, the autonomous policy identity (`auto`) is recorded as the approver.
+  The per-project manifest flag `shared.auto_approve` overrides the global
+  `shared_auto_approve` default in settings. Humans can still approve, execute,
+  retry, or delete proposals manually from the dashboard.
+
+### Changed
+
+- **No confirmation dialogs for run-starting actions.** `Approve & run`,
+  `Run now`, and `Retry` in the Shared tab now start the headless run
+  immediately. Confirmation dialogs are kept for destructive or irreversible
+  actions (`Approve only`, `Reject`, `Cancel`, `Delete`).
+
+### Fixed
+
+- The dedicated PerunChat chat agent file (`~/.config/opencode/agents/perunchat.md`)
+  is now created on bridge start when it is missing, using an atomic write so a
+  crash cannot leave a half-written file. Previously the install step was silently
+  skipped on first run, so OpenCode fell back to the default coding agent and the
+  chat bridge produced empty replies.
+
 ## v0.8.2 - 2026-10-25
 
 ### Added

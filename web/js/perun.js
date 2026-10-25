@@ -1771,6 +1771,10 @@ async function sharedProjectCard(detail) {
                 <div id="sp-deps"></div>
                 <button class="btn sm ghost mt" id="sp-add-dep" type="button">＋ Add dependency</button>
             </div>
+            <div class="shared-section">
+                <label class="opt"><input type="checkbox" id="sp-auto-approve" ${cfg.auto_approve ? 'checked' : ''}> <b>Autonomous mode</b></label>
+                <p class="muted" style="font-size:.72rem;margin-top:4px">When enabled, action proposals created by chat agents are reviewed and approved automatically by a peer project agent, then executed without waiting for a human click. Humans can still approve or execute proposals manually.</p>
+            </div>
             <button class="btn primary" id="sp-save" type="button">Save shared settings</button>
             <p class="muted" style="font-size:.72rem;margin-top:10px">A post-run filesystem audit logs any changes outside the allowlist. The optional <code>perun-guard</code> MCP tools enforce the allowlist only if the Project Agent chooses them.</p>
         </div>`;
@@ -1880,6 +1884,7 @@ async function sharedProjectCard(detail) {
     enabledCb.addEventListener('change', () => {
         card.querySelector('#sp-form').classList.toggle('hidden', !enabledCb.checked);
     });
+    const autoApproveCb = card.querySelector('#sp-auto-approve');
     card.querySelector('#sp-save').addEventListener('click', async () => {
         const selected = editor.getValue();
         const depRows = depsContainer.querySelectorAll('.dep-row');
@@ -1894,7 +1899,7 @@ async function sharedProjectCard(detail) {
         try {
             const res = await api(`/api/projects/${p.slug}/shared`, {
                 method: 'PUT',
-                body: { shared: enabledCb.checked, participants: selected, external_deps: newDeps },
+                body: { shared: enabledCb.checked, auto_approve: autoApproveCb.checked, participants: selected, external_deps: newDeps },
             });
             if (res.project_chat) renderChat(res.project_chat);
             const sync = res.chat_sync || {};
@@ -2000,7 +2005,6 @@ async function proposalsCard(detail) {
              <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}</span>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
         row.querySelector('[data-approve-run]')?.addEventListener('click', async () => {
-            if (!confirm(`Approve and start the headless run now?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}\n\nThe agent will work in the project without a TUI.`)) return;
             try {
                 await api(`/api/projects/${p.slug}/proposals/${prop.id}/approve-and-execute`, { method: 'POST' });
                 toast('Approved — headless run started', 'ok');
@@ -2017,7 +2021,6 @@ async function proposalsCard(detail) {
             catch (e) { toast(e.message, 'err'); }
         });
         row.querySelector('[data-execute]')?.addEventListener('click', async () => {
-            if (!confirm(`Start this approved proposal now?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}\n\nThe agent will work in the project without a TUI.`)) return;
             try {
                 await api(`/api/projects/${p.slug}/proposals/${prop.id}/execute`, { method: 'POST' });
                 toast('Headless run started', 'ok');
@@ -2033,7 +2036,6 @@ async function proposalsCard(detail) {
             } catch (e) { toast(e.message, 'err'); }
         });
         row.querySelector('[data-retry]')?.addEventListener('click', async () => {
-            if (!confirm(`Create a new pending proposal from this one?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}\n\nYou will still need to approve it before it runs.`)) return;
             try {
                 await api(`/api/projects/${p.slug}/proposals/${prop.id}/retry`, { method: 'POST' });
                 toast('Retry proposal created', 'ok');

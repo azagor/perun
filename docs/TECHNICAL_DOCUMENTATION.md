@@ -1109,7 +1109,13 @@ call fails with a decode error. The dashboard's Shared tab shows the project
 chat as first-class information (name, room id, state, managed-by, members,
 last sync) with a "Sync now" control, and its participant editor is shared with
 the creation wizard so both always offer the same trust-list chips plus inline
-"trust and add" for a brand-new agent.
+"trust and add" for a brand-new agent. The tab also exposes an **Autonomous
+mode** toggle (`shared.auto_approve` in the manifest, defaulting to the global
+`shared_auto_approve` setting). When enabled, proposals created by chat agents
+are approved and executed automatically: the recorded approver is a different
+`rw` participant agent when one exists, otherwise the autonomous policy identity
+`auto`. Humans always retain the ability to approve, execute, retry, or delete
+proposals manually.
 
 ---
 
@@ -1456,6 +1462,7 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `perunchat_trusted` | `[]` | agents allowed internal/private context in private/group rooms (never in public rooms) |
 | `perun_owner_name` | `""` | Approver identity shown in Shared Projects audits; defaults to OS username when empty |
 | `perun_hitl_secret` | `""` | HMAC-SHA256 secret for HITL approval tokens; falls back to `PERUN_HITL_SECRET` env. When `PERUN_PASSWORD` set, encrypted at rest |
+| `shared_auto_approve` | `false` | Default for autonomous shared-project mode. When `true`, new chat-agent proposals are auto-approved and executed unless the per-project manifest flag disables it. |
 | `auto_discover_on_start` | `true` | discovery on service startup |
 | `index_docs_on_discover` | `false` | index new projects' docs on discover |
 | `terminal` | `""` | preferred terminal emulator for `Run in Terminal` / TUI launches. Empty = OS default (`pwsh`/`powershell` on Windows, `$SHELL` elsewhere). Accepts an alias (`cmd`, `pwsh`, `wt`) or a full path. The dashboard Settings page edits this value; it only affects future launches. |

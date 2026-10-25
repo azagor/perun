@@ -256,9 +256,19 @@ def _ensure_opencode_agent() -> None:
         agents_dir = Path.home() / ".config" / "opencode" / "agents"
         agents_dir.mkdir(parents=True, exist_ok=True)
         agent_file = agents_dir / f"{_OPENCODE_AGENT_NAME}.md"
-        if agent_file.read_text(encoding="utf-8").strip() != _OPENCODE_AGENT_MD.strip():
-            agent_file.write_text(_OPENCODE_AGENT_MD, encoding="utf-8")
+        if (
+            not agent_file.exists()
+            or agent_file.read_text(encoding="utf-8").strip() != _OPENCODE_AGENT_MD.strip()
+        ):
+            # Atomic write: a crash mid-write cannot leave a half-written file.
+            tmp = agent_file.with_suffix(".tmp")
+            tmp.write_text(_OPENCODE_AGENT_MD, encoding="utf-8")
+            tmp.replace(agent_file)
             logger.info("PerunChat bridge updated OpenCode agent %s", agent_file)
+    except PermissionError as exc:
+        logger.warning(
+            "PerunChat bridge could not install agent file (permission denied): %s", exc
+        )
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("PerunChat bridge could not install agent file: %s", exc)
 
@@ -1478,7 +1488,10 @@ class PerunChatBridge:
                         note += f": {summary}"
                     if tg:
                         note += f" -> {tg}"
-                    note += "; awaiting owner approval in the project's Shared tab.]"
+                    if shared_projects.is_auto_approve(project["path"]):
+                        note += "; auto-approved and executing.]"
+                    else:
+                        note += "; awaiting owner approval in the project's Shared tab.]"
                     clean_reply += "\n\n" + note
                 except Exception as exc:
                     clean_reply += f"\n\n[Proposal not created: {exc}]"
@@ -1864,13 +1877,30 @@ class PerunChatBridge:
             raise ValueError(
                 f"participant {requester} is not on the PerunChat trust list"
             )
-        return action_proposals.create(
+        proposal = action_proposals.create(
             project,
             requester,
             envelope,
             owner=row["managed_by"],
             trusted=list(getattr(self.settings, "perunchat_trusted", []) or []),
         )
+
+        def _post_digest(final: dict[str, Any]) -> None:
+            digest = action_proposals.state_digest(final, project)
+            text = json.dumps(digest, ensure_ascii=False)
+            text = self._redact_internal_info(text, room_id)
+            self.post_to_room(
+                room_id,
+                text,
+                content_type="application/perun-state-digest",
+            )
+
+        action_proposals.auto_approve_and_execute(
+            project,
+            proposal,
+            on_complete=_post_digest,
+        )
+        return proposal
 
     def _build_prompt(
         self,

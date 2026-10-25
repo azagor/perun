@@ -281,3 +281,46 @@ def test_retry_pending_room_deletions(tmp_path, monkeypatch):
     with db.db() as conn:
         rows = conn.execute("SELECT room_id FROM pending_room_deletions").fetchall()
         assert [r["room_id"] for r in rows] == ["room-fail"]
+
+
+def test_normalize_persists_auto_approve(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    data, _ = shared_projects.normalize(manifest.from_project(project))
+    assert "auto_approve" not in data
+
+    data["auto_approve"] = True
+    normalized, _ = shared_projects.normalize(data)
+    assert normalized["auto_approve"] is True
+
+    manifest.save(project["path"], normalized, body="# test")
+    loaded = shared_projects.load(project["path"])
+    assert loaded["auto_approve"] is True
+
+
+def test_is_auto_approve_uses_per_project_flag(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    assert shared_projects.is_auto_approve(project["path"]) is False
+
+    data = manifest.from_project(project)
+    data["auto_approve"] = True
+    manifest.save(project["path"], data, body="# test")
+    assert shared_projects.is_auto_approve(project["path"]) is True
+
+
+def test_is_auto_approve_falls_back_to_global_default(tmp_path, monkeypatch):
+    from perun import config
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    assert shared_projects.is_auto_approve(project["path"]) is False
+
+    monkeypatch.setattr(config.Settings, "load", lambda: config.Settings(shared_auto_approve=True))
+    assert shared_projects.is_auto_approve(project["path"]) is True
+
+    # Per-project explicit false overrides global true.
+    data = manifest.from_project(project)
+    data["auto_approve"] = False
+    manifest.save(project["path"], data, body="# test")
+    assert shared_projects.is_auto_approve(project["path"]) is False

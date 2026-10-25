@@ -119,6 +119,9 @@ def normalize(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 
     shared_enabled = data.get("shared", False)
 
+    if "auto_approve" in data:
+        data["auto_approve"] = _is_truthy(data["auto_approve"])
+
     participants, pw = _normalize_participants(data.get("participants"))
     deps, dw = _normalize_external_deps(data.get("external_deps"))
     warnings += pw + dw
@@ -177,6 +180,22 @@ def get_participant_role(data: dict[str, Any] | None, agent_id: str) -> str | No
 def can_write(data: dict[str, Any] | None, agent_id: str) -> bool:
     """Whether *agent_id* has write access in this shared project."""
     return get_participant_role(data, agent_id) == "rw"
+
+
+def is_auto_approve(project_path: str | Path) -> bool:
+    """Effective auto-approve setting for a project.
+
+    The per-project manifest flag ``shared.auto_approve`` overrides the global
+    ``shared_auto_approve`` default. When neither is set, autonomous mode is
+    disabled.
+    """
+    snap = manifest.load(project_path)
+    data = snap.get("data") or {}
+    if "auto_approve" in data:
+        return _is_truthy(data["auto_approve"])
+    from . import config
+
+    return config.Settings.load().shared_auto_approve
 
 
 def get_external_deps(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -274,6 +293,7 @@ def load(project_path: str | Path) -> dict[str, Any]:
     out, _ = normalize(data)
     return {
         "shared": out.get("shared", False),
+        "auto_approve": out.get("auto_approve", False),
         "participants": out.get("participants", []),
         "external_deps": out.get("external_deps", []),
         "manifest_rev": out.get("manifest_rev", 1),
@@ -307,6 +327,7 @@ def apply_payload(
         return load(base), errors
 
     data["shared"] = _is_truthy(payload.get("shared", True))
+    data["auto_approve"] = _is_truthy(payload.get("auto_approve", False))
     data["participants"] = participants
     data["external_deps"] = deps
     bump_manifest_rev(data)

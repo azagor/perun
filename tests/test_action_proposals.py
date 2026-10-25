@@ -654,3 +654,74 @@ def test_pending_proposals_expire(tmp_path):
         )
     refreshed = action_proposals.get(proposal["id"])
     assert refreshed["status"] == "expired"
+
+
+def test_auto_approve_does_nothing_when_disabled(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "file.txt")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: False)
+
+    started = []
+    monkeypatch.setattr(action_proposals, "start_execution", lambda *a, **kw: started.append((a, kw)) or proposal)
+
+    result = action_proposals.auto_approve_and_execute(project, proposal)
+    assert result is None
+    assert action_proposals.get(proposal["id"])["status"] == "pending"
+    assert not started
+
+
+def test_auto_approve_uses_peer_agent_and_starts_execution(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(
+        project,
+        participants=[
+            {"agent_id": "frambo", "roles": ["rw"]},
+            {"agent_id": "glados", "roles": ["rw"]},
+        ],
+    )
+    target = str(project["path"] / "file.txt")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: True)
+
+    started = []
+
+    def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
+        started.append({"proposal_id": proposal_id, "on_complete": on_complete})
+        return action_proposals.get(proposal_id)
+
+    monkeypatch.setattr(action_proposals, "start_execution", fake_start)
+
+    result = action_proposals.auto_approve_and_execute(project, proposal)
+
+    assert result["status"] == "approved"
+    assert started
+    assert started[0]["proposal_id"] == proposal["id"]
+    approved = action_proposals.get(proposal["id"])
+    assert approved["status"] == "approved"
+    assert approved["approved_by"] == "glados"
+
+
+def test_auto_approve_falls_back_to_auto_when_no_peer_agent(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    target = str(project["path"] / "file.txt")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: True)
+
+    def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
+        return action_proposals.get(proposal_id)
+
+    monkeypatch.setattr(action_proposals, "start_execution", fake_start)
+
+    action_proposals.auto_approve_and_execute(project, proposal)
+
+    approved = action_proposals.get(proposal["id"])
+    assert approved["approved_by"] == action_proposals.AUTO_APPROVER

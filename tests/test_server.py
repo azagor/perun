@@ -257,6 +257,52 @@ def test_approve_and_execute_starts_a_background_run(client, tmp_path, monkeypat
     assert r.json()["accepted"] is True
 
 
+def test_create_proposal_auto_approves_when_enabled(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["run-bot", "approver-bot"])
+    target = tmp_path / "shared-auto"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedAuto", "path": str(target), "bootstrap": False,
+        "shared": True,
+        "participants": [
+            {"agent_id": "run-bot", "roles": ["rw"]},
+            {"agent_id": "approver-bot", "roles": ["rw"]},
+        ],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.put(f"/api/projects/{slug}/shared", json={
+        "shared": True, "auto_approve": True, "participants": [
+            {"agent_id": "run-bot", "roles": ["rw"]},
+            {"agent_id": "approver-bot", "roles": ["rw"]},
+        ], "external_deps": []
+    })
+    assert r.status_code == 200, r.text
+
+    calls = []
+
+    def fake_start(proposal_id, orchestrator_instance=None, on_complete=None):
+        calls.append(proposal_id)
+        current = server.action_proposals.get(proposal_id)
+        return {**current, "status": "executing"}
+
+    monkeypatch.setattr(server.action_proposals, "start_execution", fake_start)
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "run-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    assert r.status_code == 200, r.text
+    prop_id = r.json()["proposal"]["id"]
+
+    assert calls == [prop_id]
+    proposal = server.action_proposals.get(prop_id)
+    assert proposal["status"] == "approved"
+    assert proposal["approved_by"] == "approver-bot"
+
+
 def test_post_proposal_digest_redacts_paths_and_remains_json(client, tmp_path, monkeypatch):
     from perun import registry, server
 
