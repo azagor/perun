@@ -2070,19 +2070,38 @@ class PerunChatBridge:
                     proposal_id,
                     on_complete=_post_digest,
                 )
+            except Exception as exc:
+                self._post_simple_reply(
+                    frame, ws, f"[Approval failed for {proposal_id}: {exc}]"
+                )
+                return
+            # Best-effort notifications: a failure here must not make a
+            # successfully-started execution look like a failure.
+            try:
                 self._post_simple_reply(
                     frame,
                     ws,
                     f"[Proposal {proposal_id} approved by {sender} and is now executing.]",
                 )
+            except Exception:
+                logger.exception(
+                    "Failed to send approval confirmation for %s", proposal_id
+                )
+            try:
                 _post_started(action_proposals.get(proposal_id) or proposal)
-            except Exception as exc:
-                self._post_simple_reply(
-                    frame, ws, f"[Approval failed for {proposal_id}: {exc}]"
+            except Exception:
+                logger.exception(
+                    "Failed to post started notice for %s", proposal_id
                 )
         elif choice == "reject":
             try:
                 action_proposals.reject(proposal_id, sender, reason=reason)
+            except Exception as exc:
+                self._post_simple_reply(
+                    frame, ws, f"[Rejection failed for {proposal_id}: {exc}]"
+                )
+                return
+            try:
                 text = f"[Proposal {proposal_id} rejected by {sender}"
                 if reason:
                     text += f": {reason}"
@@ -2091,12 +2110,17 @@ class PerunChatBridge:
                     room_id,
                     self._redact_internal_info(text, room_id),
                 )
+            except Exception:
+                logger.exception(
+                    "Failed to post rejection notice for %s", proposal_id
+                )
+            try:
                 self._post_simple_reply(
                     frame, ws, f"[Proposal {proposal_id} rejected.]"
                 )
-            except Exception as exc:
-                self._post_simple_reply(
-                    frame, ws, f"[Rejection failed for {proposal_id}: {exc}]"
+            except Exception:
+                logger.exception(
+                    "Failed to send rejection confirmation for %s", proposal_id
                 )
         else:
             self._post_simple_reply(
