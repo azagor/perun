@@ -55,8 +55,11 @@ them all — no matter which folder you happened to open.
   policy-enforcing `perun-guard` filesystem MCP server with post-run audits.
   Headless runs use `--standalone` and injected API-key credentials so any cloud
   model you have connected works reliably. Since v0.8.3, Shared Projects also
-  support an optional **Autonomous mode**: when enabled, chat-agent proposals are
-  auto-approved by a peer `rw` participant and executed without a human click.
+  support optional **Agent approval in chat** (autonomous mode): when enabled,
+  chat-agent proposals must be explicitly approved or rejected by another `rw`
+  participant agent in the dedicated project chat before they run. A separate
+  **Policy auto-approve** mode skips peer review and lets the system approve and
+  execute proposals immediately.
   Lifecycle notices (started, completed, failed, rejected) are posted back to the
   project chat, and completed proposals move to a collapsed-by-default list in the
   dashboard. Participant roles (`rw`/`ro`) are enforced, and approver identity

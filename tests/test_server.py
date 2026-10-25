@@ -257,7 +257,7 @@ def test_approve_and_execute_starts_a_background_run(client, tmp_path, monkeypat
     assert r.json()["accepted"] is True
 
 
-def test_create_proposal_auto_approves_when_enabled(client, tmp_path, monkeypatch):
+def test_create_proposal_policy_auto_approves_when_enabled(client, tmp_path, monkeypatch):
     from perun import server
 
     monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["run-bot", "approver-bot"])
@@ -274,7 +274,7 @@ def test_create_proposal_auto_approves_when_enabled(client, tmp_path, monkeypatc
     slug = r.json()["project"]["slug"]
 
     r = client.put(f"/api/projects/{slug}/shared", json={
-        "shared": True, "auto_approve": True, "participants": [
+        "shared": True, "policy_auto_approve": True, "participants": [
             {"agent_id": "run-bot", "roles": ["rw"]},
             {"agent_id": "approver-bot", "roles": ["rw"]},
         ], "external_deps": []
@@ -300,10 +300,10 @@ def test_create_proposal_auto_approves_when_enabled(client, tmp_path, monkeypatc
     assert calls == [prop_id]
     proposal = server.action_proposals.get(prop_id)
     assert proposal["status"] == "approved"
-    assert proposal["approved_by"] == "approver-bot"
+    assert proposal["approved_by"] == "auto"
 
 
-def test_create_proposal_returns_proposal_when_auto_approve_fails(client, tmp_path, monkeypatch):
+def test_create_proposal_returns_proposal_when_policy_auto_approve_fails(client, tmp_path, monkeypatch):
     from perun import server
 
     monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["run-bot", "approver-bot"])
@@ -320,7 +320,7 @@ def test_create_proposal_returns_proposal_when_auto_approve_fails(client, tmp_pa
     slug = r.json()["project"]["slug"]
 
     r = client.put(f"/api/projects/{slug}/shared", json={
-        "shared": True, "auto_approve": True, "participants": [
+        "shared": True, "policy_auto_approve": True, "participants": [
             {"agent_id": "run-bot", "roles": ["rw"]},
             {"agent_id": "approver-bot", "roles": ["rw"]},
         ], "external_deps": []
@@ -341,7 +341,7 @@ def test_create_proposal_returns_proposal_when_auto_approve_fails(client, tmp_pa
 
     proposal = server.action_proposals.get(prop_id)
     assert proposal["status"] == "approved"
-    assert proposal["approved_by"] == "approver-bot"
+    assert proposal["approved_by"] == "auto"
 
 
 def test_post_proposal_started_notifies_project_chat(client, tmp_path, monkeypatch):

@@ -132,19 +132,31 @@ external) are readable/writable.
 - **FR-19** Project→chat feedback: after each project run, a State Digest (files
   changed, outcome, manifest_rev) is posted to the dedicated room.
 
-### 3.5 Autonomous Mode (v0.8.3)
+### 3.5 Agent Approval in Chat (v0.8.4)
 
-- **FR-20** Optional auto-approval: the Shared tab exposes an **Autonomous mode**
-  toggle that persists `shared.auto_approve` in the project manifest. When
-  enabled, chat-agent proposals are approved and executed automatically without
-  waiting for a human click.
-- **FR-21** Objective approver selection: the autonomous approver recorded in the
-  audit trail is a different `rw` participant than the agent that proposed the
-  task. If no other `rw` participant exists, the generic `auto` policy identity
-  is recorded.
+- **FR-20** Peer-agent review: the Shared tab exposes an **Agent approval in
+  chat** toggle (manifest flag `shared.auto_approve`). When enabled, a chat-agent
+  proposal is held in `pending` and a review request is posted to the dedicated
+  project chat. Any other `rw` participant on the trust list may approve or
+  reject the proposal with an explicit `[APPROVAL: ...]` marker. The requester
+  cannot approve their own proposal.
+- **FR-21** Explicit peer decisions are recorded: when a peer approves or
+  rejects, their agent id is written to the audit trail (`approved_by`), and
+  approval immediately starts execution.
 - **FR-22** Human override is always available: the dashboard continues to show
   Approve / Run / Retry / Delete controls, and humans can execute proposals even
-  when autonomous mode is enabled.
+  when agent approval is enabled.
+
+### 3.6 Policy Auto-Approve (v0.8.4)
+
+- **FR-20a** Optional policy auto-approval: the Shared tab exposes a separate
+  **Policy auto-approve** toggle (manifest flag `shared.policy_auto_approve`).
+  When enabled, chat-agent proposals are approved and executed immediately by
+  the system without waiting for a peer or human review. This overrides agent
+  approval if both flags are set.
+- **FR-21a** Honest audit identity: policy auto-approvals always record the
+  generic `auto` policy identity as the approver, never a passive manifest peer.
+- **FR-22a** Human override remains available for policy auto-approve as well.
 
 ### 3.6 Lifecycle Chat Notifications (v0.8.3)
 
@@ -404,7 +416,7 @@ so I can re-verify or remove them.
 
 | Where | Change |
 |-------|--------|
-| `perun.md` front matter | `shared: bool`, `auto_approve: bool`, `participants: [{agent_id, roles}...]`, `external_deps: [{name, path, access}...]` (FR-4, FR-20). |
+| `perun.md` front matter | `shared: bool`, `auto_approve: bool` (agent approval in chat), `policy_auto_approve: bool` (system immediate auto-approval), `participants: [{agent_id, roles}...]`, `external_deps: [{name, path, access}...]` (FR-4, FR-20, FR-20a). |
 | Perun registry/DB | `project_chats` table: `(project_slug, room_id, managed_by, state, manifest_rev, last_sync_at)`; `participant_status` view joining trust list. |
 | PerunChat `rooms`/`room_members` | `managed_by` column on rooms; endpoint guard: member mutations allowed only to `managed_by` key (or owner). |
 | Bridge | `Action Envelope` + `State Digest` schemas; digest quota; `manifest_rev` in prompt assembly; lifecycle notices for started/rejected/failed/completed proposals. |
@@ -580,8 +592,11 @@ contract.
 | 15 | Owner absent for HITL approval | Proposal timeout | Auto-expire with chat notice after N hours; requester may re-propose. | Dashboard shows expired queue. |
 | 16 | Sensitive field in manifest | `memory.is_sensitive()` guard | Field redacted from chat context, logged. | Owner review; never silently leaked. |
 | 17 | External agent sends code/prompt-injection text | Existing `<untrusted_peer_input>` wrapping + Chat Agent instructions | Treated as data; Chat Agent may not execute; envelopes validated. | Defense in depth with Path Guard. |
-| 18 | Auto-approve fails after proposal created | `start_execution()` raises | Proposal remains `approved`; failure notice posted to chat; owner can run manually. | Best-effort notification; manual retry from dashboard. |
+| 18 | Policy auto-approve fails after proposal created | `start_execution()` raises | Proposal remains `approved`; failure notice posted to chat; owner can run manually. | Best-effort notification; manual retry from dashboard. |
 | 19 | Notification redaction fails | `_redact_internal_info()` exception | Notice is dropped rather than posted unredacted. | Logged; no sensitive leak. |
+| 20 | Peer approval race | Two peers approve simultaneously | CAS update ensures only one succeeds; the other gets a "no longer pending" acknowledgement. | Idempotent; no duplicate execution. |
+| 21 | Requester tries to self-approve | `[APPROVAL: ...]` from original requester | Marker is ignored with a warning reply. | Prevents self-approval. |
+| 22 | Untrusted or read-only agent approves | Sender lacks `rw` role or trust | Marker is ignored with a warning reply. | Enforces ACL. |
 | 20 | Clock skew / stale catch-up messages | Existing reconnect catch-up logic | Gap acknowledged rather than mis-replied. | Existing behavior retained. |
 
 ---

@@ -308,19 +308,36 @@ def test_is_auto_approve_uses_per_project_flag(tmp_path, monkeypatch):
     manifest.save(project["path"], data, body="# test")
     assert shared_projects.is_auto_approve(project["path"]) is True
 
-
-def test_is_auto_approve_falls_back_to_global_default(tmp_path, monkeypatch):
-    from perun import config
-
-    project = _make_project(tmp_path)
-    _enable_shared(project)
-    assert shared_projects.is_auto_approve(project["path"]) is False
-
-    monkeypatch.setattr(config.Settings, "load", lambda: config.Settings(shared_auto_approve=True))
-    assert shared_projects.is_auto_approve(project["path"]) is True
-
     # Per-project explicit false overrides global true.
     data = manifest.from_project(project)
     data["auto_approve"] = False
     manifest.save(project["path"], data, body="# test")
     assert shared_projects.is_auto_approve(project["path"]) is False
+
+
+def test_is_policy_auto_approve_uses_per_project_flag(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    assert shared_projects.is_policy_auto_approve(project["path"]) is False
+
+    data = manifest.from_project(project)
+    data["policy_auto_approve"] = True
+    manifest.save(project["path"], data, body="# test")
+    assert shared_projects.is_policy_auto_approve(project["path"]) is True
+
+
+def test_is_policy_auto_approve_falls_back_to_global_default(tmp_path, monkeypatch):
+    from perun import config
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    assert shared_projects.is_policy_auto_approve(project["path"]) is False
+
+    monkeypatch.setattr(config.Settings, "load", lambda: config.Settings(shared_auto_approve=True))
+    assert shared_projects.is_policy_auto_approve(project["path"]) is True
+
+    # Per-project explicit false overrides global true.
+    data = manifest.from_project(project)
+    data["policy_auto_approve"] = False
+    manifest.save(project["path"], data, body="# test")
+    assert shared_projects.is_policy_auto_approve(project["path"]) is False

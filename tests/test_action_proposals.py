@@ -674,7 +674,7 @@ def test_auto_approve_does_nothing_when_disabled(tmp_path, monkeypatch):
     assert not started
 
 
-def test_auto_approve_uses_peer_agent_and_starts_execution(tmp_path, monkeypatch):
+def test_policy_auto_approve_uses_autonomous_policy_identity(tmp_path, monkeypatch):
     project = _make_project(tmp_path)
     _enable_shared(
         project,
@@ -687,7 +687,7 @@ def test_auto_approve_uses_peer_agent_and_starts_execution(tmp_path, monkeypatch
     proposal = action_proposals.create(
         project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
     )
-    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: True)
+    monkeypatch.setattr(action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True)
 
     started = []
 
@@ -704,37 +704,17 @@ def test_auto_approve_uses_peer_agent_and_starts_execution(tmp_path, monkeypatch
     assert started[0]["proposal_id"] == proposal["id"]
     approved = action_proposals.get(proposal["id"])
     assert approved["status"] == "approved"
-    assert approved["approved_by"] == "glados"
-
-
-def test_auto_approve_falls_back_to_auto_when_no_peer_agent(tmp_path, monkeypatch):
-    project = _make_project(tmp_path)
-    _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
-    target = str(project["path"] / "file.txt")
-    proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
-    )
-    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: True)
-
-    def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
-        return action_proposals.get(proposal_id)
-
-    monkeypatch.setattr(action_proposals, "start_execution", fake_start)
-
-    action_proposals.auto_approve_and_execute(project, proposal)
-
-    approved = action_proposals.get(proposal["id"])
     assert approved["approved_by"] == action_proposals.AUTO_APPROVER
 
 
-def test_auto_approve_leaves_proposal_approved_if_execution_fails(tmp_path, monkeypatch):
+def test_policy_auto_approve_leaves_proposal_approved_if_execution_fails(tmp_path, monkeypatch):
     project = _make_project(tmp_path)
     _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     target = str(project["path"] / "file.txt")
     proposal = action_proposals.create(
         project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
     )
-    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: True)
+    monkeypatch.setattr(action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True)
 
     def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
         raise RuntimeError("orchestrator unavailable")

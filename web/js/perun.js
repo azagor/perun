@@ -1772,9 +1772,11 @@ async function sharedProjectCard(detail) {
                 <button class="btn sm ghost mt" id="sp-add-dep" type="button">＋ Add dependency</button>
             </div>
             <div class="shared-section">
-                <label class="opt"><input type="checkbox" id="sp-auto-approve" ${cfg.auto_approve ? 'checked' : ''}> <b>Autonomous mode</b></label>
-                <p class="muted" style="font-size:.72rem;margin-top:4px">When enabled, action proposals created by chat agents are reviewed and approved automatically by a peer project agent, then executed without waiting for a human click. Humans can still approve or execute proposals manually.</p>
-                <p class="warn-text" style="font-size:.72rem;margin-top:4px">Warning: enabling this lets chat agents run code in this project without a human click. Only enable for projects whose participants you trust.</p>
+                <label class="opt"><input type="checkbox" id="sp-auto-approve" ${cfg.auto_approve ? 'checked' : ''}> <b>Agent approval in chat</b></label>
+                <p class="muted" style="font-size:.72rem;margin-top:4px">When enabled, action proposals created by chat agents must be explicitly approved or rejected by another <code>rw</code> participant agent in the project chat. The proposal is not executed until a peer agent posts an approval.</p>
+                <label class="opt"><input type="checkbox" id="sp-policy-auto-approve" ${cfg.policy_auto_approve ? 'checked' : ''}> <b>Policy auto-approve</b></label>
+                <p class="muted" style="font-size:.72rem;margin-top:4px">When enabled, the system approves and executes chat-agent proposals immediately without waiting for a peer or human review. This overrides agent approval.</p>
+                <p class="warn-text" style="font-size:.72rem;margin-top:4px">Warning: enabling policy auto-approve lets chat agents run code in this project without any review. Only enable for projects whose participants you trust.</p>
             </div>
             <button class="btn primary" id="sp-save" type="button">Save shared settings</button>
             <p class="muted" style="font-size:.72rem;margin-top:10px">A post-run filesystem audit logs any changes outside the allowlist. The optional <code>perun-guard</code> MCP tools enforce the allowlist only if the Project Agent chooses them.</p>
@@ -1886,6 +1888,7 @@ async function sharedProjectCard(detail) {
         card.querySelector('#sp-form').classList.toggle('hidden', !enabledCb.checked);
     });
     const autoApproveCb = card.querySelector('#sp-auto-approve');
+    const policyAutoApproveCb = card.querySelector('#sp-policy-auto-approve');
     card.querySelector('#sp-save').addEventListener('click', async () => {
         const selected = editor.getValue();
         const depRows = depsContainer.querySelectorAll('.dep-row');
@@ -1900,7 +1903,13 @@ async function sharedProjectCard(detail) {
         try {
             const res = await api(`/api/projects/${p.slug}/shared`, {
                 method: 'PUT',
-                body: { shared: enabledCb.checked, auto_approve: autoApproveCb.checked, participants: selected, external_deps: newDeps },
+                body: {
+                    shared: enabledCb.checked,
+                    auto_approve: autoApproveCb.checked,
+                    policy_auto_approve: policyAutoApproveCb.checked,
+                    participants: selected,
+                    external_deps: newDeps,
+                },
             });
             if (res.project_chat) renderChat(res.project_chat);
             const sync = res.chat_sync || {};

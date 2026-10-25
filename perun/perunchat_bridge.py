@@ -289,6 +289,7 @@ def _strip_instruction_wrappers(text: str) -> str:
 
 
 _ACTION_START_RE = re.compile(r"\[ACTION:\s*", re.IGNORECASE)
+_APPROVAL_START_RE = re.compile(r"\[APPROVAL:\s*", re.IGNORECASE)
 
 
 def _split_action_marker(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -302,6 +303,64 @@ def _split_action_marker(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if not text:
         return None, text or ""
     match = _ACTION_START_RE.search(text)
+    if not match:
+        return None, text
+    obj_start = text.find("{", match.end())
+    if obj_start < 0:
+        return None, text
+
+    depth = 0
+    in_string = False
+    escape = False
+    end = -1
+    for i in range(obj_start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 0 and ch == "}":
+                end = i + 1
+                break
+    if end < 0:
+        return None, text
+
+    try:
+        payload = json.loads(text[obj_start:end])
+    except Exception:
+        return None, text
+    if not isinstance(payload, dict):
+        return None, text
+
+    span_end = end
+    while span_end < len(text) and text[span_end] in " \t":
+        span_end += 1
+    if span_end < len(text) and text[span_end] == "]":
+        span_end += 1
+    cleaned = (text[: match.start()] + text[span_end:]).strip()
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return payload, cleaned
+
+
+def _split_approval_marker(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Split the first ``[APPROVAL: {...}]`` marker out of *text*.
+
+    The scanner is identical to the action-marker parser so that JSON payloads
+    containing brackets are not truncated.
+    """
+    if not text:
+        return None, text or ""
+    match = _APPROVAL_START_RE.search(text)
     if not match:
         return None, text
     obj_start = text.find("{", match.end())
@@ -1346,6 +1405,15 @@ class PerunChatBridge:
             )
         include_internal_context = is_trusted or is_project_member
 
+        # Dedicated project chats support structured command markers. If a peer
+        # agent posts an explicit [APPROVAL: ...] decision, handle it directly
+        # without generating a conversational reply.
+        if binding:
+            decision = self._extract_approval_decision(frame.get("payload", ""))
+            if decision:
+                self._handle_approval_decision(frame, decision, ws)
+                return
+
         # The dedicated perunchat agent carries its own persona; Perun project
         # instructions must never be injected into chat runs.
         skip_instructions = True
@@ -1490,11 +1558,13 @@ class PerunChatBridge:
                     if tg:
                         note += f" -> {tg}"
                     if proposal["status"] in ("approved", "executing"):
-                        note += "; auto-approved and executing.]"
+                        note += "; policy auto-approved and executing.]"
                     elif proposal["status"] == "failed":
-                        note += "; auto-approval failed to start the run — check the project's Shared tab.]"
+                        note += "; policy auto-approval failed to start the run — check the project's Shared tab.]"
+                    elif shared_projects.is_policy_auto_approve(shared_project["path"]):
+                        note += "; policy auto-approval failed — awaiting owner approval in the project's Shared tab.]"
                     elif shared_projects.is_auto_approve(shared_project["path"]):
-                        note += "; auto-approval failed — awaiting owner approval in the project's Shared tab.]"
+                        note += "; awaiting peer-agent review in this chat.]"
                     else:
                         note += "; awaiting owner approval in the project's Shared tab.]"
                     clean_reply += "\n\n" + note
@@ -1853,6 +1923,206 @@ class PerunChatBridge:
         payload["requester"] = requester
         return payload
 
+    def _extract_approval_decision(self, text: str) -> Dict[str, Any] | None:
+        """Parse a structured [APPROVAL: ...] marker from a chat message."""
+        payload, _ = _split_approval_marker(text)
+        if payload is None:
+            return None
+        return {
+            "proposal_id": str(payload.get("proposal_id") or "").strip(),
+            "decision": str(payload.get("decision") or "").strip().lower(),
+            "reason": str(payload.get("reason") or "").strip(),
+        }
+
+    def _post_peer_review_request(
+        self,
+        room_id: str,
+        cfg: Dict[str, Any],
+        proposal: Dict[str, Any],
+    ) -> None:
+        """Ask peer rw agents in the project chat to review a pending proposal."""
+        requester = str(proposal.get("requester") or "").strip().lower()
+        peers = [
+            p
+            for p in shared_projects.get_participants(cfg)
+            if shared_projects.can_write(cfg, p.get("agent_id"))
+            and str(p.get("agent_id") or "").strip().lower() != requester
+        ]
+        if not peers:
+            return
+        peer_names = ", ".join(f"@{p['agent_id']}" for p in peers)
+        summary = " ".join(str(proposal.get("intent") or "").split())[:120]
+        targets = ", ".join(str(t) for t in (proposal.get("targets") or []))[:80]
+        approve_marker = json.dumps(
+            {"proposal_id": proposal["id"], "decision": "approve", "reason": ""},
+            ensure_ascii=False,
+        )
+        reject_marker = json.dumps(
+            {
+                "proposal_id": proposal["id"],
+                "decision": "reject",
+                "reason": "reason for rejection",
+            },
+            ensure_ascii=False,
+        )
+        text = (
+            f"[Peer review requested for proposal {proposal['id']} by "
+            f"{proposal.get('requester', 'unknown')}"
+            f"{(': ' + summary) if summary else ''}"
+            f"{(' -> ' + targets) if targets else ''}. "
+            f"Eligible reviewers: {peer_names}. "
+            f"Approve with [APPROVAL: {approve_marker}] or reject with "
+            f"[APPROVAL: {reject_marker}].]"
+        )
+        self.post_to_room(room_id, self._redact_internal_info(text, room_id))
+
+    def _handle_approval_decision(
+        self,
+        frame: Dict[str, Any],
+        decision: Dict[str, Any],
+        ws: Any,
+    ) -> None:
+        """Process an explicit [APPROVAL: ...] marker from a peer agent."""
+        room_id = frame.get("room_id", "")
+        sender = frame.get("sender", {}).get("agent_id", "")
+        proposal_id = decision.get("proposal_id", "")
+        choice = decision.get("decision", "")
+        reason = decision.get("reason", "")
+
+        binding = self._project_binding(room_id)
+        if not binding:
+            return
+        project, cfg = binding
+
+        # Do not process our own review-request messages.
+        if sender.lower() == self._agent_id.lower():
+            return
+
+        proposal = action_proposals.get(proposal_id)
+        if not proposal:
+            self._post_simple_reply(
+                frame, ws, f"[Approval ignored: proposal {proposal_id} not found.]"
+            )
+            return
+
+        if proposal.get("status") != "pending":
+            self._post_simple_reply(
+                frame,
+                ws,
+                f"[Approval ignored: proposal {proposal_id} is {proposal.get('status')}.]",
+            )
+            return
+
+        requester = str(proposal.get("requester") or "").strip().lower()
+        sender_lower = str(sender).strip().lower()
+        if sender_lower == requester:
+            self._post_simple_reply(
+                frame,
+                ws,
+                "[Approval ignored: a proposal cannot be approved by its requester.]",
+            )
+            return
+
+        if not shared_projects.can_write(cfg, sender):
+            self._post_simple_reply(
+                frame,
+                ws,
+                f"[Approval ignored: {sender} does not have write access.]",
+            )
+            return
+
+        if not self._is_trusted(sender):
+            self._post_simple_reply(
+                frame,
+                ws,
+                f"[Approval ignored: {sender} is not on the trust list.]",
+            )
+            return
+
+        def _proposal_summary(prop: dict[str, Any]) -> str:
+            summary = " ".join(str(prop.get("intent") or "").split())[:120]
+            tg = ", ".join(str(t) for t in (prop.get("targets") or []))[:80]
+            if tg:
+                summary += f" -> {tg}"
+            return summary
+
+        def _post_digest(final: dict[str, Any]) -> None:
+            digest = action_proposals.state_digest(final, project)
+            text = json.dumps(digest, ensure_ascii=False)
+            text = self._redact_internal_info(text, room_id)
+            self.post_to_room(
+                room_id,
+                text,
+                content_type="application/perun-state-digest",
+            )
+
+        def _post_started(executing: dict[str, Any]) -> None:
+            text = f"[Proposal {executing['id']} is now executing: {_proposal_summary(executing)}]"
+            self.post_to_room(
+                room_id,
+                self._redact_internal_info(text, room_id),
+            )
+
+        if choice == "approve":
+            try:
+                action_proposals.approve(proposal_id, sender)
+                action_proposals.start_execution(
+                    proposal_id,
+                    on_complete=_post_digest,
+                )
+                self._post_simple_reply(
+                    frame,
+                    ws,
+                    f"[Proposal {proposal_id} approved by {sender} and is now executing.]",
+                )
+                _post_started(action_proposals.get(proposal_id) or proposal)
+            except Exception as exc:
+                self._post_simple_reply(
+                    frame, ws, f"[Approval failed for {proposal_id}: {exc}]"
+                )
+        elif choice == "reject":
+            try:
+                action_proposals.reject(proposal_id, sender, reason=reason)
+                text = f"[Proposal {proposal_id} rejected by {sender}"
+                if reason:
+                    text += f": {reason}"
+                text += "]"
+                self.post_to_room(
+                    room_id,
+                    self._redact_internal_info(text, room_id),
+                )
+                self._post_simple_reply(
+                    frame, ws, f"[Proposal {proposal_id} rejected.]"
+                )
+            except Exception as exc:
+                self._post_simple_reply(
+                    frame, ws, f"[Rejection failed for {proposal_id}: {exc}]"
+                )
+        else:
+            self._post_simple_reply(
+                frame,
+                ws,
+                "[Approval ignored: decision must be 'approve' or 'reject'.]",
+            )
+
+    def _post_simple_reply(self, frame: Dict[str, Any], ws: Any, text: str) -> None:
+        """Send a plain-text reply frame (used for command acknowledgements)."""
+        self._seq += 1
+        self._save_seq()
+        reply_frame = {
+            "id": f"msg_{uuid.uuid4().hex}",
+            "thread_id": frame.get("thread_id", "default"),
+            "sequence_number": self._seq,
+            "timestamp": int(time.time() * 1000),
+            "room_type": _room_type(frame.get("room_id", "")),
+            "room_id": frame.get("room_id", ""),
+            "sender": {"agent_id": self._agent_id, "runtime": "perun"},
+            "content_type": "text/plain",
+            "payload": text,
+            "in_reply_to": frame.get("id"),
+        }
+        self._send_frame(ws, reply_frame)
+
     def _create_action_proposal(self, room_id: str, envelope: Dict[str, Any]) -> Dict[str, Any]:
         """Create an action proposal for the shared project bound to *room_id*."""
         with registry.db.db() as conn:
@@ -1914,6 +2184,9 @@ class PerunChatBridge:
                 self._redact_internal_info(text, room_id),
             )
 
+        policy_auto = shared_projects.is_policy_auto_approve(project["path"])
+        agent_approval = shared_projects.is_auto_approve(project["path"])
+
         try:
             action_proposals.auto_approve_and_execute(
                 project,
@@ -1922,19 +2195,23 @@ class PerunChatBridge:
                 on_complete=_post_digest,
             )
         except Exception as exc:
-            logger.warning(
-                "Auto-approval failed for proposal %s in %s: %s",
-                proposal["id"],
-                room_id,
-                exc,
-            )
-            text = f"[Proposal {proposal['id']} could not start automatically: {exc}]"
-            self.post_to_room(
-                room_id,
-                self._redact_internal_info(text, room_id),
-            )
+            if policy_auto:
+                logger.warning(
+                    "Policy auto-approval failed for proposal %s in %s: %s",
+                    proposal["id"],
+                    room_id,
+                    exc,
+                )
+                text = f"[Proposal {proposal['id']} could not start automatically: {exc}]"
+                self.post_to_room(
+                    room_id,
+                    self._redact_internal_info(text, room_id),
+                )
         # Re-fetch so the caller sees the real post-auto-approve status.
-        return action_proposals.get(proposal["id"]) or proposal
+        fresh = action_proposals.get(proposal["id"]) or proposal
+        if not policy_auto and agent_approval and fresh.get("status") == "pending":
+            self._post_peer_review_request(room_id, cfg, fresh)
+        return fresh
 
     def _build_prompt(
         self,

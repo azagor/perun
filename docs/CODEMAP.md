@@ -515,19 +515,25 @@ Autonomous PerunChat chat participant for the Orchestrator.
   project brief (no local paths or Git remotes) into managed `grp:` rooms;
   `_extract_action_proposal()` parses `[ACTION: …]` markers from replies and
   `_create_action_proposal()` stages a HITL-gated proposal only for currently
-  trusted `rw` participants or the local room owner. Direct-address detection
-  uses this machine's resolved agent id, not a hard-coded chat id.
+  trusted `rw` participants or the local room owner. When **agent approval**
+  (`shared.auto_approve`) is enabled, `_post_peer_review_request()` asks peer
+  `rw` agents to approve/reject with `[APPROVAL: …]` markers; the bridge's
+  `_handle_approval_decision()` validates the sender, calls
+  `action_proposals.approve()` or `reject()`, and starts execution on approval.
+  When **policy auto-approve** (`shared.policy_auto_approve`) is enabled,
+  proposals are approved and executed immediately by the system. Direct-address
+  detection uses this machine's resolved agent id, not a hard-coded chat id.
 * `PERUNCHAT_API_KEY`/`PERUNCHAT_API_ENDPOINT` are in `orchestrator._SECRET_ENV` so
   spawned agent subprocesses never inherit them.
 
 ### Shared Projects modules
 
 * `perun/shared_projects.py` — manifest schema normalization (`shared`,
-  `auto_approve`, `participants`, `external_deps`, `manifest_rev`), trust-list/role
+  `auto_approve` for agent approval, `policy_auto_approve` for system
+  auto-approval, `participants`, `external_deps`, `manifest_rev`), trust-list/role
   validation (`rw`/`ro`), manifest-participant removal with a revision bump,
-  external-dependency path resolution, the project→room id helper, and
-  `is_auto_approve()` (per-project flag overrides the global
-  ``shared_auto_approve`` default).
+  external-dependency path resolution, the project→room id helper, and the
+  `is_auto_approve()` / `is_policy_auto_approve()` accessors.
 * `perun/shared_project_sync.py` — reconciles the trusted subset of the manifest
   participant list with the PerunChat gateway ACL for managed `grp:` rooms,
   creating/lazy-creating or tearing down the dedicated project chat on lifecycle
@@ -558,14 +564,14 @@ Autonomous PerunChat chat participant for the Orchestrator.
   audit enforcement, and State Digests for the project chat. Approved runs use
   the restricted `perun-shared` agent and a target-scoped guard allowlist; the
   proposal id is also the headless run id.
-* `auto_approve_and_execute()` — when a project's autonomous mode is enabled,
-  approves a freshly-created pending proposal and starts its headless run. The
-  recorded approver is a different ``rw`` participant agent when available,
-  falling back to the ``auto`` policy identity. Accepts ``on_started`` and
+* `auto_approve_and_execute()` — when a project's **policy auto-approve**
+  (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
+  proposal and starts its headless run immediately. The recorded approver is
+  always the ``auto`` autonomous policy identity. Accepts ``on_started`` and
   ``on_complete`` callbacks so callers can post lifecycle notices to the bound
   project chat.
-* `_pick_auto_approver()` — selects a peer ``rw`` participant that is not the
-  original requester so autonomous approvals remain objective.
+* `_pick_auto_approver()` — returns the ``auto`` policy identity; policy
+  auto-approval is a system decision, not a peer review.
 * `_humanize_result()` — shortens run-result JSON errors for chat State Digests
   without echoing upstream response bodies.
 * `retry()` — clones a terminal proposal into a fresh pending proposal owned by

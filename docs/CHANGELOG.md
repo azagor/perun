@@ -4,6 +4,30 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- **Agent approval in chat.** Shared projects can now require a peer `rw`
+  agent to explicitly approve or reject action proposals in the dedicated
+  project chat. A review request is posted when a proposal is created; peers
+  reply with an `[APPROVAL: {"proposal_id": "...", "decision": "approve"}]`
+  or `[APPROVAL: {"proposal_id": "...", "decision": "reject",
+  "reason": "..."}]` marker. Only a different `rw` participant on the trust
+  list can approve or reject; the requester cannot approve their own proposal.
+- **Policy auto-approve flag.** A separate `policy_auto_approve` manifest flag
+  (and Shared tab checkbox) enables the previous system-immediate-auto-approve
+  behaviour. It is independent of agent approval and overrides it when enabled.
+
+### Changed
+
+- **Autonomous mode now means agent approval.** The `shared.auto_approve`
+  flag and the Shared tab's **Autonomous mode** checkbox now enable chat-agent
+  peer review instead of immediate system auto-approval. Projects that were
+  relying on the old behaviour must enable `shared.policy_auto_approve`
+  instead.
+- Autonomous policy approvals now always record the generic `auto` identity;
+  they no longer attribute the approval to a passive manifest peer, which
+  created a misleading audit trail.
+
 ## v0.8.3 - 2026-10-25
 
 ### Added

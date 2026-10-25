@@ -926,7 +926,7 @@ def test_reply_creates_proposal_for_rw_participant(bridge_env, tmp_path):
     assert "awaiting owner approval" in sent
 
 
-def test_reply_reports_auto_approved_and_executing_when_autonomous_mode_on(
+def test_reply_reports_policy_auto_approved_and_executing(
     bridge_env, tmp_path, monkeypatch
 ):
     from perun import action_proposals
@@ -940,7 +940,7 @@ def test_reply_reports_auto_approved_and_executing_when_autonomous_mode_on(
         ],
     )
     monkeypatch.setattr(
-        action_proposals.shared_projects, "is_auto_approve", lambda _path: True
+        action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True
     )
 
     def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
@@ -962,11 +962,161 @@ def test_reply_reports_auto_approved_and_executing_when_autonomous_mode_on(
     proposals = action_proposals.list_by_project(project["id"])
     assert len(proposals) == 1
     assert proposals[0]["status"] == "approved"
-    assert proposals[0]["approved_by"] == "glados"
+    assert proposals[0]["approved_by"] == action_proposals.AUTO_APPROVER
     sent = ws.send.call_args[0][0]
     assert "[ACTION:" not in sent
-    assert "auto-approved and executing" in sent
+    assert "policy auto-approved and executing" in sent
     assert "auto-approval failed" not in sent
+
+
+def test_reply_posts_peer_review_request_when_agent_approval_enabled(
+    bridge_env, tmp_path, monkeypatch
+):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path,
+        participants=[
+            {"agent_id": "frambo", "roles": ["rw"]},
+            {"agent_id": "glados", "roles": ["rw"]},
+        ],
+    )
+    monkeypatch.setattr(
+        action_proposals.shared_projects, "is_auto_approve", lambda _path: True
+    )
+    posted: list[tuple[str, str]] = []
+    monkeypatch.setattr(bridge, "post_to_room", lambda room_id, text, **kw: posted.append((room_id, text)))
+
+    orchestrator.run_and_wait.return_value = _run_result(
+        'Sure.\n[ACTION: {"intent": "add a README", "action_type": "create", '
+        '"targets": ["README.md"], "details": {}}]',
+        uid="run_1",
+    )
+    frame = _chat_frame(room=room, text="please add a README")
+    frame["sender"]["agent_id"] = "frambo"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    proposals = action_proposals.list_by_project(project["id"])
+    assert len(proposals) == 1
+    assert proposals[0]["status"] == "pending"
+    assert any("Peer review requested" in p[1] for p in posted)
+    assert any("@glados" in p[1] for p in posted)
+    assert any("APPROVAL" in p[1] for p in posted)
+
+
+def test_peer_agent_approves_proposal_via_chat_marker(
+    bridge_env, tmp_path, monkeypatch
+):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path,
+        participants=[
+            {"agent_id": "frambo", "roles": ["rw"]},
+            {"agent_id": "glados", "roles": ["rw"]},
+        ],
+    )
+    bridge.settings.perunchat_trusted = ["frambo", "glados"]
+    target = str(Path(project["path"]) / "README.md")
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "add a README", "targets": [target], "action_type": "create"},
+    )
+
+    def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
+        return action_proposals.get(proposal_id)
+
+    monkeypatch.setattr(action_proposals, "start_execution", fake_start)
+
+    marker = json.dumps(
+        {"proposal_id": proposal["id"], "decision": "approve", "reason": ""},
+        ensure_ascii=False,
+    )
+    frame = _chat_frame(room=room, text=f"[APPROVAL: {marker}]")
+    frame["sender"]["agent_id"] = "glados"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    approved = action_proposals.get(proposal["id"])
+    assert approved["status"] == "approved"
+    assert approved["approved_by"] == "glados"
+
+
+def test_peer_agent_rejects_proposal_via_chat_marker(
+    bridge_env, tmp_path, monkeypatch
+):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path,
+        participants=[
+            {"agent_id": "frambo", "roles": ["rw"]},
+            {"agent_id": "glados", "roles": ["rw"]},
+        ],
+    )
+    bridge.settings.perunchat_trusted = ["frambo", "glados"]
+    target = str(Path(project["path"]) / "README.md")
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "add a README", "targets": [target], "action_type": "create"},
+    )
+
+    marker = json.dumps(
+        {
+            "proposal_id": proposal["id"],
+            "decision": "reject",
+            "reason": "not now",
+        },
+        ensure_ascii=False,
+    )
+    frame = _chat_frame(room=room, text=f"[APPROVAL: {marker}]")
+    frame["sender"]["agent_id"] = "glados"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    rejected = action_proposals.get(proposal["id"])
+    assert rejected["status"] == "rejected"
+    assert rejected["approved_by"] == "glados"
+
+
+def test_requester_cannot_approve_own_proposal_via_chat_marker(
+    bridge_env, tmp_path, monkeypatch
+):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path,
+        participants=[{"agent_id": "frambo", "roles": ["rw"]}],
+    )
+    bridge.settings.perunchat_trusted = ["frambo"]
+    target = str(Path(project["path"]) / "README.md")
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "add a README", "targets": [target], "action_type": "create"},
+    )
+
+    marker = json.dumps(
+        {"proposal_id": proposal["id"], "decision": "approve", "reason": ""},
+        ensure_ascii=False,
+    )
+    frame = _chat_frame(room=room, text=f"[APPROVAL: {marker}]")
+    frame["sender"]["agent_id"] = "frambo"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    assert action_proposals.get(proposal["id"])["status"] == "pending"
 
 
 def test_reply_preserves_absolute_target_in_action_envelope(bridge_env, tmp_path):

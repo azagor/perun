@@ -122,6 +122,9 @@ def normalize(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     if "auto_approve" in data:
         data["auto_approve"] = _is_truthy(data["auto_approve"])
 
+    if "policy_auto_approve" in data:
+        data["policy_auto_approve"] = _is_truthy(data["policy_auto_approve"])
+
     participants, pw = _normalize_participants(data.get("participants"))
     deps, dw = _normalize_external_deps(data.get("external_deps"))
     warnings += pw + dw
@@ -183,16 +186,30 @@ def can_write(data: dict[str, Any] | None, agent_id: str) -> bool:
 
 
 def is_auto_approve(project_path: str | Path) -> bool:
-    """Effective auto-approve setting for a project.
+    """Whether chat-agent peer approval ("autonomous mode") is enabled.
 
-    The per-project manifest flag ``shared.auto_approve`` overrides the global
-    ``shared_auto_approve`` default. When neither is set, autonomous mode is
-    disabled.
+    When this is true, pending proposals are routed to peer ``rw`` agents in
+    the project chat for explicit approve/reject decisions instead of waiting
+    for a human dashboard click.
     """
     snap = manifest.load(project_path)
     data = snap.get("data") or {}
-    if "auto_approve" in data:
-        return _is_truthy(data["auto_approve"])
+    return _is_truthy(data.get("auto_approve", False))
+
+
+def is_policy_auto_approve(project_path: str | Path) -> bool:
+    """Whether policy auto-approval is enabled.
+
+    When this is true, pending proposals are approved and executed immediately
+    by the autonomous policy without agent review. This is a separate,
+    higher-risk mode from ``is_auto_approve``. The global
+    ``shared_auto_approve`` setting acts as the default when the per-project
+    manifest does not specify ``policy_auto_approve``.
+    """
+    snap = manifest.load(project_path)
+    data = snap.get("data") or {}
+    if "policy_auto_approve" in data:
+        return _is_truthy(data["policy_auto_approve"])
     from . import config
 
     return config.Settings.load().shared_auto_approve
@@ -294,6 +311,7 @@ def load(project_path: str | Path) -> dict[str, Any]:
     return {
         "shared": out.get("shared", False),
         "auto_approve": out.get("auto_approve", False),
+        "policy_auto_approve": out.get("policy_auto_approve", False),
         "participants": out.get("participants", []),
         "external_deps": out.get("external_deps", []),
         "manifest_rev": out.get("manifest_rev", 1),
@@ -328,6 +346,7 @@ def apply_payload(
 
     data["shared"] = _is_truthy(payload.get("shared", True))
     data["auto_approve"] = _is_truthy(payload.get("auto_approve", False))
+    data["policy_auto_approve"] = _is_truthy(payload.get("policy_auto_approve", False))
     data["participants"] = participants
     data["external_deps"] = deps
     bump_manifest_rev(data)

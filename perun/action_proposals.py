@@ -37,20 +37,13 @@ AUTO_APPROVER = "auto"
 
 
 def _pick_auto_approver(cfg: dict[str, Any], requester: str) -> str:
-    """Choose a peer agent to record as the autonomous approver.
+    """Return the identity recorded for an autonomous approval.
 
-    To keep the review objective, the approver is a different ``rw`` participant
-    than the agent that proposed the task. If no other participant is available,
-    fall back to the generic autonomous identity.
+    Autonomous approval is a policy decision by Perun, not a review by another
+    participant. Recording a passive manifest peer as the approver would create
+    a false audit trail (the peer may be offline and never saw the proposal),
+    so the approver is always the generic autonomous policy identity.
     """
-    requester_id = str(requester or "").strip().lower()
-    for p in shared_projects.get_participants(cfg):
-        roles = {str(r).strip().lower() for r in p.get("roles", [])}
-        if "rw" not in roles:
-            continue
-        agent_id = str(p.get("agent_id") or "").strip().lower()
-        if agent_id and agent_id != requester_id:
-            return p.get("agent_id") or agent_id
     return AUTO_APPROVER
 
 
@@ -71,7 +64,7 @@ def auto_approve_and_execute(
     """
     if proposal.get("status") != "pending":
         return None
-    if not shared_projects.is_auto_approve(project["path"]):
+    if not shared_projects.is_policy_auto_approve(project["path"]):
         return None
     cfg = shared_projects.load(project["path"])
     approver = _pick_auto_approver(cfg, proposal.get("requester", ""))
