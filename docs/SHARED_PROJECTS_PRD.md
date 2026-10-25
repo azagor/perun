@@ -132,7 +132,47 @@ external) are readable/writable.
 - **FR-19** Project→chat feedback: after each project run, a State Digest (files
   changed, outcome, manifest_rev) is posted to the dedicated room.
 
-### 3.5 Non-Functional Requirements
+### 3.5 Autonomous Mode (v0.8.3)
+
+- **FR-20** Optional auto-approval: the Shared tab exposes an **Autonomous mode**
+  toggle that persists `shared.auto_approve` in the project manifest. When
+  enabled, chat-agent proposals are approved and executed automatically without
+  waiting for a human click.
+- **FR-21** Objective approver selection: the autonomous approver recorded in the
+  audit trail is a different `rw` participant than the agent that proposed the
+  task. If no other `rw` participant exists, the generic `auto` policy identity
+  is recorded.
+- **FR-22** Human override is always available: the dashboard continues to show
+  Approve / Run / Retry / Delete controls, and humans can execute proposals even
+  when autonomous mode is enabled.
+
+### 3.6 Lifecycle Chat Notifications (v0.8.3)
+
+- **FR-23** Execution start notice: when a proposal enters `executing` state, a
+  plain-text "Proposal … is now executing" notice is posted to the dedicated
+  project chat.
+- **FR-24** Completion/failure digest: on run end, the existing State Digest is
+  posted to the chat with outcome, targets, and humanized notes.
+- **FR-25** Rejection notice: when an owner rejects a pending proposal, a brief
+  notice is posted to the chat, including the rejection reason if one was given.
+- **FR-26** Auto-approve failure notice: if autonomous mode is enabled but the
+  run cannot start (e.g., orchestrator unavailable), a failure notice is posted
+  so participants know manual approval is required.
+- **FR-27** Redaction: all chat notices pass through the same DLP redaction used
+  for digests (`_redact_internal_info`) before leaving the process.
+
+### 3.7 Dashboard UX (v0.8.3)
+
+- **FR-28** Active/completed split: the Shared tab proposal list separates active
+  proposals (`pending`, `approved`, `executing`) from completed proposals
+  (`executed`, `failed`, `rejected`, `expired`).
+- **FR-29** Collapsed completed list: completed proposals are rendered in a
+  collapsed-by-default section with a count, expandable via a header click.
+- **FR-30** No run confirmations: `Approve & run`, `Run now`, and `Retry` start
+  the headless run immediately. Confirmation dialogs remain for destructive or
+  irreversible actions (`Approve only`, `Reject`, `Cancel`, `Delete`).
+
+### 3.8 Non-Functional Requirements
 
 - **NFR-1 Security:** least privilege; manifest injected to chat passes the same
   `memory.is_sensitive()` guard as memory storage; no secrets, keys, or absolute
@@ -364,10 +404,10 @@ so I can re-verify or remove them.
 
 | Where | Change |
 |-------|--------|
-| `perun.md` front matter | `shared: bool`, `participants: [{agent_id, roles}...]`, `external_deps: [{name, path, access}...]` (FR-4). |
+| `perun.md` front matter | `shared: bool`, `auto_approve: bool`, `participants: [{agent_id, roles}...]`, `external_deps: [{name, path, access}...]` (FR-4, FR-20). |
 | Perun registry/DB | `project_chats` table: `(project_slug, room_id, managed_by, state, manifest_rev, last_sync_at)`; `participant_status` view joining trust list. |
 | PerunChat `rooms`/`room_members` | `managed_by` column on rooms; endpoint guard: member mutations allowed only to `managed_by` key (or owner). |
-| Bridge | `Action Envelope` + `State Digest` schemas; digest quota; `manifest_rev` in prompt assembly. |
+| Bridge | `Action Envelope` + `State Digest` schemas; digest quota; `manifest_rev` in prompt assembly; lifecycle notices for started/rejected/failed/completed proposals. |
 
 ### 5.3 Sync flows
 
@@ -540,7 +580,9 @@ contract.
 | 15 | Owner absent for HITL approval | Proposal timeout | Auto-expire with chat notice after N hours; requester may re-propose. | Dashboard shows expired queue. |
 | 16 | Sensitive field in manifest | `memory.is_sensitive()` guard | Field redacted from chat context, logged. | Owner review; never silently leaked. |
 | 17 | External agent sends code/prompt-injection text | Existing `<untrusted_peer_input>` wrapping + Chat Agent instructions | Treated as data; Chat Agent may not execute; envelopes validated. | Defense in depth with Path Guard. |
-| 18 | Clock skew / stale catch-up messages | Existing reconnect catch-up logic | Gap acknowledged rather than mis-replied. | Existing behavior retained. |
+| 18 | Auto-approve fails after proposal created | `start_execution()` raises | Proposal remains `approved`; failure notice posted to chat; owner can run manually. | Best-effort notification; manual retry from dashboard. |
+| 19 | Notification redaction fails | `_redact_internal_info()` exception | Notice is dropped rather than posted unredacted. | Logged; no sensitive leak. |
+| 20 | Clock skew / stale catch-up messages | Existing reconnect catch-up logic | Gap acknowledged rather than mis-replied. | Existing behavior retained. |
 
 ---
 

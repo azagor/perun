@@ -48,15 +48,19 @@ them all — no matter which folder you happened to open.
   history), retries empty replies, and persists replies in a write-ahead outbox
   so no message is lost across reconnects. Chat messages are untrusted data;
   state-changing actions require human approval tokens.
-* **Shared Projects (v0.8.0).** Bind a Perun project to a dedicated PerunChat
+* **Shared Projects (v0.8.0+).** Bind a Perun project to a dedicated PerunChat
   `grp:` room with trusted participants. Chat-originated action proposals are
   gated by local HMAC-SHA256 HITL approval; one click approves and starts a
   headless `opencode run` in the background (no TUI), using the
   policy-enforcing `perun-guard` filesystem MCP server with post-run audits.
   Headless runs use `--standalone` and injected API-key credentials so any cloud
-  model you have connected works reliably. Failed or terminal proposals can be
-  retried or deleted from the dashboard. Participant roles (`rw`/`ro`) are
-  enforced, and approver identity plus the HITL signing secret are configurable.
+  model you have connected works reliably. Since v0.8.3, Shared Projects also
+  support an optional **Autonomous mode**: when enabled, chat-agent proposals are
+  auto-approved by a peer `rw` participant and executed without a human click.
+  Lifecycle notices (started, completed, failed, rejected) are posted back to the
+  project chat, and completed proposals move to a collapsed-by-default list in the
+  dashboard. Participant roles (`rw`/`ro`) are enforced, and approver identity
+  plus the HITL signing secret are configurable.
 * **A bounded context budget.** `AGENTS.md` no longer has to grow without limit.
   Reference material moves into a **Context layer** — keyed, retrievable
   documents — and the agent pulls what it needs (`perun_context("<task>")`)
