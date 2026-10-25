@@ -17,11 +17,34 @@ from typing import Any
 
 from . import config, opencode_config
 
-# Cache provider list the same way /api/models does — ``opencode auth list`` is
+# Cache provider list the same way /api/models does - ``opencode auth list`` is
 # fast but can still churn if the dashboard is reloaded repeatedly.
 _PROVIDERS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 _PROVIDERS_TTL = 30.0
 _PROVIDERS_LOCK = threading.Lock()
+
+# Map OpenCode integration IDs to the environment variable name the OpenCode
+# CLI expects for API-key authentication. This lets headless ``opencode run``
+# use the same cloud credentials the TUI/desktop app already authenticated.
+_AUTH_ENV_NAMES: dict[str, str] = {
+    "opencode": "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_GO_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "moonshotai": "MOONSHOT_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "xai": "XAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
+    "perplexity": "PERPLEXITY_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "cerebras": "CEREBRAS_API_KEY",
+    "togetherai": "TOGETHER_API_KEY",
+    "fireworks-ai": "FIREWORKS_API_KEY",
+    "ollama-cloud": "OLLAMA_CLOUD_API_KEY",
+}
 
 # OpenCode provider IDs are lowercase alphanumeric with dashes/underscores.
 _PROVIDER_ID_RE = re.compile(r"^[a-z0-9_-]+$")
@@ -227,6 +250,214 @@ def _auth_providers(timeout: float = 5.0) -> dict[str, Any]:
             "connections": conns,
         })
     return {"ok": True, "providers": providers, "count": len(providers), "error": None}
+
+
+def _integration_env_var(integration_id: str) -> str:
+    """Canonical env-var name for an OpenCode integration ID."""
+    return _AUTH_ENV_NAMES.get(integration_id) or (
+        re.sub(r"[^A-Za-z0-9_]+", "_", integration_id).upper() + "_API_KEY"
+    )
+
+
+def active_api_key_credentials(*, timeout: float = 10.0) -> list[dict[str, str]]:
+    """Return active API-key credentials from ``opencode auth export``.
+
+    Each entry contains ``integration_id``, ``env_var`` and ``key``. The
+    credentials are read fresh on every call and are never cached, logged, or
+    stored by Perun; they are only returned so they can be injected directly
+    into a child ``opencode run`` process.
+    """
+    creds: list[dict[str, str]] = []
+    argv = _opencode_argv() + ["auth", "export"]
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.returncode == 0:
+            raw = json.loads(proc.stdout or "[]")
+            for entry in raw if isinstance(raw, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                if not entry.get("active"):
+                    continue
+                value = entry.get("value") or {}
+                if value.get("type") != "key":
+                    continue
+                key = str(value.get("key") or "").strip()
+                if not key:
+                    continue
+                integration = str(entry.get("integrationID") or "").strip()
+                if not integration:
+                    continue
+                creds.append({
+                    "integration_id": integration,
+                    "env_var": _integration_env_var(integration),
+                    "key": key,
+                })
+    except Exception:
+        # Graceful degradation: if auth export fails (opencode missing, user
+        # denies export, etc.), fall back to the previous behavior. The run may
+        # still work if the provider does not need a key or if the key is in
+        # opencode.json.
+        pass
+    return [dict(c) for c in creds]
+
+
+def auth_env_for_subprocess(*, timeout: float = 10.0) -> dict[str, str]:
+    """Return API-key env vars for every active OpenCode credential.
+
+    Headless ``opencode run`` does not share the TUI/desktop app's interactive
+    authentication session. Exporting active credentials and injecting them as
+    environment variables lets the same cloud providers work in daemon runs.
+    The keys are only passed to the child process and are never cached or stored
+    by Perun.
+    """
+    return {c["env_var"]: c["key"]
+            for c in active_api_key_credentials(timeout=timeout)}
+
+
+# OpenCode sometimes lists the same third-party model under the ``opencode``
+# provider namespace, but that namespace is only reachable for OpenCode's own
+# models (e.g. ``opencode/big-pickle``). For headless runs we prefer the
+# API-key gateway that actually hosts the model.
+_PROVIDER_ALIASES: dict[str, list[str]] = {
+    "opencode": ["opencode-go"],
+}
+
+# Cache for ``opencode models`` output.
+_MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+_MODELS_TTL = 60.0
+_MODELS_LOCK = threading.Lock()
+
+
+def _available_models(*, refresh: bool = False, timeout: float = 10.0) -> frozenset[str]:
+    """Return the set of ``provider/model`` IDs OpenCode currently exposes."""
+    now = time.time()
+    with _MODELS_LOCK:
+        if (not refresh and _MODELS_CACHE["data"] is not None
+                and now - _MODELS_CACHE["ts"] < _MODELS_TTL):
+            return _MODELS_CACHE["data"]
+
+    models: set[str] = set()
+    argv = _opencode_argv() + ["models"]
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.returncode == 0:
+            for line in (proc.stdout or "").splitlines():
+                line = line.strip()
+                if line and "/" in line and not line.startswith("["):
+                    models.add(line.split()[0])
+    except Exception:
+        proc = None
+
+    if proc is not None and proc.returncode == 0:
+        data = frozenset(models)
+        with _MODELS_LOCK:
+            _MODELS_CACHE.update(ts=now, data=data)
+        return data
+
+    # Return the previous cache (or an empty set) without overwriting it.
+    with _MODELS_LOCK:
+        cached = _MODELS_CACHE["data"]
+    return cached if cached is not None else frozenset()
+
+
+def _local_provider_ids() -> set[str]:
+    """Return provider IDs that are known to run on the local machine.
+
+    Built-in local providers are taken from the catalog; custom providers are
+    detected from the configured ``baseURL`` when it points to localhost.
+    """
+    local = {pid for pid, meta in _PROVIDER_CATALOG.items()
+             if meta.get("kind") == "local"}
+    try:
+        configured, _ = opencode_config.configured_providers()
+        for cp in configured:
+            base = (cp.get("base_url") or "").lower()
+            if "localhost" in base or "127.0.0.1" in base or "::1" in base:
+                local.add(cp["id"])
+    except Exception:
+        pass
+    return local
+
+
+def resolve_run_model(model: str, *, refresh: bool = False,
+                      timeout: float = 10.0) -> tuple[str, dict[str, str]]:
+    """Resolve a model string to one that works with headless ``opencode run``.
+
+    The requested provider is honored when it has an active API-key credential.
+    If the requested provider is authenticated but known to mis-list models from
+    another gateway, the gateway is preferred when it also offers the model. If
+    the requested provider is not authenticated, we look for an active cloud
+    provider that exposes the same model base; local providers are only used as
+    a last resort so a slow local model is never silently substituted for a
+    cloud model.
+
+    Returns ``(resolved_model, auth_env)``. ``resolved_model`` is the original
+    string when no better match is found; ``auth_env`` contains the API-key
+    environment variables for all active credentials, even when resolution does
+    not change, so a child process can authenticate in standalone mode.
+    """
+    creds = active_api_key_credentials(timeout=timeout)
+    env = {c["env_var"]: c["key"] for c in creds}
+    active = {c["integration_id"] for c in creds}
+    requested = (model or "").strip()
+    if not requested:
+        return "", env
+    if "/" not in requested:
+        return requested, env
+
+    prefix, _, base = requested.partition("/")
+    models = _available_models(refresh=refresh, timeout=timeout)
+
+    # If the requested provider is active, prefer it unless a known alias is
+    # active and lists the same model (e.g. ``opencode/kimi-k2.7-code`` is
+    # actually hosted on ``opencode-go``).
+    if prefix in active:
+        for alias in _PROVIDER_ALIASES.get(prefix, []):
+            if alias in active and f"{alias}/{base}" in models:
+                return f"{alias}/{base}", env
+        if requested in models:
+            return requested, env
+        # The requested provider is authenticated but the exact model id is not
+        # advertised; keep the user's choice and let the run fail clearly.
+        return requested, env
+
+    def _candidate(prefixes: list[str]) -> str | None:
+        for candidate_prefix in prefixes:
+            if candidate_prefix == prefix:
+                continue
+            candidate = f"{candidate_prefix}/{base}"
+            if candidate in models:
+                return candidate
+        return None
+
+    # Requested provider is not authenticated via API key. Try aliases first,
+    # then active cloud providers, and only fall back to local providers when
+    # no cloud option exists.
+    aliases = _PROVIDER_ALIASES.get(prefix, [])
+    local_ids = _local_provider_ids()
+    cloud = [p for p in active if p not in local_ids]
+    local = [p for p in active if p in local_ids]
+
+    for prefixes in (aliases, cloud, local):
+        candidate = _candidate(prefixes)
+        if candidate:
+            return candidate, env
+
+    return requested, env
 
 
 def list_providers(*, refresh: bool = False, timeout: float = 5.0) -> dict[str, Any]:

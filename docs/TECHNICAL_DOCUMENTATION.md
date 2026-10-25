@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.1 (see §15). This release ships the **Shared Projects** feature and its hardening: Perun projects can be bound to dedicated PerunChat group rooms (`grp:`), chat-originated action proposals are gated by local HMAC-SHA256 HITL approval, approved runs run under the generated deny-all `perun-shared` agent with a target-scoped `perun-guard` filesystem MCP server plus a post-run filesystem audit, participant roles (`rw`/`ro`) and approver identity are configurable, trust revocation removes agents from the manifest and re-syncs the room, PerunChat memory is room/project scoped, and agent ids are treated as machine-local gateway identities. The HITL signing secret is `PERUN_HITL_SECRET` / `perun_hitl_secret`. See `docs/SHARED_PROJECTS_PRD.md` and `docs/CHANGELOG.md` for details. `perun.__version__` reports `0.8.1`.
+**Latest release:** v0.8.2 (see §15). This release ships the **Shared Projects** feature and its hardening: Perun projects can be bound to dedicated PerunChat group rooms (`grp:`), chat-originated action proposals are gated by local HMAC-SHA256 HITL approval, approved runs run under the generated deny-all `perun-shared` agent with a target-scoped `perun-guard` filesystem MCP server plus a post-run filesystem audit, participant roles (`rw`/`ro`) and approver identity are configurable, trust revocation removes agents from the manifest and re-syncs the room, PerunChat memory is room/project scoped, and agent ids are treated as machine-local gateway identities. The HITL signing secret is `PERUN_HITL_SECRET` / `perun_hitl_secret`. See `docs/SHARED_PROJECTS_PRD.md` and `docs/CHANGELOG.md` for details. `perun.__version__` reports `0.8.2`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -747,6 +747,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/execute` | Claim an approved proposal and start its headless run in the background (`202`) |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve-and-execute` | Approve and start the headless run in one owner action (`202`) |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/retry` | Clone a terminal proposal into a fresh pending proposal (`failed`/`rejected`/`expired`/`executed`) |
+| DELETE | `/api/projects/{slug}/proposals/{proposal_id}` | Delete a proposal; `executing` proposals are rejected |
 | GET | `/api/projects/{slug}/shared` | Shared-project config, local chat binding, and a live `project_chat` description (room id, state, `managed_by`, manifest rev, expected vs. live members — gateway errors are reported in `project_chat.error`, never as a 5xx) |
 | PUT | `/api/projects/{slug}/shared` | Replace `shared`/`participants`/`external_deps`; validates against the trust list, bumps `manifest_rev`, mirrors `opencode.json`, and re-syncs the chat (a failed sync is returned in `chat_sync`, the manifest save still succeeds) |
 | POST | `/api/projects/{slug}/shared/sync` | Force-reconcile the project chat with the manifest participant list: create the managed room if missing, add declared participants, remove everyone else. Idempotent |
@@ -765,7 +767,10 @@ short-lived HMAC token bound to the proposal; `execute` (or the one-click
 - the run is `opencode run --format json --auto` in the project directory with
   `stdin=DEVNULL`, `CREATE_NO_WINDOW` on Windows, the project's model override,
   and the generated deny-all `perun-shared` agent; `--auto` removes permission
-  prompts, so no human keystrokes are needed;
+  prompts, so no human keystrokes are needed. Shared-project runs also use
+  `--standalone` and active API-key credentials are exported from
+  `opencode auth export` and injected as environment variables, so cloud models
+  work without relying on the interactive background service;
 - the proposal id *is* the run id (`run_uid`), which makes the run addressable
   for cancellation (`POST /api/runs/{proposal_id}/cancel`), logs, and SSE;
 - the HTTP handler returns `202` immediately; the agent runs in a daemon thread
@@ -829,6 +834,11 @@ server, and polls `/api/health` until the new version responds. Job state and a
 progress log are persisted to `~/.perun/update-state.json` so the dashboard can
 stream status across restarts. Server shutdown prefers uvicorn's
 `should_exit`, falls back to `SIGINT`, and only force-exits as a last resort.
+For Windows installer updates, the runner waits for any already-running
+`PerunSetup.exe` instance to finish, runs the installer with
+`/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTARTAPPLICATIONS`, and includes
+the installer log tail in the failure message if the installer returns a
+non-zero exit code.
 
 `GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
 literal path is not swallowed by the parameterised route.

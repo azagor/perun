@@ -4,6 +4,44 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.8.2 - 2026-10-25
+
+### Added
+
+- **Rock-solid provider authentication for headless shared-project runs.**
+  Approved action proposals now execute in a private OpenCode server
+  (`--standalone`) with active API-key credentials injected as environment
+  variables exported from `opencode auth export`. The model string is resolved
+  against the user's connected providers; known aliases such as
+  `opencode/kimi-k2.7-code` are routed to the authenticated gateway that
+  actually hosts the model (e.g. `opencode-go/kimi-k2.7-code`). Credentials are
+  never logged or persisted by Perun.
+- **Proposal retry and delete.** Terminal proposals can be retried
+  (`POST /api/projects/{slug}/proposals/{id}/retry`), creating a fresh pending
+  proposal owned by the room owner and tagged `retry_of`. Proposals that are
+  not `executing` can be deleted (`DELETE /api/projects/{slug}/proposals/{id}`)
+  and the action is logged to project activity. Dashboard buttons expose both
+  actions.
+
+### Fixed
+
+- State-digest notes are humanized: JSON provider errors are summarized as
+  `type: message` instead of dumping the raw upstream response body into chat.
+- Exported provider credentials are read fresh for each headless run and are no
+  longer cached by Perun, matching the policy that Perun does not store
+  credentials.
+- Model resolution only falls back to local providers (`ollama`, `lmstudio`,
+  `vllm`) when no active cloud provider offers the requested model, so a slow
+  local model is never silently substituted for a cloud model.
+- `retry` is rejected for non-terminal proposals (`pending`, `approved`,
+  `executing`).
+- **Windows installer updates are more robust.** The update runner now invokes
+  the Inno Setup installer with `/CLOSEAPPLICATIONS`, `/FORCECLOSEAPPLICATIONS`,
+  and `/NORESTARTAPPLICATIONS` so a lingering Perun process cannot lock files
+  and the installer cannot race with the update runner when restarting Perun.
+  If the installer still fails, the last 2,000 characters of its log are
+  included in the error message.
+
 ## v0.8.1 - 2026-10-25
 
 ### Added

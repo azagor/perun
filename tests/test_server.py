@@ -300,6 +300,57 @@ def test_post_proposal_digest_redacts_paths_and_remains_json(client, tmp_path, m
     assert "[redacted]" in digest["notes"]
 
 
+def test_retry_proposal_creates_new_pending(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["retry-bot"])
+    target = tmp_path / "shared-retry"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedRetry", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "retry-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "retry-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    prop_id = r.json()["proposal"]["id"]
+    client.post(f"/api/projects/{slug}/proposals/{prop_id}/reject", json={"reason": "no time"})
+
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/retry")
+    assert r.status_code == 200, r.text
+    new = r.json()["proposal"]
+    assert new["id"] != prop_id
+    assert new["status"] == "pending"
+    assert new["details"]["retry_of"] == prop_id
+
+
+def test_delete_proposal_removes_it(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["del-bot"])
+    target = tmp_path / "shared-del"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedDel", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "del-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "del-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    prop_id = r.json()["proposal"]["id"]
+
+    r = client.delete(f"/api/projects/{slug}/proposals/{prop_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] is True
+    assert client.get(f"/api/projects/{slug}/proposals").json()["proposals"] == []
+
+
 def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     """Enabling/disabling shared mode mirrors the perun-guard MCP entry in opencode.json."""
     from perun import server

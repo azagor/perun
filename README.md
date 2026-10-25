@@ -53,8 +53,10 @@ them all — no matter which folder you happened to open.
   gated by local HMAC-SHA256 HITL approval; one click approves and starts a
   headless `opencode run` in the background (no TUI), using the
   policy-enforcing `perun-guard` filesystem MCP server with post-run audits.
-  Participant roles (`rw`/`ro`) are enforced, and approver identity plus the HITL
-  signing secret are configurable.
+  Headless runs use `--standalone` and injected API-key credentials so any cloud
+  model you have connected works reliably. Failed or terminal proposals can be
+  retried or deleted from the dashboard. Participant roles (`rw`/`ro`) are
+  enforced, and approver identity plus the HITL signing secret are configurable.
 * **A bounded context budget.** `AGENTS.md` no longer has to grow without limit.
   Reference material moves into a **Context layer** — keyed, retrievable
   documents — and the agent pulls what it needs (`perun_context("<task>")`)

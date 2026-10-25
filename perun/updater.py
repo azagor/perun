@@ -822,23 +822,71 @@ def _apply_git(plan: dict[str, Any]) -> None:
         _log("Dependencies installed.", level="ok")
 
 
+def _installer_mutex_running() -> bool:
+    """Return True if another PerunSetup installer instance is already running."""
+    if os.name == "nt":
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq PerunSetup.exe", "/NH"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5,
+            )
+            return "PerunSetup.exe" in (proc.stdout or "")
+        except Exception:
+            return False
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-x", "PerunSetup"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5,
+        )
+        return proc.returncode == 0 and bool(proc.stdout.strip())
+    except Exception:
+        return False
+
+
+def _wait_for_installer_mutex(timeout: float = 60.0) -> None:
+    """Block until no other PerunSetup installer is running."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _installer_mutex_running():
+            return
+        time.sleep(1.0)
+    raise UpdateError("another PerunSetup installer instance is already running")
+
+
 def _apply_installer(plan: dict[str, Any]) -> None:
     installer = Path(plan["installer"])
     if not installer.exists():
         raise UpdateError(f"installer not found: {installer}")
+    _wait_for_installer_mutex()
     log_file = updates_dir() / f"installer-{plan.get('job', 'update')}.log"
     _set_state(state="applying",
                message="Running the installer (Windows may ask for permission)…")
+    # /CLOSEAPPLICATIONS and /FORCECLOSEAPPLICATIONS make the installer close
+    # any running Perun processes that would otherwise keep files locked and
+    # cause a code-1 failure. /NORESTARTAPPLICATIONS prevents the installer from
+    # restarting the app itself; the update runner already restarts Perun after
+    # the installer finishes. The runner already waits for the old server PID,
+    # but child processes or a second console instance can still hold handles.
     proc = subprocess.run(
         [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-         "/SP-", f"/LOG={log_file}"],
+         "/SP-", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS",
+         "/NORESTARTAPPLICATIONS", f"/LOG={log_file}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=1800, creationflags=_creationflags(),
     )
     if proc.returncode != 0:
+        log_tail = ""
+        try:
+            if log_file.exists():
+                log_tail = log_file.read_text(encoding="utf-8", errors="replace")[-2000:]
+        except OSError:
+            pass
         raise UpdateError(
             f"installer exited with code {proc.returncode} "
             f"(log: {log_file})"
+            + (f"\n\n--- installer log tail ---\n{log_tail}" if log_tail else "")
         )
     _log(f"Installer finished (log: {log_file}).", level="ok")
 

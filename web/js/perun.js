@@ -1958,10 +1958,15 @@ async function proposalsCard(detail) {
             actions.push(`<button class="btn sm primary" data-approve-run="${esc(prop.id)}">Approve &amp; run</button>`);
             actions.push(`<button class="btn sm ghost" data-approve="${esc(prop.id)}">Approve only</button>`);
             actions.push(`<button class="btn sm ghost" data-reject="${esc(prop.id)}">Reject</button>`);
+            actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         } else if (prop.status === 'approved') {
             actions.push(`<button class="btn sm primary" data-execute="${esc(prop.id)}">Run now</button>`);
+            actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         } else if (prop.status === 'executing') {
             actions.push(`<button class="btn sm ghost" data-cancel="${esc(prop.id)}">Cancel</button>`);
+        } else if (['failed', 'rejected', 'expired', 'executed'].includes(prop.status)) {
+            actions.push(`<button class="btn sm primary" data-retry="${esc(prop.id)}">Retry</button>`);
+            actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         }
         let meta = `${esc(prop.requester)} · ${esc(targets)} · ${esc(timeAgo(prop.created_at))}`;
         if (prop.status === 'executing') {
@@ -2024,6 +2029,22 @@ async function proposalsCard(detail) {
             try {
                 await api(`/api/runs/${prop.id}/cancel`, { method: 'POST' });
                 toast('Cancelling…', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-retry]')?.addEventListener('click', async () => {
+            if (!confirm(`Create a new pending proposal from this one?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}\n\nYou will still need to approve it before it runs.`)) return;
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}/retry`, { method: 'POST' });
+                toast('Retry proposal created', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-delete]')?.addEventListener('click', async () => {
+            if (!confirm(`Delete this proposal permanently?\n\n${prop.intent}`)) return;
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}`, { method: 'DELETE' });
+                toast('Proposal deleted', 'ok');
                 viewProject(p.slug, 'shared');
             } catch (e) { toast(e.message, 'err'); }
         });

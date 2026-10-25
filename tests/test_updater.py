@@ -344,6 +344,18 @@ def test_wait_for_pid_stops_stale_process(monkeypatch):
     assert ("kill", 1234) in calls
 
 
+def test_apply_installer_waits_for_mutex(monkeypatch, tmp_path):
+    installer = tmp_path / "PerunSetup.exe"
+    installer.write_text("fake")
+
+    monkeypatch.setattr(updater, "_installer_mutex_running", lambda: True)
+    monkeypatch.setattr(updater, "updates_dir", lambda: tmp_path)
+    plan = {"installer": str(installer), "job": "j1"}
+    with pytest.raises(updater.UpdateError) as exc:
+        updater._apply_installer(plan)
+    assert "already running" in str(exc.value)
+
+
 def test_apply_rejects_concurrent_update(monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

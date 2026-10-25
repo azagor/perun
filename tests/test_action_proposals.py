@@ -1,3 +1,4 @@
+import json
 import time
 import threading
 from pathlib import Path
@@ -252,6 +253,91 @@ def test_cas_rejects_duplicate_approve_and_reject(tmp_path, monkeypatch):
     monkeypatch.setattr(action_proposals, "get", lambda _pid: stale)
     with pytest.raises(ValueError, match="no longer pending"):
         action_proposals.approve(proposal["id"], "second-approver")
+
+
+def test_state_digest_humanizes_json_errors():
+    from perun import action_proposals
+
+    proposal = {
+        "id": "prop_1",
+        "action_type": "create",
+        "status": "failed",
+        "targets": ["README.md"],
+        "intent": "add readme",
+        "result": json.dumps({
+            "type": "provider.invalid-request",
+            "message": "Upstream request failed: Endpoint is unavailable.",
+            "status": 410,
+            "response": {"body": "secret details"},
+        }),
+    }
+    digest = action_proposals.state_digest(proposal, {"slug": "demo"})
+    assert digest["outcome"] == "failed"
+    assert "provider.invalid-request" in digest["notes"]
+    assert "Endpoint is unavailable" in digest["notes"]
+    assert "secret details" not in digest["notes"]
+    assert "status" not in digest["notes"]
+
+
+def test_retry_creates_new_pending_from_terminal_proposal(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals._set_status(proposal["id"], "failed", "provider error")
+
+    new = action_proposals.retry(proposal["id"], owner="owner", trusted=["frambo"])
+
+    assert new["id"] != proposal["id"]
+    assert new["status"] == "pending"
+    assert new["intent"] == "x"
+    assert new["targets"] == [target]
+    assert new["details"].get("retry_of") == proposal["id"]
+
+
+def test_retry_refuses_non_terminal_proposal(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+
+    with pytest.raises(ValueError, match="only terminal proposals"):
+        action_proposals.retry(proposal["id"], owner="owner", trusted=["frambo"])
+
+    action_proposals._set_status(proposal["id"], "executing")
+    with pytest.raises(ValueError, match="cannot retry"):
+        action_proposals.retry(proposal["id"], owner="owner", trusted=["frambo"])
+
+
+def test_delete_removes_proposal_and_logs_activity(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+
+    assert action_proposals.delete(proposal["id"], deleted_by="owner") is True
+    assert action_proposals.get(proposal["id"]) is None
+    activity = registry.list_activity(project["id"])
+    assert any(a["kind"] == "proposal_deleted" for a in activity)
+
+
+def test_delete_refuses_executing_proposal(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals._set_status(proposal["id"], "executing")
+
+    with pytest.raises(ValueError, match="cannot delete"):
+        action_proposals.delete(proposal["id"])
 
 
 def test_cas_rejects_duplicate_reject(tmp_path, monkeypatch):

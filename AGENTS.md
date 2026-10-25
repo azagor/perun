@@ -75,7 +75,9 @@ with `python -m perun project-roots --add <name> <path>`.
   thread pool; SSE endpoints pump blocking generators through
   `iterate_in_threadpool`. Keep it that way.
 * **No secrets in memory.** `memory.is_sensitive()` guards `remember()`; keep
-  new storage paths behind the same guard.
+  new storage paths behind the same guard. Provider API keys may be exported
+  fresh from `opencode auth export` and injected into child `opencode run`
+  processes, but they must never be cached, logged, or persisted by Perun.
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

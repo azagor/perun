@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -97,6 +98,160 @@ def test_list_providers_merges_configured_providers(monkeypatch, isolated_config
     ollama = next(p for p in data["providers"] if p["id"] == "ollama")
     assert ollama["configured"] is True
     assert ollama["connected"] is True
+
+
+def test_auth_env_for_subprocess_exports_active_keys(monkeypatch):
+    """auth_env_for_subprocess maps active credentials to provider env vars."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "cred_1", "integrationID": "openai", "active": True,
+                 "value": {"type": "key", "key": "sk-openai"}},
+                {"id": "cred_2", "integrationID": "opencode-go", "active": True,
+                 "value": {"type": "key", "key": "sk-go"}},
+                {"id": "cred_3", "integrationID": "opencode", "active": False,
+                 "value": {"type": "key", "key": "sk-inactive"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    env = providers.auth_env_for_subprocess()
+    assert env == {"OPENAI_API_KEY": "sk-openai", "OPENCODE_GO_API_KEY": "sk-go"}
+
+
+def test_resolve_run_model_keeps_authenticated_provider(monkeypatch):
+    """A model whose provider is authenticated is passed through unchanged."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "c1", "integrationID": "openai", "active": True,
+                 "value": {"type": "key", "key": "sk"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    providers._MODELS_CACHE["data"] = frozenset(["openai/gpt-5"])
+    providers._MODELS_CACHE["ts"] = time.time()
+    resolved, env = providers.resolve_run_model("openai/gpt-5")
+    assert resolved == "openai/gpt-5"
+    assert env["OPENAI_API_KEY"] == "sk"
+
+
+def test_resolve_run_model_opencode_alias_to_opencode_go(monkeypatch):
+    """Third-party models advertised under ``opencode/`` are routed to ``opencode-go``."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "c1", "integrationID": "opencode", "active": True,
+                 "value": {"type": "key", "key": "oc-sk"}},
+                {"id": "c2", "integrationID": "opencode-go", "active": True,
+                 "value": {"type": "key", "key": "go-sk"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    providers._MODELS_CACHE["data"] = frozenset([
+        "opencode/big-pickle", "opencode-go/kimi-k2.7-code",
+    ])
+    providers._MODELS_CACHE["ts"] = time.time()
+    resolved, env = providers.resolve_run_model("opencode/kimi-k2.7-code")
+    assert resolved == "opencode-go/kimi-k2.7-code"
+    assert env["OPENCODE_GO_API_KEY"] == "go-sk"
+
+
+def test_resolve_run_model_opencode_own_model_stays_put(monkeypatch):
+    """OpenCode's own models (not on opencode-go) keep the ``opencode/`` prefix."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "c1", "integrationID": "opencode", "active": True,
+                 "value": {"type": "key", "key": "oc-sk"}},
+                {"id": "c2", "integrationID": "opencode-go", "active": True,
+                 "value": {"type": "key", "key": "go-sk"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    providers._MODELS_CACHE["data"] = frozenset(["opencode/big-pickle"])
+    providers._MODELS_CACHE["ts"] = time.time()
+    resolved, _ = providers.resolve_run_model("opencode/big-pickle")
+    assert resolved == "opencode/big-pickle"
+
+
+def test_resolve_run_model_falls_back_to_active_provider(monkeypatch):
+    """If the requested provider is not authenticated, switch to one that is."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "c1", "integrationID": "openai", "active": True,
+                 "value": {"type": "key", "key": "sk"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    providers._MODELS_CACHE["data"] = frozenset(["openai/gpt-5"])
+    providers._MODELS_CACHE["ts"] = time.time()
+    resolved, env = providers.resolve_run_model("anthropic/gpt-5")
+    assert resolved == "openai/gpt-5"
+    assert env["OPENAI_API_KEY"] == "sk"
+
+
+def test_resolve_run_model_prefers_cloud_over_local_fallback(monkeypatch):
+    """When the requested provider is missing, cloud providers outrank local ones."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "c1", "integrationID": "openai", "active": True,
+                 "value": {"type": "key", "key": "sk-openai"}},
+                {"id": "c2", "integrationID": "ollama", "active": True,
+                 "value": {"type": "key", "key": "sk-ollama"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    providers._MODELS_CACHE["data"] = frozenset(["openai/gpt-5", "ollama/gpt-5"])
+    providers._MODELS_CACHE["ts"] = time.time()
+    resolved, env = providers.resolve_run_model("anthropic/gpt-5")
+    assert resolved == "openai/gpt-5"
+    assert env["OPENAI_API_KEY"] == "sk-openai"
+
+
+def test_resolve_run_model_detects_custom_local_provider(monkeypatch, isolated_config):
+    """Custom providers pointing at localhost are treated as local fallbacks."""
+    opencode_config.configure_provider("my-local", {
+        "baseURL": "http://localhost:1234/v1", "apiKey": "x",
+    })
+
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps([
+                {"id": "c1", "integrationID": "openai", "active": True,
+                 "value": {"type": "key", "key": "sk-openai"}},
+                {"id": "c2", "integrationID": "my-local", "active": True,
+                 "value": {"type": "key", "key": "sk-local"}},
+            ])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    providers._MODELS_CACHE["data"] = frozenset(["openai/gpt-5", "my-local/gpt-5"])
+    providers._MODELS_CACHE["ts"] = time.time()
+    resolved, env = providers.resolve_run_model("anthropic/gpt-5")
+    assert resolved == "openai/gpt-5"
+    assert env["OPENAI_API_KEY"] == "sk-openai"
 
 
 def test_logout_provider_reports_success(monkeypatch):
@@ -246,4 +401,3 @@ def test_disconnect_provider_removes_config_when_auth_list_fails(monkeypatch, is
 
     data, _, _ = opencode_config.load_config()
     assert "ollama" not in opencode_config.providers_section(data)
-

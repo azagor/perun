@@ -434,6 +434,10 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             # The proposal id is the run id: it makes the headless run
             # addressable (cancel, logs, SSE) with no extra mapping table.
             run_uid=run_uid,
+            # Run a private OpenCode server for this proposal so the active
+            # API-key credentials injected by the orchestrator are used instead
+            # of a background service that may lack authentication.
+            standalone=True,
         )
         run = result.get("run") or {}
         run_uid = run.get("run_uid") or proposal_id
@@ -653,6 +657,27 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return d
 
 
+def _humanize_result(result: str) -> str:
+    """Return a short, readable summary of a run result.
+
+    If the result is a JSON error object, extract the high-level type and
+    message so the digest is readable in chat. Never echo the full upstream
+    response body, which may contain internal details.
+    """
+    text = (result or "").strip()
+    if len(text) >= 2 and text[0] == "{" and text[-1] == "}":
+        try:
+            data = json.loads(text)
+        except Exception:
+            return text[:300]
+        error_type = data.get("type") or data.get("error", {}).get("type") or "error"
+        message = data.get("message") or data.get("error", {}).get("message") or ""
+        if error_type and message:
+            return f"{error_type}: {message}"
+        return message or text[:300]
+    return text[:300]
+
+
 def state_digest(proposal: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     """Compose a compact State Digest for the project chat."""
     return {
@@ -663,5 +688,71 @@ def state_digest(proposal: dict[str, Any], project: dict[str, Any]) -> dict[str,
         "outcome": proposal["status"],
         "targets": proposal["targets"],
         "intent": proposal["intent"],
-        "notes": (proposal.get("result") or "")[:300],
+        "notes": _humanize_result(proposal.get("result") or ""),
     }
+
+
+def retry(
+    proposal_id: str,
+    *,
+    owner: str | None = None,
+    trusted: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a fresh pending proposal copied from a previous one.
+
+    The dashboard/owner uses this to re-run a failed or otherwise terminal
+    proposal. The new proposal is created on behalf of the room owner, so it
+    survives even if the original requester has been removed from the trust
+    list. The original intent, targets, and details are preserved, with a
+    ``retry_of`` marker in the details.
+    """
+    original = get(proposal_id)
+    if not original:
+        raise ValueError("proposal not found")
+    if original["status"] == "executing":
+        raise ValueError("cannot retry a proposal while it is executing")
+    if original["status"] not in ("failed", "rejected", "expired", "executed"):
+        raise ValueError("only terminal proposals can be retried")
+    project = registry.get_project(original["project_id"])
+    if not project:
+        raise ValueError("project not found")
+
+    owner_id = str(owner or "").strip() or original.get("approved_by") or "owner"
+    details = dict(original.get("details") or {})
+    details["retry_of"] = proposal_id
+    envelope = {
+        "intent": original["intent"],
+        "action_type": original["action_type"],
+        "targets": original["targets"],
+        "details": details,
+        "room_id": original.get("room_id", ""),
+    }
+    return create(
+        project,
+        owner_id,
+        envelope,
+        owner=owner_id,
+        trusted=trusted,
+    )
+
+
+def delete(proposal_id: str, deleted_by: str | None = None) -> bool:
+    """Remove a proposal from the store.
+
+    Executing proposals cannot be deleted while a run is in flight. The action
+    is logged so the audit trail remains complete.
+    """
+    proposal = get(proposal_id)
+    if not proposal:
+        return False
+    if proposal["status"] == "executing":
+        raise ValueError("cannot delete a proposal while it is executing")
+    with db.db() as conn:
+        conn.execute("DELETE FROM action_proposals WHERE id=?", (proposal_id,))
+    registry.log_activity(
+        proposal["project_id"],
+        "proposal_deleted",
+        f"Proposal {proposal_id} deleted by {deleted_by or 'unknown'}",
+        {"proposal_id": proposal_id, "deleted_by": deleted_by},
+    )
+    return True

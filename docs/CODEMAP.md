@@ -132,9 +132,20 @@ Shared project creation/registration, used by **both** the HTTP wizard
 ### `perun/providers.py`
 LLM provider discovery, status and configuration. Perun never stores credentials
 itself; it edits OpenCode's own config so the CLI/server remain the source of truth.
+For headless runs it also exports active API keys at runtime and injects them as
+environment variables into the child ``opencode run`` process.
 * `_PROVIDER_CATALOG` — built-in/well-known providers grouped by ``kind``
   (``api_key`` / ``local`` / ``oauth`` / ``custom``). Non-built-in presets include
   the canonical OpenAI-compatible runtime ``package`` and a known ``default_base_url``.
+* `active_api_key_credentials()` / `auth_env_for_subprocess()` — read active
+  API-key credentials from ``opencode auth export`` and map them to the env vars
+  the OpenCode CLI expects (e.g. ``OPENCODE_GO_API_KEY``, ``OPENAI_API_KEY``).
+  Credentials are read fresh per call and never cached or persisted by Perun.
+* `resolve_run_model()` — pick a model string that works for headless runs:
+  honors the requested provider if authenticated, resolves known aliases such as
+  ``opencode/kimi-k2.7-code`` → ``opencode-go/kimi-k2.7-code``, and falls back to
+  active cloud providers before considering local providers.
+* `_available_models()` — cached wrapper around ``opencode models``.
 * `list_providers()` — ``GET /api/providers``; merges providers from
   ``opencode auth list --format json`` with providers configured in ``opencode.json[c]``,
   plus a ``catalog`` of providers not yet active. Returns ``config_had_comments`` so
@@ -352,6 +363,10 @@ Start / stream / cancel headless `opencode run`.
   model. Every source is stripped; `start_run` stores `model_explicit=bool(model)`
   and `_execute` forwards `--model` whenever a non-empty model was resolved
   (only an empty resolution defers to OpenCode).
+* For shared-project proposals, `_execute()` calls `providers.resolve_run_model()`
+  to route models to an authenticated gateway, injects active API-key env vars,
+  and adds `--standalone` so the headless run does not depend on the interactive
+  background service.
 * Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `SUB_QUEUE_LIMIT`,
   `HISTORY_TTL_SECONDS`, `STREAM_POLL_SECONDS`, `MAX_AGENT_DEPTH`,
   `MAX_INSTRUCTION_BYTES`, `MAX_TOTAL_INSTRUCTION_BYTES`, `DEFAULT_SESSION_PROMPT`,
@@ -541,10 +556,16 @@ Autonomous PerunChat chat participant for the Orchestrator.
   audit enforcement, and State Digests for the project chat. Approved runs use
   the restricted `perun-shared` agent and a target-scoped guard allowlist; the
   proposal id is also the headless run id.
-* REST endpoints in `perun/server.py` manage proposals (including
-  `approve-and-execute` returning `202`) and apply shared-project manifest fields
-  from the wizard; `perun/projects.py` keeps `opencode.json` in sync to
-  register/remove the `perun-guard` MCP server.
+* `_humanize_result()` — shortens run-result JSON errors for chat State Digests
+  without echoing upstream response bodies.
+* `retry()` — clones a terminal proposal into a fresh pending proposal owned by
+  the room owner, preserving intent/targets/details and tagging ``retry_of``.
+* `delete()` — removes a non-executing proposal and logs the action to project
+  activity.
+* REST endpoints in `perun/server.py` manage proposals (list, create, approve,
+  reject, `approve-and-execute` returning `202`, execute, retry, delete) and
+  apply shared-project manifest fields from the wizard; `perun/projects.py`
+  keeps `opencode.json` in sync to register/remove the `perun-guard` MCP server.
 * Tables: `project_chats`, `action_proposals`, and `pending_room_deletions` in
   `perun/db.py`.
 
@@ -655,6 +676,10 @@ dashboard can stream progress across restarts. Installer downloads verify the
 release's `PerunSetup.exe.sha256` checksum when present, old downloads are
 cleaned up automatically, and server shutdown uses `should_exit` then SIGINT
 before a final force-exit fallback.
+* `_apply_installer()` runs the Inno Setup installer with
+  `/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTARTAPPLICATIONS` and waits
+  for any already-running installer mutex before starting. On failure it includes
+  the last 2,000 characters of the installer log in the error message.
 
 ### `perun/integrations/install_global.py`
 Idempotent, additive global install into `~/.config/opencode` (honours

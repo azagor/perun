@@ -1329,6 +1329,43 @@ def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     return _ok(proposal=result, accepted=True)
 
 
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/retry")
+def api_retry_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Clone a terminal proposal into a new pending proposal.
+
+    The room owner is the new requester, so the retry works even if the
+    original participant has been revoked. The owner must still approve the
+    new proposal before it runs.
+    """
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    try:
+        new_proposal = action_proposals.retry(
+            proposal_id,
+            owner=_approver_identity(),
+            trusted=_trusted_agents(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=new_proposal)
+
+
+@app.delete("/api/projects/{slug}/proposals/{proposal_id}")
+def api_delete_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Delete a proposal. Executing proposals cannot be deleted."""
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    try:
+        action_proposals.delete(proposal_id, deleted_by=_approver_identity())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(deleted=True)
+
+
 @app.delete("/api/projects/{slug}")
 def api_delete_project(slug: str) -> dict[str, Any]:
     project = _project_or_404(slug)

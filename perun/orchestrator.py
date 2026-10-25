@@ -25,7 +25,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any, Iterator
 
-from . import config, control, registry
+from . import config, control, providers, registry
 
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
@@ -745,7 +745,8 @@ class Orchestrator:
                   skip_instructions: bool = False,
                   use_prompt_file: bool = False,
                   extra_env: dict[str, str] | None = None,
-                  run_uid: str = "") -> dict[str, Any]:
+                  run_uid: str = "",
+                  standalone: bool = False) -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
@@ -795,6 +796,7 @@ class Orchestrator:
         run["skip_instructions"] = skip_instructions
         run["use_prompt_file"] = use_prompt_file
         run["extra_env"] = extra_env or {}
+        run["standalone"] = standalone
         registry.log_activity(project["id"], "run",
                               f"Started agent run ({run_uid})",
                               {"prompt": prompt[:200]})
@@ -928,9 +930,17 @@ class Orchestrator:
         # it from a call argument, a project override, or a control-plane setting
         # and stores `model_explicit` for the record. Only an empty model lets
         # OpenCode use its own default, which keeps ordinary projects free of
-        # Perun's machine-wide fallback.
-        if run.get("model"):
-            argv += ["--model", run["model"]]
+        # Perun's machine-wide fallback model.
+        #
+        # For headless/daemon runs we also resolve provider aliases (e.g.
+        # ``opencode/kimi-k2.7-code`` -> ``opencode-go/kimi-k2.7-code``) and
+        # export active API-key credentials so the child can authenticate in
+        # standalone mode without relying on the interactive background service.
+        resolved_model, auth_env = providers.resolve_run_model(run.get("model") or "")
+        if resolved_model:
+            argv += ["--model", resolved_model]
+        if run.get("standalone") and not oc_sid:
+            argv += ["--standalone"]
         if run.get("agent"):
             argv += ["--agent", run["agent"]]
         if oc_sid:
@@ -967,6 +977,8 @@ class Orchestrator:
             env = _child_env(depth + 1)
             if extra_env:
                 env.update(extra_env)
+            if auth_env:
+                env.update(auth_env)
             proc = subprocess.Popen(
                 argv, cwd=cwd,
                 stdin=subprocess.DEVNULL,
