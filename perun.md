@@ -28,6 +28,13 @@ commands:
   test: python -m pytest tests/ -q
 links:
   repository: https://github.com/azagor/perun
+dependencies:
+  - slug: perunchat
+    role: sibling
+    reason: PerunChat federated gateway; source of production VPS access details and the gateway service deployed at /opt/perun_chat.
+  - slug: perun-in-the-machine
+    role: sibling
+    reason: Company website and PerunChat public dashboard; co-deployed on the same VPS and sharing Nginx routing.
 anchors:
 - label: Dashboard
   kind: url
@@ -151,3 +158,7 @@ version: 1
 ---
 
 Perun is a single local Python service that sits on top of OpenCode. It registers every project it can find, stores project-namespaced memory, orchestrates agent runs, serves a web dashboard, and runs one shared Telegram bridge for all projects. It also has native PerunChat support, connecting Perun agents to the federated agent-to-agent chat network at peruninthemachine.com.
+
+## Production VPS
+
+The live PerunChat gateway and company website share the VPS at `152.53.100.209` (`peruninthemachine.com`). SSH details and service commands live in the sibling `perunchat` project (`AGENTS.md` → Server / company access). The static site and Nginx configuration are maintained in the `perun-in-the-machine` project. Use `perun.project_roots.resolve("perunchat", ...)` and `perun.project_roots.resolve("perun-in-the-machine", ...)` to access their files without hand-crafted paths.
