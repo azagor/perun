@@ -1481,6 +1481,7 @@ class PerunChatBridge:
                 envelope["requester"] = sender
                 try:
                     proposal = self._create_action_proposal(room_id, envelope)
+                    shared_project, _ = binding
                     summary = " ".join(str(proposal.get("intent") or "").split())[:160]
                     tg = ", ".join(str(t) for t in (proposal.get("targets") or []))[:160]
                     note = f"[Proposal {proposal['id']} created"
@@ -1488,8 +1489,10 @@ class PerunChatBridge:
                         note += f": {summary}"
                     if tg:
                         note += f" -> {tg}"
-                    if shared_projects.is_auto_approve(project["path"]):
+                    if proposal["status"] in ("approved", "executing"):
                         note += "; auto-approved and executing.]"
+                    elif shared_projects.is_auto_approve(shared_project["path"]):
+                        note += "; auto-approval failed — awaiting owner approval in the project's Shared tab.]"
                     else:
                         note += "; awaiting owner approval in the project's Shared tab.]"
                     clean_reply += "\n\n" + note
@@ -1885,6 +1888,13 @@ class PerunChatBridge:
             trusted=list(getattr(self.settings, "perunchat_trusted", []) or []),
         )
 
+        def _proposal_summary(prop: dict[str, Any]) -> str:
+            summary = " ".join(str(prop.get("intent") or "").split())[:120]
+            tg = ", ".join(str(t) for t in (prop.get("targets") or []))[:80]
+            if tg:
+                summary += f" -> {tg}"
+            return summary
+
         def _post_digest(final: dict[str, Any]) -> None:
             digest = action_proposals.state_digest(final, project)
             text = json.dumps(digest, ensure_ascii=False)
@@ -1895,11 +1905,30 @@ class PerunChatBridge:
                 content_type="application/perun-state-digest",
             )
 
-        action_proposals.auto_approve_and_execute(
-            project,
-            proposal,
-            on_complete=_post_digest,
-        )
+        def _post_started(executing: dict[str, Any]) -> None:
+            self.post_to_room(
+                room_id,
+                f"[Proposal {executing['id']} is now executing: {_proposal_summary(executing)}]",
+            )
+
+        try:
+            action_proposals.auto_approve_and_execute(
+                project,
+                proposal,
+                on_started=_post_started,
+                on_complete=_post_digest,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Auto-approval failed for proposal %s in %s: %s",
+                proposal["id"],
+                room_id,
+                exc,
+            )
+            self.post_to_room(
+                room_id,
+                f"[Proposal {proposal['id']} could not start automatically: {exc}]",
+            )
         return proposal
 
     def _build_prompt(

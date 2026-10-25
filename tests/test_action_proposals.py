@@ -725,3 +725,25 @@ def test_auto_approve_falls_back_to_auto_when_no_peer_agent(tmp_path, monkeypatc
 
     approved = action_proposals.get(proposal["id"])
     assert approved["approved_by"] == action_proposals.AUTO_APPROVER
+
+
+def test_auto_approve_leaves_proposal_approved_if_execution_fails(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    target = str(project["path"] / "file.txt")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: True)
+
+    def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
+        raise RuntimeError("orchestrator unavailable")
+
+    monkeypatch.setattr(action_proposals, "start_execution", fake_start)
+
+    with pytest.raises(RuntimeError, match="orchestrator unavailable"):
+        action_proposals.auto_approve_and_execute(project, proposal)
+
+    approved = action_proposals.get(proposal["id"])
+    assert approved["status"] == "approved"
+    assert approved["approved_by"] == action_proposals.AUTO_APPROVER

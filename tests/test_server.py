@@ -303,6 +303,89 @@ def test_create_proposal_auto_approves_when_enabled(client, tmp_path, monkeypatc
     assert proposal["approved_by"] == "approver-bot"
 
 
+def test_create_proposal_returns_proposal_when_auto_approve_fails(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["run-bot", "approver-bot"])
+    target = tmp_path / "shared-auto-fail"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedAutoFail", "path": str(target), "bootstrap": False,
+        "shared": True,
+        "participants": [
+            {"agent_id": "run-bot", "roles": ["rw"]},
+            {"agent_id": "approver-bot", "roles": ["rw"]},
+        ],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.put(f"/api/projects/{slug}/shared", json={
+        "shared": True, "auto_approve": True, "participants": [
+            {"agent_id": "run-bot", "roles": ["rw"]},
+            {"agent_id": "approver-bot", "roles": ["rw"]},
+        ], "external_deps": []
+    })
+    assert r.status_code == 200, r.text
+
+    def fake_start(proposal_id, orchestrator_instance=None, on_complete=None):
+        raise RuntimeError("orchestrator unavailable")
+
+    monkeypatch.setattr(server.action_proposals, "start_execution", fake_start)
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "run-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    assert r.status_code == 200, r.text
+    prop_id = r.json()["proposal"]["id"]
+
+    proposal = server.action_proposals.get(prop_id)
+    assert proposal["status"] == "approved"
+    assert proposal["approved_by"] == "approver-bot"
+
+
+def test_post_proposal_started_notifies_project_chat(client, tmp_path, monkeypatch):
+    from perun import registry, server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["start-bot"])
+    target = tmp_path / "shared-start"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedStart", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "start-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    project = registry.get_project(slug)
+
+    monkeypatch.setattr(
+        server.registry, "get_project_chat",
+        lambda _pid: {"room_id": f"grp:perun:{slug}:chat"},
+    )
+    posted: list[tuple[str, str | None]] = []
+
+    class FakeBridge:
+        def post_to_room(self, room_id, text, content_type=None):
+            posted.append((text, content_type))
+        def _redact_internal_info(self, text, room_id):
+            return text
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(server, "PERUNCHAT_BRIDGE", FakeBridge())
+
+    proposal = {
+        "id": "prop_start_1",
+        "intent": "add logging",
+        "targets": [str(target / "api.py")],
+        "status": "approved",
+    }
+    server._post_proposal_started(project, proposal)
+
+    assert len(posted) == 1
+    assert "is now executing" in posted[0][0]
+    assert "add logging" in posted[0][0]
+
+
 def test_post_proposal_digest_redacts_paths_and_remains_json(client, tmp_path, monkeypatch):
     from perun import registry, server
 

@@ -14,6 +14,16 @@ All notable changes are recorded here. Single source of truth for release notes.
   The per-project manifest flag `shared.auto_approve` overrides the global
   `shared_auto_approve` default in settings. Humans can still approve, execute,
   retry, or delete proposals manually from the dashboard.
+- **Lifecycle chat notifications.** Project chat rooms now receive notices when
+  a proposal starts executing and a State Digest when it completes or fails,
+  for both autonomous and manually-triggered runs. Failed autonomous starts
+  also post a failure notice so participants know the proposal needs manual
+  attention.
+- **Completed proposals list.** The Shared tab separates active proposals
+  (`pending`/`approved`/`executing`) from completed ones
+  (`executed`/`failed`/`rejected`/`expired`). Completed proposals are shown in
+  a collapsed-by-default section with a count, keeping the active queue
+  uncluttered.
 
 ### Changed
 

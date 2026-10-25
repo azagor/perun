@@ -290,6 +290,9 @@ select { cursor: pointer; }
 .proposal-list .list-row { align-items: flex-start; }
 .proposal-list .list-row .intent { flex: 1; min-width: 0; }
 .proposal-list .list-row .meta { color: var(--text-muted); font-size: .72rem; }
+.completed-proposals .card-head { margin-bottom: 0; padding: 8px 0; }
+.completed-proposals .card-head h4 { font-size: .9rem; color: var(--text-secondary); }
+.completed-proposals .list { border-top: 1px solid var(--border); padding-top: 4px; }
 .shared-status { display: inline-flex; align-items: center; gap: 6px; }
 .shared-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
 .shared-status.on::before { background: var(--green); box-shadow: 0 0 6px var(--green); }

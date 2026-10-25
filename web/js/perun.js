@@ -1774,6 +1774,7 @@ async function sharedProjectCard(detail) {
             <div class="shared-section">
                 <label class="opt"><input type="checkbox" id="sp-auto-approve" ${cfg.auto_approve ? 'checked' : ''}> <b>Autonomous mode</b></label>
                 <p class="muted" style="font-size:.72rem;margin-top:4px">When enabled, action proposals created by chat agents are reviewed and approved automatically by a peer project agent, then executed without waiting for a human click. Humans can still approve or execute proposals manually.</p>
+                <p class="warn-text" style="font-size:.72rem;margin-top:4px">Warning: enabling this lets chat agents run code in this project without a human click. Only enable for projects whose participants you trust.</p>
             </div>
             <button class="btn primary" id="sp-save" type="button">Save shared settings</button>
             <p class="muted" style="font-size:.72rem;margin-top:10px">A post-run filesystem audit logs any changes outside the allowlist. The optional <code>perun-guard</code> MCP tools enforce the allowlist only if the Project Agent chooses them.</p>
@@ -1950,13 +1951,19 @@ async function proposalsCard(detail) {
         card.innerHTML += '<div class="empty">No action proposals yet.</div>';
         return card;
     }
-    // Pending work first: it is the only thing that needs the owner's attention.
-    proposals = [
-        ...proposals.filter((prop) => prop.status === 'pending'),
-        ...proposals.filter((prop) => prop.status !== 'pending'),
-    ];
-    const list = el('div', { class: 'list' });
-    for (const prop of proposals) {
+
+    const activeStatuses = new Set(['pending', 'approved', 'executing']);
+    const completedStatuses = new Set(['executed', 'failed', 'rejected', 'expired']);
+    let active = proposals.filter((prop) => activeStatuses.has(prop.status));
+    let completed = proposals.filter((prop) => completedStatuses.has(prop.status));
+
+    // Active: pending first, then approved, then executing.
+    const statusOrder = { pending: 0, approved: 1, executing: 2 };
+    active.sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
+    // Completed: newest first.
+    completed.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+    const renderRow = (prop) => {
         const targets = (prop.targets || []).join(', ');
         const actions = [];
         if (prop.status === 'pending') {
@@ -1969,7 +1976,7 @@ async function proposalsCard(detail) {
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         } else if (prop.status === 'executing') {
             actions.push(`<button class="btn sm ghost" data-cancel="${esc(prop.id)}">Cancel</button>`);
-        } else if (['failed', 'rejected', 'expired', 'executed'].includes(prop.status)) {
+        } else if (completedStatuses.has(prop.status)) {
             actions.push(`<button class="btn sm primary" data-retry="${esc(prop.id)}">Retry</button>`);
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         }
@@ -2050,9 +2057,28 @@ async function proposalsCard(detail) {
                 viewProject(p.slug, 'shared');
             } catch (e) { toast(e.message, 'err'); }
         });
-        list.appendChild(row);
+        return row;
+    };
+
+    const activeList = el('div', { class: 'list' });
+    active.forEach((prop) => activeList.appendChild(renderRow(prop)));
+    card.appendChild(activeList);
+
+    if (completed.length) {
+        const completedWrap = el('div', { class: 'completed-proposals mt' });
+        const header = el('div', { class: 'card-head', style: 'cursor:pointer;user-select:none' },
+            `<h4>Completed (${completed.length})</h4><span class="muted">▸</span>`);
+        const completedList = el('div', { class: 'list hidden' });
+        completed.forEach((prop) => completedList.appendChild(renderRow(prop)));
+        header.addEventListener('click', () => {
+            completedList.classList.toggle('hidden');
+            header.querySelector('span').textContent = completedList.classList.contains('hidden') ? '▸' : '▾';
+        });
+        completedWrap.appendChild(header);
+        completedWrap.appendChild(completedList);
+        card.appendChild(completedWrap);
     }
-    card.appendChild(list);
+
     if (proposals.some((prop) => prop.status === 'executing')) scheduleSharedPoll(p.slug);
     return card;
 }

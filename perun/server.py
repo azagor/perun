@@ -20,6 +20,8 @@ import hmac
 import json
 import logging
 import os
+
+logger = logging.getLogger("perun.server")
 import queue
 import re
 import shlex
@@ -186,6 +188,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         await asyncio.to_thread(_shutdown_sync)
     except Exception:  # pragma: no cover - best effort
+        pass
+
+
+def _post_proposal_started(project: dict[str, Any], proposal: dict[str, Any]) -> None:
+    """Post a lightweight "execution started" notice to the bound project chat."""
+    chat = registry.get_project_chat(project["id"])
+    if not chat or not chat.get("room_id") or not PERUNCHAT_BRIDGE:
+        return
+    try:
+        summary = " ".join(str(proposal.get("intent") or "").split())[:120]
+        targets = ", ".join(str(t) for t in (proposal.get("targets") or []))[:80]
+        if targets:
+            summary += f" -> {targets}"
+        text = f"[Proposal {proposal['id']} is now executing: {summary}]"
+        PERUNCHAT_BRIDGE.post_to_room(chat["room_id"], text)
+    except Exception:  # pragma: no cover - best-effort notification
         pass
 
 
@@ -1251,14 +1269,18 @@ def api_create_proposal(slug: str, payload: dict[str, Any] = Body(...)) -> dict[
             owner=chat.get("managed_by"),
             trusted=_trusted_agents(),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
         action_proposals.auto_approve_and_execute(
             project,
             proposal,
             orchestrator_instance=ORCH,
+            on_started=lambda executing: _post_proposal_started(project, executing),
             on_complete=lambda final: _post_proposal_digest(project, final),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Auto-approval failed for proposal %s", proposal["id"])
     return _ok(proposal=proposal)
 
 
@@ -1304,6 +1326,7 @@ def api_approve_and_execute_proposal(slug: str, proposal_id: str) -> dict[str, A
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
         action_proposals.approve(proposal_id, _approver_identity())
+        _post_proposal_started(project, action_proposals.get(proposal_id))
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,
@@ -1325,6 +1348,7 @@ def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     if not proposal or proposal["project_id"] != project["id"]:
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
+        _post_proposal_started(project, action_proposals.get(proposal_id))
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,

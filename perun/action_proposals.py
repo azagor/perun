@@ -58,13 +58,16 @@ def auto_approve_and_execute(
     project: dict[str, Any],
     proposal: dict[str, Any],
     *,
+    on_started: Callable[[dict[str, Any]], None] | None = None,
     on_complete: Callable[[dict[str, Any]], None] | None = None,
     orchestrator_instance: Any | None = None,
 ) -> dict[str, Any] | None:
     """Auto-approve and execute a pending proposal when autonomous mode is on.
 
     Returns the proposal after starting execution, or ``None`` if auto-approve is
-    disabled or the proposal is not pending.
+    disabled or the proposal is not pending. ``on_started`` is called
+    synchronously after the headless run has been claimed (status ``executing``);
+    ``on_complete`` is called asynchronously when the run finishes.
     """
     if proposal.get("status") != "pending":
         return None
@@ -72,12 +75,26 @@ def auto_approve_and_execute(
         return None
     cfg = shared_projects.load(project["path"])
     approver = _pick_auto_approver(cfg, proposal.get("requester", ""))
+    logger.info(
+        "Auto-approving proposal %s by %s for project %s",
+        proposal["id"],
+        approver,
+        project.get("slug", project["id"]),
+    )
     approve(proposal["id"], approver)
-    return start_execution(
+    started = start_execution(
         proposal["id"],
         orchestrator_instance=orchestrator_instance,
         on_complete=on_complete,
     )
+    if on_started is not None:
+        try:
+            on_started(started)
+        except Exception:  # pragma: no cover - notification is best-effort
+            logger.exception(
+                "Proposal started callback failed for %s", proposal["id"]
+            )
+    return started
 # Bounds on chat-supplied data. A looping or malicious agent must not be able
 # to create an unbounded row or stuff the execution prompt with instructions.
 MAX_INTENT_CHARS = 500
