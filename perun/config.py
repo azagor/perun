@@ -164,6 +164,13 @@ class Settings:
     # (project names, file paths, tools) only in private/group rooms with agents
     # on this list. Public rooms never receive internal context regardless of trust.
     perunchat_trusted: list[str] = field(default_factory=list)
+    # Display name used when the local operator approves or rejects shared-project
+    # action proposals. Falls back to the OS username, then "owner".
+    perun_owner_name: str = ""
+    # Signing secret for the local HITL approval-token engine. On a single
+    # machine it defaults to a hash of PERUN_HOME; for multi-node deployments
+    # set the same value everywhere via PERUN_HITL_SECRET or this setting.
+    perun_hitl_secret: str = ""
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
     # Dedicated terminal / command shell. On Windows the value can be a path to

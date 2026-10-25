@@ -178,6 +178,14 @@ def normalize(data: Any) -> tuple[dict[str, Any], list[str]]:
 
     git = out.get("git")
     out["git"] = _string_map(git) if isinstance(git, dict) else {}
+
+    try:
+        from . import shared_projects
+
+        out, sw = shared_projects.normalize(out)
+        warnings += sw
+    except Exception:  # pragma: no cover - shared_projects import should not break parsing
+        pass
     return out, warnings
 
 

@@ -342,6 +342,7 @@ def delete_project(slug: str) -> bool:
         conn.execute("DELETE FROM tasks WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM runs WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM sessions WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM project_chats WHERE project_id=?", (pid,))
         conn.execute("UPDATE bridge_links SET project_id=NULL, session_pk=NULL WHERE project_id=?", (pid,))
         cur = conn.execute("DELETE FROM projects WHERE id=?", (pid,))
         return cur.rowcount > 0
@@ -356,6 +357,60 @@ def set_project_manifest(slug: str, snapshot: str, path: str = "") -> None:
             "updated_at=? WHERE slug=?",
             (snapshot, path, ts, ts, slug),
         )
+
+
+# --------------------------------------------------------------------------- #
+# Shared project chats
+# --------------------------------------------------------------------------- #
+def get_project_chat(project_id: int) -> dict[str, Any] | None:
+    with db.db() as conn:
+        row = db.one(conn, "SELECT * FROM project_chats WHERE project_id=?", (project_id,))
+        return dict(row) if row else None
+
+
+def set_project_chat(
+    project_id: int,
+    room_id: str,
+    managed_by: str,
+    state: str = "active",
+    manifest_rev: int = 1,
+) -> dict[str, Any]:
+    ts = now_iso()
+    with db.db() as conn:
+        conn.execute(
+            """INSERT INTO project_chats
+               (project_id, room_id, managed_by, state, manifest_rev, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(project_id) DO UPDATE SET
+                 room_id=excluded.room_id,
+                 managed_by=excluded.managed_by,
+                 state=excluded.state,
+                 manifest_rev=excluded.manifest_rev,
+                 updated_at=excluded.updated_at""",
+            (project_id, room_id, managed_by, state, manifest_rev, ts, ts),
+        )
+        row = db.one(conn, "SELECT * FROM project_chats WHERE project_id=?", (project_id,))
+        return dict(row) if row else {}
+
+
+def update_project_chat(project_id: int, **fields: Any) -> dict[str, Any] | None:
+    allowed = {"room_id", "managed_by", "state", "manifest_rev", "last_sync_at"}
+    sets = {k: v for k, v in fields.items() if k in allowed}
+    if not sets:
+        return get_project_chat(project_id)
+    sets["updated_at"] = now_iso()
+    cols = ", ".join(f"{k}=?" for k in sets)
+    with db.db() as conn:
+        conn.execute(f"UPDATE project_chats SET {cols} WHERE project_id=?",
+                     (*sets.values(), project_id))
+        row = db.one(conn, "SELECT * FROM project_chats WHERE project_id=?", (project_id,))
+        return dict(row) if row else None
+
+
+def delete_project_chat(project_id: int) -> bool:
+    with db.db() as conn:
+        cur = conn.execute("DELETE FROM project_chats WHERE project_id=?", (project_id,))
+        return cur.rowcount > 0
 
 
 def load_manifest_from_disk(slug: str) -> dict[str, Any] | None:

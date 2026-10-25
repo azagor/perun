@@ -15,6 +15,7 @@ background thread, so slow clients never stall a run.
 from __future__ import annotations
 
 import asyncio
+import getpass
 import hmac
 import json
 import logging
@@ -38,8 +39,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
-from . import (__version__, config, context, control, db, discovery, git, manifest,
-               memory, projects, providers, registry, scaffold)
+from . import (__version__, action_proposals, config, context, control, db,
+               discovery, git, manifest, memory, projects, providers, registry,
+               scaffold, shared_projects, shared_project_sync)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -55,6 +57,21 @@ _SSE_HEADERS = {
 SETTINGS = config.Settings.load()
 ORCH = orchestrator.Orchestrator(SETTINGS)
 PERUNCHAT_BRIDGE = _attach_perunchat_bridge(ORCH)
+
+
+def _approver_identity() -> str:
+    """Return the human-readable identity of the local operator.
+
+    Uses the configured ``perun_owner_name`` if set, otherwise the OS login
+    name, with a final fallback to ``"owner"``.
+    """
+    name = getattr(SETTINGS, "perun_owner_name", "").strip()
+    if name:
+        return name
+    try:
+        return getpass.getuser()
+    except Exception:  # pragma: no cover - unusual environments
+        return "owner"
 
 
 def _control_project() -> dict[str, Any]:
@@ -122,6 +139,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             discovery.discover_and_sync(SETTINGS.roots, max_depth=1)
         except Exception:  # pragma: no cover - discovery is best-effort
             pass
+    # Retry shared-project chat deletions that failed while the gateway was offline.
+    try:
+        shared_project_sync.retry_pending_room_deletions()
+    except Exception:  # pragma: no cover - best-effort retry
+        pass
     # Start a background thread that repairs embeddings written while Ollama
     # was down. It is daemonic and signalled on shutdown.
     reembed_stop = _start_reembed_thread()
@@ -1022,6 +1044,43 @@ def api_add_project(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         )
     except projects.ProjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # Persist shared-project manifest fields when supplied by the wizard.
+    shared_payload = {
+        "shared": payload.get("shared"),
+        "participants": payload.get("participants", []),
+        "external_deps": payload.get("external_deps", []),
+    }
+    if shared_payload["shared"] or shared_payload["participants"] or shared_payload["external_deps"]:
+        project = result.get("project") or {}
+        if project.get("path"):
+            cfg, errors = shared_projects.apply_payload(
+                project["path"], shared_payload, trusted=_trusted_agents()
+            )
+            result["shared"] = cfg
+            if errors:
+                result["shared_errors"] = errors
+            else:
+                try:
+                    projects.sync_manifest(project)
+                    refreshed = registry.get_project(project["slug"])
+                    if refreshed:
+                        result["project"] = refreshed
+                except Exception:  # pragma: no cover - best-effort refresh
+                    pass
+                try:
+                    # Keep the project's opencode.json in sync so the perun-guard
+                    # MCP server is registered (or removed) for shared projects.
+                    projects.sync_opencode_config(result.get("project") or project)
+                except Exception:  # pragma: no cover - best-effort config sync
+                    pass
+                try:
+                    chat_result = shared_project_sync.sync_project_chat(
+                        result.get("project") or project, cfg
+                    )
+                    result["chat_sync"] = chat_result
+                except Exception:  # pragma: no cover - best-effort sync
+                    pass
     return {"ok": True, **result}
 
 
@@ -1056,6 +1115,121 @@ def api_update_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[s
     return _ok(project=project, opencode_config=opencode_config)
 
 
+@app.get("/api/projects/{slug}/shared")
+def api_get_shared_project(slug: str) -> dict[str, Any]:
+    """Return the shared-project configuration and bound chat state."""
+    project = _project_or_404(slug)
+    cfg = shared_projects.load(project["path"])
+    chat = registry.get_project_chat(project["id"])
+    return _ok(shared=cfg, chat=chat)
+
+
+@app.put("/api/projects/{slug}/shared")
+def api_update_shared_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Update participants/external_deps for a shared project.
+
+    All declared participants must be on the PerunChat trust list. On success
+    the manifest revision is bumped and the registry snapshot is refreshed.
+    """
+    project = _project_or_404(slug)
+    cfg, errors = shared_projects.apply_payload(
+        project["path"], payload, trusted=_trusted_agents()
+    )
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+    try:
+        projects.sync_manifest(project)
+        project = registry.get_project(slug) or project
+    except Exception:  # pragma: no cover - best-effort refresh
+        pass
+    try:
+        # Mirror the shared flag into opencode.json so perun-guard is added/removed.
+        projects.sync_opencode_config(project)
+    except Exception:  # pragma: no cover - best-effort config sync
+        pass
+    try:
+        chat_sync = shared_project_sync.sync_project_chat(project, cfg)
+    except Exception:  # pragma: no cover - best-effort sync
+        chat_sync = {"ok": False, "error": "sync_failed"}
+    chat = registry.get_project_chat(project["id"])
+    return _ok(shared=cfg, project=project, chat=chat, chat_sync=chat_sync)
+
+
+@app.get("/api/projects/{slug}/proposals")
+def api_list_proposals(slug: str, status: str | None = None) -> dict[str, Any]:
+    """List action proposals for a shared project."""
+    project = _project_or_404(slug)
+    proposals = action_proposals.list_by_project(project["id"], status=status)
+    return _ok(proposals=proposals)
+
+
+@app.post("/api/projects/{slug}/proposals")
+def api_create_proposal(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create an action proposal from an Action Envelope (used by the bridge)."""
+    project = _project_or_404(slug)
+    envelope = payload.get("envelope") or payload
+    requester = str(payload.get("requester") or "unknown").strip()
+    try:
+        proposal = action_proposals.create(project, requester, envelope)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=proposal)
+
+
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/approve")
+def api_approve_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    try:
+        result = action_proposals.approve(proposal_id, _approver_identity())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
+
+
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/reject")
+def api_reject_proposal(
+    slug: str, proposal_id: str, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    try:
+        result = action_proposals.reject(
+            proposal_id, _approver_identity(), reason=payload.get("reason", "")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
+
+
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/execute")
+def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    try:
+        result = action_proposals.execute(proposal_id, orchestrator_instance=ORCH)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    chat = registry.get_project_chat(project["id"])
+    if chat and chat.get("room_id") and PERUNCHAT_BRIDGE:
+        try:
+            digest = action_proposals.state_digest(result, project)
+            PERUNCHAT_BRIDGE.post_to_room(
+                chat["room_id"],
+                json.dumps(digest, ensure_ascii=False),
+                content_type="application/perun-state-digest",
+            )
+        except Exception:  # pragma: no cover - best-effort digest post
+            pass
+    return _ok(proposal=result)
+
+
 @app.delete("/api/projects/{slug}")
 def api_delete_project(slug: str) -> dict[str, Any]:
     project = _project_or_404(slug)
@@ -1063,6 +1237,10 @@ def api_delete_project(slug: str) -> dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail="the Perun orchestrator project cannot be removed")
+    try:
+        shared_project_sync.delete_project_chat(project)
+    except Exception:  # pragma: no cover - lifecycle best-effort
+        pass
     deleted = registry.delete_project(slug)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"no such project: {slug}")
@@ -1852,6 +2030,9 @@ def api_get_settings() -> dict[str, Any]:
     data["perunchat_api_key"] = ""  # never echo
     data["perunchat_api_key_set"] = bool(pc_key)
     data["perunchat_api_endpoint"] = pc_endpoint
+    # HITL signing secret is sensitive; never echo it.
+    data["perun_hitl_secret"] = ""
+    data["perun_hitl_secret_set"] = bool(SETTINGS.perun_hitl_secret.strip() or os.environ.get("PERUN_HITL_SECRET", "").strip())
     # Expose bridge controls so the dashboard can pre-fill them.
     data.setdefault("perunchat_auto_reply", False)
     data.setdefault("perunchat_auto_join", [])
@@ -2123,7 +2304,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "host", "default_model", "default_agent", "orchestrator_model",
         "orchestrator_agent", "ollama_host", "embed_model", "telegram_token",
         "telegram_bot_name", "terminal", "perunchat_api_key", "perunchat_api_endpoint",
-        "perunchat_chat_model", "perunchat_chat_agent",
+        "perunchat_chat_model", "perunchat_chat_agent", "perun_owner_name",
+        "perun_hitl_secret",
     }
     if key in int_fields:
         try:
@@ -2176,6 +2358,23 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         if not _secrets.is_encrypted(current):
             try:
                 SETTINGS.perunchat_api_key = _secrets.encrypt_value(current, pc_password)
+            except _secrets.SecretError:
+                pass
+
+    # Encrypt perun_hitl_secret when a password is available.
+    if "perun_hitl_secret" in payload:
+        hitl_secret = str(payload.get("perun_hitl_secret") or "").strip()
+        if hitl_secret and pc_password:
+            try:
+                payload = dict(payload)
+                payload["perun_hitl_secret"] = _secrets.encrypt_value(hitl_secret, pc_password)
+            except _secrets.SecretError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif pc_password and SETTINGS.perun_hitl_secret:
+        current = SETTINGS.perun_hitl_secret
+        if not _secrets.is_encrypted(current):
+            try:
+                SETTINGS.perun_hitl_secret = _secrets.encrypt_value(current, pc_password)
             except _secrets.SecretError:
                 pass
 
@@ -2659,8 +2858,34 @@ def _trusted_agents() -> list[str]:
     return list(getattr(SETTINGS, "perunchat_trusted", []) or [])
 
 
+def _handle_trust_revocations(removed: set[str]) -> None:
+    """Re-sync shared-project chats when agents are removed from the trust list."""
+    if not removed:
+        return
+    for project in registry.list_projects():
+        cfg = shared_projects.load(project["path"])
+        if not cfg.get("shared"):
+            continue
+        participants = {p["agent_id"].lower() for p in cfg.get("participants", [])}
+        evicted = participants & removed
+        if not evicted:
+            continue
+        for agent_id in sorted(evicted):
+            registry.log_activity(
+                project["id"],
+                "trust_revoked",
+                f"Participant '{agent_id}' removed from PerunChat trust list; chat context and ACL updated",
+                {"agent_id": agent_id},
+            )
+        try:
+            shared_project_sync.sync_project_chat(project, cfg)
+        except Exception:
+            pass
+
+
 def _save_trusted(agents: list[str]) -> list[str]:
     global SETTINGS
+    old = {a.strip().lower() for a in getattr(SETTINGS, "perunchat_trusted", []) if str(a).strip()}
     # De-duplicate while preserving order, case-insensitively.
     seen: set[str] = set()
     clean: list[str] = []
@@ -2669,8 +2894,17 @@ def _save_trusted(agents: list[str]) -> list[str]:
         if name and name.lower() not in seen:
             seen.add(name.lower())
             clean.append(name)
+    removed = old - {c.lower() for c in clean}
     SETTINGS.perunchat_trusted = clean
     SETTINGS.save()
+    if removed:
+        _handle_trust_revocations(removed)
+        registry.log_activity(
+            None,
+            "trusted_list_changed",
+            f"Removed from PerunChat trust list: {', '.join(sorted(removed))}",
+            {"removed": sorted(removed)},
+        )
     return clean
 
 

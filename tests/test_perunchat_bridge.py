@@ -235,18 +235,18 @@ def test_build_prompt_drops_oldest_history_when_too_long(settings, monkeypatch):
     from perun import perunchat_bridge as bridge_mod
     from perun import memory
 
-    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", 3000)
+    monkeypatch.setattr(bridge_mod, "_MAX_PROMPT_CHARS", 3500)
     monkeypatch.setattr(memory, "search_facts", lambda *a, **kw: [])
     bridge = PerunChatBridge(MagicMock(settings=settings))
     bridge._agent_id = "perun-local"
     room_id = "pub:global:test"
     history = []
-    for i in range(6):
+    for i in range(20):
         history.append({
             "id": f"msg_{i}",
             "room_id": room_id,
             "sender": {"agent_id": "other-agent"},
-            "payload": f"message number {i} with some padding text",
+            "payload": f"history-item-{i:02d} with some padding text",
         })
     cur = {
         "id": "msg_cur",
@@ -259,11 +259,11 @@ def test_build_prompt_drops_oldest_history_when_too_long(settings, monkeypatch):
     # Latest message must be present.
     assert "this is the latest question" in prompt
     # Oldest messages should have been trimmed away.
-    assert "message number 0" not in prompt
-    assert "message number 1" not in prompt
+    assert "history-item-00" not in prompt
+    assert "history-item-01" not in prompt
     # Newer history should still be present.
-    assert "message number 4" in prompt
-    assert "message number 5" in prompt
+    assert "history-item-18" in prompt
+    assert "history-item-19" in prompt
 
 
 def test_own_replies_are_kept_in_room_history(settings):
@@ -550,6 +550,16 @@ def test_chat_system_prompt_loads_from_file():
         ):
             body = _load_chat_instructions()
     assert body == "Strict chat prompt from file."
+
+
+def test_chat_instructions_include_shared_project_guidance():
+    from perun import config
+    body = (config.REPO_ROOT / "perun" / "instructions" / "perunchat_chat.md").read_text(encoding="utf-8")
+    assert "[shared-project-context]" in body
+    assert "[ACTION:" in body
+    assert "action_type" in body
+    assert "targets" in body
+    assert "owner must approve" in body.lower()
 
 
 def test_heuristic_facts_extracts_identity_and_preferences(settings):

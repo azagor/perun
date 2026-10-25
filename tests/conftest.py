@@ -28,7 +28,8 @@ def _fresh_db():
     with db.db() as conn:
         for table in ("bridge_links", "activity", "doc_chunks", "memory",
                       "runs", "sessions", "projects", "context_docs",
-                      "secret_store"):
+                      "secret_store", "project_chats", "action_proposals",
+                      "pending_room_deletions", "hitl_nonces"):
             conn.execute(f"DELETE FROM {table}")
     yield
 

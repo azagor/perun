@@ -44,6 +44,9 @@ anchors:
 - label: Product design
   kind: doc
   path: docs/DESIGN.md
+- label: Shared Projects PRD
+  kind: doc
+  path: docs/SHARED_PROJECTS_PRD.md
 - label: AGENTS.md context-budget optimisation
   kind: doc
   path: docs/AGENTS_OPTIMIZATION.md

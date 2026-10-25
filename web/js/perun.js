@@ -40,6 +40,13 @@ const state = {
 };
 
 /* ---------------------------------------------------------------- api ---- */
+async function loadTrustedAgents() {
+    try {
+        const data = await api('/api/perunchat/trusted');
+        return data.trusted || [];
+    } catch (e) { return []; }
+}
+
 async function api(path, opts = {}) {
     const init = { headers: {} };
     if (opts.method) init.method = opts.method;
@@ -1096,6 +1103,7 @@ function projectWizard() {
         model: '', agent: '',
         bootstrap: true, git_init: false, git_remote: '', git_branch: 'main',
         index_docs: false,
+        shared: false, participants: [], external_deps: [],
     };
     const STEPS = ['Method', 'Location', 'Details', 'Review'];
 
@@ -1144,7 +1152,33 @@ function projectWizard() {
         return html;
     };
 
-    const detailsStep = () => `
+    const participantRole = (agent) => {
+        const p = wiz.participants.find((x) => (x.agent_id || x) === agent);
+        if (!p) return null;
+        const roles = (p.roles || []);
+        if (roles.includes('rw')) return 'rw';
+        if (roles.includes('ro')) return 'ro';
+        return null;
+    };
+    const setParticipantRole = (agent, role) => {
+        const idx = wiz.participants.findIndex((x) => (x.agent_id || x) === agent);
+        if (!role) {
+            if (idx >= 0) wiz.participants.splice(idx, 1);
+            return;
+        }
+        if (idx >= 0) {
+            wiz.participants[idx].roles = [role];
+        } else {
+            wiz.participants.push({ agent_id: agent, roles: [role] });
+        }
+    };
+
+    const detailsStep = (trusted) => {
+        const participantChips = (trusted || []).map((agent) => {
+            const role = participantRole(agent);
+            return `<span class="trust-chip ${role ? 'role-' + role : ''}" data-agent="${esc(agent)}">${esc(agent)}<span class="role">${role || '—'}</span></span>`;
+        }).join('');
+        return `
         <div class="form-row">
             <label class="field"><span class="lab">Name</span><input type="text" data-field="name" value="${esc(wiz.name)}" placeholder="My Project"></label>
             <label class="field"><span class="lab">Kind</span><select data-field="kind">
@@ -1168,7 +1202,15 @@ function projectWizard() {
         <div class="form-row">
             <label class="field"><span class="lab">Git remote (optional)</span><input type="text" data-field="git_remote" value="${esc(wiz.git_remote)}" placeholder="https://github.com/you/repo.git"></label>
             <label class="field"><span class="lab">Branch</span><input type="text" data-field="git_branch" value="${esc(wiz.git_branch)}" placeholder="main"></label>
-        </div>` : ''}`;
+        </div>` : ''}
+        <hr style="margin:18px 0;border-color:var(--border)">
+        <label class="opt"><input type="checkbox" data-field="shared" ${wiz.shared ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
+        <div class="shared-section ${wiz.shared ? '' : 'hidden'}">
+            <h4>Participants from PerunChat trust list</h4>
+            <p class="muted" style="font-size:.78rem">Click a chip to cycle role: removed → rw → ro → removed. Only trusted agents can be added.</p>
+            <div class="trust-pool">${participantChips || '<span class="muted">No trusted agents configured. Add agents in Settings → PerunChat.</span>'}</div>
+        </div>`;
+    };
 
     const reviewStep = () => {
         const rows = [
@@ -1181,6 +1223,7 @@ function projectWizard() {
             ['Git', wiz.method === 'clone' ? 'cloned from remote'
                 : (wiz.git_init ? `init on ${wiz.git_branch || 'main'}` : (wiz.git_remote ? 'remote configured' : 'none'))],
             ['Index docs', wiz.index_docs ? 'yes' : 'no'],
+            ['Shared project', wiz.shared ? `yes (${wiz.participants.length} participant(s))` : 'no'],
         ].filter(Boolean);
         return `<p class="secondary">Review and create.</p>
             <div class="kv">${rows.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('')}</div>`;
@@ -1197,12 +1240,16 @@ function projectWizard() {
         return null;
     };
 
-    const render = () => {
+    let trustedAgents = [];
+    const render = async () => {
         const body = el('div', { class: 'wizard' });
         body.appendChild(el('div', { class: 'wiz-steps' }, STEPS.map((s, i) =>
             `<span class="wiz-step ${i === wiz.step ? 'active' : ''} ${i < wiz.step ? 'done' : ''}"><b>${i + 1}</b> ${esc(s)}</span>`).join('')));
         const pane = el('div', { class: 'wiz-pane' });
-        pane.innerHTML = [methodStep, locationStep, detailsStep, reviewStep][wiz.step]();
+        if (wiz.step === 2 && !trustedAgents.length) {
+            trustedAgents = await loadTrustedAgents();
+        }
+        pane.innerHTML = [methodStep, locationStep, () => detailsStep(trustedAgents), reviewStep][wiz.step]();
         body.appendChild(pane);
 
         pane.querySelectorAll('[data-method]').forEach((c) => c.addEventListener('click', () => {
@@ -1222,6 +1269,14 @@ function projectWizard() {
                 toast(r.created ? 'Folder created' : 'Folder already exists', 'ok'); }
             catch (e) { toast(e.message, 'err'); }
         });
+        // Shared-project participant chips: cycle removed → rw → ro → removed.
+        pane.querySelectorAll('.trust-chip').forEach((chip) => chip.addEventListener('click', () => {
+            const agent = chip.dataset.agent;
+            const role = participantRole(agent);
+            const next = role === null ? 'rw' : (role === 'rw' ? 'ro' : null);
+            setParticipantRole(agent, next);
+            render();
+        }));
         bind(pane);
 
         const actions = [];
@@ -1250,6 +1305,11 @@ async function submitWizard(wiz) {
         git_remote: wiz.git_remote, git_branch: wiz.git_branch,
         index_docs: wiz.index_docs, clone_url: wiz.clone_url,
     };
+    if (wiz.shared && wiz.participants.length) {
+        payload.shared = true;
+        payload.participants = wiz.participants;
+        payload.external_deps = wiz.external_deps;
+    }
     if (!payload.path) { toast('Folder path is required', 'err'); return; }
     try {
         const res = await api('/api/projects', { method: 'POST', body: payload });
@@ -1317,7 +1377,7 @@ async function viewProject(slug, tab) {
          </div>`));
 
     const tabDefs = [
-        ['overview', 'Overview'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
+        ['overview', 'Overview'], ['shared', 'Shared'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
         ['memory', 'Memory'], ['activity', 'Activity'], ['git', 'Git'],
         ['manifest', 'Manifest'], ['instructions', 'Instructions'], ['config', 'Config'],
     ];
@@ -1416,6 +1476,17 @@ function renderProjectTab(name, detail) {
         // mounted separately
     } else if (name === 'config') {
         wrap.appendChild(projectConfigForm(p));
+    } else if (name === 'shared') {
+        const sharedPlaceholder = el('div', { class: 'card' }, '<div class="empty"><span class="spinner"></span> loading shared settings…</div>');
+        const proposalsPlaceholder = el('div', { class: 'card' }, '<div class="empty"><span class="spinner"></span> loading proposals…</div>');
+        wrap.appendChild(sharedPlaceholder);
+        wrap.appendChild(proposalsPlaceholder);
+        sharedProjectCard(detail).then((card) => sharedPlaceholder.replaceWith(card)).catch((e) => {
+            sharedPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+        });
+        proposalsCard(detail).then((card) => proposalsPlaceholder.replaceWith(card)).catch((e) => {
+            proposalsPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+        });
     }
     return wrap;
 }
@@ -1508,6 +1579,169 @@ function projectInstructionsForm(p) {
     });
 
     return wrap;
+}
+
+async function sharedProjectCard(detail) {
+    const p = detail.project;
+    const card = el('div', { class: 'card' }, '<div class="card-head"><h4>Shared project</h4></div>');
+    let cfg, chat;
+    try {
+        const res = await api(`/api/projects/${p.slug}/shared`);
+        cfg = res.shared || {};
+        chat = res.chat || null;
+    } catch (e) {
+        cfg = {};
+        chat = null;
+    }
+    const enabled = !!cfg.shared;
+    const statusClass = enabled ? (chat && chat.state === 'active' ? 'on' : 'pending') : '';
+    const statusText = enabled ? (chat && chat.state === 'active' ? 'Active' : 'Pending') : 'Disabled';
+
+    card.innerHTML = `
+        <div class="card-head"><h4>Shared project</h4><span class="shared-status ${statusClass}">${esc(statusText)}</span></div>
+        <label class="opt"><input type="checkbox" id="sp-enabled" ${enabled ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
+        <div id="sp-form" class="mt ${enabled ? '' : 'hidden'}">
+            <div class="shared-section">
+                <h4>Participants</h4>
+                <p class="muted" style="font-size:.78rem">Click a chip to cycle role: removed → rw → ro → removed.</p>
+                <div id="sp-participants" class="trust-pool"></div>
+            </div>
+            <div class="shared-section">
+                <h4>External dependencies</h4>
+                <div id="sp-deps"></div>
+                <button class="btn sm ghost mt" id="sp-add-dep" type="button">＋ Add dependency</button>
+            </div>
+            <button class="btn primary" id="sp-save" type="button">Save shared settings</button>
+            <p class="muted" style="font-size:.72rem;margin-top:10px">A post-run filesystem audit logs any changes outside the allowlist. The optional <code>perun-guard</code> MCP tools enforce the allowlist only if the Project Agent chooses them.</p>
+        </div>
+        ${chat ? `<div class="kv mt"><span class="k">Room</span><span class="v mono">${esc(chat.room_id || '—')}</span>
+            <span class="k">State</span><span class="v">${esc(chat.state || '—')}</span>
+            <span class="k">Manifest rev</span><span class="v">${cfg.manifest_rev || 1}</span>
+            <span class="k">Last sync</span><span class="v">${esc(chat.last_sync_at ? timeAgo(chat.last_sync_at) : 'never')}</span></div>` : ''}`;
+
+    const trusted = await loadTrustedAgents();
+    const participantPool = card.querySelector('#sp-participants');
+    const participantMap = {};
+    for (const x of (cfg.participants || [])) {
+        const roles = x.roles || [];
+        participantMap[x.agent_id || x] = roles.includes('rw') ? 'rw' : (roles.includes('ro') ? 'ro' : null);
+    }
+    const renderParticipantPool = () => {
+        participantPool.innerHTML = trusted.map((agent) => {
+            const role = participantMap[agent] || null;
+            return `<span class="trust-chip ${role ? 'role-' + role : ''}" data-agent="${esc(agent)}">${esc(agent)}<span class="role">${role || '—'}</span></span>`;
+        }).join('') || '<span class="muted">No trusted agents configured. Add agents in Settings → PerunChat.</span>';
+        participantPool.querySelectorAll('.trust-chip').forEach((chip) => chip.addEventListener('click', () => {
+            const agent = chip.dataset.agent;
+            const role = participantMap[agent] || null;
+            const next = role === null ? 'rw' : (role === 'rw' ? 'ro' : null);
+            participantMap[agent] = next;
+            renderParticipantPool();
+        }));
+    };
+    renderParticipantPool();
+
+    const depsContainer = card.querySelector('#sp-deps');
+    const deps = (cfg.external_deps || []).map((d) => ({ path: d.path || '', access: d.access || 'rw', name: d.name || '' }));
+    const renderDeps = () => {
+        depsContainer.innerHTML = deps.map((d, i) => `
+            <div class="dep-row" data-idx="${i}">
+                <input type="text" class="sp-dep-path" value="${esc(d.path)}" placeholder="C:\\shared\\lib or relative\\path">
+                <select class="sp-dep-access">
+                    <option value="rw" ${d.access === 'rw' ? 'selected' : ''}>rw</option>
+                    <option value="ro" ${d.access === 'ro' ? 'selected' : ''}>ro</option>
+                </select>
+                <button class="btn ghost sm" type="button" data-rm-dep>✕</button>
+            </div>`).join('');
+        depsContainer.querySelectorAll('[data-rm-dep]').forEach((b) => b.addEventListener('click', () => {
+            deps.splice(parseInt(b.closest('.dep-row').dataset.idx), 1);
+            renderDeps();
+        }));
+    };
+    renderDeps();
+    card.querySelector('#sp-add-dep').addEventListener('click', () => { deps.push({ path: '', access: 'rw', name: '' }); renderDeps(); });
+
+    const enabledCb = card.querySelector('#sp-enabled');
+    enabledCb.addEventListener('change', () => {
+        card.querySelector('#sp-form').classList.toggle('hidden', !enabledCb.checked);
+    });
+    card.querySelector('#sp-save').addEventListener('click', async () => {
+        const selected = Object.entries(participantMap)
+            .filter(([, role]) => role)
+            .map(([agent, role]) => ({ agent_id: agent, roles: [role] }));
+        const depRows = depsContainer.querySelectorAll('.dep-row');
+        const newDeps = [];
+        depRows.forEach((row) => {
+            const path = row.querySelector('.sp-dep-path').value.trim();
+            if (!path) return;
+            newDeps.push({ path, access: row.querySelector('.sp-dep-access').value, name: '' });
+        });
+        try {
+            await api(`/api/projects/${p.slug}/shared`, {
+                method: 'PUT',
+                body: { shared: enabledCb.checked, participants: selected, external_deps: newDeps }
+            });
+            toast('Shared settings saved', 'ok');
+            viewProject(p.slug, 'shared');
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    return card;
+}
+
+async function proposalsCard(detail) {
+    const p = detail.project;
+    const card = el('div', { class: 'card proposal-list' }, '<div class="card-head"><h4>Action proposals</h4></div>');
+    let proposals = [];
+    try {
+        const res = await api(`/api/projects/${p.slug}/proposals`);
+        proposals = res.proposals || [];
+    } catch (e) {
+        card.innerHTML += `<div class="empty">${esc(e.message)}</div>`;
+        return card;
+    }
+    if (!proposals.length) {
+        card.innerHTML += '<div class="empty">No action proposals yet.</div>';
+        return card;
+    }
+    const list = el('div', { class: 'list' });
+    for (const prop of proposals) {
+        const targets = (prop.targets || []).join(', ');
+        const actions = [];
+        if (prop.status === 'pending') {
+            actions.push(`<button class="btn sm primary" data-approve="${esc(prop.id)}">Approve</button>`);
+            actions.push(`<button class="btn sm ghost" data-reject="${esc(prop.id)}">Reject</button>`);
+        } else if (prop.status === 'approved') {
+            actions.push(`<button class="btn sm primary" data-execute="${esc(prop.id)}">Execute</button>`);
+        }
+        let meta = `${esc(prop.requester)} · ${esc(targets)} · ${esc(timeAgo(prop.created_at))}`;
+        if (prop.status === 'approved' || prop.status === 'rejected') {
+            const who = prop.approved_by || 'owner';
+            meta += ` · ${prop.status === 'rejected' ? 'rejected' : 'approved'} by ${esc(who)}`;
+            if (prop.status === 'rejected' && prop.result) {
+                meta += `: ${esc(prop.result)}`;
+            }
+        }
+        const row = el('div', { class: 'list-row' },
+            `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' ? 'blue' : prop.status === 'rejected' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
+             <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
+             <div class="meta">${meta}</div></span>
+             <span class="row" style="gap:6px">${actions.join('')}</span>`);
+        row.querySelector('[data-approve]')?.addEventListener('click', async () => {
+            try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/approve`, { method: 'POST' }); toast('Approved', 'ok'); viewProject(p.slug, 'shared'); }
+            catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-reject]')?.addEventListener('click', async () => {
+            try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/reject`, { method: 'POST' }); toast('Rejected', 'ok'); viewProject(p.slug, 'shared'); }
+            catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-execute]')?.addEventListener('click', async () => {
+            try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/execute`, { method: 'POST' }); toast('Executed', 'ok'); viewProject(p.slug, 'shared'); }
+            catch (e) { toast(e.message, 'err'); }
+        });
+        list.appendChild(row);
+    }
+    card.appendChild(list);
+    return card;
 }
 
 function projectConfigForm(p) {
@@ -4359,6 +4593,11 @@ async function viewSettings() {
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">Ollama host</span><input type="text" id="s-ollama" value="${esc(s.ollama_host)}"></label>
+            <label class="field"><span class="lab">Owner name <span class="muted">(shown on proposal approvals)</span></span><input type="text" id="s-owner" value="${esc(s.perun_owner_name || '')}" placeholder="owner"></label>
+         </div>
+         <div class="form-row">
+            <label class="field"><span class="lab">HITL secret <span class="muted">(approval-token signing key)</span> <span id="hitl-secret-badge" class="badge ${s.perun_hitl_secret_set ? 'green' : ''}">${s.perun_hitl_secret_set ? 'set' : 'not set'}</span></span><input type="password" id="s-hitl-secret" value="" placeholder="leave blank to keep the current secret"></label>
+            <label class="field"><span class="lab">HITL secret source</span><span class="mono" style="font-size:.78rem">PERUN_HITL_SECRET env var, then this field, then a hash of PERUN_HOME. If PERUN_PASSWORD is set, the value saved here is encrypted in config.json.</span></label>
          </div>
          <div class="row wrap" style="gap:18px;margin:6px 0 4px">
             <label class="row" style="gap:6px"><input type="checkbox" id="s-autodisc" ${s.auto_discover_on_start ? 'checked' : ''}> auto-discover on start</label>
@@ -4521,8 +4760,11 @@ async function viewSettings() {
             terminal: $('#s-terminal').value || $('#s-terminal-custom').value.trim(),
             max_concurrent_runs: Number($('#s-max').value), run_timeout: Number($('#s-timeout').value),
             ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value || $('#s-embed-custom').value.trim(),
+            perun_owner_name: $('#s-owner').value.trim(),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
         };
+        const hitlSecret = $('#s-hitl-secret').value.trim();
+        if (hitlSecret) payload.perun_hitl_secret = hitlSecret;
         try { await api('/api/settings', { method: 'PATCH', body: payload }); toast('Settings saved', 'ok'); }
         catch (e) { toast(e.message, 'err'); }
     });

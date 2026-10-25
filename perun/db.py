@@ -193,6 +193,60 @@ CREATE TABLE IF NOT EXISTS bridge_links (
     updated_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_bridge_links_project ON bridge_links(project_id);
+
+-- Shared Projects: PerunChat room bound to a project lifecycle.
+CREATE TABLE IF NOT EXISTS project_chats (
+    project_id   INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    room_id      TEXT UNIQUE NOT NULL,
+    managed_by   TEXT NOT NULL,
+    state        TEXT DEFAULT 'active',
+    manifest_rev INTEGER DEFAULT 1,
+    last_sync_at TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_project_chats_room ON project_chats(room_id);
+
+-- Shared Projects: HITL-gated action proposals from chat.
+CREATE TABLE IF NOT EXISTS action_proposals (
+    id              TEXT PRIMARY KEY,
+    project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    room_id         TEXT,
+    requester       TEXT NOT NULL,
+    action_type     TEXT NOT NULL,
+    intent          TEXT NOT NULL,
+    targets         TEXT NOT NULL,  -- JSON list of paths
+    details         TEXT NOT NULL,  -- JSON extra parameters
+    manifest_rev    INTEGER DEFAULT 1,
+    status          TEXT DEFAULT 'pending',
+    expires_at      INTEGER NOT NULL,
+    approval_token  TEXT,
+    approval_expiry INTEGER,
+    approved_by     TEXT,
+    approved_at     TEXT,
+    result          TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_action_proposals_project ON action_proposals(project_id);
+CREATE INDEX IF NOT EXISTS idx_action_proposals_status ON action_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_action_proposals_room ON action_proposals(room_id);
+
+-- Offline room deletions queued when the gateway is unreachable during project
+-- deletion. Retried on server startup / bridge reconnect.
+CREATE TABLE IF NOT EXISTS pending_room_deletions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id      TEXT NOT NULL,
+    attempted_at TEXT NOT NULL,
+    error        TEXT
+);
+
+-- HITL approval-token consumed nonces. Persists across restarts so approved
+-- tokens cannot be replayed before their expiry.
+CREATE TABLE IF NOT EXISTS hitl_nonces (
+    nonce        TEXT PRIMARY KEY,
+    consumed_at  INTEGER NOT NULL
+);
 """
 
 

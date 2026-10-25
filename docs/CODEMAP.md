@@ -494,8 +494,39 @@ Autonomous PerunChat chat participant for the Orchestrator.
   it whenever the embedded content changes so prompt fixes reach production.
 * Chat model/agent precedence: `perunchat_chat_model`/`perunchat_chat_agent` →
   `orchestrator_model`/`orchestrator_agent` → defaults.
+* Shared-project chat flow: `_shared_project_context()` injects the manifest into
+  managed `grp:` rooms; `_extract_action_proposal()` parses `[ACTION: …]` markers
+  from replies and `_create_action_proposal()` stages a HITL-gated proposal in
+  Perun's local proposal store.
 * `PERUNCHAT_API_KEY`/`PERUNCHAT_API_ENDPOINT` are in `orchestrator._SECRET_ENV` so
   spawned agent subprocesses never inherit them.
+
+### Shared Projects modules
+
+* `perun/shared_projects.py` — manifest schema normalization (`shared`,
+  `participants`, `external_deps`, `manifest_rev`), trust-list validation,
+  external-dependency path resolution, and the project→room id helper.
+* `perun/shared_project_sync.py` — reconciles the manifest participant list with
+  the PerunChat gateway ACL for managed `grp:` rooms, creating/lazy-creating or
+  tearing down the dedicated project chat on lifecycle events.
+* `perun/hitl.py` — local HMAC-SHA256 HITL approval-token engine for action
+  proposals (tokens bind proposal id, action hash, expiry, and nonce).
+* `perun/path_guard.py` — resolves the project allowlist (root + declared
+  external deps) and validates proposal targets against it.
+* `perun/guard_mcp.py` — policy-enforcing filesystem MCP server used by the
+  Project Agent for shared-project runs; validates every path against the manifest
+  allowlist (`PERUN_ALLOWLIST` env) and falls back to pass-through when unset.
+* `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
+  before a shared-project run, diffs them after, and logs violations plus parent-
+  directory escapes to the activity table.
+* `perun/action_proposals.py` — proposal lifecycle: create, approve, reject,
+  execute via the Orchestrator, and compose State Digests for the project chat.
+* Dashboard UI (`web/js/perun.js`, `web/css/perun.css`) — project wizard adds a
+  shared-project step with multi-select from the PerunChat trust list; the
+  project detail page gains a "Shared" tab to edit participants/external deps
+  and manage (approve/reject/execute) action proposals.
+* Tables: `project_chats`, `action_proposals`, and `pending_room_deletions` in
+  `perun/db.py`.
 
 ### `perun/server.py`
 FastAPI app + SSE + static dashboard.

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.7.51 (see §15). This release fixes a PerunChat hard-timeout bug where the foreground worker abandoned a slow reply after 60 seconds but the background generation thread kept running, often sending a stale reply minutes later when the model/provider call finally finished. The timeout handler now cancels the underlying orchestrator run so the slot is freed and no delayed reply is sent. It also includes the v0.7.50 sequence-number collision fix, the v0.7.42–v0.7.43 private-room UI and conversational memory work, and the v0.7.44 60-second reply timeout. `perun.__version__` reports `0.7.51`.
+**Latest release:** v0.8.0 (see §15). This release ships the **Shared Projects** feature: Perun projects can be bound to dedicated PerunChat group rooms, chat-originated action proposals are gated by local HITL approval, approved runs are wrapped by a policy-enforcing filesystem MCP server plus a post-run filesystem audit, and participant roles/approver identity/HITL signing secret are configurable. See `docs/SHARED_PROJECTS_PRD.md` and `docs/CHANGELOG.md` for details. `perun.__version__` reports `0.8.0`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound

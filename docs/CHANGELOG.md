@@ -4,6 +4,49 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.8.0 - 2026-10-25
+
+### Added
+
+- **Shared Projects**: Perun projects can now be bound to dedicated PerunChat
+  group rooms. Manifests gain `shared`, `participants`, and `external_deps`
+  fields; the dashboard wizard and project detail page expose multi-select
+  participant management and external-dependency configuration.
+- HITL-gated **action proposals** from shared-project chat rooms. Chat agents
+  emit `[ACTION: ...]` envelopes; owners approve/reject/execute them from the
+  dashboard or via the REST API. Approved runs are wrapped by a policy-enforcing
+  filesystem MCP server (`perun-guard`) and audited post-run.
+- Local HMAC-SHA256 **approval-token engine** for proposals, with a persisted
+  nonce store so replay protection survives server restarts.
+- Post-run **filesystem audit** snapshots allowlisted paths before a shared
+  project run and diffs them afterwards, logging violations and parent-directory
+  escapes to the activity feed.
+- Offline room-deletion retry queue (`pending_room_deletions`) retried on
+  server startup and PerunChat bridge reconnect.
+- Configurable **approver identity** for shared-project proposals via the
+  `perun_owner_name` setting; defaults to the OS username so the audit trail
+  shows who approved or rejected each proposal.
+- Per-project participant **role semantics**: `rw` participants may propose
+  actions, while `ro` participants can read shared context but are rejected when
+  they originate `[ACTION: ...]` proposals.
+- Configurable **HITL signing secret** via the `PERUN_HITL_SECRET` environment
+  variable or the `perun_hitl_secret` setting, so multi-node deployments can
+  share the same approval-token key instead of deriving it from `PERUN_HOME`.
+  When `PERUN_PASSWORD` is set, the persisted secret is encrypted at rest.
+
+### Changed
+
+- PerunChat reply hard cap removed; the model is now trusted to decide reply
+  length (the system prompt still asks for brevity).
+
+### Fixed
+
+- `perun-guard` MCP server is now registered in (and removed from) the project's
+  `opencode.json` whenever shared-project mode is enabled or disabled from the
+  dashboard.
+- Trust-list revocation immediately re-syncs affected shared-project chats,
+  stripping the revoked agent from the room ACL.
+
 ## v0.7.51 - 2026-10-24
 
 ### Fixed

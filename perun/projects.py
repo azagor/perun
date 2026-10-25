@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from . import git, manifest, memory, orchestrator, registry, scaffold
+from . import git, manifest, memory, orchestrator, registry, scaffold, shared_project_sync, shared_projects
 
 # Config file names OpenCode looks for in a project, in precedence order.
 OPENCODE_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
@@ -69,6 +70,26 @@ def sync_opencode_config(project: dict[str, Any]) -> dict[str, Any]:
             del data[key]
             changed = True
 
+    # Register the shared-project filesystem guard MCP server for shared projects.
+    mcp_servers = data.get("mcp")
+    if not isinstance(mcp_servers, dict):
+        mcp_servers = {}
+    shared_cfg = shared_projects.load(project["path"])
+    guard_key = "perun-guard"
+    guard_entry = {"command": sys.executable, "args": ["-m", "perun.guard_mcp"]}
+    if shared_cfg.get("shared"):
+        if mcp_servers.get(guard_key) != guard_entry:
+            mcp_servers[guard_key] = guard_entry
+            data["mcp"] = mcp_servers
+            changed = True
+    elif guard_key in mcp_servers:
+        del mcp_servers[guard_key]
+        if mcp_servers:
+            data["mcp"] = mcp_servers
+        else:
+            data.pop("mcp", None)
+        changed = True
+
     if not changed:
         return {"action": "unchanged", "path": str(target)} if target.is_file() else {"action": "unchanged"}
 
@@ -105,7 +126,12 @@ def sync_manifest(project: dict[str, Any]) -> dict[str, Any]:
     (seed-once, so later dashboard edits are never clobbered); every other
     declared field is merged into the registry. Instruction text never touches
     the database.
+
+    If the project is shared, the dedicated PerunChat room is reconciled so
+    manual manifest edits are reflected in the chat ACL.
     """
+    from . import shared_projects
+
     snap = manifest.load(project["path"])
     if snap["found"]:
         declared = manifest.to_project_fields(snap["data"])
@@ -116,6 +142,12 @@ def sync_manifest(project: dict[str, Any]) -> dict[str, Any]:
             project["path"], instructions, overwrite=False)
         registry.set_project_manifest(project["slug"], manifest.snapshot(snap),
                                       snap["path"])
+        cfg = shared_projects.load(project["path"])
+        if cfg.get("shared") or cfg.get("participants"):
+            try:
+                shared_project_sync.sync_project_chat(project, cfg)
+            except Exception:  # pragma: no cover - best-effort chat sync
+                pass
     return snap
 
 

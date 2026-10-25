@@ -163,6 +163,93 @@ def test_settings_get_patch(client):
     assert client.get("/api/settings").json()["settings"]["max_concurrent_runs"] == 5
 
 
+def test_hitl_secret_is_encrypted_when_password_available(client, tmp_path, monkeypatch):
+    from perun import config, server
+
+    config.CONFIG_PATH = tmp_path / "config.json"
+    server.SETTINGS.perun_hitl_secret = ""
+    r = client.patch("/api/settings", json={
+        "perun_hitl_secret": "my-shared-secret",
+        "perunchat_password": "test-password",
+    })
+    assert r.status_code == 200, r.text
+    saved = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert saved["perun_hitl_secret"].startswith("enc:")
+
+
+def test_proposal_approval_uses_configured_owner_name(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perun_owner_name", "Ada Lovelace")
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ada-bot"])
+    target = tmp_path / "shared-ada"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedAda", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "ada-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "ada-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    assert r.status_code == 200, r.text
+    prop_id = r.json()["proposal"]["id"]
+
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/approve")
+    assert r.status_code == 200, r.text
+    assert r.json()["proposal"]["approved_by"] == "ada lovelace"
+
+
+def test_proposal_api_rejects_read_only_requester(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ro-bot"])
+    target = tmp_path / "shared-ro"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedRO", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "ro-bot", "roles": ["ro"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "ro-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    assert r.status_code == 400
+    assert "read-only" in r.json()["detail"]
+
+
+def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
+    """Enabling/disabling shared mode mirrors the perun-guard MCP entry in opencode.json."""
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ada-bot"])
+    target = tmp_path / "shared-guard"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedGuard", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "ada-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    cfg_path = target / "opencode.json"
+    assert cfg_path.exists()
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "perun-guard" in cfg.get("mcp", {})
+    assert cfg["mcp"]["perun-guard"]["args"] == ["-m", "perun.guard_mcp"]
+
+    # Disabling shared mode removes the guard entry.
+    r = client.put(f"/api/projects/{slug}/shared", json={
+        "shared": False, "participants": [], "external_deps": []
+    })
+    assert r.status_code == 200, r.text
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "perun-guard" not in cfg.get("mcp", {})
+
+
 def test_global_instruction_file_apis(client, tmp_path, monkeypatch):
     from perun import config, orchestrator
 

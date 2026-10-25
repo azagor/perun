@@ -743,7 +743,8 @@ class Orchestrator:
                   agent: str = "",
                   title: str = "",
                   skip_instructions: bool = False,
-                  use_prompt_file: bool = False) -> dict[str, Any]:
+                  use_prompt_file: bool = False,
+                  extra_env: dict[str, str] | None = None) -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
@@ -790,6 +791,7 @@ class Orchestrator:
         # avoid command-line length limits.
         run["skip_instructions"] = skip_instructions
         run["use_prompt_file"] = use_prompt_file
+        run["extra_env"] = extra_env or {}
         registry.log_activity(project["id"], "run",
                               f"Started agent run ({run_uid})",
                               {"prompt": prompt[:200]})
@@ -881,7 +883,11 @@ class Orchestrator:
                                cancelled=True)
                 return
             use_prompt_file = run.get("use_prompt_file", False)
-            self._execute(run_uid, project, prompt, run, use_prompt_file=use_prompt_file)
+            self._execute(
+                run_uid, project, prompt, run,
+                use_prompt_file=use_prompt_file,
+                extra_env=run.get("extra_env") or {},
+            )
         except Exception as exc:  # pragma: no cover - defensive
             self._publish_text(run_uid, f"\n[perun] internal error: {exc}\n")
             self._finalize(run_uid, "failed", None, str(exc), cancelled=False)
@@ -889,7 +895,8 @@ class Orchestrator:
             self._sem.release()
 
     def _execute(self, run_uid: str, project: dict[str, Any], prompt: str,
-                 run: dict[str, Any], *, use_prompt_file: bool = False) -> None:
+                 run: dict[str, Any], *, use_prompt_file: bool = False,
+                 extra_env: dict[str, str] | None = None) -> None:
         cwd = project["path"]
         oc_sid = run.get("opencode_session_id") or ""
         # Refuse to nest agents without bound: an agent spawned by Perun inherits
@@ -954,6 +961,9 @@ class Orchestrator:
                                    "project": project["slug"], "cwd": cwd})
 
         try:
+            env = _child_env(depth + 1)
+            if extra_env:
+                env.update(extra_env)
             proc = subprocess.Popen(
                 argv, cwd=cwd,
                 stdin=subprocess.DEVNULL,
@@ -963,7 +973,7 @@ class Orchestrator:
                 # POSIX: lead a new session so terminate_tree() can signal the
                 # whole process group (MCP servers, LSPs, tool children).
                 start_new_session=(os.name != "nt"),
-                env=_child_env(depth + 1),
+                env=env,
             )
         except FileNotFoundError as exc:
             self._finalize(run_uid, "failed", None, f"cannot launch opencode: {exc}",

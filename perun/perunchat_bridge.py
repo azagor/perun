@@ -42,7 +42,7 @@ try:
 except Exception:  # pragma: no cover
     _HAS_HTTPX = False
 
-from . import config, control, memory, registry
+from . import action_proposals, config, control, memory, registry, shared_project_sync, shared_projects
 
 if False:  # type: ignore
     # Circular-import-safe type hint for the orchestrator.
@@ -75,7 +75,6 @@ DEFAULT_PUBLIC_ROOMS = ["pub:global:general", "pub:global:tech", "pub:global:ran
 _MAX_REPLIES_PER_MINUTE = 15
 _MAX_RECENT_REPLIED = 250
 _REPLIED_TRIM_TO = 150
-_MAX_REPLY_CHARS = 320
 _ROOM_HISTORY_LEN = 40
 _MAX_CONTEXT_MESSAGES = 6
 # Absolute prompt-size guard. We pass prompts via a temp file, so the real limit
@@ -535,6 +534,29 @@ class PerunChatBridge:
         self._drop_from_outbox(frame.get("id"))
         return True
 
+    def post_to_room(self, room_id: str, payload: str, content_type: str = "text/plain") -> bool:
+        """Post a message to *room_id* from outside the normal reply flow."""
+        if not self._ws or not self._agent_id:
+            return False
+        try:
+            self._seq += 1
+            self._save_seq()
+            frame = {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "thread_id": "default",
+                "sequence_number": self._seq,
+                "timestamp": int(time.time() * 1000),
+                "room_type": _room_type(room_id),
+                "room_id": room_id,
+                "sender": {"agent_id": self._agent_id, "runtime": "perun"},
+                "content_type": content_type,
+                "payload": payload,
+            }
+            return self._send_frame(self._ws, frame)
+        except Exception:
+            logger.debug("PerunChat post_to_room failed", exc_info=True)
+            return False
+
     def _flush_outbox(self, ws: Any) -> None:
         """Resend queued frames after a (re)connect.
 
@@ -623,6 +645,11 @@ class PerunChatBridge:
                 # process) goes out first, before new replies are generated,
                 # so sequence numbers stay monotonic in the room.
                 self._flush_outbox(ws)
+                # Retry any project-chat deletions that failed while offline.
+                try:
+                    shared_project_sync.retry_pending_room_deletions()
+                except Exception:
+                    pass
 
                 while not self._stop.is_set():
                     try:
@@ -1105,15 +1132,27 @@ class PerunChatBridge:
             reply = self._redact_internal_info(reply, room_id)
             # Brief, human-like pause before sending the decided reply.
             time.sleep(random.uniform(_TYPING_DELAY_MIN, _TYPING_DELAY_MAX))
-            # Hard cap: some models ignore the "brief" system prompt.
-            if len(reply) > _MAX_REPLY_CHARS:
-                reply = reply[:_MAX_REPLY_CHARS].rsplit(" ", 1)[0] + "…"
+            # The system prompt asks the model to be brief; we do not impose a
+            # hard reply cap so the LLM can decide when a longer answer is needed.
             logger.info("PerunChat bridge sending reply (%d chars) in %s", len(reply), room_id)
             # Strip any [FACT: ...] / [FACT(type=...): ...] markers from the
             # outgoing payload so users don't see the machine-readable memory
             # annotations, regardless of where the model placed them.
             clean_reply = re.sub(r"\s*\[FACT(?:\([^)]*\))?:\s*.+?\]\s*", " ", reply, flags=re.IGNORECASE).strip()
             clean_reply = re.sub(r"\s{2,}", " ", clean_reply).strip()
+
+            # Shared project: detect action proposals and create HITL-gated proposals.
+            if room_id and room_id.startswith("grp:") and is_trusted:
+                envelope = self._extract_action_proposal(clean_reply, room_id, sender)
+                if envelope:
+                    try:
+                        proposal = self._create_action_proposal(room_id, envelope)
+                        clean_reply += (
+                            f"\n\n[Proposal {proposal['id']} created; awaiting owner approval.]"
+                        )
+                    except Exception as exc:
+                        clean_reply += f"\n\n[Could not create proposal: {exc}]"
+
             self._seq += 1
             self._save_seq()
             reply_frame = {
@@ -1293,6 +1332,100 @@ class PerunChatBridge:
             return None
         return max(1, int(age_ms // 60_000))
 
+    def _shared_project_context(self, room_id: str) -> str:
+        """Return a sanitized manifest block for a managed project chat room."""
+        try:
+            with registry.db.db() as conn:
+                row = registry.db.one(
+                    conn,
+                    "SELECT project_id FROM project_chats WHERE room_id = ? AND state = ?",
+                    (room_id, "active"),
+                )
+                if not row:
+                    return ""
+                pid = row["project_id"]
+                proj = registry.db.one(
+                    conn, "SELECT slug, name, path FROM projects WHERE id = ?", (pid,)
+                )
+                if not proj:
+                    return ""
+            cfg = shared_projects.load(proj["path"])
+            if not cfg.get("shared"):
+                return ""
+
+            participants = ", ".join(
+                p["agent_id"] for p in cfg.get("participants", []) if p.get("agent_id")
+            )
+            dep_summary = []
+            for dep in cfg.get("external_deps", []):
+                name = dep.get("name") or dep.get("path", "")
+                if name:
+                    dep_summary.append(f"{name} ({dep.get('access', 'rw')})")
+            allowlist = "project root (rw)"
+            if dep_summary:
+                allowlist += ", " + ", ".join(dep_summary)
+
+            block = (
+                "\n\n[shared-project-context]\n"
+                f"Project: {proj['name']} ({proj['slug']})\n"
+                f"Revision: {cfg.get('manifest_rev', 1)}\n"
+                f"Participants: {participants or 'none'}\n"
+                f"Allowlist: {allowlist}\n"
+                "[end-shared-project-context]"
+            )
+            if len(block) > 4000:
+                block = (
+                    "\n\n[shared-project-context]\n"
+                    f"Project: {proj['name']} ({proj['slug']})\n"
+                    f"Revision: {cfg.get('manifest_rev', 1)}\n"
+                    f"Participants: {participants or 'none'}\n"
+                    "[end-shared-project-context]"
+                )
+            return "\n".join(
+                "[redacted]" if memory.is_sensitive(line) else line
+                for line in block.splitlines()
+            )
+        except Exception:
+            return ""
+
+    def _extract_action_proposal(self, text: str, room_id: str, requester: str) -> Dict[str, Any] | None:
+        """Parse a structured [ACTION: ...] marker from a chat reply."""
+        match = re.search(r"\[ACTION:\s*(.+?)\]", text, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+        try:
+            payload = json.loads(match.group(1).strip())
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        payload["room_id"] = room_id
+        payload["requester"] = requester
+        return payload
+
+    def _create_action_proposal(self, room_id: str, envelope: Dict[str, Any]) -> Dict[str, Any]:
+        """Create an action proposal for the shared project bound to *room_id*."""
+        with registry.db.db() as conn:
+            row = registry.db.one(
+                conn,
+                "SELECT project_id FROM project_chats WHERE room_id=? AND state=?",
+                (room_id, "active"),
+            )
+            if not row:
+                raise ValueError("no active shared project bound to this room")
+            pid = row["project_id"]
+            proj_row = registry.db.one(conn, "SELECT * FROM projects WHERE id=?", (pid,))
+            if not proj_row:
+                raise ValueError("project not found")
+            project = registry.project_dict(conn, proj_row)
+        requester = envelope.get("requester", "unknown")
+        cfg = shared_projects.load(project["path"])
+        if not shared_projects.can_write(cfg, requester):
+            raise ValueError(
+                f"participant {requester} has read-only access to this project"
+            )
+        return action_proposals.create(project, requester, envelope)
+
     def _build_prompt(
         self,
         frame: Dict[str, Any],
@@ -1304,6 +1437,18 @@ class PerunChatBridge:
         room = frame.get("room_id", "unknown")
         text = frame.get("payload", "")
         memory_context = ""
+        shared_context = ""
+        shared_action_note = ""
+        if include_internal_context and room and room.startswith("grp:"):
+            shared_context = self._shared_project_context(room)
+            if shared_context:
+                shared_action_note = (
+                    "\nNote: this is a shared project room. You may not execute "
+                    "tools or edit files. When a participant requests a project "
+                    "change, summarise it with an [ACTION: {...}] JSON marker "
+                    "containing intent, action_type, and targets. The owner must "
+                    "approve before it runs."
+                )
         try:
             pid = 0
             facts = memory.search_facts(f"{sender} {room} {text}", project_id=pid, top_k=4, include_global=True)
@@ -1393,8 +1538,8 @@ class PerunChatBridge:
         # fits. The latest message stays at the end so it is never truncated away.
         while True:
             prompt = (
-                f"{CHAT_SYSTEM_PROMPT}{context}{memory_context}{first_message_note}{saturation_note}"
-                f"{trust_note}{reply_to_note}{catchup_note}{roster_note}\n\n"
+                f"{CHAT_SYSTEM_PROMPT}{context}{memory_context}{shared_context}{first_message_note}{saturation_note}"
+                f"{trust_note}{reply_to_note}{catchup_note}{roster_note}{shared_action_note}\n\n"
                 f"Room: {room}\n"
                 f"Active participants (last 5 min): {active_humans}\n"
                 f"Messages in last minute: {recent_msgs}\n"
