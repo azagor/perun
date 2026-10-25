@@ -1117,6 +1117,19 @@ are approved and executed automatically: the recorded approver is a different
 `auto`. Humans always retain the ability to approve, execute, retry, or delete
 proposals manually.
 
+Lifecycle chat notifications keep project participants informed without
+requiring the dashboard: a plain-text "Proposal … is now executing" notice is
+posted when a run starts, a State Digest is posted when it completes or fails,
+rejections post a brief reason, and failed autonomous starts post a failure
+notice so the owner knows manual action is needed. All notices are redacted
+before leaving the process.
+
+The Shared tab also separates active proposals
+(`pending`/`approved`/`executing`) from completed ones
+(`executed`/`failed`/`rejected`/`expired`). Completed proposals are grouped in
+a collapsed-by-default section with a count, keeping the active queue visible
+and uncluttered.
+
 ---
 
 ## 11. Global installation

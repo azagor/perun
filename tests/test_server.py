@@ -386,6 +386,85 @@ def test_post_proposal_started_notifies_project_chat(client, tmp_path, monkeypat
     assert "add logging" in posted[0][0]
 
 
+def test_post_proposal_started_redacts_internal_info(client, tmp_path, monkeypatch):
+    from perun import registry, server
+
+    target = tmp_path / "shared-start-redact"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedStartRedact", "path": str(target), "bootstrap": False,
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    project = registry.get_project(slug)
+
+    monkeypatch.setattr(
+        server.registry, "get_project_chat",
+        lambda _pid: {"room_id": f"grp:perun:{slug}:chat"},
+    )
+    posted: list[str] = []
+
+    class FakeBridge:
+        def post_to_room(self, room_id, text, content_type=None):
+            posted.append(text)
+        def _redact_internal_info(self, text, room_id):
+            return text.replace("secret", "[redacted]")
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(server, "PERUNCHAT_BRIDGE", FakeBridge())
+
+    proposal = {
+        "id": "prop_start_2",
+        "intent": "touch secret.txt",
+        "targets": ["secret.txt"],
+        "status": "approved",
+    }
+    server._post_proposal_started(project, proposal)
+
+    assert len(posted) == 1
+    assert "[redacted].txt" in posted[0]
+
+
+def test_post_proposal_rejected_notifies_project_chat(client, tmp_path, monkeypatch):
+    from perun import registry, server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["reject-bot"])
+    target = tmp_path / "shared-reject"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedReject", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "reject-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "reject-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    prop_id = r.json()["proposal"]["id"]
+
+    posted: list[str] = []
+
+    class FakeBridge:
+        def post_to_room(self, room_id, text, content_type=None):
+            posted.append(text)
+        def _redact_internal_info(self, text, room_id):
+            return text
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(server, "PERUNCHAT_BRIDGE", FakeBridge())
+    monkeypatch.setattr(
+        server.registry, "get_project_chat",
+        lambda _pid: {"room_id": f"grp:perun:{slug}:chat"},
+    )
+
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/reject", json={"reason": "not now"})
+    assert r.status_code == 200, r.text
+
+    assert any("rejected" in p and "not now" in p for p in posted)
+
+
 def test_post_proposal_digest_redacts_paths_and_remains_json(client, tmp_path, monkeypatch):
     from perun import registry, server
 

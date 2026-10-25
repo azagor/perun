@@ -202,6 +202,32 @@ def _post_proposal_started(project: dict[str, Any], proposal: dict[str, Any]) ->
         if targets:
             summary += f" -> {targets}"
         text = f"[Proposal {proposal['id']} is now executing: {summary}]"
+        redact = getattr(PERUNCHAT_BRIDGE, "_redact_internal_info", None)
+        if callable(redact):
+            text = redact(text, chat["room_id"])
+        PERUNCHAT_BRIDGE.post_to_room(chat["room_id"], text)
+    except Exception:  # pragma: no cover - best-effort notification
+        pass
+
+
+def _post_proposal_rejected(
+    project: dict[str, Any], proposal: dict[str, Any], reason: str = ""
+) -> None:
+    """Post a rejection notice to the bound project chat."""
+    chat = registry.get_project_chat(project["id"])
+    if not chat or not chat.get("room_id") or not PERUNCHAT_BRIDGE:
+        return
+    try:
+        summary = " ".join(str(proposal.get("intent") or "").split())[:120]
+        targets = ", ".join(str(t) for t in (proposal.get("targets") or []))[:80]
+        if targets:
+            summary += f" -> {targets}"
+        text = f"[Proposal {proposal['id']} rejected: {summary}]"
+        if reason:
+            text += f" Reason: {reason}"
+        redact = getattr(PERUNCHAT_BRIDGE, "_redact_internal_info", None)
+        if callable(redact):
+            text = redact(text, chat["room_id"])
         PERUNCHAT_BRIDGE.post_to_room(chat["room_id"], text)
     except Exception:  # pragma: no cover - best-effort notification
         pass
@@ -1305,10 +1331,12 @@ def api_reject_proposal(
     proposal = action_proposals.get(proposal_id)
     if not proposal or proposal["project_id"] != project["id"]:
         raise HTTPException(status_code=404, detail="proposal not found")
+    reason = str(payload.get("reason") or "").strip()
     try:
         result = action_proposals.reject(
-            proposal_id, _approver_identity(), reason=payload.get("reason", "")
+            proposal_id, _approver_identity(), reason=reason
         )
+        _post_proposal_rejected(project, result, reason=reason)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=result)

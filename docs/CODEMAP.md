@@ -561,7 +561,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `auto_approve_and_execute()` — when a project's autonomous mode is enabled,
   approves a freshly-created pending proposal and starts its headless run. The
   recorded approver is a different ``rw`` participant agent when available,
-  falling back to the ``auto`` policy identity.
+  falling back to the ``auto`` policy identity. Accepts ``on_started`` and
+  ``on_complete`` callbacks so callers can post lifecycle notices to the bound
+  project chat.
 * `_pick_auto_approver()` — selects a peer ``rw`` participant that is not the
   original requester so autonomous approvals remain objective.
 * `_humanize_result()` — shortens run-result JSON errors for chat State Digests
@@ -571,9 +573,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `delete()` — removes a non-executing proposal and logs the action to project
   activity.
 * REST endpoints in `perun/server.py` manage proposals (list, create, approve,
-  reject, `approve-and-execute` returning `202`, execute, retry, delete) and
-  apply shared-project manifest fields from the wizard; `perun/projects.py`
-  keeps `opencode.json` in sync to register/remove the `perun-guard` MCP server.
+  reject, `approve-and-execute` returning `202`, execute, retry, delete), post
+  lifecycle notices (started/rejected/completed/failed) to the bound project
+  chat, and apply shared-project manifest fields from the wizard;
+  `perun/projects.py` keeps `opencode.json` in sync to register/remove the
+  `perun-guard` MCP server.
 * Tables: `project_chats`, `action_proposals`, and `pending_room_deletions` in
   `perun/db.py`.
 
@@ -594,7 +598,9 @@ FastAPI app + SSE + static dashboard.
   `_clamp()`, `_normalize_instruction_filename()`, `_project_instruction_path()`,
   `_ps_quote()`/`_posix_quote()`/`_cmd_quote()`, `_terminal_command()`
   (server-side command construction), `_dashboard_index()` (injects
-  `window.PERUN_TOKEN` into `index.html`).
+  `window.PERUN_TOKEN` into `index.html`), `_post_proposal_started()`,
+  `_post_proposal_rejected()`, `_post_proposal_digest()` (best-effort lifecycle
+  notices to the bound project chat, redacted before leaving the process).
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
   structured `/api/models`), providers (`/api/providers…` — read-only
   `opencode auth` status + logout), agents/skills/tools (`/api/agents`,

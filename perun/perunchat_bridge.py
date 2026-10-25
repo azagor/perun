@@ -1906,9 +1906,10 @@ class PerunChatBridge:
             )
 
         def _post_started(executing: dict[str, Any]) -> None:
+            text = f"[Proposal {executing['id']} is now executing: {_proposal_summary(executing)}]"
             self.post_to_room(
                 room_id,
-                f"[Proposal {executing['id']} is now executing: {_proposal_summary(executing)}]",
+                self._redact_internal_info(text, room_id),
             )
 
         try:
@@ -1925,9 +1926,10 @@ class PerunChatBridge:
                 room_id,
                 exc,
             )
+            text = f"[Proposal {proposal['id']} could not start automatically: {exc}]"
             self.post_to_room(
                 room_id,
-                f"[Proposal {proposal['id']} could not start automatically: {exc}]",
+                self._redact_internal_info(text, room_id),
             )
         return proposal
 
