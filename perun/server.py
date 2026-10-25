@@ -20,8 +20,6 @@ import hmac
 import json
 import logging
 import os
-
-logger = logging.getLogger("perun.server")
 import queue
 import re
 import shlex
@@ -59,6 +57,8 @@ _SSE_HEADERS = {
 SETTINGS = config.Settings.load()
 ORCH = orchestrator.Orchestrator(SETTINGS)
 PERUNCHAT_BRIDGE = _attach_perunchat_bridge(ORCH)
+
+logger = logging.getLogger("perun.server")
 
 
 def _approver_identity() -> str:
@@ -1326,12 +1326,12 @@ def api_approve_and_execute_proposal(slug: str, proposal_id: str) -> dict[str, A
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
         action_proposals.approve(proposal_id, _approver_identity())
-        _post_proposal_started(project, action_proposals.get(proposal_id))
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,
             on_complete=lambda final: _post_proposal_digest(project, final),
         )
+        _post_proposal_started(project, result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=result, accepted=True)
@@ -1348,12 +1348,12 @@ def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     if not proposal or proposal["project_id"] != project["id"]:
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
-        _post_proposal_started(project, action_proposals.get(proposal_id))
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,
             on_complete=lambda final: _post_proposal_digest(project, final),
         )
+        _post_proposal_started(project, result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=result, accepted=True)
