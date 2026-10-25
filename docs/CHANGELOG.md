@@ -4,6 +4,8 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.8.3 - 2026-10-25
+
 ### Added
 
 - **Autonomous mode for shared projects.** The Shared tab now has an
