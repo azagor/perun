@@ -1491,6 +1491,8 @@ class PerunChatBridge:
                         note += f" -> {tg}"
                     if proposal["status"] in ("approved", "executing"):
                         note += "; auto-approved and executing.]"
+                    elif proposal["status"] == "failed":
+                        note += "; auto-approval failed to start the run — check the project's Shared tab.]"
                     elif shared_projects.is_auto_approve(shared_project["path"]):
                         note += "; auto-approval failed — awaiting owner approval in the project's Shared tab.]"
                     else:
@@ -1931,7 +1933,8 @@ class PerunChatBridge:
                 room_id,
                 self._redact_internal_info(text, room_id),
             )
-        return proposal
+        # Re-fetch so the caller sees the real post-auto-approve status.
+        return action_proposals.get(proposal["id"]) or proposal
 
     def _build_prompt(
         self,

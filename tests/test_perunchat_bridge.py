@@ -926,6 +926,49 @@ def test_reply_creates_proposal_for_rw_participant(bridge_env, tmp_path):
     assert "awaiting owner approval" in sent
 
 
+def test_reply_reports_auto_approved_and_executing_when_autonomous_mode_on(
+    bridge_env, tmp_path, monkeypatch
+):
+    from perun import action_proposals
+
+    bridge, orchestrator = bridge_env
+    project, room = _make_shared_project(
+        tmp_path,
+        participants=[
+            {"agent_id": "frambo", "roles": ["rw"]},
+            {"agent_id": "glados", "roles": ["rw"]},
+        ],
+    )
+    monkeypatch.setattr(
+        action_proposals.shared_projects, "is_auto_approve", lambda _path: True
+    )
+
+    def fake_start(proposal_id, *, orchestrator_instance=None, on_complete=None):
+        return action_proposals.get(proposal_id)
+
+    monkeypatch.setattr(action_proposals, "start_execution", fake_start)
+
+    orchestrator.run_and_wait.return_value = _run_result(
+        'Sure.\n[ACTION: {"intent": "add a README", "action_type": "create", '
+        '"targets": ["README.md"], "details": {}}]',
+        uid="run_1",
+    )
+    frame = _chat_frame(room=room, text="please add a README")
+    frame["sender"]["agent_id"] = "frambo"
+    ws = MagicMock()
+
+    bridge._reply(frame, ws)
+
+    proposals = action_proposals.list_by_project(project["id"])
+    assert len(proposals) == 1
+    assert proposals[0]["status"] == "approved"
+    assert proposals[0]["approved_by"] == "glados"
+    sent = ws.send.call_args[0][0]
+    assert "[ACTION:" not in sent
+    assert "auto-approved and executing" in sent
+    assert "auto-approval failed" not in sent
+
+
 def test_reply_preserves_absolute_target_in_action_envelope(bridge_env, tmp_path):
     """Redaction must not run on the machine-readable ACTION envelope.
 
