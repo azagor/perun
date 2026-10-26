@@ -4390,8 +4390,10 @@ async function viewPerunChat() {
     function _msgTs(msg) {
         const ts = msg && msg.timestamp;
         if (typeof ts === 'number') return ts;
-        const d = ts ? new Date(ts).getTime() : 0;
-        return isNaN(d) ? 0 : d;
+        const d = ts ? new Date(ts).getTime() : NaN;
+        // Messages without a usable timestamp sort to the end instead of
+        // appearing as the oldest message in the log.
+        return isNaN(d) ? Number.MAX_SAFE_INTEGER : d;
     }
 
     function chatHistoryKey(roomId) {
@@ -4528,9 +4530,11 @@ async function viewPerunChat() {
         }
         // Keep the in-memory operator set bounded to the visible history.
         const visibleIds = new Set(messageHistory.map((m) => m.id));
+        const opsToRemove = [];
         for (const id of operatorMessageIds) {
-            if (!visibleIds.has(id)) operatorMessageIds.delete(id);
+            if (!visibleIds.has(id)) opsToRemove.push(id);
         }
+        for (const id of opsToRemove) operatorMessageIds.delete(id);
         if (!opts.skipPersist) persistChat();
 
         let isOperator = (msg.sender && isOperatorRuntime(msg.sender.runtime)) || operatorMessageIds.has(msg.id) || msg._perunOperator === true;

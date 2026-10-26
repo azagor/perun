@@ -2,6 +2,14 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.10
+
+### Fixed
+
+- **Dashboard chat robustness.** Messages without a usable timestamp now sort to
+  the end of the log instead of the beginning, and the operator-message cleanup
+  loop no longer mutates the `Set` while iterating.
+
 ## v0.8.9
 
 ### Fixed
