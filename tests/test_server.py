@@ -1668,7 +1668,7 @@ def test_on_proposal_completed_refreshes_manifest_and_docs(monkeypatch):
     server._on_proposal_completed(project, proposal)
 
     assert calls["digest"] is True
-    assert calls["sync"] == {"project": project, "sync_chat": False}
+    assert calls["sync"] == {"project": project, "sync_chat": True}
     assert calls["index"] == 42
 
 

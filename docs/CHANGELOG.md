@@ -2,6 +2,14 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.14
+
+### Changed
+
+- **Proposal completion now syncs the project chat ACL.** `_on_proposal_completed`
+  uses `projects.sync_manifest(..., sync_chat=True)` so participant changes made
+  by a shared-project proposal are reflected in the PerunChat room immediately.
+
 ## v0.8.13
 
 ### Added

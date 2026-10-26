@@ -265,7 +265,7 @@ def _on_proposal_completed(project: dict[str, Any], proposal: dict[str, Any]) ->
     """
     _post_proposal_digest(project, proposal)
     try:
-        snap = projects.sync_manifest(project, sync_chat=False)
+        snap = projects.sync_manifest(project, sync_chat=True)
         if snap.get("found"):
             memory.index_project_docs(project["id"])
     except Exception:
