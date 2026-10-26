@@ -2,6 +2,16 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.8
+
+### Fixed
+
+- **Version source consistency.** `pyproject.toml` now matches `perun.__version__`
+  so package builds report the same version as the running service.
+- **Dashboard chat history cleanup.** When the PerunChat panel's message history
+  hits its cap, the oldest DOM line is removed along with the in-memory entry,
+  keeping the rendered log and `messageHistory` in sync.
+
 ## v0.8.7
 
 ### Added
