@@ -2,6 +2,20 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.11
+
+### Changed
+
+- **Longer PerunChat dashboard history.** The dashboard chat panel now keeps
+  500 messages in memory and 500 in `localStorage` (up from 200/100), matching
+  the increased gateway replay buffer.
+
+### Added
+
+- **Memory MCP tools in PerunChat instructions.** The bridge persona now lists
+  `perun_memory_store` / `perun_memory_search` as preferred tools for durable
+  facts, with `[FACT: ...]` markers kept as a legacy fallback.
+
 ## v0.8.10
 
 ### Fixed

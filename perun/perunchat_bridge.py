@@ -2250,6 +2250,8 @@ class PerunChatBridge:
             facts: list[tuple[str, str, dict[str, Any]]] = []
 
             # 1) Parse explicit [FACT(type=...): ...] markers from Perun's reply.
+            #    Agents should prefer the perun_memory_store MCP tool; these markers
+            #    remain supported as a legacy fallback for older clients.
             for match in re.finditer(r"\[FACT\(([^)]+)\):\s*(.+?)\]", reply, flags=re.IGNORECASE):
                 fact_type = match.group(1).strip().lower() or "note"
                 fact_text = match.group(2).strip()

@@ -4381,8 +4381,8 @@ async function viewPerunChat() {
     let replyToPreview = null;
     const messageHistory = []; // keep recent messages for reply rendering
     const operatorMessageIds = new Set(); // dashboard manual messages sent by the human operator
-    const MAX_HISTORY = 200;
-    const MAX_STORED_HISTORY = 100;
+    const MAX_HISTORY = 500;
+    const MAX_STORED_HISTORY = 500;
     let wsReconnectTimer = null;
     let wsReconnectDelay = 1000;
     let wsExplicitClose = false;
