@@ -33,7 +33,7 @@ SCHEMA_VERSION = 1
 ANCHOR_KINDS = ("file", "doc", "url", "command", "symbol", "secret")
 
 _FENCE = re.compile(r"^---\s*$")
-_STR_KEYS = ("name", "slug", "kind", "description", "model", "agent", "instructions")
+_STR_KEYS = ("name", "slug", "kind", "description", "model", "agent", "instructions", "deploy")
 _MAP_KEYS = ("docs", "commands", "links")
 
 
@@ -149,6 +149,46 @@ def _normalize_anchors(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
     return out, warnings
 
 
+def _normalize_dependencies(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate the ``dependencies`` manifest list.
+
+    Each dependency names a sibling project (by slug) and describes the
+    relationship so Perun can perform impact analysis and deploy planning.
+    Unknown keys are preserved so projects can add access hints, health checks,
+    or version pins without waiting for a schema change.
+    """
+    warnings: list[str] = []
+    out: list[dict[str, Any]] = []
+    if value is None:
+        return out, warnings
+    if not isinstance(value, list):
+        return out, ["dependencies must be a list"]
+    for i, item in enumerate(value, 1):
+        if not isinstance(item, dict):
+            warnings.append(f"dependency #{i} is not an object")
+            continue
+        slug = str(item.get("slug") or "").strip()
+        if not slug:
+            warnings.append(f"dependency #{i} is missing 'slug'")
+            continue
+        dep: dict[str, Any] = {"slug": slug}
+        # Known scalar fields. ``role`` is an alias for ``relationship``.
+        for key in ("role", "relationship", "reason", "deploy_command", "deploy_doc",
+                    "access", "health_check", "branch", "repo", "version_pin"):
+            if item.get(key) not in (None, ""):
+                dep[key] = str(item[key])
+        if "relationship" not in dep and "role" in dep:
+            dep["relationship"] = dep.pop("role")
+        raw_auto = item.get("auto_deploy")
+        dep["auto_deploy"] = bool(raw_auto) if raw_auto is not None else False
+        # Preserve any project-specific extension keys.
+        for key, val in item.items():
+            if key not in dep:
+                dep[key] = val
+        out.append(dep)
+    return out, warnings
+
+
 def normalize(data: Any) -> tuple[dict[str, Any], list[str]]:
     """Return a validated manifest dict and a list of human-readable warnings."""
     if not isinstance(data, dict):
@@ -175,6 +215,10 @@ def normalize(data: Any) -> tuple[dict[str, Any], list[str]]:
     anchors, aw = _normalize_anchors(out.get("anchors"))
     out["anchors"] = anchors
     warnings += aw
+
+    dependencies, dw = _normalize_dependencies(out.get("dependencies"))
+    out["dependencies"] = dependencies
+    warnings += dw
 
     git = out.get("git")
     out["git"] = _string_map(git) if isinstance(git, dict) else {}
@@ -361,6 +405,21 @@ def from_project(project: dict[str, Any]) -> dict[str, Any]:
                         "path": "opencode.json"})
     if anchors:
         data["anchors"] = anchors
+
+    # Preserve the dependency graph declared in the manifest when exporting.
+    raw_manifest = project.get("manifest")
+    manifest_data: dict[str, Any] | None = None
+    if isinstance(raw_manifest, dict):
+        manifest_data = raw_manifest
+    elif isinstance(raw_manifest, str) and raw_manifest.strip():
+        try:
+            manifest_data = json.loads(raw_manifest).get("data") or {}
+        except Exception:
+            pass
+    if manifest_data:
+        deps = manifest_data.get("dependencies")
+        if deps:
+            data["dependencies"] = deps
     return data
 
 

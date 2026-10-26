@@ -1720,6 +1720,53 @@ def api_put_manifest(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str
 
 
 # --------------------------------------------------------------------------- #
+# Cross-project dependency graph
+# --------------------------------------------------------------------------- #
+@app.get("/api/projects/{slug}/dependencies")
+def api_get_dependencies(slug: str) -> dict[str, Any]:
+    """Projects *slug* directly depends on."""
+    project = _project_or_404(slug)
+    return _ok(
+        project=project,
+        dependencies=registry.get_dependencies(slug, include_missing=True),
+    )
+
+
+@app.get("/api/projects/{slug}/dependents")
+def api_get_dependents(slug: str) -> dict[str, Any]:
+    """Projects that directly depend on *slug*."""
+    project = _project_or_404(slug)
+    return _ok(
+        project=project,
+        dependents=registry.get_dependents(slug),
+    )
+
+
+@app.get("/api/projects/{slug}/impact")
+def api_get_impact(slug: str, changed: str = "") -> dict[str, Any]:
+    """Transitive impact analysis: every project affected by a change to *slug*."""
+    project = _project_or_404(slug)
+    changed_files = [f.strip() for f in changed.split(",") if f.strip()] if changed else []
+    return _ok(
+        project=project,
+        analysis=registry.analyze_impact(slug, changed_files=changed_files),
+    )
+
+
+@app.get("/api/projects/{slug}/deploy-plan")
+def api_get_deploy_plan(slug: str, changed: str = "",
+                        include_auto: bool = False) -> dict[str, Any]:
+    """Ordered deploy checklist for a change to *slug*."""
+    project = _project_or_404(slug)
+    changed_files = [f.strip() for f in changed.split(",") if f.strip()] if changed else []
+    return _ok(
+        project=project,
+        plan=registry.get_deploy_plan(slug, changed_files=changed_files,
+                                      include_auto=include_auto),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Filesystem (folder picker for the project wizard)
 # --------------------------------------------------------------------------- #
 @app.get("/api/fs/list")

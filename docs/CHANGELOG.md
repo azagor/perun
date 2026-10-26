@@ -2,6 +2,31 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.6
+
+### Added
+
+- **Cross-project dependency graph.** Projects now declare dependencies in
+  `perun.md` under a `dependencies:` list (slug, relationship, reason,
+  deploy_command, deploy_doc, auto_deploy, plus extension keys). The graph is
+  normalized into the new SQLite `project_dependencies` table on every manifest
+  refresh, making impact analysis and deploy planning fast and queryable.
+- **Impact analysis.** `registry.analyze_impact(slug)` walks the upstream graph
+  with cycle detection and returns every project affected by a change, ordered
+  by graph depth.
+- **Deploy planning.** `registry.get_deploy_plan(slug)` produces an ordered
+  checklist of deploy steps for the changed project and its dependents. Auto-
+  deploy items are flagged and skipped by default.
+- **CLI for dependencies and deploy planning.**
+  `python -m perun dependencies <slug> [--impact] [--json]` and
+  `python -m perun deploy-plan <slug> [--changed FILE ...] [--include-auto] [--json]`.
+- **REST endpoints for the dependency graph.**
+  `GET /api/projects/{slug}/dependencies`, `/dependents`, `/impact`, and
+  `/deploy-plan`.
+- **Project-local cross-project reference docs.**
+  `.perun/context/cross-project.md` and `.perun/instructions/cross-project-deps.md`
+  document the schema, API, and agent rules for multi-project impact and deploys.
+
 ## v0.8.5
 
 ### Added

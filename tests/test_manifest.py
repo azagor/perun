@@ -73,7 +73,7 @@ def test_malformed_yaml_degrades_gracefully():
 def test_missing_front_matter_is_all_body():
     data, body, warnings = manifest.parse("# Just markdown\n")
     assert data == {"version": 1, "tags": [], "docs": {}, "commands": {},
-                    "links": {}, "anchors": [], "git": {}}
+                    "links": {}, "anchors": [], "dependencies": [], "git": {}}
     assert body.strip() == "# Just markdown"
 
 

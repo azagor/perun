@@ -93,7 +93,8 @@ search), `secret_store` (encrypted secret values).
   (context manager), `init_db()`, `rows()`, `one()`.
 
 ### `perun/registry.py`
-Registry CRUD (projects, sessions, runs, tasks, activity, bridge links).
+Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
+**cross-project dependency graph**.
 * Helpers: `now_iso()`, `slugify()`, `project_dict()` (parses the stored
   manifest snapshot, adds `has_manifest` and `is_control` — set from
   `config.is_control_path()`).
@@ -102,7 +103,13 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links).
   discovery), `update_project()`, `touch_project()`,
   `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`,
   `set_project_manifest()`, `get_project_manifest()`,
-  `load_manifest_from_disk()` (refresh snapshot + apply declared fields).
+  `load_manifest_from_disk()` (refresh snapshot + apply declared fields + sync
+  `dependencies:` edges).
+* Cross-project dependencies: `sync_dependencies()` (manifest →
+  `project_dependencies` table), `get_dependencies()`, `get_dependents()`,
+  `get_dependency_graph()` (downstream/upstream with cycle detection),
+  `analyze_impact()` (transitive affected-project list ordered by depth),
+  `get_deploy_plan()` (ordered deploy checklist with auto-deploy filtering).
 * Sessions: `create_session()`, `get_session()`, `find_session_by_opencode()`,
   `update_session()`, `list_sessions()`, `delete_session()`.
 * Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`,

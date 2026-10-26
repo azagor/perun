@@ -360,6 +360,428 @@ def set_project_manifest(slug: str, snapshot: str, path: str = "") -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Cross-project dependency graph
+# --------------------------------------------------------------------------- #
+
+def _dependency_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    d["auto_deploy"] = bool(d.get("auto_deploy"))
+    return d
+
+
+def _resolve_dep_target(conn: sqlite3.Connection, slug: str) -> dict[str, Any] | None:
+    row = db.one(conn, "SELECT id, slug, name, path FROM projects WHERE slug=?", (slug,))
+    if not row:
+        return None
+    return {"id": row["id"], "slug": row["slug"],
+            "name": row["name"], "path": row["path"]}
+
+
+def sync_dependencies(slug: str, deps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Persist the dependency declarations for *slug*.
+
+    If *deps* is ``None``, the current manifest snapshot is re-read. The
+    ``project_dependencies`` table becomes the queryable graph; the manifest
+    remains the source of truth and is refreshed by ``load_manifest_from_disk``.
+
+    Returns a status dict with ``synced``, ``removed``, ``missing`` (unregistered
+    dependency slugs), and ``warnings``.
+    """
+    project = get_project(slug)
+    if not project:
+        raise ValueError(f"no such project: {slug}")
+    pid = int(project["id"])
+
+    if deps is None:
+        man = get_project_manifest(slug)
+        deps = (man.get("data") or {}).get("dependencies") or []
+    if not isinstance(deps, list):
+        return {"synced": 0, "removed": 0, "missing": [],
+                "warnings": ["dependencies must be a list"]}
+
+    warnings: list[str] = []
+    ts = now_iso()
+    with db.db() as conn:
+        # Remove edges that no longer exist, then upsert the current set.
+        conn.execute("DELETE FROM project_dependencies WHERE project_id=?", (pid,))
+        synced = 0
+        seen_slugs: set[str] = set()
+        missing: list[str] = []
+        for i, item in enumerate(deps, 1):
+            if not isinstance(item, dict):
+                warnings.append(f"dependency #{i} is not an object")
+                continue
+            dep_slug = str(item.get("slug") or "").strip()
+            if not dep_slug:
+                warnings.append(f"dependency #{i} is missing 'slug'")
+                continue
+            if dep_slug in seen_slugs:
+                warnings.append(f"duplicate dependency on '{dep_slug}'")
+                continue
+            seen_slugs.add(dep_slug)
+            target = _resolve_dep_target(conn, dep_slug)
+            if target is None:
+                missing.append(dep_slug)
+            relationship = str(item.get("relationship") or item.get("role") or "").strip()
+            deploy_command = str(item.get("deploy_command") or "").strip()
+            deploy_doc = str(item.get("deploy_doc") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            auto_deploy = 1 if item.get("auto_deploy") else 0
+            target_id = target["id"] if target else None
+            conn.execute(
+                """INSERT INTO project_dependencies
+                   (project_id, depends_on_project_id, depends_on_slug, relationship,
+                    deploy_command, deploy_doc, auto_deploy, reason, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(project_id, depends_on_slug) DO UPDATE SET
+                     depends_on_project_id=excluded.depends_on_project_id,
+                     relationship=excluded.relationship,
+                     deploy_command=excluded.deploy_command,
+                     deploy_doc=excluded.deploy_doc,
+                     auto_deploy=excluded.auto_deploy,
+                     reason=excluded.reason,
+                     updated_at=excluded.updated_at""",
+                (pid, target_id, dep_slug, relationship, deploy_command, deploy_doc,
+                 auto_deploy, reason, ts, ts),
+            )
+            synced += 1
+    return {"synced": synced, "removed": 0, "missing": missing, "warnings": warnings}
+
+
+def get_dependencies(
+    slug: str,
+    *,
+    relationship: str | None = None,
+    include_missing: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the projects *slug* directly depends on.
+
+    Each result includes the dependency edge fields plus ``target``
+    ``{id, slug, name, path}`` when the target is registered. Missing targets
+    are included only when *include_missing* is true.
+    """
+    project = get_project(slug)
+    if not project:
+        return []
+    pid = int(project["id"])
+    sql = """SELECT d.*, p.slug AS target_slug, p.name AS target_name, p.path AS target_path
+             FROM project_dependencies d
+             LEFT JOIN projects p ON p.id = d.depends_on_project_id
+             WHERE d.project_id=?"""
+    params: list[Any] = [pid]
+    if relationship:
+        sql += " AND d.relationship=?"
+        params.append(relationship)
+    if not include_missing:
+        sql += " AND d.depends_on_project_id IS NOT NULL"
+    sql += " ORDER BY d.relationship, COALESCE(p.name, d.depends_on_slug) COLLATE NOCASE"
+    out: list[dict[str, Any]] = []
+    with db.db() as conn:
+        for row in db.rows(conn, sql, params):
+            dep = _dependency_row_to_dict(row)
+            if row["depends_on_project_id"] is not None:
+                dep["target"] = {
+                    "id": row["depends_on_project_id"],
+                    "slug": row["target_slug"],
+                    "name": row["target_name"],
+                    "path": row["target_path"],
+                }
+            else:
+                dep["target"] = None
+                dep["missing_slug"] = row["depends_on_slug"]
+            out.append(dep)
+    return out
+
+
+def get_dependents(
+    slug: str,
+    *,
+    relationship: str | None = None,
+    include_missing: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the projects that directly depend on *slug*."""
+    project = get_project(slug)
+    if not project:
+        return []
+    pid = int(project["id"])
+    sql = """SELECT d.*, p.slug AS source_slug, p.name AS source_name, p.path AS source_path
+             FROM project_dependencies d
+             JOIN projects p ON p.id = d.project_id
+             WHERE d.depends_on_project_id=?"""
+    params: list[Any] = [pid]
+    if relationship:
+        sql += " AND d.relationship=?"
+        params.append(relationship)
+    sql += " ORDER BY d.relationship, p.name COLLATE NOCASE"
+    out: list[dict[str, Any]] = []
+    with db.db() as conn:
+        for row in db.rows(conn, sql, params):
+            dep = _dependency_row_to_dict(row)
+            dep["source"] = {
+                "id": row["project_id"],
+                "slug": row["source_slug"],
+                "name": row["source_name"],
+                "path": row["source_path"],
+            }
+            out.append(dep)
+    return out
+
+
+def get_dependency_graph(
+    slug: str,
+    *,
+    direction: str = "downstream",
+    relationship: str | None = None,
+) -> dict[str, Any]:
+    """Compute the transitive dependency graph for *slug*.
+
+    *direction* is ``downstream`` (what *slug* depends on, recursively) or
+    ``upstream`` (what depends on *slug*, recursively). Cycle detection stops
+    infinite recursion and reports the loop.
+    """
+    project = get_project(slug)
+    if not project:
+        return {"error": f"no such project: {slug}"}
+    start_id = int(project["id"])
+
+    nodes: dict[int, dict[str, Any]] = {
+        start_id: {"id": start_id, "slug": project["slug"],
+                   "name": project["name"], "path": project["path"]},
+    }
+    edges: list[dict[str, Any]] = []
+    visited: set[int] = set()
+    path: list[int] = []
+    cycle: list[int] | None = None
+
+    if direction == "downstream":
+        sql = """SELECT d.depends_on_project_id AS other_id,
+                        p.slug AS other_slug, p.name AS other_name, p.path AS other_path,
+                        d.relationship, d.reason
+                 FROM project_dependencies d
+                 LEFT JOIN projects p ON p.id = d.depends_on_project_id
+                 WHERE d.project_id=?"""
+    else:
+        sql = """SELECT d.project_id AS other_id,
+                        p.slug AS other_slug, p.name AS other_name, p.path AS other_path,
+                        d.relationship, d.reason
+                 FROM project_dependencies d
+                 JOIN projects p ON p.id = d.project_id
+                 WHERE d.depends_on_project_id=?"""
+
+    def _walk(current_id: int) -> None:
+        nonlocal cycle
+        if current_id in visited:
+            return
+        if current_id in path:
+            cycle = path[path.index(current_id):] + [current_id]
+            return
+        path.append(current_id)
+        params: list[Any] = [current_id]
+        if relationship:
+            params.append(relationship)
+        with db.db() as conn:
+            for row in db.rows(conn, sql + (" AND d.relationship=?" if relationship else ""), params):
+                other_id = row["other_id"]
+                if other_id is None:
+                    continue
+                if other_id not in nodes:
+                    nodes[other_id] = {
+                        "id": other_id,
+                        "slug": row["other_slug"],
+                        "name": row["other_name"],
+                        "path": row["other_path"],
+                    }
+                edges.append({
+                    "from": current_id,
+                    "to": other_id,
+                    "relationship": row["relationship"],
+                    "reason": row["reason"],
+                })
+                _walk(other_id)
+        path.pop()
+        visited.add(current_id)
+
+    _walk(start_id)
+    return {
+        "direction": direction,
+        "start": nodes[start_id],
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "cycle": cycle,
+        "depth": max((len(path) for path in _paths_from(start_id, edges, direction)), default=0),
+    }
+
+
+def _paths_from(start_id: int, edges: list[dict[str, Any]], direction: str) -> list[list[int]]:
+    """Return all root-to-leaf paths in the computed graph."""
+    by_node: dict[int, list[int]] = {}
+    for e in edges:
+        by_node.setdefault(e["from"], []).append(e["to"])
+    paths: list[list[int]] = []
+
+    def _walk(node: int, current: list[int]) -> None:
+        children = by_node.get(node, [])
+        if not children:
+            paths.append(list(current))
+            return
+        for child in children:
+            if child in current:
+                continue
+            current.append(child)
+            _walk(child, current)
+            current.pop()
+
+    _walk(start_id, [start_id])
+    return paths
+
+
+def analyze_impact(
+    slug: str,
+    *,
+    changed_files: list[str] | None = None,
+) -> dict[str, Any]:
+    """Find every project impacted by a change to *slug*.
+
+    Returns the upstream graph plus a flattened list of impacted projects,
+    ordered by graph depth (closest dependents first). The optional
+    *changed_files* list is recorded so deploy planning can later filter by
+    interface surface.
+    """
+    graph = get_dependency_graph(slug, direction="upstream")
+    if graph.get("error"):
+        return graph
+
+    start_id = graph["start"]["id"]
+    by_id: dict[int, dict[str, Any]] = {n["id"]: n for n in graph["nodes"]}
+    edges = graph["edges"]
+
+    # Build depth map via BFS from the start project.
+    depth: dict[int, int] = {start_id: 0}
+    queue = [start_id]
+    while queue:
+        current = queue.pop(0)
+        for e in edges:
+            if e.get("from") != current:
+                continue
+            other = e["to"]
+            if other not in depth:
+                depth[other] = depth[current] + 1
+                queue.append(other)
+
+    impacted: list[dict[str, Any]] = []
+    for node_id, node in by_id.items():
+        if node_id == start_id:
+            continue
+        # Collect reasons from every edge that points to this node.
+        reasons: list[str] = []
+        for e in edges:
+            if e.get("to") == node_id and e.get("reason"):
+                reasons.append(e["reason"])
+        impacted.append({
+            "id": node_id,
+            "slug": node["slug"],
+            "name": node["name"],
+            "path": node["path"],
+            "depth": depth.get(node_id, -1),
+            "reasons": reasons,
+        })
+    impacted.sort(key=lambda x: (x["depth"], x["name"].lower()))
+
+    return {
+        "project": graph["start"],
+        "changed_files": changed_files or [],
+        "impacted": impacted,
+        "cycle": graph.get("cycle"),
+        "total": len(impacted),
+    }
+
+
+def get_deploy_plan(
+    slug: str,
+    *,
+    changed_files: list[str] | None = None,
+    include_auto: bool = False,
+) -> dict[str, Any]:
+    """Build an ordered deploy checklist for a change to *slug*.
+
+    The plan traverses dependents (upstream impact), then includes the changed
+    project itself if it has a deploy command/doc. Auto-deploy dependencies are
+    flagged but only included in the checklist when *include_auto* is true.
+
+    Each checklist item carries ``project``, ``deploy_command``, ``deploy_doc``,
+    ``auto_deploy``, and ``reason``.
+    """
+    impact = analyze_impact(slug, changed_files=changed_files)
+    if impact.get("error"):
+        return impact
+
+    project = get_project(slug)
+    if not project:
+        return {"error": f"no such project: {slug}"}
+
+    items: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    # Dependents in impact order (deepest first so leaf consumers deploy last).
+    for node in reversed(impact["impacted"]):
+        pid = node["id"]
+        if pid in seen:
+            continue
+        seen.add(pid)
+        edge = _deploy_edge_for(node["slug"], slug)
+        if not include_auto and edge.get("auto_deploy"):
+            continue
+        items.append(_deploy_item(node, edge))
+
+    # Finally the changed project itself, if it declares a deploy command.
+    manifest_data = project.get("manifest") or {}
+    self_deploy = str(manifest_data.get("deploy") or "").strip()
+    if self_deploy:
+        items.append({
+            "project": {"id": project["id"], "slug": project["slug"],
+                        "name": project["name"], "path": project["path"]},
+            "deploy_command": self_deploy,
+            "deploy_doc": "",
+            "auto_deploy": False,
+            "reason": "changed project",
+        })
+
+    return {
+        "project": {"id": project["id"], "slug": project["slug"],
+                    "name": project["name"], "path": project["path"]},
+        "changed_files": impact.get("changed_files", []),
+        "items": items,
+        "auto_deploy_skipped": not include_auto,
+    }
+
+
+def _deploy_edge_for(dependent_slug: str, dependency_slug: str) -> dict[str, Any]:
+    """Return the dependency edge from *dependent_slug* to *dependency_slug*."""
+    dependent = get_project(dependent_slug)
+    dependency = get_project(dependency_slug)
+    if not dependent or not dependency:
+        return {}
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            """SELECT d.* FROM project_dependencies d
+               WHERE d.project_id=? AND d.depends_on_project_id=?""",
+            (int(dependent["id"]), int(dependency["id"])),
+        )
+        return _dependency_row_to_dict(row) if row else {}
+
+
+def _deploy_item(node: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "project": node,
+        "deploy_command": edge.get("deploy_command", ""),
+        "deploy_doc": edge.get("deploy_doc", ""),
+        "auto_deploy": edge.get("auto_deploy", False),
+        "reason": edge.get("reason", "") or ", ".join(node.get("reasons", [])) or "dependent",
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Shared project chats
 # --------------------------------------------------------------------------- #
 def get_project_chat(project_id: int) -> dict[str, Any] | None:
@@ -442,6 +864,7 @@ def load_manifest_from_disk(slug: str) -> dict[str, Any] | None:
     if declared:
         update_project(slug, **declared)  # unknown keys are filtered out
     set_project_manifest(slug, manifest_module.snapshot(man), man["path"])
+    sync_dependencies(slug, man["data"].get("dependencies"))
     return get_project(slug)
 
 

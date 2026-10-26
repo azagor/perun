@@ -151,6 +151,7 @@ def sync_manifest(project: dict[str, Any], *, sync_chat: bool = True) -> dict[st
             project["path"], instructions, overwrite=False)
         registry.set_project_manifest(project["slug"], manifest.snapshot(snap),
                                       snap["path"])
+        registry.sync_dependencies(project["slug"], snap["data"].get("dependencies"))
         cfg = shared_projects.load(project["path"])
         if sync_chat and cfg.get("shared"):
             try:

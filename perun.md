@@ -30,11 +30,19 @@ links:
   repository: https://github.com/azagor/perun
 dependencies:
   - slug: perunchat
-    role: sibling
+    relationship: sibling
     reason: PerunChat federated gateway; source of production VPS access details and the gateway service deployed at /opt/perun_chat.
+    deploy_command: ssh -i ~/.ssh/perun_opencode2 root@152.53.100.209 "cd /opt/perun_chat && git pull && systemctl restart perunchat"
+    deploy_doc: DEPLOY.md
+    access: root@152.53.100.209
+    auto_deploy: false
   - slug: perun-in-the-machine
-    role: sibling
+    relationship: sibling
     reason: Company website and PerunChat public dashboard; co-deployed on the same VPS and sharing Nginx routing.
+    deploy_command: powershell -Command ". .\company_site\remote.ps1; Sync-PerunWebsite; Sync-PerunNginx"
+    deploy_doc: company_site/DEPLOY.md
+    access: root@152.53.100.209
+    auto_deploy: false
 anchors:
 - label: Dashboard
   kind: url

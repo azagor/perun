@@ -248,6 +248,25 @@ CREATE TABLE IF NOT EXISTS hitl_nonces (
     nonce        TEXT PRIMARY KEY,
     consumed_at  INTEGER NOT NULL
 );
+
+-- Cross-project dependency graph. Source of truth is each project's manifest
+-- (``perun.md`` / ``perun.json``), synced here on registration/manifest refresh
+-- so impact analysis and deploy planning can query it directly.
+CREATE TABLE IF NOT EXISTS project_dependencies (
+    project_id            INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    depends_on_project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    depends_on_slug       TEXT DEFAULT '',
+    relationship          TEXT DEFAULT '',
+    deploy_command        TEXT DEFAULT '',
+    deploy_doc            TEXT DEFAULT '',
+    auto_deploy           INTEGER DEFAULT 0,
+    reason                TEXT DEFAULT '',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    UNIQUE(project_id, depends_on_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_project_dependencies_project ON project_dependencies(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_dependencies_depends ON project_dependencies(depends_on_project_id);
 """
 
 
@@ -365,7 +384,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def init_db() -> None:

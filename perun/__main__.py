@@ -22,6 +22,8 @@ Usage::
     python -m perun backfill-docs [slug] [--all]
     python -m perun validate-docs [slug] [--all]
     python -m perun refresh-deps [slug] [--all]
+    python -m perun dependencies <slug> [--impact] [--json]
+    python -m perun deploy-plan <slug> [--changed FILE ...] [--include-auto] [--json]
     python -m perun install [--uninstall] [--machine]
     python -m perun mcp
 """
@@ -652,6 +654,122 @@ def cmd_refresh_deps(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - defensive
             print(f"{proj['slug']}: error — {exc}")
     print(f"\nrefresh complete — {total_facts} fact(s) recorded")
+    return 0
+
+
+def cmd_dependencies(args: argparse.Namespace) -> int:
+    """Show a project's dependency graph or impact analysis."""
+    _ensure()
+    project = registry.get_project(args.slug)
+    if not project:
+        project = registry.get_project_by_path(args.slug)
+    if not project:
+        print(f"no such project: {args.slug}")
+        return 1
+
+    if args.impact:
+        result = registry.analyze_impact(project["slug"])
+    else:
+        result = {
+            "project": project["slug"],
+            "dependencies": registry.get_dependencies(project["slug"]),
+            "dependents": registry.get_dependents(project["slug"]),
+            "downstream": registry.get_dependency_graph(project["slug"], direction="downstream"),
+            "upstream": registry.get_dependency_graph(project["slug"], direction="upstream"),
+        }
+
+    if args.json:
+        _print(result)
+        return 0
+
+    if args.impact:
+        print(f"Impact analysis for {result['project']['slug']}:")
+        if result.get("cycle"):
+            print(f"  WARNING: dependency cycle detected: {' -> '.join(str(x) for x in result['cycle'])}")
+        if result["changed_files"]:
+            print(f"  changed files: {', '.join(result['changed_files'])}")
+        if not result["impacted"]:
+            print("  no impacted sibling projects")
+            return 0
+        print(f"  {result['total']} impacted project(s):")
+        for node in result["impacted"]:
+            reasons = "; ".join(node["reasons"]) if node["reasons"] else "dependent"
+            print(f"    [{node['depth']}] {node['slug']} — {reasons}")
+        return 0
+
+    print(f"Dependencies for {project['slug']}:")
+    deps = result.get("dependencies", [])
+    if deps:
+        for d in deps:
+            target = d.get("target") or {}
+            rel = d.get("relationship") or "dependency"
+            missing = " (NOT REGISTERED)" if d.get("target") is None else ""
+            print(f"  [{rel}] {target.get('slug', d.get('missing_slug', '?'))}{missing}")
+            if d.get("reason"):
+                print(f"      {d['reason']}")
+    else:
+        print("  (none)")
+
+    print(f"\nDependents of {project['slug']}:")
+    dents = result.get("dependents", [])
+    if dents:
+        for d in dents:
+            source = d.get("source") or {}
+            rel = d.get("relationship") or "dependency"
+            print(f"  [{rel}] {source.get('slug', '?')}")
+            if d.get("reason"):
+                print(f"      {d['reason']}")
+    else:
+        print("  (none)")
+
+    for direction in ("downstream", "upstream"):
+        graph = result.get(direction, {})
+        if graph.get("cycle"):
+            print(f"\nWARNING: {direction} cycle: "
+                  f"{' -> '.join(str(x) for x in graph['cycle'])}")
+    return 0
+
+
+def cmd_deploy_plan(args: argparse.Namespace) -> int:
+    """Build an ordered deploy checklist for a changed project."""
+    _ensure()
+    project = registry.get_project(args.slug)
+    if not project:
+        project = registry.get_project_by_path(args.slug)
+    if not project:
+        print(f"no such project: {args.slug}")
+        return 1
+
+    changed = [c for c in (args.changed or []) if c]
+    plan = registry.get_deploy_plan(
+        project["slug"], changed_files=changed, include_auto=args.include_auto,
+    )
+
+    if args.json:
+        _print(plan)
+        return 0
+
+    if plan.get("error"):
+        print(f"[perun] {plan['error']}")
+        return 1
+
+    print(f"Deploy plan for {plan['project']['slug']}:")
+    if plan.get("changed_files"):
+        print(f"  changed files: {', '.join(plan['changed_files'])}")
+    if not plan["items"]:
+        print("  no deploy steps required")
+        return 0
+    if plan.get("auto_deploy_skipped"):
+        print("  (auto-deploy items hidden; use --include-auto to show them)")
+    for i, item in enumerate(plan["items"], 1):
+        p = item["project"]
+        auto = " [AUTO]" if item.get("auto_deploy") else ""
+        print(f"\n{i}. {p['slug']}{auto}")
+        print(f"   reason: {item.get('reason') or 'dependent'}")
+        if item.get("deploy_command"):
+            print(f"   command: {item['deploy_command']}")
+        if item.get("deploy_doc"):
+            print(f"   doc: {item['deploy_doc']}")
     return 0
 
 
@@ -1441,6 +1559,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true",
                    help="refresh dependencies for every registered project")
     p.set_defaults(func=cmd_refresh_deps)
+
+    p = sub.add_parser("dependencies",
+                       help="show a project's cross-project dependency graph")
+    p.add_argument("slug", help="project slug or path")
+    p.add_argument("--impact", action="store_true",
+                   help="show impacted dependents instead of the raw graph")
+    p.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p.set_defaults(func=cmd_dependencies)
+
+    p = sub.add_parser("deploy-plan",
+                       help="build an ordered deploy checklist for a changed project")
+    p.add_argument("slug", help="project slug or path")
+    p.add_argument("--changed", nargs="*", metavar="FILE",
+                   help="changed files that triggered the deploy plan")
+    p.add_argument("--include-auto", action="store_true",
+                   help="include auto-deploy dependencies in the checklist")
+    p.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p.set_defaults(func=cmd_deploy_plan)
 
     p = sub.add_parser("install", help="install Perun globally into OpenCode")
     p.add_argument("--uninstall", action="store_true")
