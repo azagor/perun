@@ -93,6 +93,10 @@ anchors:
   kind: doc
   path: .perun/context/releasing.md
   memory: perun.context.releasing
+- label: Cross-project dependencies (retrievable)
+  kind: doc
+  path: .perun/context/cross-project.md
+  memory: perun.context.cross-project
 - label: perun.server
   kind: file
   path: perun/server.py
