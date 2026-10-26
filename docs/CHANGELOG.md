@@ -11,6 +11,14 @@ All notable changes are recorded here. Single source of truth for release notes.
   (`online_count` from `GET /api/perunchat/rooms`), alongside the durable member
   count.
 
+### Fixed
+
+- **Dashboard chat message ordering.** The PerunChat panel now keeps messages
+  sorted by `timestamp` when restoring from `localStorage` and when inserting
+  out-of-order replays or recovered state digests. This prevents old messages
+  from appearing at the bottom of the project chat after reconnects or page
+  refreshes.
+
 ## v0.8.6
 
 ### Added

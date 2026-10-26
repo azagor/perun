@@ -4387,6 +4387,13 @@ async function viewPerunChat() {
     let wsReconnectDelay = 1000;
     let wsExplicitClose = false;
 
+    function _msgTs(msg) {
+        const ts = msg && msg.timestamp;
+        if (typeof ts === 'number') return ts;
+        const d = ts ? new Date(ts).getTime() : 0;
+        return isNaN(d) ? 0 : d;
+    }
+
     function chatHistoryKey(roomId) {
         return 'perunchat_chat_history:' + (roomId || 'none');
     }
@@ -4407,7 +4414,12 @@ async function viewPerunChat() {
             messageHistory.length = 0;
             const box = $('#pc-chat-log');
             box.innerHTML = '';
-            for (const msg of stored.slice(-MAX_HISTORY)) renderMessage(msg);
+            // Sort by timestamp ascending so a corrupt/out-of-order localStorage
+            // array does not render old messages at the bottom.
+            const sorted = stored
+                .slice(-MAX_HISTORY)
+                .sort((a, b) => _msgTs(a) - _msgTs(b));
+            for (const msg of sorted) renderMessage(msg, { skipPersist: true });
         } catch (e) { /* ignore corrupt storage */ }
     }
 
@@ -4479,7 +4491,7 @@ async function viewPerunChat() {
         return isOwn ? `${label} (you)` : label;
     }
 
-    function renderMessage(msg) {
+    function renderMessage(msg, opts = {}) {
         if (!msg.id) return;
         if (messageHistory.some((m) => m.id === msg.id)) return;
         // Typing indicators are transient UI state, not chat history.
@@ -4488,14 +4500,24 @@ async function viewPerunChat() {
             return;
         }
         removeTypingIndicator();
-        messageHistory.push(msg);
+        // Insert in timestamp order so out-of-order replays / recovered digests
+        // do not appear at the bottom.
+        const msgTs = _msgTs(msg);
+        let insertIndex = messageHistory.length;
+        for (let i = 0; i < messageHistory.length; i++) {
+            if (_msgTs(messageHistory[i]) > msgTs) {
+                insertIndex = i;
+                break;
+            }
+        }
+        messageHistory.splice(insertIndex, 0, msg);
         if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
         // Keep the in-memory operator set bounded to the visible history.
         const visibleIds = new Set(messageHistory.map((m) => m.id));
         for (const id of operatorMessageIds) {
             if (!visibleIds.has(id)) operatorMessageIds.delete(id);
         }
-        persistChat();
+        if (!opts.skipPersist) persistChat();
 
         let isOperator = (msg.sender && isOperatorRuntime(msg.sender.runtime)) || operatorMessageIds.has(msg.id) || msg._perunOperator === true;
         if (isOperator) msg._perunOperator = true;
@@ -4520,10 +4542,17 @@ async function viewPerunChat() {
             ${replyHtml}
             <div style="margin-left:12px; overflow-wrap:anywhere;">${esc(String(msg.payload))}</div>
         </div>`;
-        log(lineHtml, { id: msg.id });
-
-        // Attach listener to the reply button of the line we just appended.
+        // Insert the DOM line at the same position so the visual order matches
+        // the sorted messageHistory.
         const box = $('#pc-chat-log');
+        const line = el('div', {}, lineHtml);
+        line._meta = { id: msg.id };
+        const beforeNode = box.children[insertIndex] || null;
+        if (beforeNode) box.insertBefore(line, beforeNode);
+        else box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+
+        // Attach listener to the reply button of the line we just inserted.
         const btn = box.querySelector(`[data-reply-id="${CSS.escape(msg.id)}"]`);
         if (btn) {
             btn.addEventListener('click', () => {
