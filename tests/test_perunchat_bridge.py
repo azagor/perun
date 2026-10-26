@@ -1655,3 +1655,32 @@ def test_dead_room_worker_is_replaced(bridge_env):
     assert bridge._room_queues[room_id] is old_queue
 
 
+
+
+def test_project_context_includes_manifest_dependencies(settings, tmp_path):
+    """The shared-project context block lists cross-project dependencies."""
+    project, room = _make_shared_project(
+        tmp_path,
+        slug="deps-project",
+        description="Project with dependencies",
+    )
+    from perun import shared_projects
+
+    project["manifest"] = {
+        "dependencies": [
+            {
+                "slug": "perunchat",
+                "relationship": "sibling",
+                "reason": "Federated chat gateway",
+            },
+            {"slug": "perun-in-the-machine", "relationship": "sibling"},
+        ]
+    }
+    cfg = shared_projects.load(project["path"])
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    ctx = bridge._shared_project_context(room, binding=(project, cfg))
+
+    assert "Project dependencies (from perun.md):" in ctx
+    assert "perunchat (sibling): Federated chat gateway" in ctx
+    assert "perun-in-the-machine (sibling)" in ctx

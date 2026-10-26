@@ -2,6 +2,14 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.13
+
+### Added
+
+- **Tests for v0.8.12 shared-project features.** Added regression tests for
+  `_on_proposal_completed` (manifest sync + doc re-index) and for manifest
+  dependency rendering in `_shared_project_context`.
+
 ## v0.8.12
 
 ### Added

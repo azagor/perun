@@ -1637,3 +1637,59 @@ def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):
     assert client.get("/api/skills?project=perun").status_code == 200
     assert client.get("/api/tools?project=perun").status_code == 200
     assert client.get("/api/skills?project=ghost").status_code == 200
+
+
+
+def test_on_proposal_completed_refreshes_manifest_and_docs(monkeypatch):
+    """After a proposal completes, the manifest is re-synced and docs re-indexed."""
+    from perun import server
+    from unittest.mock import MagicMock
+
+    calls = {"digest": False, "sync": None, "index": None}
+
+    def fake_post_digest(project, proposal):
+        calls["digest"] = True
+
+    def fake_sync_manifest(project, sync_chat=False):
+        calls["sync"] = {"project": project, "sync_chat": sync_chat}
+        return {"found": True}
+
+    def fake_index_docs(project_id):
+        calls["index"] = project_id
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_post_proposal_digest", fake_post_digest)
+    monkeypatch.setattr(server.projects, "sync_manifest", fake_sync_manifest)
+    monkeypatch.setattr(server.memory, "index_project_docs", fake_index_docs)
+
+    project = {"id": 42, "slug": "test-proj", "path": "/tmp/test-proj"}
+    proposal = {"id": "prop-123", "status": "executed"}
+
+    server._on_proposal_completed(project, proposal)
+
+    assert calls["digest"] is True
+    assert calls["sync"] == {"project": project, "sync_chat": False}
+    assert calls["index"] == 42
+
+
+def test_on_proposal_completed_still_posts_digest_when_refresh_fails(monkeypatch):
+    """A manifest/doc refresh failure must not swallow the digest post."""
+    from perun import server
+
+    digest_called = {"ok": False}
+
+    def fake_post_digest(project, proposal):
+        digest_called["ok"] = True
+
+    def failing_sync_manifest(project, sync_chat=False):
+        raise RuntimeError("disk busy")
+
+    monkeypatch.setattr(server, "_post_proposal_digest", fake_post_digest)
+    monkeypatch.setattr(server.projects, "sync_manifest", failing_sync_manifest)
+
+    project = {"id": 42, "slug": "test-proj", "path": "/tmp/test-proj"}
+    proposal = {"id": "prop-456", "status": "failed"}
+
+    server._on_proposal_completed(project, proposal)
+
+    assert digest_called["ok"] is True
