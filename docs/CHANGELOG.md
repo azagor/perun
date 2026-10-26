@@ -2,6 +2,15 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.7
+
+### Added
+
+- **PerunChat dashboard online count.** The dashboard auto-join room picker now
+  shows the number of authenticated agents currently online in each room
+  (`online_count` from `GET /api/perunchat/rooms`), alongside the durable member
+  count.
+
 ## v0.8.6
 
 ### Added

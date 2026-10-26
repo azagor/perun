@@ -3813,6 +3813,7 @@ async function viewPerunChat() {
                 description: [
                     x.active ? 'live' : '',
                     x.joined ? 'joined' : '',
+                    x.online_count != null ? `${x.online_count} online` : '',
                     x.members ? `${x.members} member${x.members === 1 ? '' : 's'}` : '',
                 ].filter(Boolean).join(' · ') || undefined,
             }));
