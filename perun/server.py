@@ -256,6 +256,24 @@ def _post_proposal_digest(project: dict[str, Any], proposal: dict[str, Any]) -> 
         pass
 
 
+def _on_proposal_completed(project: dict[str, Any], proposal: dict[str, Any]) -> None:
+    """Callback after a shared-project proposal finishes.
+
+    Posts the State Digest to the project chat and refreshes the project's
+    manifest + docs so agents in the chat immediately see the latest
+    dependencies and documentation.
+    """
+    _post_proposal_digest(project, proposal)
+    try:
+        snap = projects.sync_manifest(project, sync_chat=False)
+        if snap.get("found"):
+            memory.index_project_docs(project["id"])
+    except Exception:
+        logging.getLogger("perun.server").exception(
+            "Could not refresh project docs after proposal %s", proposal.get("id")
+        )
+
+
 def _post_recovered_digests(recovered: list[dict[str, Any]]) -> None:
     """Wait briefly for the bridge socket, then report interrupted proposals.
 
@@ -1303,7 +1321,7 @@ def api_create_proposal(slug: str, payload: dict[str, Any] = Body(...)) -> dict[
             proposal,
             orchestrator_instance=ORCH,
             on_started=lambda executing: _post_proposal_started(project, executing),
-            on_complete=lambda final: _post_proposal_digest(project, final),
+            on_complete=lambda final: _on_proposal_completed(project, final),
         )
     except Exception as exc:
         logger.exception("Auto-approval failed for proposal %s", proposal["id"])
@@ -1357,7 +1375,7 @@ def api_approve_and_execute_proposal(slug: str, proposal_id: str) -> dict[str, A
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,
-            on_complete=lambda final: _post_proposal_digest(project, final),
+            on_complete=lambda final: _on_proposal_completed(project, final),
         )
         _post_proposal_started(project, result)
     except ValueError as exc:
@@ -1379,7 +1397,7 @@ def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,
-            on_complete=lambda final: _post_proposal_digest(project, final),
+            on_complete=lambda final: _on_proposal_completed(project, final),
         )
         _post_proposal_started(project, result)
     except ValueError as exc:

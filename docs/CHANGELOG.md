@@ -2,6 +2,18 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.12
+
+### Added
+
+- **Post-proposal doc refresh.** When a shared-project action proposal finishes,
+  Perun now re-syncs the project manifest (including `dependencies:` edges) and
+  re-indexes project docs before posting the State Digest, so agents in the
+  project chat see the latest manifest and dependency graph immediately.
+- **Project dependencies in chat context.** The `[shared-project-context]` block
+  now includes cross-project dependencies declared in `perun.md`, capped at 20
+  entries.
+
 ## v0.8.11
 
 ### Changed

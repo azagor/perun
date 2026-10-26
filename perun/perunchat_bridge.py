@@ -1897,6 +1897,21 @@ class PerunChatBridge:
                 lines.append(f"Participants (ro): {', '.join(readers)}")
             lines.append(f"Allowlist: {allowlist}")
 
+            # Surface cross-project dependencies declared in perun.md so chat
+            # agents understand how this project relates to others.
+            manifest_data = project.get("manifest") or {}
+            manifest_deps = manifest_data.get("dependencies") or []
+            if manifest_deps:
+                dep_lines = []
+                for d in manifest_deps:
+                    slug = d.get("slug") or d.get("name") or "unknown"
+                    rel = d.get("relationship") or "depends on"
+                    reason = d.get("reason") or ""
+                    dep_lines.append(f"- {slug} ({rel})" + (f": {reason}" if reason else ""))
+                lines.append("")
+                lines.append("Project dependencies (from perun.md):")
+                lines.extend(dep_lines[:20])  # cap to keep the brief bounded
+
             # A short, prioritized digest of what the project says about itself.
             docs_parts: List[str] = []
             docs_budget = 2200
