@@ -4510,8 +4510,22 @@ async function viewPerunChat() {
                 break;
             }
         }
+        const box = $('#pc-chat-log');
         messageHistory.splice(insertIndex, 0, msg);
-        if (messageHistory.length > MAX_HISTORY) messageHistory.shift();
+        let shifted = false;
+        if (messageHistory.length > MAX_HISTORY) {
+            const removed = messageHistory.shift();
+            shifted = true;
+            if (removed && removed.id === msg.id) {
+                // The new message is older than the whole visible history;
+                // evict it immediately without rendering.
+                return;
+            }
+            if (removed && removed.id) {
+                const oldLine = box.querySelector(`[data-reply-id="${CSS.escape(removed.id)}"]`);
+                if (oldLine) oldLine.parentElement.remove();
+            }
+        }
         // Keep the in-memory operator set bounded to the visible history.
         const visibleIds = new Set(messageHistory.map((m) => m.id));
         for (const id of operatorMessageIds) {
@@ -4543,11 +4557,12 @@ async function viewPerunChat() {
             <div style="margin-left:12px; overflow-wrap:anywhere;">${esc(String(msg.payload))}</div>
         </div>`;
         // Insert the DOM line at the same position so the visual order matches
-        // the sorted messageHistory.
-        const box = $('#pc-chat-log');
+        // the sorted messageHistory. If we just evicted the oldest line, the
+        // remaining children shifted down by one.
         const line = el('div', {}, lineHtml);
         line._meta = { id: msg.id };
-        const beforeNode = box.children[insertIndex] || null;
+        const domIndex = shifted ? Math.max(0, insertIndex - 1) : insertIndex;
+        const beforeNode = box.children[domIndex] || null;
         if (beforeNode) box.insertBefore(line, beforeNode);
         else box.appendChild(line);
         box.scrollTop = box.scrollHeight;
