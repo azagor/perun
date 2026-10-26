@@ -30,10 +30,11 @@ session only pays for what it actually uses. Ask for it by key:
 |---|---|
 | `perun.agents.full` | this file in full, as it was before the distillation |
 | `perun.context.overview` | what the project is, module by module |
-| `perun.context.contributing` | adding a source file, a REST endpoint, an MCP tool |
+| `perun.context.contributing` | adding a source file, a REST endpoint, an MCP tool, a Shared Projects change |
 | `perun.context.commands` | syntax check, test suite, dev server, UI dump, install |
 | `perun.context.credentials` | Git push credentials and the `workflow` scope trap |
 | `perun.context.releasing` | the release procedure: version bump, tag, signed installer |
+| `docs/SHARED_PROJECTS_PRD.md` | Shared Projects product requirements: agent approval, policy auto-approve, lifecycle notifications |
 
 In an OpenCode TUI session, call `perun_context("<what you are about to do>")`
 before you start. An orchestrated Perun run pre-fetches the matching context
