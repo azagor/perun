@@ -4,6 +4,8 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+## v0.8.4 - 2026-10-26
+
 ### Added
 
 - **Agent approval in chat.** Shared projects can now require a peer `rw`
