@@ -2,6 +2,14 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.9
+
+### Fixed
+
+- **Installer version alignment.** `installer/PerunSetup.iss` now matches the
+  package version (`0.8.9`) so the Windows installer reports the correct
+  release.
+
 ## v0.8.8
 
 ### Fixed
