@@ -372,20 +372,69 @@ def test_allowlist_env_includes_resolved_targets(tmp_path):
 def test_execute_approved_proposal(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
-    target = str(project["path"] / "api.py")
+    target = project["path"] / "api.py"
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "edit"}
     )
     action_proposals.approve(proposal["id"], "owner")
 
     mock_orchestrator = type("MockOrchestrator", (), {})()
     # Real Orchestrator runs finalize as "done", not "completed"; this
     # regression test used to hide that mismatch by faking "completed".
-    mock_orchestrator.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
+    def run_and_wait(*a, **kw):
+        # A real run changes the approved target; the post-run outcome check
+        # requires it before reporting "executed".
+        target.write_text("x = 1\n", encoding="utf-8")
+        return {"run": {"status": "done"}, "reply": "done"}
+
+    mock_orchestrator.run_and_wait = run_and_wait
     executed = action_proposals.execute(proposal["id"], orchestrator_instance=mock_orchestrator)
 
     assert executed["status"] == "executed"
     assert executed["result"] == "done"
+
+
+def test_execute_marks_failed_when_no_target_changed(tmp_path):
+    """A no-op run must never be recorded as executed (prop_bd0bf5002f60)."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = project["path"] / "api.py"
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "create"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    orch = type("NoopOrchestrator", (), {})()
+    orch.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
+
+    executed = action_proposals.execute(proposal["id"], orchestrator_instance=orch)
+
+    assert executed["status"] == "failed"
+    assert "NO TARGET CHANGES" in executed["result"]
+    assert not target.exists()
+
+
+def test_execution_passes_prompt_as_file(tmp_path):
+    """The proposal prompt can exceed the Windows command-line limit."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = project["path"] / "api.py"
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    seen: dict = {}
+
+    class RecordingOrchestrator:
+        def run_and_wait(self, *args, **kwargs):
+            seen.update(kwargs)
+            target.write_text("x = 1\n", encoding="utf-8")
+            return {"run": {"status": "done"}, "reply": "done"}
+
+    action_proposals.execute(proposal["id"], orchestrator_instance=RecordingOrchestrator())
+
+    assert seen.get("use_prompt_file") is True
 
 
 def test_start_execution_is_non_blocking_and_single_shot(tmp_path):
@@ -404,6 +453,8 @@ def test_start_execution_is_non_blocking_and_single_shot(tmp_path):
         def run_and_wait(self, *args, **kwargs):
             started.set()
             assert release.wait(5)
+            target_path = Path(target)
+            target_path.write_text("x = 1\n", encoding="utf-8")
             return {
                 "run": {"status": "completed", "run_uid": kwargs.get("run_uid")},
                 "reply": "done",

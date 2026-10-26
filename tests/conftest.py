@@ -114,3 +114,4 @@ def _api_token_header(monkeypatch):
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
     shutil.rmtree(_TEST_HOME, ignore_errors=True)
+

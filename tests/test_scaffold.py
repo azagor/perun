@@ -6,7 +6,7 @@ import pytest
 
 import json
 
-from perun import scaffold
+from perun import scaffold, manifest
 
 
 def test_create_dir_is_idempotent(tmp_path):
@@ -153,3 +153,104 @@ def test_find_local_project_references_detects_file_dependency(tmp_path):
     refs = scaffold.find_local_project_references(p, projects)
     assert len(refs) == 1
     assert refs[0]["target_slug"] == "other"
+
+
+def test_enrich_manifest_fills_a_minimal_manifest(tmp_path):
+    """A shared-project bootstrap manifest has no docs/commands/anchors."""
+    p, _ = scaffold.create_dir(tmp_path / "shared")
+    # The minimal shape written by the shared-project payload path.
+    (p / "perun.md").write_text(
+        "---\n"
+        "shared: true\n"
+        "participants:\n"
+        "- agent_id: frambo\n"
+        "  roles:\n"
+        "  - rw\n"
+        "auto_approve: true\n"
+        "docs: {}\n"
+        "commands: {}\n"
+        "anchors: []\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    for rel in ("README.md", "AGENTS.md", "docs/CHANGELOG.md",
+                "docs/TECHNICAL_DOCUMENTATION.md", "docs/CODEMAP.md"):
+        (p / rel).parent.mkdir(parents=True, exist_ok=True)
+        (p / rel).write_text(f"# {rel}\n", encoding="utf-8")
+
+    result = scaffold.enrich_manifest(p, "Shared")
+
+    assert result["updated"] is True
+    snap = manifest.load(p)
+    data = snap["data"]
+    assert data["shared"] is True
+    assert data["participants"] == [{"agent_id": "frambo", "roles": ["rw"]}]
+    assert data["auto_approve"] is True
+    assert data["docs"]["readme"] == "README.md"
+    assert data["docs"]["codemap"] == "docs/CODEMAP.md"
+    assert data["commands"].get("git-status") == "git status"
+    paths = {a["path"] for a in data["anchors"]}
+    assert {"README.md", "AGENTS.md", "docs/CHANGELOG.md"} <= paths
+
+    # Idempotent: a second run changes nothing.
+    assert scaffold.enrich_manifest(p, "Shared")["updated"] is False
+
+
+def test_enrich_manifest_preserves_existing_values(tmp_path):
+    p, _ = scaffold.create_dir(tmp_path / "proj")
+    scaffold.bootstrap(p, "Proj")
+    snap = manifest.load(p)
+    data = snap["data"]
+    data["docs"] = {"readme": "docs/OVERVIEW.md"}
+    data["commands"] = {"test": "make test"}
+    data["anchors"] = [{"label": "Custom", "kind": "file", "path": "CUSTOM.md"}]
+    manifest.save(p, data, body=snap["body"])
+
+    scaffold.enrich_manifest(p, "Proj")
+
+    data = manifest.load(p)["data"]
+    assert data["docs"]["readme"] == "docs/OVERVIEW.md"  # not overwritten
+    assert data["docs"]["agents"] == "AGENTS.md"          # missing key filled
+    assert data["commands"]["test"] == "make test"
+    assert any(a["path"] == "CUSTOM.md" for a in data["anchors"])
+    assert any(a["path"] == "README.md" for a in data["anchors"])
+
+
+def test_backfill_enriches_an_existing_minimal_manifest(tmp_path):
+    p, _ = scaffold.create_dir(tmp_path / "existing")
+    (p / "perun.md").write_text(
+        "---\nshared: true\ndocs: {}\ncommands: {}\nanchors: []\n---\n",
+        encoding="utf-8",
+    )
+
+    created = scaffold.backfill(p, "Existing")
+
+    assert "perun.md" not in created
+    assert "perun.md (enriched)" in created
+    data = manifest.load(p)["data"]
+    assert data["docs"]["readme"] == "README.md"
+    assert data["anchors"]
+
+
+def test_create_new_project_bootstraps_an_existing_empty_directory(tmp_path):
+    """Regression for ai_playground: only opencode.json + a bare perun.md."""
+    from perun import projects
+
+    target = tmp_path / "already-made"
+    target.mkdir()
+
+    result = projects.create(
+        method="new",
+        name="Already Made",
+        path=str(target),
+        bootstrap=True,
+    )
+
+    assert result["project"]["path"] == str(target)
+    for rel in ("README.md", "AGENTS.md", "docs/CHANGELOG.md",
+                "docs/TECHNICAL_DOCUMENTATION.md", "docs/CODEMAP.md"):
+        assert (target / rel).is_file(), rel
+    data = manifest.load(target)["data"]
+    assert data["docs"]["readme"] == "README.md"
+    assert data["anchors"]
+

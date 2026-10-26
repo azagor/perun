@@ -297,7 +297,10 @@ Starter-project skeleton + directory creation + safe backfill + dependency parsi
 * `ScaffoldError`, `create_dir()`, `bootstrap()` (writes `opencode.json`,
   `AGENTS.md`, `README.md`, `.gitignore`, `perun.md`, `docs/CHANGELOG.md`,
   `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CODEMAP.md`, and `.opencode/`),
-  `backfill()` (creates only missing scaffold files),
+  `backfill()` (creates only missing scaffold files, then enriches the
+  manifest),
+  `enrich_manifest()` (fills missing docs/commands/anchors in a minimal
+  `perun.md` while preserving existing values and shared-project fields),
   `detect_anchors()` (finds dependency/build/CI files),
   `parse_dependencies()` (reads `package.json`, `requirements.txt`,
   `pyproject.toml`, `Cargo.toml`, `go.mod`),
@@ -468,11 +471,15 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `CHAT_SYSTEM_PROMPT`, `_load_chat_instructions()` (reads the embedded
   `perun/instructions/perunchat_chat.md` persona).
 * `PerunChatBridge` — background thread: `status()`, `start()`, `stop()`,
-  `restart()`; connects to the gateway via the
-  configured API key, auto-joins `perunchat_auto_join` rooms, listens for
-  incoming messages, and answers through `Orchestrator.run_and_wait()` with
-  the chat system prompt. Rate-limited (15 replies/min); state-changing
-  requests are emitted as HITL `PERUN_ACTION_PROPOSAL`s, never executed.
+  `restart()`; connects to the gateway via the configured API key,
+  auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and
+  answers through `Orchestrator.run_and_wait()` with the chat system prompt.
+  Rate-limited (15 replies/min). Shared-project chats load the project's
+  `opencode.json` so the agent can use the `perun-guard` and `perun-proposals`
+  MCP servers; state-changing requests are sent through the `propose` tool,
+  not executed directly. A background activity-table poller posts review
+  requests and state digests back to the bound room so notices work even
+  though the MCP server runs in a separate process.
 * No-loss reply delivery: every outbound reply frame is persisted in a
   write-ahead outbox (`perunchat_outbox.json`) before sending and removed only
   after success; `_flush_outbox()` resends queued frames after a reconnect with
@@ -550,10 +557,14 @@ Autonomous PerunChat chat participant for the Orchestrator.
   proposal targets, and denies sensitive paths (credentials, `.env`, VCS/host
   metadata, manifest/OpenCode config) even inside the root.
 * `perun/guard_mcp.py` — policy-enforcing filesystem MCP server used by the
-  Project Agent for shared-project runs; validates every path against the manifest
-  allowlist (`PERUN_ALLOWLIST` env), restricts writes to the proposal's declared
-  targets, hides sensitive files/directories, and falls back to pass-through when
-  unset.
+  Project Agent for shared-project runs and for read-only inspection in chat;
+  validates every path against the manifest allowlist (`PERUN_ALLOWLIST` env),
+  restricts writes to the proposal's declared targets, hides sensitive files/
+  directories, and falls back to pass-through when unset.
+* `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
+  Exposes `propose`, `approve`, `list_proposals` and `get_proposal`; uses
+  `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` / `PERUN_ROOM_ID` from the chat run
+  environment to validate rw/trust/owner rules server-side.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/
@@ -561,8 +572,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
   CAS approve/reject, atomic `approved → executing` claim, synchronous `execute`
   and non-blocking `start_execution`, startup `reconcile_interrupted`, post-run
-  audit enforcement, and State Digests for the project chat. Approved runs use
-  the restricted `perun-shared` agent and a target-scoped guard allowlist; the
+  audit enforcement, State Digests for the project chat, and activity logging
+  (`proposal_created`/`approved`/`rejected`/`executed`). Approved runs use the
+  restricted `perun-shared` agent and a target-scoped guard allowlist; the
   proposal id is also the headless run id.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending

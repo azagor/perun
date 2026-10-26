@@ -2,7 +2,72 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## Unreleased
+## v0.8.5
+
+### Added
+
+- **`perun-proposals` MCP server.** Shared-project proposal coordination is now
+  exposed as structured MCP tools (`propose`, `approve`, `list_proposals`,
+  `get_proposal`) instead of brittle `[ACTION:…]` / `[APPROVAL:…]` text markers.
+  The chat agent calls the tools directly; authorization (rw access, trust list,
+  room-owner bypass, no self-approval) is enforced in the tool layer. Lifecycle
+  notices are posted to the room by a bridge activity-table poller so they work
+  across the MCP-server process boundary.
+- **Read-only project inspection in chat.** The PerunChat agent can now use the
+  existing `perun-guard` MCP tools (`guard_read_file`, `guard_list_directory`,
+  `guard_search_files`) to inspect project content before proposing changes.
+  Shell commands, native file tools, web access, subagents and guard write/edit
+  tools remain denied.
+
+### Changed
+
+- **Project-chat runs load the project's `opencode.json`.** The bridge now sets
+  `skip_instructions=False` for shared-project chats and injects
+  `PERUN_PROJECT_PATH`, `PERUN_CHAT_SENDER` and `PERUN_ROOM_ID` into the run
+  environment so the `perun-guard` and `perun-proposals` MCP servers know which
+  project and sender they are serving.
+- **`opencode.json` for shared projects now registers both MCP servers.**
+  `projects.sync_opencode_config()` adds `perun-guard` and `perun-proposals`
+  entries when the project is shared, and clears both when sharing is turned off.
+
+### Fixed
+
+- **The reviewer is any other rw participant, including the room owner.**
+  Previously the PerunChat bridge only offered peer agents listed in the
+  manifest as eligible reviewers. The room owner (Perun's chat persona) is
+  always implicitly a member of a managed project chat, but was never pinged
+  as a reviewer and was rejected by the trust-list check. In a two-agent room
+  where Frambo raised a proposal, there was no one left who could approve it.
+  The perun-proposals tool layer treats the owner as an eligible reviewer, so
+  peer-to-Perun and Perun-to-peer workflows both work.
+- **Proposal execution no longer reports false success.** Two changes:
+  the execution prompt is passed with `use_prompt_file=True` (a long prompt
+  used to be truncated by the Windows command-line limit, leaving the agent
+  looking at instruction markers with no task), and a run that finishes
+  "successfully" without creating, modifying or deleting any approved target is
+  now recorded as `failed` with a `[NO TARGET CHANGES: …]` note instead of
+  `executed`.
+- **Policy auto-approve is honored through the MCP tool path.** The
+  `perun-proposals` `propose` tool now auto-approves and starts execution for
+  projects with `policy_auto_approve`, matching the previous marker-based flow.
+- **The proposals MCP server no longer auto-registers unknown projects.** An
+  unregistered `PERUN_PROJECT_PATH` now raises a clear error instead of silently
+  polluting the project registry.
+- **New projects are bootstrapped even when the target directory exists.** The
+  wizard's "new project" path only bootstrapped a directory it had just
+  created, so pointing it at an existing empty folder (the ai_playground case)
+  produced a bare `perun.md` with no README/AGENTS/docs and an empty Manifest
+  tab.
+- **`backfill-docs` now completes minimal manifests.** New
+  `scaffold.enrich_manifest()` fills missing `docs`, `commands` and `anchors`
+  (and `name`/`kind`/`version`) while preserving existing values, the Markdown
+  body and every shared-project field. `scaffold.backfill()` calls it, so
+  `python -m perun backfill-docs <slug>` repairs the Manifest tab in one step.
+- **Overview always shows the Manifest card.** The dashboard now renders the
+  Manifest section unconditionally: if no manifest is synced it offers a link
+  to the Manifest tab; if the manifest has no content it shows a helpful
+  empty-state with the backfill command; otherwise it links docs, anchors,
+  commands and the manifest file itself.
 
 ## v0.8.4 - 2026-10-26
 

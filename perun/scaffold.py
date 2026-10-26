@@ -367,7 +367,133 @@ def backfill(path: str | Path, name: str = "") -> list[str]:
     opencode_dir = p / ".opencode"
     if not opencode_dir.exists():
         opencode_dir.mkdir(parents=True, exist_ok=True)
+    # A pre-existing minimal manifest (shared-project bootstrap, older wizard)
+    # has no docs/commands/anchors, so the Manifest tab shows nothing to open.
+    enriched = enrich_manifest(p, project_name)
+    if enriched.get("updated"):
+        created.append(f"{manifest.MANIFEST_MD} (enriched)")
     return created
+
+
+def _doc_links() -> dict[str, str]:
+    """The standard documentation pointers a scaffolded project provides."""
+    return {
+        "readme": "README.md",
+        "agents": "AGENTS.md",
+        "changelog": "docs/CHANGELOG.md",
+        "technical": "docs/TECHNICAL_DOCUMENTATION.md",
+        "codemap": "docs/CODEMAP.md",
+    }
+
+
+def _standard_anchors() -> list[dict[str, str]]:
+    """Doc anchors that mirror :func:`_doc_links`."""
+    return [
+        {"label": "README", "kind": "doc", "path": "README.md"},
+        {"label": "Agent guide", "kind": "doc", "path": "AGENTS.md"},
+        {"label": "Changelog", "kind": "doc", "path": "docs/CHANGELOG.md"},
+        {
+            "label": "Technical documentation",
+            "kind": "doc",
+            "path": "docs/TECHNICAL_DOCUMENTATION.md",
+        },
+        {"label": "CODEMAP", "kind": "doc", "path": "docs/CODEMAP.md"},
+    ]
+
+
+def enrich_manifest(path: str | Path, name: str = "") -> dict[str, Any]:
+    """Fill missing docs/commands/anchors in an existing manifest.
+
+    A minimal manifest (for example one written by the shared-project bootstrap
+    or by an older dashboard) carries empty ``docs`` / ``commands`` / ``anchors``
+    maps, which leaves the dashboard's Manifest tab with nothing to link to.
+    Only what is missing is added: existing keys, values, body and shared
+    project fields are preserved.
+
+    Returns ``{"updated": bool, "changed": [...], "reason": str}``.
+    """
+    p = Path(path)
+    if not p.is_dir():
+        raise ScaffoldError(f"path does not exist: {p}")
+    target = manifest.find(p)
+    if target is None:
+        return {"updated": False, "changed": [], "reason": "no manifest"}
+
+    snap = manifest.load(p)
+    if not snap["found"]:
+        return {"updated": False, "changed": [], "reason": "could not parse manifest"}
+
+    data: dict[str, Any] = dict(snap["data"])
+    changed: list[str] = []
+
+    if not str(data.get("name") or "").strip():
+        data["name"] = name or p.name
+        changed.append("name")
+    if not str(data.get("kind") or "").strip():
+        data["kind"] = "opencode"
+        changed.append("kind")
+    if "version" not in data or data.get("version") in (None, ""):
+        data["version"] = manifest.SCHEMA_VERSION
+        changed.append("version")
+
+    docs = data.get("docs")
+    if not isinstance(docs, dict):
+        docs = {}
+    added_docs = 0
+    for key, rel in _doc_links().items():
+        if docs.get(key):
+            continue
+        # Never point at a file that does not exist: a dead link is worse than
+        # an absent one, and backfill() creates these before enriching.
+        if not (p / rel).is_file():
+            continue
+        docs[key] = rel
+        added_docs += 1
+    if added_docs:
+        data["docs"] = docs
+        changed.append(f"docs ({added_docs})")
+
+    commands = data.get("commands")
+    if not isinstance(commands, dict):
+        commands = {}
+    added_commands = 0
+    for key, cmd in _suggest_commands(p).items():
+        if commands.get(key):
+            continue
+        commands[key] = cmd
+        added_commands += 1
+    if added_commands:
+        data["commands"] = commands
+        changed.append(f"commands ({added_commands})")
+
+    anchors = data.get("anchors")
+    if not isinstance(anchors, list):
+        anchors = []
+    known = {
+        str(a.get("path") or "").strip()
+        for a in anchors
+        if isinstance(a, dict)
+    }
+    added_anchors = 0
+    for anchor in _standard_anchors() + detect_anchors(p):
+        rel = str(anchor.get("path") or "").strip()
+        if not rel or rel in known:
+            continue
+        known.add(rel)
+        anchors.append(anchor)
+        added_anchors += 1
+    if added_anchors:
+        data["anchors"] = anchors
+        changed.append(f"anchors ({added_anchors})")
+
+    if not changed:
+        return {"updated": False, "changed": [], "reason": "already complete"}
+
+    try:
+        manifest.save(p, data, body=snap.get("body") or "")
+    except manifest.ManifestError as exc:  # pragma: no cover - disk failure
+        raise ScaffoldError(str(exc))
+    return {"updated": True, "changed": changed, "reason": ""}
 
 
 def _read_text_file(path: Path) -> str:

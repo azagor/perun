@@ -563,8 +563,9 @@ def cmd_backfill_docs(args: argparse.Namespace) -> int:
         if created:
             print(f"{proj['slug']}: created {', '.join(created)}")
             total_created.extend(f"{proj['slug']}/{c}" for c in created)
-            # Re-sync manifest if perun.md was created.
-            if "perun.md" in created:
+            # Re-sync the manifest when it was created or enriched so the
+            # dashboard's Manifest tab reflects the new docs/anchors at once.
+            if any(str(c).startswith("perun.md") for c in created):
                 try:
                     from . import projects as _projects
                     _projects.sync_manifest(proj)
@@ -681,6 +682,15 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     from perun_mcp import main as mcp_main  # type: ignore
 
     mcp_main()
+    return 0
+
+
+def cmd_proposals_mcp(args: argparse.Namespace) -> int:
+    """Run the perun-proposals coordination MCP server (stdio)."""
+    _ensure()
+    from perun.proposals_mcp import mcp
+
+    mcp.run()
     return 0
 
 
@@ -1451,6 +1461,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")
     p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser("proposals-mcp", help="run the Perun proposals coordination MCP server (stdio)")
+    p.set_defaults(func=cmd_proposals_mcp)
 
     p_up = sub.add_parser("update", help="check for and apply Perun updates from GitHub")
     up_sub = p_up.add_subparsers(dest="action")

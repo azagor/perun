@@ -1572,9 +1572,11 @@ function renderProjectTab(name, detail) {
                 <span class="k">Last seen</span><span class="v">${esc(timeAgo(p.last_seen_at))}</span>
              </div>`);
         wrap.appendChild(kv);
-        if (p.has_manifest) {
-            wrap.appendChild(manifestOverview(p));
-        }
+        // Always render the manifest card. A project can lack a synced
+        // manifest, or have a minimal one with no docs/anchors — either way the
+        // Overview must say so and link to the Manifest tab instead of
+        // silently showing nothing (the ai_playground wizard case).
+        wrap.appendChild(manifestOverview(p));
         wrap.appendChild(sectionTitle('Recent runs'));
         const box = el('div', { class: 'card' });
         const list = el('div', { class: 'list' });
@@ -2459,15 +2461,38 @@ function wireManifestLinks(root, projectRoot) {
 }
 
 function manifestOverview(p) {
+    const hasManifest = Boolean(p.has_manifest);
     const data = p.manifest || {};
     const body = p.manifest_body || '';
     const box = el('div', { class: 'card mb' });
-    box.appendChild(el('div', { class: 'card-head' },
+    // Prefer the resolved on-disk path (absolute); fall back to the canonical
+    // name so the header always offers a way to open the manifest itself, not
+    // just the files it points at.
+    const manifestPath = String(p.manifest_source || '').trim() || 'perun.md';
+    const head = el('div', { class: 'card-head' },
         `<h4>Manifest</h4>
          <span class="row wrap" style="gap:8px">
-            <span class="badge gold">perun.md</span>
+            <span class="badge ${hasManifest ? 'gold' : 'muted'}">perun.md</span>
             ${p.manifest_source ? `<span class="mono muted truncate" style="max-width:260px;font-size:.72rem">${esc(p.manifest_source)}</span>` : ''}
-         </span>`));
+         </span>`);
+    if (hasManifest) {
+        const open = el('button', { class: 'btn ghost sm', type: 'button', title: `Open ${manifestPath}` }, 'Open perun.md');
+        open.addEventListener('click', () => openManifestPath(p.path, manifestPath));
+        head.querySelector('.row').appendChild(open);
+    }
+    box.appendChild(head);
+
+    if (!hasManifest) {
+        box.appendChild(el('div', { class: 'empty' },
+            'No manifest is synced for this project yet, so the Overview has nothing to show. ' +
+            'Open the <b>Manifest</b> tab to read an existing <span class="mono">perun.md</span> or generate one.'));
+        const actions = el('div', { class: 'form-actions' });
+        const openTab = el('button', { class: 'btn primary sm', type: 'button' }, 'Open Manifest tab');
+        openTab.addEventListener('click', () => goto(`#/project/${p.slug}/manifest`));
+        actions.appendChild(openTab);
+        box.appendChild(actions);
+        return box;
+    }
 
     const anchors = data.anchors || [];
     if (anchors.length) {
@@ -2529,6 +2554,14 @@ function manifestOverview(p) {
             row.appendChild(chip);
         }
         box.appendChild(row);
+    }
+
+    const hasContent = anchors.length || cmds.length || links.length || docs.length || body.trim();
+    if (!hasContent) {
+        box.appendChild(el('div', { class: 'empty' },
+            'This manifest has no docs, links, commands, anchors or overview body yet. ' +
+            'Open the <b>Manifest</b> tab to add content, or run ' +
+            `<span class="mono">python -m perun backfill-docs ${esc(p.slug)}</span>.`));
     }
 
     if (body && body.trim()) {

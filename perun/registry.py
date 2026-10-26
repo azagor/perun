@@ -368,6 +368,15 @@ def get_project_chat(project_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def get_project_chat_by_room(room_id: str) -> dict[str, Any] | None:
+    """Look up the managed project chat bound to *room_id*."""
+    if not room_id:
+        return None
+    with db.db() as conn:
+        row = db.one(conn, "SELECT * FROM project_chats WHERE room_id=?", (room_id,))
+        return dict(row) if row else None
+
+
 def set_project_chat(
     project_id: int,
     room_id: str,

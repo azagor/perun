@@ -236,7 +236,8 @@ def create(
         f"Proposal {proposal_id} created by {requester}: {intent}",
         {"proposal_id": proposal_id, "requester": requester, "intent": intent, "targets": targets},
     )
-    return get(proposal_id)
+    created = get(proposal_id)
+    return created
 
 
 def get(proposal_id: str) -> dict[str, Any] | None:
@@ -488,6 +489,12 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             agent=shared_agent.SHARED_AGENT_ID,
             timeout=context["settings"].run_timeout or 1800,
             extra_env={"PERUN_ALLOWLIST": context["allowlist_env"]},
+            # The proposal prompt is long (instructions + request + details).
+            # Passing it as a command-line argument can exceed the Windows
+            # ~32K limit, which silently truncates it and leaves the agent
+            # looking at instruction markers with no task. Attach it as a file
+            # instead.
+            use_prompt_file=True,
             # The proposal id is the run id: it makes the headless run
             # addressable (cancel, logs, SSE) with no extra mapping table.
             run_uid=run_uid,
@@ -512,6 +519,7 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
     # Post-run filesystem audit. A violation is a policy failure even when the
     # agent reported success: the proposal must not claim "executed" after
     # touching paths outside the allowlist.
+    audit_result: dict[str, Any] = {}
     try:
         audit_result = fs_audit.diff(project, context["before_snapshot"])
         fs_audit.log_result(project["id"], run_uid, audit_result)
@@ -535,6 +543,36 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             output + f"\n\n[POLICY AUDIT FAILED: {exc}]"
         ).strip()
         logger.warning("Filesystem audit failed for proposal %s: %s", proposal_id, exc)
+
+    # Outcome check. An agent can finish "successfully" without touching a
+    # single approved target (the classic no-op: it read the instructions,
+    # answered conversationally, and did nothing). Reporting that as
+    # ``executed`` makes the audit trail lie, so require a real change under
+    # at least one approved target.
+    if status == "executed":
+        target_paths = [
+            Path(t) for t in (context["before_snapshot"].get("targets") or [])
+        ]
+        changed_paths = [
+            Path(p)
+            for p in (
+                list(audit_result.get("created") or [])
+                + list(audit_result.get("modified") or [])
+                + list(audit_result.get("deleted") or [])
+            )
+        ]
+        if target_paths and not any(
+            _path_under(path, target)
+            for path in changed_paths
+            for target in target_paths
+        ):
+            status = "failed"
+            shown = ", ".join(str(t) for t in target_paths[:10])
+            output = (
+                output
+                + "\n\n[NO TARGET CHANGES: the run reported success but none of "
+                f"the approved targets were created, modified or deleted: {shown}]"
+            ).strip()
 
     _set_status(proposal_id, status, output[:4000])
 
@@ -671,6 +709,15 @@ def _build_allowlist_env(project: dict[str, Any], targets: list[str] | None = No
         {"root": str(root), "deps": deps, "targets": resolved_targets},
         ensure_ascii=False,
     )
+
+
+def _path_under(path: Path, parent: Path) -> bool:
+    """Return True when *path* is *parent* or lives beneath it."""
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _set_status(proposal_id: str, status: str, result: str = "") -> None:

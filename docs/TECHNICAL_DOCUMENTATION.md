@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.4 (see §15). This release splits Shared Projects approval into two modes: **Agent approval in chat** (`shared.auto_approve`) requires a peer `rw` agent to explicitly approve or reject proposals via `[APPROVAL: ...]` markers in the project chat, while **Policy auto-approve** (`shared.policy_auto_approve`) keeps the previous system-immediate-auto-approve behaviour. v0.8.4 also fixes the misleading audit trail by always recording the generic `auto` policy identity for policy auto-approvals. The v0.8.3 features remain in place: lifecycle chat notifications, a collapsed-by-default Completed proposals list, and no confirmation dialogs for run-starting actions. The v0.8.2 hardening remains in place: Perun projects can be bound to dedicated PerunChat group rooms (`grp:`), chat-originated action proposals are gated by local HMAC-SHA256 HITL approval, approved runs run under the generated deny-all `perun-shared` agent with a target-scoped `perun-guard` filesystem MCP server plus a post-run filesystem audit, participant roles (`rw`/`ro`) and approver identity are configurable, trust revocation removes agents from the manifest and re-syncs the room, PerunChat memory is room/project scoped, and agent ids are treated as machine-local gateway identities. The HITL signing secret is `PERUN_HITL_SECRET` / `perun_hitl_secret`. See `docs/SHARED_PROJECTS_PRD.md` and `docs/CHANGELOG.md` for details. `perun.__version__` reports `0.8.4`.
+**Latest release:** v0.8.5 (see §15). This release replaces the brittle `[ACTION:…]` / `[APPROVAL:…]` chat markers with structured `perun-proposals` MCP tools (`propose`, `approve`, `list_proposals`, `get_proposal`), adds a bridge activity-table poller so lifecycle notices work across the MCP-server process boundary, restores `policy_auto_approve` handling in the tool path, and removes silent on-the-fly project registration. The v0.8.4 hardening remains in place: dedicated PerunChat group rooms (`grp:`), HMAC-SHA256 HITL approval, target-scoped `perun-guard` filesystem MCP server plus post-run audit, participant roles (`rw`/`ro`) and trust revocation, room/project-scoped memory, and machine-local agent ids. `perun.__version__` reports `0.8.5`.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -404,7 +404,12 @@ records local `file:` cross-project references.
 **Backfill docs for existing projects**
 (`python -m perun backfill-docs [slug] [--all]`). The `scaffold.backfill()`
 helper writes the same scaffold files but only where they are missing, so it is
-safe to run on existing projects.
+safe to run on existing projects. It then calls
+`scaffold.enrich_manifest()`, which fills missing `docs`, `commands` and
+`anchors` (plus `name`/`kind`/`version`) in a minimal `perun.md` while
+preserving existing values, the Markdown body and every shared-project field —
+so a project created before the scaffold existed still gets a usable Manifest
+tab.
 
 **Validate manifests**
 (`python -m perun validate-docs [slug] [--all]`). Reports `perun.md` docs and
@@ -780,7 +785,41 @@ short-lived HMAC token bound to the proposal; `execute` (or the one-click
   `action_proposals.reconcile_interrupted()` moves the proposal to `failed`
   with an explicit reason instead of leaving it stuck in `executing`;
 - a filesystem-audit violation downgrades an otherwise successful run to
-  `failed` and records the offending paths.
+  `failed` and records the offending paths;
+- a run that reports success without creating, modifying or deleting any of the
+  approved targets is also downgraded to `failed`, with a
+  `[NO TARGET CHANGES: …]` note. An instruction-reading, conversational no-op
+  must never be recorded as `executed`;
+- the prompt is passed to `opencode` as a temporary file
+  (`use_prompt_file=True`), not as a command-line argument: instruction preamble
+  plus request plus details routinely exceed the Windows ~32 KB limit, and a
+  truncated argument silently leaves the agent staring at markers with no task.
+
+**Proposal coordination (v0.8.4+)**
+
+A proposal raised from a project chat is authored by whoever asked for the
+change: if Frambo asks for a README, Frambo is the `requester`; if Perun asks,
+Perun is the `requester`. The eligible reviewer is then any *other* `rw`
+participant in the project. The room owner (`project_chats.managed_by`, Perun's
+own chat persona) is always implicitly a member of a managed project chat and
+can therefore approve or reject proposals raised by a peer, even when the owner
+is not listed as a manifest participant and is not on the global trust list.
+This makes a two-agent room work in both directions: Perun can propose and
+Frambo approve, or Frambo can propose and Perun approve.
+
+The chat agent performs read-only project inspection through the `perun-guard`
+MCP server (`guard_read_file`, `guard_list_directory`, `guard_search_files`).
+Actual proposal/approval coordination goes through the `perun-proposals` MCP
+server, which exposes `propose`, `approve`, `list_proposals` and `get_proposal`
+tools. The bridge injects `PERUN_PROJECT_PATH`, `PERUN_CHAT_SENDER` and
+`PERUN_ROOM_ID` into each chat run so these servers know which project and
+sender they are serving. Tool calls are validated server-side against the same
+rw/trust/owner rules that used to be enforced for `[ACTION:…]` / `[APPROVAL:…]`
+markers. A background activity-table poller in the bridge posts review requests
+and state digests to the bound room, so notices work even though the MCP server
+runs in a separate process. Projects with `policy_auto_approve` are approved and
+executed immediately inside the `propose` tool; projects with `auto_approve`
+still require a peer `approve` call, and the poller prompts eligible reviewers.
 
 The `perun-guard` MCP server is the sanctioned filesystem path (`guard_read_file`,
 `guard_write_file`, `guard_edit_file`, `guard_list_directory`,

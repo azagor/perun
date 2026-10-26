@@ -70,25 +70,34 @@ def sync_opencode_config(project: dict[str, Any]) -> dict[str, Any]:
             del data[key]
             changed = True
 
-    # Register the shared-project filesystem guard MCP server for shared projects.
+    # Register the shared-project filesystem guard and proposal-coordination
+    # MCP servers for shared projects.
     mcp_servers = data.get("mcp")
     if not isinstance(mcp_servers, dict):
         mcp_servers = {}
     shared_cfg = shared_projects.load(project["path"])
     guard_key = "perun-guard"
     guard_entry = {"command": sys.executable, "args": ["-m", "perun.guard_mcp"]}
+    proposals_key = "perun-proposals"
+    proposals_entry = {"command": sys.executable, "args": ["-m", "perun.proposals_mcp"]}
     if shared_cfg.get("shared"):
         if mcp_servers.get(guard_key) != guard_entry:
             mcp_servers[guard_key] = guard_entry
             data["mcp"] = mcp_servers
             changed = True
-    elif guard_key in mcp_servers:
-        del mcp_servers[guard_key]
-        if mcp_servers:
+        if mcp_servers.get(proposals_key) != proposals_entry:
+            mcp_servers[proposals_key] = proposals_entry
             data["mcp"] = mcp_servers
-        else:
-            data.pop("mcp", None)
-        changed = True
+            changed = True
+    else:
+        if guard_key in mcp_servers:
+            del mcp_servers[guard_key]
+            changed = True
+        if proposals_key in mcp_servers:
+            del mcp_servers[proposals_key]
+            changed = True
+        if changed:
+            data["mcp"] = mcp_servers
 
     if not changed:
         return {"action": "unchanged", "path": str(target)} if target.is_file() else {"action": "unchanged"}
@@ -238,9 +247,16 @@ def create(*, method: str = "existing", name: str = "", path: str = "",
         if not path:
             raise ProjectError("path is required")
         try:
-            created_dir = scaffold.create_dir(path)[1]
-            if created_dir and bootstrap:
-                scaffold.bootstrap(path, name or Path(path).name)
+            target_dir, created_dir = scaffold.create_dir(path)
+            # The wizard (or an API caller) may point "new" at a directory the
+            # user already created in Explorer or an editor. Bootstrapping must
+            # happen for that existing-but-empty target too, otherwise the
+            # project ends up with no README/AGENTS/docs/manifest anchors and the
+            # dashboard shows an empty Manifest tab. Non-empty directories are
+            # never touched.
+            empty_dir = not created_dir and not any(target_dir.iterdir())
+            if bootstrap and (created_dir or empty_dir):
+                scaffold.bootstrap(str(target_dir), name or Path(path).name)
         except scaffold.ScaffoldError as exc:
             raise ProjectError(str(exc))
 
