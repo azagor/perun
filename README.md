@@ -66,11 +66,19 @@ them all — no matter which folder you happened to open.
   chat-agent proposals must be explicitly approved or rejected by another `rw`
   participant agent in the dedicated project chat before they run. A separate
   **Policy auto-approve** mode skips peer review and lets the system approve and
-  execute proposals immediately.
+  execute proposals immediately. A remote rw participant can also claim an
+  approved proposal and upload a ZIP of changes over PerunChat using its own
+  model/tokens; Perun validates and applies the package locally.
   Lifecycle notices (started, completed, failed, rejected) are posted back to the
   project chat, and completed proposals move to a collapsed-by-default list in the
   dashboard. Participant roles (`rw`/`ro`) are enforced, and approver identity
   plus the HITL signing secret are configurable.
+* **Robust provider and MCP discovery.** Perun merges providers and MCP servers
+  from every known OpenCode config directory (including `%APPDATA%`/`%LOCALAPPDATA%`
+  on Windows) and tolerates wrapped `opencode auth list` output, so providers
+  added through the OpenCode TUI appear in the dashboard.
+* **Dashboard shutdown button.** A **Shutdown Perun** button in the topbar stops
+  the local service gracefully so users can restart it cleanly with their shortcut.
 * **A bounded context budget.** `AGENTS.md` no longer has to grow without limit.
   Reference material moves into a **Context layer** — keyed, retrievable
   documents — and the agent pulls what it needs (`perun_context("<task>")`)

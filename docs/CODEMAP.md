@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.7.51"`).
+Package docstring + `__version__` (`"0.8.21"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -384,6 +384,19 @@ Start / stream / cancel headless `opencode run`.
   The instruction envelope uses plain-text markers
   (`--- PERUN INSTRUCTIONS START ---` / `--- PERUN INSTRUCTIONS END ---`).
 
+### `perun/package_handoff.py`
+Safe ZIP work-package handling for the external execution handoff. Perun never
+runs an LLM on this path; the remote rw participant generates the package with
+its own model/tokens and Perun validates/applies it locally.
+* `pack()` — build a ZIP from a list of target paths relative to the project root.
+* `unpack()` — decode base64 chunks, reassemble the archive, and validate against
+  caps (uncompressed total 50 MB, 500 entries, 10 MB/entry) and anti-abuse rules.
+* `validate()` — reject traversal (`..`), absolute paths, drive letters,
+  symlinks, encrypted entries, duplicate entry names, and entries outside the
+  approved proposal targets.
+* `apply()` — write the validated entries to disk under the project root and run
+  a post-apply filesystem audit.
+
 ### `perun/skills.py`
 Discovery of OpenCode agent skills and tools available to a project.
 * `BUILTIN_SKILLS` — runtime-provided OpenCode skills (`code-audit`,
@@ -524,7 +537,14 @@ Autonomous PerunChat chat participant for the Orchestrator.
   agent (`~/.config/opencode/agents/perunchat.md`) on bridge start, overwriting
   it whenever the embedded content changes so prompt fixes reach production.
 * Chat model/agent precedence: `perunchat_chat_model`/`perunchat_chat_agent` →
-  `orchestrator_model`/`orchestrator_agent` → defaults.
+  `orchestrator_model`/`orchestrator_agent` → defaults. The `settings` property
+  reads from the orchestrator each time, so dashboard changes take effect without
+  a bridge restart.
+* External execution handoff (remote rw participants only): the bridge receives
+  `application/perun-execution` control frames and `application/perun-package`
+  ZIP chunks, persists upload slots to SQLite, and calls `package_handoff` to
+  validate/apply the package. The local host agent should use the normal
+  shared-project pipeline instead.
 * Shared-project chat flow: `_shared_project_context()` injects a trust-filtered
   project brief (no local paths or Git remotes) into managed `grp:` rooms;
   `_extract_action_proposal()` parses `[ACTION: …]` markers from replies and
@@ -637,7 +657,9 @@ FastAPI app + SSE + static dashboard.
   (legacy inline or project-local Markdown file), `/api/projects/{slug}/instruction-files`
   (multi-file project-local instructions with CRUD + toggle), `/api/projects/{slug}/manifest…`,
   `/api/projects/{slug}/git…`,
-  `/api/projects/{slug}/tasks…`, `DELETE /api/sessions/{pk}`; `DELETE` refuses
+  `/api/projects/{slug}/tasks…`, shared-project proposals
+  (`/api/projects/{slug}/proposals…` incl. `claim`/`revoke-claim` for external
+  execution handoff), `DELETE /api/sessions/{pk}`; `DELETE` refuses
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
@@ -665,6 +687,8 @@ FastAPI app + SSE + static dashboard.
   gateway's `/api/v1/rooms` room discovery (active/joined/well-known public
   rooms) that feeds the dashboard auto-join picker; the dashboard opens a direct
   WebSocket to the gateway).
+* Lifecycle: `POST /api/shutdown` signals uvicorn to exit gracefully; guarded by
+  the same token middleware.
 * `_sync_manifest()` (module-level alias of `projects.sync_manifest`), `serve()`
   (uvicorn launcher).
 
@@ -955,8 +979,12 @@ stdio MCP server (`perun`). 25 tools: `perun_list_projects`,
 * `test_perunchat_bridge.py` — the autonomous PerunChat participant: start/stop
   lifecycle, room auto-join, reply dedupe, the write-ahead outbox and its
   reconnect flush, empty-reply retry, typing/reply sequence-number monotonicity,
-  private-room alias handling, memory fact extraction, and the `perunchat`
-  agent installer.
+  private-room alias handling, memory fact extraction, the `perunchat`
+  agent installer, and external execution package reassembly.
+* `test_package_handoff.py` — safe ZIP pack/unpack/validate/apply, caps,
+  traversal/symlink/duplicate rejection, and target-scoped apply.
+* `test_action_proposals.py` — proposal lifecycle, claim/revoke, expiry, and
+  external-execution claim guards.
 * `test_perunchat_proxy.py` — the `/api/perunchat/*` proxy layer: status
   (`agent_id`), key reveal restricted to loopback, room discovery, the trusted
   list, and gateway-failure degradation.

@@ -2,6 +2,15 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## Unreleased
+
+### Changed
+
+- Updated `docs/CODEMAP.md`, `docs/TECHNICAL_DOCUMENTATION.md`, and `README.md`
+  to reflect v0.8.21: added `perun/package_handoff.py`, the `/api/shutdown`
+  endpoint, external execution handoff details, and the local-host-agent
+  execution-path clarification.
+
 ## v0.8.21
 
 ### Changed
