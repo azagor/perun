@@ -778,3 +778,221 @@ def test_policy_auto_approve_leaves_proposal_approved_if_execution_fails(tmp_pat
     approved = action_proposals.get(proposal["id"])
     assert approved["status"] == "approved"
     assert approved["approved_by"] == action_proposals.AUTO_APPROVER
+
+
+def test_claim_execution_reserves_approved_proposal(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    claimed = action_proposals.claim_execution(proposal["id"], "frambo")
+    assert claimed["status"] == "claimed"
+    assert claimed["executor_id"] == "frambo"
+    assert claimed["execution_mode"] == "external"
+    assert claimed["claim_snapshot"]
+
+
+def test_claim_execution_rejects_ro_participant(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(
+        project,
+        participants=[{"agent_id": "frambo", "roles": ["ro"]}],
+    )
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project,
+        "owner",
+        {"intent": "x", "targets": [target], "action_type": "edit"},
+        owner="owner",
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    with pytest.raises(ValueError, match="read-only"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+
+def test_claim_execution_rejects_double_claim(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+    with pytest.raises(ValueError, match="claimed"):
+        action_proposals.claim_execution(proposal["id"], "glados")
+
+
+def test_revoke_execution_claim_returns_to_approved(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+    revoked = action_proposals.revoke_execution_claim(
+        proposal["id"], "owner", owner="owner"
+    )
+    assert revoked["status"] == "approved"
+    assert revoked["executor_id"] == ""
+    assert revoked["execution_mode"] == "perun"
+
+
+def test_claim_expiry_sweep_returns_to_approved(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET claim_expires_at=? WHERE id=?",
+            (int(time.time()) - 1, proposal["id"]),
+        )
+    action_proposals.expire_stale()
+    assert action_proposals.get(proposal["id"])["status"] == "approved"
+
+
+def test_concurrent_claim_race_leaves_only_one_winner(tmp_path, monkeypatch):
+    """Two simultaneous claim_execution calls must not both succeed."""
+    import threading
+
+    project = _make_project(tmp_path)
+    _enable_shared(
+        project,
+        participants=[
+            {"agent_id": "frambo", "roles": ["rw"]},
+            {"agent_id": "glados", "roles": ["rw"]},
+        ],
+    )
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    results: list = []
+    errors: list = []
+
+    def claim(agent):
+        try:
+            results.append(action_proposals.claim_execution(proposal["id"], agent))
+        except Exception as exc:
+            errors.append(str(exc))
+
+    t1 = threading.Thread(target=claim, args=("frambo",))
+    t2 = threading.Thread(target=claim, args=("glados",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    winner = results[0]
+    assert winner["status"] == "claimed"
+    # The loser got a ValueError because the CAS update affected 0 rows.
+    assert "approved" in errors[0] or "claimed" in errors[0]
+
+
+def test_start_execution_refuses_claimed_proposal(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+    with pytest.raises(ValueError, match="claimed"):
+        action_proposals.start_execution(proposal["id"])
+
+
+def test_delete_refuses_claimed_proposal(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+    with pytest.raises(ValueError, match="claimed"):
+        action_proposals.delete(proposal["id"])
+
+
+def test_complete_external_execution_marks_executed(tmp_path):
+    import io, zipfile
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("api.py", "new")
+    result = action_proposals.complete_external_execution(
+        proposal["id"], "frambo", buf.getvalue()
+    )
+    assert result["status"] == "executed"
+    assert (root / "api.py").read_text() == "new"
+
+
+def test_complete_external_execution_keeps_claimed_on_validation_failure(tmp_path):
+    import io, zipfile
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("other.py", "new")
+    result = action_proposals.complete_external_execution(
+        proposal["id"], "frambo", buf.getvalue()
+    )
+    assert result["ok"] is False
+    assert action_proposals.get(proposal["id"])["status"] == "claimed"
+
+
+def test_complete_external_execution_fails_on_no_target_changes(tmp_path):
+    import io, zipfile
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        pass  # empty package: no files touched
+    result = action_proposals.complete_external_execution(
+        proposal["id"], "frambo", buf.getvalue()
+    )
+    assert result["status"] == "failed"
+    assert "NO TARGET CHANGES" in result["result"]

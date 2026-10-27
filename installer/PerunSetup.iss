@@ -1,5 +1,5 @@
 #define MyAppName "Perun"
-#define MyAppVersion "0.8.14"
+#define MyAppVersion "0.8.17"
 #define MyAppPublisher "Perun in The Machine"
 #define MyAppURL "https://github.com/azagor/perun"
 #define MyAppExeName "Perun.cmd"
@@ -35,11 +35,12 @@ Name: "full"; Description: "Full installation"; Flags: iscustom
 Name: "perun"; Description: "Perun dashboard and orchestrator"; Types: full; Flags: fixed
 Name: "python"; Description: "Python 3.12.10 (required if Python 3.10+ is not installed)"; Types: full
 Name: "git"; Description: "Git for Windows (required for project discovery)"; Types: full
+Name: "nodejs"; Description: "Node.js 22.14.0 LTS (required by OpenCode CLI)"; Types: full
 Name: "opencode"; Description: "OpenCode CLI"; Types: full
 Name: "ollama"; Description: "Ollama (for semantic memory)"; Types: full
 
 [Files]
-Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "\.git,\.gitignore,*.pyc,__pycache__,.pytest_cache,node_modules,installer\Output,installer\*.exe,installer\*.iss,installer\certs"
+Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "\.git,\.gitignore,perun.md,AGENTS.md,README.md,docs,.perun,*.pyc,__pycache__,.pytest_cache,node_modules,installer\Output,installer\*.exe,installer\*.iss,installer\certs"
 Source: "install-prereqs.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "..\web\assets\perun.ico"; DestDir: "{app}\web\assets"; Flags: ignoreversion
@@ -67,6 +68,8 @@ begin
     Switches := Switches + ' -InstallPython';
   if WizardIsComponentSelected('git') then
     Switches := Switches + ' -InstallGit';
+  if WizardIsComponentSelected('nodejs') then
+    Switches := Switches + ' -InstallNodeJS';
   if WizardIsComponentSelected('opencode') then
     Switches := Switches + ' -InstallOpencode';
   if WizardIsComponentSelected('ollama') then

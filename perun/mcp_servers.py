@@ -147,8 +147,17 @@ def _config_files(directory: Path) -> list[Path]:
 # Discovery
 # --------------------------------------------------------------------------- #
 def global_config_files() -> list[Path]:
-    """Config files that define machine-wide MCP servers."""
-    return _config_files(config.OPENCODE_CONFIG_DIR)
+    """Config files that define machine-wide MCP servers.
+
+    OpenCode on Windows may keep its global config in APPDATA/LOCALAPPDATA
+    opencode directories instead of ~/.config/opencode. To avoid missing
+    servers configured through the OpenCode desktop/TUI, read from all known
+    global config directories. Perun's own install still writes to the
+    primary directory, so nothing moves for existing users.
+    """
+    from .opencode_config import global_config_files as _oc_global_files
+
+    return _oc_global_files()
 
 
 def project_config_files(project_path: str | Path | None) -> list[Path]:

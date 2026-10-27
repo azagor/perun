@@ -79,6 +79,28 @@ def test_list_providers_reports_subprocess_errors(monkeypatch, isolated_config):
     assert "not logged in" in data["error"]
 
 
+def test_list_providers_parses_wrapped_auth_output(monkeypatch, isolated_config):
+    """``opencode auth list`` may wrap providers in a top-level providers key."""
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = json.dumps({
+                "providers": [
+                    {"integrationID": "openai", "name": "OpenAI",
+                     "connections": [{"type": "credential"}]},
+                    {"providerId": "ollama", "name": "Ollama", "connections": []},
+                ]
+            })
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    data = providers.list_providers()
+    assert data["count"] == 2
+    ids = {p["id"] for p in data["providers"]}
+    assert ids == {"openai", "ollama"}
+
+
 def test_list_providers_merges_configured_providers(monkeypatch, isolated_config):
     """Providers written to opencode.json appear as configured, even without auth."""
     opencode_config.configure_provider("ollama", {"baseURL": "http://localhost:11434/v1"})
@@ -98,6 +120,78 @@ def test_list_providers_merges_configured_providers(monkeypatch, isolated_config
     ollama = next(p for p in data["providers"] if p["id"] == "ollama")
     assert ollama["configured"] is True
     assert ollama["connected"] is True
+
+
+def test_configured_providers_merges_windows_config_dirs(monkeypatch, tmp_path, isolated_config):
+    """On Windows, providers from %APPDATA%\\opencode are merged with the primary config."""
+    # Primary config gets one provider.
+    opencode_config.configure_provider("primary", {"baseURL": "http://primary/v1"})
+
+    # Simulate a TUI-written config in APPDATA\opencode on Windows.
+    appdata = tmp_path / "appdata" / "opencode"
+    appdata.mkdir(parents=True)
+    appdata_config = appdata / "opencode.json"
+    appdata_config.write_text(json.dumps({
+        "providers": {"tui-provider": {"name": "TUI Provider", "apiKey": "sk-tui"}}
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(opencode_config.os, "name", "nt")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    # Clear LOCALAPPDATA so it does not interfere.
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    out, _ = opencode_config.configured_providers()
+    ids = {p["id"] for p in out}
+    assert "primary" in ids
+    assert "tui-provider" in ids
+    tui = next(p for p in out if p["id"] == "tui-provider")
+    assert tui["has_key"] is True
+
+
+def test_configured_providers_tolerates_list_form(monkeypatch, isolated_config):
+    """OpenCode may store providers as a list; we still surface them."""
+    path = isolated_config
+    opencode_config.save_config(
+        {
+            "providers": [
+                {"id": "openai", "name": "OpenAI", "apiKey": "sk-test"},
+                {"id": "custom-provider", "name": "Custom", "baseURL": "http://example.com/v1"},
+            ]
+        },
+        path,
+    )
+
+    out, _ = opencode_config.configured_providers()
+    ids = {p["id"] for p in out}
+    assert ids == {"openai", "custom-provider"}
+    openai = next(p for p in out if p["id"] == "openai")
+    assert openai["has_key"] is True
+    custom = next(p for p in out if p["id"] == "custom-provider")
+    assert custom["base_url"] == "http://example.com/v1"
+
+
+def test_list_providers_falls_back_to_models_when_auth_and_config_empty(monkeypatch, isolated_config):
+    """If auth/config yield nothing, derive providers from ``opencode models``."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        if "auth" in argv:
+            R.stdout = json.dumps([])
+        elif "models" in argv:
+            R.stdout = "openai/gpt-4\nollama/llama3\nopenai/gpt-3.5-turbo"
+        calls.append(" ".join(argv))
+        return R()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+    data = providers.list_providers()
+    assert data["count"] == 2
+    ids = {p["id"] for p in data["providers"]}
+    assert ids == {"openai", "ollama"}
+    assert all(p["connected"] for p in data["providers"])
 
 
 def test_auth_env_for_subprocess_exports_active_keys(monkeypatch):

@@ -594,6 +594,18 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     assert "perun-guard" in cfg.get("mcp", {})
     assert cfg["mcp"]["perun-guard"]["args"] == ["-m", "perun.guard_mcp"]
 
+    # Remove the guard entry manually to simulate a stale opencode.json, then
+    # call the manual sync endpoint; it should restore the shared MCP servers.
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["mcp"] = {k: v for k, v in cfg.get("mcp", {}).items()
+                  if k not in ("perun-guard", "perun-proposals")}
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    r = client.post(f"/api/projects/{slug}/shared/sync")
+    assert r.status_code == 200, r.text
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "perun-guard" in cfg.get("mcp", {})
+    assert "perun-proposals" in cfg.get("mcp", {})
+
     # Disabling shared mode removes the guard entry.
     r = client.put(f"/api/projects/{slug}/shared", json={
         "shared": False, "participants": [], "external_deps": []
@@ -1653,6 +1665,119 @@ def test_skills_and_tools_endpoints(client, tmp_path, monkeypatch):
     assert client.get("/api/skills?project=perun").status_code == 200
     assert client.get("/api/tools?project=perun").status_code == 200
     assert client.get("/api/skills?project=ghost").status_code == 200
+
+
+def _create_claimable_project(client, tmp_path, monkeypatch, *, owner_agent="perun-local", rw_participant="rw-bot"):
+    """Create a shared project and approved proposal for claim/revoke tests.
+
+    The bound project chat is patched so its owner is ``owner_agent``; the
+    dashboard claim endpoint should use that owner identity, not the human
+    display name from ``perun_owner_name``.
+    """
+    from perun import registry, server, shared_project_sync
+
+    monkeypatch.setattr(server.SETTINGS, "perun_owner_name", "Human Owner")
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", [rw_participant])
+    # Do not call the real PerunChat gateway during project creation.
+    monkeypatch.setattr(shared_project_sync, "sync_project_chat", lambda project, cfg: {"ok": True, "room_id": f"grp:perun:{project['slug']}:chat"})
+    target = tmp_path / "shared-claim"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedClaim", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": rw_participant, "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    pid = r.json()["project"]["id"]
+    # Simulate a managed project chat owned by the local bridge agent.
+    monkeypatch.setattr(
+        registry, "get_project_chat",
+        lambda project_id: {"project_id": pid, "room_id": f"grp:perun:{slug}:chat", "managed_by": owner_agent} if project_id == pid else None,
+    )
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": rw_participant,
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    assert r.status_code == 200, r.text
+    prop_id = r.json()["proposal"]["id"]
+
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/approve")
+    assert r.status_code == 200, r.text
+    assert r.json()["proposal"]["status"] == "approved"
+    return slug, prop_id, target, pid
+
+
+def test_claim_and_revoke_claim_round_trip(client, tmp_path, monkeypatch):
+    """Dashboard can reserve an approved proposal for external execution and return it.
+
+    The dashboard acts on behalf of the local Perun instance (the managed room
+    owner), so it can claim even when the human operator name is not a
+    participant.
+    """
+    slug, prop_id, _target, _pid = _create_claimable_project(
+        client, tmp_path, monkeypatch, owner_agent="perun-local", rw_participant="rw-bot"
+    )
+
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/claim")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["proposal"]["status"] == "claimed"
+    assert body["proposal"]["executor_id"] == "perun-local"
+    assert body["proposal"]["execution_mode"] == "external"
+    assert body["proposal"]["claim_expires_at"] > 0
+
+    # A second claim is rejected.
+    r2 = client.post(f"/api/projects/{slug}/proposals/{prop_id}/claim")
+    assert r2.status_code == 400
+    assert "claimed" in r2.json()["detail"]
+
+    # Revoke returns the proposal to approved.
+    r3 = client.post(f"/api/projects/{slug}/proposals/{prop_id}/revoke-claim")
+    assert r3.status_code == 200, r.text
+    assert r3.json()["proposal"]["status"] == "approved"
+    assert r3.json()["proposal"]["executor_id"] == ""
+
+
+def test_claim_endpoint_rejects_non_approved_proposal(client, tmp_path, monkeypatch):
+    """Only approved proposals can be claimed."""
+    from perun import registry, server, shared_project_sync
+
+    monkeypatch.setattr(server.SETTINGS, "perun_owner_name", "Human Owner")
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["rw-bot"])
+    monkeypatch.setattr(shared_project_sync, "sync_project_chat", lambda project, cfg: {"ok": True, "room_id": f"grp:perun:{project['slug']}:chat"})
+    target = tmp_path / "shared-claim-pending"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedClaimPending", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "rw-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    pid = r.json()["project"]["id"]
+    monkeypatch.setattr(
+        registry, "get_project_chat",
+        lambda project_id: {"project_id": pid, "room_id": f"grp:perun:{slug}:chat", "managed_by": "perun-local"} if project_id == pid else None,
+    )
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "rw-bot",
+        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "edit"},
+    })
+    prop_id = r.json()["proposal"]["id"]
+
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/claim")
+    assert r.status_code == 400
+    assert "pending" in r.json()["detail"]
+
+
+def test_claim_endpoint_returns_404_for_unknown_proposal(client, tmp_path):
+    target = tmp_path / "shared-claim-404"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedClaim404", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "claim-owner", "roles": ["rw"]}],
+    })
+    slug = r.json()["project"]["slug"]
+    assert client.post(f"/api/projects/{slug}/proposals/prop_nope/claim").status_code == 404
+    assert client.post("/api/projects/ghost-slug/proposals/prop_nope/claim").status_code == 404
 
 
 

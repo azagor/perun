@@ -31,6 +31,7 @@ Prerequisites:
 
 - macOS 12 or later
 - Python 3.10+ installed at the system level (e.g. from python.org or Homebrew)
+- Node.js 18+ and npm (required by the OpenCode CLI)
 - Xcode Command Line Tools if any Python dependency needs compilation:
   ```bash
   xcode-select --install

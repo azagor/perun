@@ -40,6 +40,19 @@ def test_is_windows_matches_platform():
     assert installer.is_windows() == (os.name == "nt")
 
 
+def test_installer_excludes_internal_project_content():
+    """The public installer must not ship owner-only project docs/manifest."""
+    import importlib.util
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parent.parent / "tools" / "check-installer-exclusions.py"
+    spec = importlib.util.spec_from_file_location("check_installer_exclusions", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main() == 0
+
+
 def test_python_version_gate():
     assert installer.python_version_ok((3, 10)) is True
     assert installer.python_version_ok((3, 14)) is True
@@ -87,7 +100,7 @@ def test_check_prerequisites_shape(monkeypatch):
     monkeypatch.setattr(installer, "ollama_status", lambda *a, **k: (False, "n/a"))
     checks = installer.check_prerequisites()
     names = {c["name"] for c in checks}
-    assert {"python", "pip", "git", "opencode", "ollama"} <= names
+    assert {"python", "pip", "git", "opencode", "node", "ollama"} <= names
     for c in checks:
         assert set(c) == {"name", "ok", "required", "detail"}
     py = next(c for c in checks if c["name"] == "python")

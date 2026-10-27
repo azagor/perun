@@ -241,6 +241,17 @@ def test_sync_opencode_config_adds_guard_mcp_for_shared_project(tmp_path):
     }
 
 
+def test_sync_manifest_adds_guard_mcp_for_shared_project(tmp_path):
+    project = _make_project(tmp_path, "shared-manifest-sync")
+    _enable_shared(project)
+    # sync_manifest re-reads the manifest and should mirror shared state into
+    # the project's opencode.json even when sync_chat is True.
+    projects.sync_manifest(project)
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    assert "perun-guard" in cfg.get("mcp", {})
+    assert "perun-proposals" in cfg.get("mcp", {})
+
+
 def test_sync_opencode_config_removes_guard_mcp_for_non_shared_project(tmp_path):
     project = _make_project(tmp_path, "plain-guard")
     (Path(project["path"]) / "opencode.json").write_text(

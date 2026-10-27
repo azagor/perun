@@ -160,6 +160,9 @@ anchors:
 - label: PerunChat chat instructions
   kind: file
   path: perun/instructions/perunchat_chat.md
+- label: External execution protocol instructions
+  kind: file
+  path: perun/instructions/perun-external-execution.md
 - label: perun_chat repo
   kind: url
   url: https://github.com/azagor/perun_chat

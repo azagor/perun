@@ -202,6 +202,66 @@ def _provider_status(*, auth_connected: bool, configured: bool, has_key: bool) -
     return "not_connected"
 
 
+def _models_providers(timeout: float = 5.0) -> dict[str, Any]:
+    """Derive connected providers from ``opencode models``.
+
+    This is a fallback for when ``opencode auth list`` does not include
+    providers that were added through the OpenCode TUI but are already serving
+    models. The model list entries look like ``provider_id/model_id``.
+    """
+    from .orchestrator import resolve_opencode
+
+    argv = resolve_opencode("opencode") + ["models"]
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except Exception as exc:
+        return {"ok": False, "providers": [], "count": 0, "error": str(exc)}
+
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "providers": [],
+            "count": 0,
+            "error": (proc.stderr or "").strip()[:500] or "opencode models failed",
+        }
+
+    provider_names: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        mid = line.strip()
+        if not mid:
+            continue
+        provider, _, name = mid.partition("/")
+        if not name:
+            continue
+        provider_id = provider.lower()
+        meta = _PROVIDER_CATALOG.get(provider_id)
+        provider_names[provider_id] = meta.get("name", provider) if meta else provider
+
+    providers: list[dict[str, Any]] = []
+    for pid, name in provider_names.items():
+        meta = _PROVIDER_CATALOG.get(pid, {})
+        providers.append({
+            "id": pid,
+            "name": name,
+            "auth_connected": True,
+            "connected": True,
+            "configured": False,
+            "has_key": False,
+            "base_url": "",
+            "source": "",
+            "kind": meta.get("kind", "custom"),
+            "status": "connected",
+        })
+    return {"ok": True, "providers": providers, "count": len(providers), "error": None}
+
+
 def _auth_providers(timeout: float = 5.0) -> dict[str, Any]:
     """Return the raw output of ``opencode auth list`` as a status dict."""
     argv = _opencode_argv() + ["auth", "list", "--format", "json"]
@@ -236,14 +296,26 @@ def _auth_providers(timeout: float = 5.0) -> dict[str, Any]:
         }
 
     providers: list[dict[str, Any]] = []
-    for entry in raw if isinstance(raw, list) else []:
+    # OpenCode may wrap the list in {"providers": [...]}; accept both forms.
+    if isinstance(raw, dict):
+        entries = raw.get("providers") or []
+        if not isinstance(entries, list):
+            entries = [raw] if entries is None else []
+    elif isinstance(raw, list):
+        entries = raw
+    else:
+        entries = []
+
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
-        conns = entry.get("connections") or []
+        # OpenCode may emit keys with different capitalisation; normalise.
+        entry_norm = {k.lower(): v for k, v in entry.items()}
+        conns = entry_norm.get("connections") or []
         connected = bool(conns) and all(isinstance(c, dict) for c in conns)
         providers.append({
-            "id": entry.get("id", ""),
-            "name": entry.get("name", ""),
+            "id": entry_norm.get("id", entry_norm.get("integrationid", entry_norm.get("providerid", ""))),
+            "name": entry_norm.get("name", ""),
             "auth_connected": connected,
             "connected": connected,
             "status": "connected" if connected else "not_connected",
@@ -532,6 +604,19 @@ def list_providers(*, refresh: bool = False, timeout: float = 5.0) -> dict[str, 
             has_key=has_key,
         )
         active.append(p)
+
+    # Fallback: if auth/config produced nothing, derive providers from the
+    # model list so the dashboard still shows providers that are already usable.
+    if not active:
+        models_auth = _models_providers(timeout=timeout)
+        for mp in models_auth.get("providers") or []:
+            pid = mp["id"]
+            if pid not in active_by_id:
+                active_by_id[pid] = mp
+                active.append(mp)
+        if models_auth.get("error") and auth.get("error") is None:
+            auth["error"] = models_auth["error"]
+
     active.sort(key=lambda x: (x["name"] or x["id"]).lower())
 
     # Catalog = well-known providers that are not already active.

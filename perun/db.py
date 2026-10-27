@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS projects (
     agent         TEXT DEFAULT '',
     favorite      INTEGER DEFAULT 0,
     enabled       INTEGER DEFAULT 1,
+    hidden        INTEGER DEFAULT 0,
     color         TEXT DEFAULT '',
     manifest           TEXT DEFAULT '',
     manifest_path      TEXT DEFAULT '',
@@ -226,12 +227,33 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     approved_by     TEXT,
     approved_at     TEXT,
     result          TEXT,
+    executor_id     TEXT DEFAULT '',
+    execution_mode  TEXT DEFAULT 'perun',
+    claimed_at      TEXT DEFAULT '',
+    claim_expires_at INTEGER DEFAULT 0,
+    claim_snapshot  TEXT DEFAULT '',
+    executed_by     TEXT DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_action_proposals_project ON action_proposals(project_id);
 CREATE INDEX IF NOT EXISTS idx_action_proposals_status ON action_proposals(status);
 CREATE INDEX IF NOT EXISTS idx_action_proposals_room ON action_proposals(room_id);
+
+-- External execution handoff: upload transfer reassembly slots. Persisted so
+-- an interrupted chunked upload survives a Perun bridge restart within the TTL.
+CREATE TABLE IF NOT EXISTS package_transfers (
+    transfer_id     TEXT PRIMARY KEY,
+    proposal_id       TEXT NOT NULL,
+    sender            TEXT NOT NULL,
+    direction         TEXT NOT NULL,
+    sha256            TEXT,
+    total_size        INTEGER,
+    total_chunks      INTEGER,
+    received          TEXT NOT NULL DEFAULT '{}',
+    started_at        REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_package_transfers_started ON package_transfers(started_at);
 
 -- Offline room deletions queued when the gateway is unreachable during project
 -- deletion. Retried on server startup / bridge reconnect.
@@ -306,6 +328,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("git_remote", "TEXT DEFAULT ''"),
         ("git_branch", "TEXT DEFAULT ''"),
         ("git_provider", "TEXT DEFAULT ''"),
+        ("hidden", "INTEGER DEFAULT 0"),
     ],
     "runs": [
         ("model_explicit", "INTEGER DEFAULT 0"),
@@ -324,6 +347,13 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # and a missing column made ``expire_stale()`` raise on every proposals read.
     "action_proposals": [
         ("expires_at", "INTEGER NOT NULL DEFAULT 0"),
+        # External execution handoff columns (v0.8.17).
+        ("executor_id", "TEXT DEFAULT ''"),
+        ("execution_mode", "TEXT DEFAULT 'perun'"),
+        ("claimed_at", "TEXT DEFAULT ''"),
+        ("claim_expires_at", "INTEGER DEFAULT 0"),
+        ("claim_snapshot", "TEXT DEFAULT ''"),
+        ("executed_by", "TEXT DEFAULT ''"),
     ],
 }
 
@@ -384,7 +414,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def init_db() -> None:

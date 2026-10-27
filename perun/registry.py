@@ -140,7 +140,7 @@ def add_project(
 def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
     allowed = {
         "name", "path", "root", "kind", "description", "tags", "model",
-        "agent", "favorite", "enabled", "color",
+        "agent", "favorite", "enabled", "hidden", "color",
         "manifest", "manifest_path", "manifest_loaded_at",
         "git_remote", "git_branch", "git_provider",
     }
@@ -252,6 +252,7 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
     d = dict(row)
     d["favorite"] = bool(d.get("favorite"))
     d["enabled"] = bool(d.get("enabled"))
+    d["hidden"] = bool(d.get("hidden"))
     # The control plane is the self-registered Perun repo; the dashboard uses
     # this flag to badge it and to protect it from deletion.
     d["is_control"] = config.is_control_path(d.get("path"))
@@ -287,9 +288,15 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
     return d
 
 
-def list_projects() -> list[dict[str, Any]]:
+def list_projects(*, include_hidden: bool = False) -> list[dict[str, Any]]:
     with db.db() as conn:
-        rows = db.rows(conn, "SELECT * FROM projects ORDER BY favorite DESC, name COLLATE NOCASE")
+        if include_hidden:
+            rows = db.rows(conn, "SELECT * FROM projects ORDER BY favorite DESC, name COLLATE NOCASE")
+        else:
+            rows = db.rows(
+                conn,
+                "SELECT * FROM projects WHERE hidden=0 ORDER BY favorite DESC, name COLLATE NOCASE",
+            )
         if not rows:
             return []
         pids = [r["id"] for r in rows]

@@ -88,6 +88,10 @@ def _is_under(target: Path, parent: Path) -> bool:
 
 def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
     """Compare current filesystem state with the *before* snapshot."""
+    def _key(value):
+        # Snapshots may be round-tripped through JSON, turning tuples into lists.
+        return tuple(value) if isinstance(value, (list, tuple)) else value
+
     after = snapshot(project)
     before_files = before.get("files", {})
     after_files = after.get("files", {})
@@ -97,7 +101,7 @@ def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
     modified = []
     for p, before_key in before_files.items():
         after_key = after_files.get(p)
-        if after_key and after_key != before_key:
+        if after_key and _key(after_key) != _key(before_key):
             modified.append(p)
 
     # Detect any created, modified, or deleted entry next to the project root.
@@ -110,7 +114,7 @@ def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
     escaped = sorted(
         str(p)
         for p in set(before_parent) | set(after_parent)
-        if before_parent.get(p) != after_parent.get(p)
+        if _key(before_parent.get(p)) != _key(after_parent.get(p))
     )
 
     violations: list[str] = []

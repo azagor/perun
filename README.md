@@ -2,6 +2,13 @@
 
 **Perun is a local overseer and orchestrator for all your OpenCode projects.**
 
+> **Note for contributors / project owner:** this public repository contains the
+> installable runtime source. The full project documentation, agent reference
+> (`AGENTS.md`), manifest (`perun.md`), design notes, and local context docs live
+> in the private companion repo **<https://github.com/azagor/perun_internal>**.
+> When working on the project itself, clone or overlay that repo so the internal
+> files are present.
+
 OpenCode normally lives *inside* one project folder at a time. Perun flips that
 around: it is a single, machine-wide service that knows about **every** project,
 can **search and remember across all of them**, can **start agents in any of

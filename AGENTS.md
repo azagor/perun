@@ -3,6 +3,13 @@
 > This is the repository for **Perun**, a local overseer/orchestrator for all
 > OpenCode projects. It is itself an OpenCode project, so agents working *in*
 > this repo should follow the conventions below.
+>
+> **Internal project content** — this `AGENTS.md`, `perun.md`, `README.md`, the
+> `docs/` directory, and the `.perun/` local context/instructions — live in the
+> private companion repo **<https://github.com/azagor/perun_internal>**. The
+> public `azagor/perun` repository ships only the installable runtime source. When
+> working on the full project, ensure the internal repo is overlayed/cloned into
+> the workspace so these files are present.
 
 A single machine-wide Python service (FastAPI + SQLite + a static SPA) that
 registers every OpenCode project it can find, stores unified

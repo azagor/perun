@@ -617,12 +617,9 @@ def health_check(fix: bool = True) -> dict[str, Any]:
             report["fixes"].append({"name": "perunchat_agent", "result": pc_res})
         else:
             # quick check
-            candidates = []
-            try:
-                candidates.append(config.OPENCODE_CONFIG_DIR)
-            except Exception:
-                pass
-            candidates.append(Path.home() / ".config" / "opencode")
+            from .opencode_config import global_config_dirs
+
+            candidates = list(global_config_dirs())
             found = False
             for base in candidates:
                 for name in ("agents", "agent"):
@@ -1177,8 +1174,8 @@ def api_mcp_probe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 # Projects
 # --------------------------------------------------------------------------- #
 @app.get("/api/projects")
-def api_list_projects() -> dict[str, Any]:
-    return {"ok": True, "projects": registry.list_projects()}
+def api_list_projects(include_hidden: bool = False) -> dict[str, Any]:
+    return {"ok": True, "projects": registry.list_projects(include_hidden=include_hidden)}
 
 
 @app.post("/api/projects")
@@ -1307,6 +1304,13 @@ def api_sync_shared_project_chat(slug: str) -> dict[str, Any]:
     cfg = shared_projects.load(project["path"])
     result = shared_project_sync.sync_project_chat(project, cfg)
     project = registry.get_project(slug) or project
+    # Ensure shared-project MCP servers are registered in the project's
+    # opencode.json after a manual sync, even if shared settings were changed
+    # outside the update endpoint.
+    try:
+        projects.sync_opencode_config(project)
+    except Exception:  # pragma: no cover - best-effort config sync
+        pass
     chat = registry.get_project_chat(project["id"])
     project_chat = shared_project_sync.describe_project_chat(project, cfg)
     return _ok(result=result, chat=chat, project_chat=project_chat)
@@ -1456,6 +1460,55 @@ def api_execute_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=result, accepted=True)
+
+
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/claim")
+def api_claim_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Reserve an approved proposal for external execution over PerunChat.
+
+    The dashboard acts on behalf of the local Perun instance, so the executor is
+    the bound room owner (the local bridge agent id) when a managed project chat
+    exists. This aligns with the owner check in ``claim_execution`` and avoids
+    treating a human display name as a chat participant id.
+    """
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    chat = registry.get_project_chat(project["id"]) or {}
+    owner_id = chat.get("managed_by") or ""
+    executor_id = owner_id or _approver_identity()
+    try:
+        result = action_proposals.claim_execution(
+            proposal_id,
+            executor_id,
+            owner=owner_id,
+            trusted=_trusted_agents(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
+
+
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/revoke-claim")
+def api_revoke_proposal_claim(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Return a claimed proposal to approved so it can run locally or be re-claimed."""
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    chat = registry.get_project_chat(project["id"]) or {}
+    owner_id = chat.get("managed_by") or ""
+    actor_id = owner_id or _approver_identity()
+    try:
+        result = action_proposals.revoke_execution_claim(
+            proposal_id,
+            actor_id,
+            owner=owner_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
 
 
 @app.post("/api/projects/{slug}/proposals/{proposal_id}/retry")

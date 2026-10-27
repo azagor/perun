@@ -442,10 +442,12 @@ class PerunTelegramBridge:
             return True
         if root == "/projects":
             try:
-                control.ensure()  # the orchestrator always appears in the list
+                control.ensure()
             except Exception:  # pragma: no cover - defensive
                 pass
-            projects = registry.list_projects()
+            # Only the allowed/owner chat sees the hidden orchestrator project.
+            include_hidden = self.authorised(chat_id)
+            projects = registry.list_projects(include_hidden=include_hidden)
             if not projects:
                 self.send(chat_id, "No projects registered yet.", reply_to=message_id)
                 return True
@@ -458,7 +460,8 @@ class PerunTelegramBridge:
             self.send(chat_id, "\n".join(lines), reply_to=message_id, reply_markup=keyboard)
             return True
         if root == "/project":
-            projects = registry.list_projects()
+            include_hidden = self.authorised(chat_id)
+            projects = registry.list_projects(include_hidden=include_hidden)
             if len(parts) < 2:
                 self.send(chat_id, "Usage: `/project <name|#>`", reply_to=message_id)
                 return True

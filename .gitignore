@@ -1,6 +1,20 @@
 # Perun runtime state — never commit (lives in ~/.perun by default)
 .perun/
 
+# Internal project content lives in the private companion repo
+# https://github.com/azagor/perun_internal and is overlayed for local
+# development. Do not commit these files to the public runtime repo.
+perun.md
+AGENTS.md
+README.md
+docs/
+.opencode/
+.github/workflows/release.yml
+
+# Sync helper for the internal companion repo
+# https://github.com/azagor/perun_internal
+tools/sync-internal.py
+
 __pycache__/
 *.py[cod]
 *.egg-info/

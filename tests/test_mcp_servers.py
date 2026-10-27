@@ -18,20 +18,18 @@ import pytest
 @pytest.fixture()
 def opencode_dir(monkeypatch, tmp_path):
     """Redirect the global OpenCode config dir into a temp folder."""
-    from perun import config
+    from perun import opencode_config
 
     cfg = tmp_path / "opencode"
     cfg.mkdir()
-    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", cfg)
+    monkeypatch.setattr(opencode_config, "_config_file", lambda: cfg / "opencode.json")
     return cfg
-
-
 def _write(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def test_snapshot_reads_global_and_project_scopes(opencode_dir, tmp_path):
-    from perun import mcp_servers
+    from perun import mcp_servers, opencode_config
 
     _write(opencode_dir / "opencode.json", {"mcp": {
         "perun": {"type": "local", "command": [sys.executable, "server.py"], "enabled": True},
@@ -58,6 +56,29 @@ def test_snapshot_reads_global_and_project_scopes(opencode_dir, tmp_path):
     assert by[("extra", "project")]["project"] == "proj"
     assert snap["count"] == 5
     assert snap["counts"]["ready"] == 3  # global perun + project perun + extra
+
+
+def test_snapshot_reads_mcp_servers_from_windows_appdata_dir(monkeypatch, tmp_path):
+    """On Windows, global MCP servers in APPDATA\\opencode are discovered too."""
+    from perun import mcp_servers, opencode_config
+
+    primary = tmp_path / "primary" / "opencode"
+    primary.mkdir(parents=True)
+    appdata = tmp_path / "appdata" / "opencode"
+    appdata.mkdir(parents=True)
+
+    _write(primary / "opencode.json", {"mcp": {"primary-server": {"type": "local", "command": [sys.executable, "-c", "print()"]}}})
+    _write(appdata / "opencode.json", {"mcp": {"tui-server": {"type": "local", "command": [sys.executable, "-c", "print()"]}}})
+
+    monkeypatch.setattr(opencode_config, "_config_file", lambda: primary / "opencode.json")
+    monkeypatch.setattr(opencode_config.os, "name", "nt")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    snap = mcp_servers.snapshot([])
+    names = {s["name"] for s in snap["servers"]}
+    assert "primary-server" in names
+    assert "tui-server" in names
 
 
 def test_snapshot_marks_missing_executable_and_parses_jsonc(opencode_dir):

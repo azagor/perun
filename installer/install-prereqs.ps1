@@ -16,6 +16,7 @@ param(
 
     [switch]$InstallPython,
     [switch]$InstallGit,
+    [switch]$InstallNodeJS,
     [switch]$InstallOpencode,
     [switch]$InstallOllama,
     [switch]$SkipMachineInstall
@@ -39,6 +40,7 @@ $state = @{
     perun_dir = $PerunDir
     python = ''
     git = ''
+    node = ''
     opencode = ''
     ollama = ''
 }
@@ -48,6 +50,7 @@ $state = @{
 $DownloadHashes = @{
     'python-3.12.10-amd64.exe' = '67B5635E80EA51072B87941312D00EC8927C4DB9BA18938F7AD2D27B328B95FB'
     'Git-2.56.0.2-64-bit.exe'  = '52188F917B378F00C70EC136BCF090005F30D44FBC4EBA0BCE759CC6592D60F6'
+    'node-v22.14.0-x64.msi'    = '2c0cc97ec64c1e4111362e1e32e0547fd870e4d9c79ec844c117da583f21b386'
     'opencode-windows-x64.zip' = 'E4CE9117F55FC068414513789F8C7D1049F855D7518BB4E350B9170A3A20D8C3'
     'OllamaSetup-v0.40.5.exe'  = 'EA0B50685D382BC0AF164ABDBF9B41BD89ABB98DE14FC51E4890A7176757A519'
 }
@@ -177,6 +180,35 @@ function Install-Git {
     Write-Log "Git installed at $git"
 }
 
+function Test-NodeJS {
+    $node = Find-OnPath 'node'
+    if (-not $node) { return '' }
+    try {
+        $ver = & $node --version 2>$null
+        if ($ver) { return $node }
+    } catch {}
+    return ''
+}
+
+function Install-NodeJS {
+    $url = 'https://nodejs.org/dist/v22.14.0/node-v22.14.0-x64.msi'
+    $installer = Join-Path $env:TEMP 'node-v22.14.0-x64.msi'
+
+    Write-Log "Downloading Node.js 22.14.0 LTS ..."
+    Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+    Assert-InstallerHash -FilePath $installer
+
+    Write-Log "Installing Node.js (all users) ..."
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', "`"$installer`"", '/quiet', '/norestart', 'ADDLOCAL=ALL') -Wait -PassThru -NoNewWindow
+    if ($proc.ExitCode -ne 0) { throw "Node.js installer exited with code $($proc.ExitCode)" }
+
+    $node = Find-OnPath 'node'
+    if (-not $node) { throw "node.exe not found after install" }
+    $npm = Find-OnPath 'npm'
+    $state.node = $node
+    Write-Log "Node.js installed at $node (npm: $npm)"
+}
+
 function Test-Opencode {
     return Find-OnPath 'opencode'
 }
@@ -279,6 +311,16 @@ if ($git) {
     Install-Git
 } else {
     Write-Log "Git not found and -InstallGit not set; skipping Git install" -Level 'WARN'
+}
+
+$node = Test-NodeJS
+if ($node) {
+    Write-Log "Node.js already available: $node"
+    $state.node = $node
+} elseif ($InstallNodeJS) {
+    Install-NodeJS
+} else {
+    Write-Log "Node.js not found and -InstallNodeJS not set; skipping Node.js install" -Level 'WARN'
 }
 
 $oc = Test-Opencode

@@ -15,7 +15,7 @@ import pytest
 
 os.environ.setdefault("PERUN_HOME", os.path.join(os.getcwd(), "tests", "tmp_perun_home"))
 
-from perun import config
+from perun import config, package_handoff
 from perun.perunchat_bridge import PerunChatBridge
 
 
@@ -1684,3 +1684,320 @@ def test_project_context_includes_manifest_dependencies(settings, tmp_path):
     assert "Project dependencies (from perun.md):" in ctx
     assert "perunchat (sibling): Federated chat gateway" in ctx
     assert "perun-in-the-machine (sibling)" in ctx
+
+
+def test_execution_transfer_status_reports_missing_chunks(settings):
+    """A `transfer_status` op returns the received and missing chunk indices."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    def capture_send(sock, f, **kwargs):
+        sent.append(f)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send):
+        with patch.object(
+            bridge,
+            "_project_binding",
+            return_value=({"id": 1, "slug": "test", "path": ""}, {}),
+        ):
+            bridge._package_transfers["trf_123"] = {
+                "proposal_id": "prop_abc",
+                "sender": "frambo",
+                "direction": "upload",
+                "sha256": "abc",
+                "total_size": 100,
+                "total_chunks": 5,
+                "received": {0: "Zg==", 2: "Zg=="},
+                "started_at": time.time(),
+            }
+            frame = {
+                "room_id": "grp:test:1:test",
+                "sender": {"agent_id": "frambo"},
+                "content_type": "application/perun-execution",
+                "payload": {"op": "transfer_status", "transfer_id": "trf_123"},
+            }
+            bridge._handle_execution_frame(frame, None)
+
+    assert len(sent) == 1
+    payload = sent[0]["payload"]
+    assert payload["op"] == "transfer_status"
+    assert payload["ok"] is True
+    assert payload["total_chunks"] == 5
+    assert payload["received_chunks"] == [0, 2]
+    assert payload["missing"] == [1, 3, 4]
+
+
+def test_upload_transfer_registers_and_receives_chunks(settings, tmp_path):
+    """A package_begin registers a transfer and chunks are reassembled."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    proposal = action_proposals.approve(proposal["id"], "owner")
+    proposal = action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    def capture_send(sock, f, **kwargs):
+        sent.append(f)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send):
+        with patch.object(bridge, "_project_binding", return_value=(project, {})):
+            frame = {
+                "room_id": room,
+                "sender": {"agent_id": "frambo"},
+                "content_type": "application/perun-execution",
+                "payload": {
+                    "op": "package_begin",
+                    "proposal_id": proposal["id"],
+                    "transfer_id": "trf_up",
+                    "sha256": package_handoff.sha256_hex(b"hello"),
+                    "total_size": 5,
+                    "total_chunks": 1,
+                },
+            }
+            bridge._handle_execution_frame(frame, None)
+            # Reply is posted, not returned.
+            assert len(sent) == 1
+            assert sent[0]["content_type"] == "application/perun-execution-result"
+            assert sent[0]["payload"]["ok"] is True
+
+            # package chunk
+            chunk_frame = {
+                "room_id": room,
+                "sender": {"agent_id": "frambo"},
+                "content_type": "application/perun-package",
+                "payload": {"transfer_id": "trf_up", "seq": 0, "total_chunks": 1, "data": "aGVsbG8="},
+            }
+            bridge._handle_package_frame(chunk_frame, None)
+
+            transfer = bridge._package_transfers.get("trf_up")
+            assert transfer is not None
+            assert transfer["received"] == {0: "aGVsbG8="}
+
+
+def test_upload_transfer_persists_to_db_and_reloads(settings, tmp_path):
+    """Transfer slots survive a bridge restart because they are persisted."""
+    from perun import action_proposals, db as db_module
+
+    project, room = _make_shared_project(tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    proposal = action_proposals.approve(proposal["id"], "owner")
+    proposal = action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+
+    with patch.object(bridge, "_project_binding", return_value=(project, {})):
+        frame = {
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {
+                "op": "package_begin",
+                "proposal_id": proposal["id"],
+                "transfer_id": "trf_persist",
+                "sha256": package_handoff.sha256_hex(b"hello"),
+                "total_size": 5,
+                "total_chunks": 1,
+            },
+        }
+        bridge._handle_execution_frame(frame, None)
+        chunk_frame = {
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-package",
+            "payload": {"transfer_id": "trf_persist", "seq": 0, "total_chunks": 1, "data": "aGVsbG8="},
+        }
+        bridge._handle_package_frame(chunk_frame, None)
+
+    # Verify DB row exists.
+    with db_module.db() as conn:
+        row = db_module.one(conn, "SELECT * FROM package_transfers WHERE transfer_id=?", ("trf_persist",))
+    assert row is not None
+    assert json.loads(row["received"]) == {"0": "aGVsbG8="}
+
+    # Simulate restart: a new bridge instance loads the slot.
+    restarted = PerunChatBridge(MagicMock(settings=settings))
+    loaded = restarted._package_transfers.get("trf_persist")
+    assert loaded is not None
+    assert loaded["received"] == {0: "aGVsbG8="}
+    assert loaded["proposal_id"] == proposal["id"]
+
+
+def test_download_transfer_publishes_package_frames(settings, tmp_path):
+    """request_download_package publishes package_ready and chunks."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    root = Path(project["path"])
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit", "room_id": room},
+    )
+    proposal = action_proposals.approve(proposal["id"], "owner")
+    proposal = action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    def capture_send(sock, f, **kwargs):
+        sent.append(f)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send):
+        with patch.object(bridge, "_project_binding", return_value=(project, {})):
+            frame = {
+                "room_id": room,
+                "sender": {"agent_id": "frambo"},
+                "content_type": "application/perun-execution",
+                "payload": {
+                    "op": "request_download_package",
+                    "proposal_id": proposal["id"],
+                },
+            }
+            bridge._handle_execution_frame(frame, None)
+
+    # package_ready + chunk + result reply
+    assert len(sent) == 3
+    assert sent[0]["content_type"] == "application/perun-execution"
+    assert sent[0]["payload"]["op"] == "package_ready"
+    assert sent[1]["content_type"] == "application/perun-package"
+    assert sent[1]["payload"]["seq"] == 0
+
+
+def test_download_transfer_rejected_without_claim(settings, tmp_path):
+    """request_download_package requires the proposal to be claimed by the sender."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    root = Path(project["path"])
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit", "room_id": room},
+    )
+    proposal = action_proposals.approve(proposal["id"], "owner")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    def capture_send(sock, f, **kwargs):
+        sent.append(f)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send):
+        with patch.object(bridge, "_project_binding", return_value=(project, {})):
+            frame = {
+                "room_id": room,
+                "sender": {"agent_id": "frambo"},
+                "content_type": "application/perun-execution",
+                "payload": {
+                    "op": "request_download_package",
+                    "proposal_id": proposal["id"],
+                },
+            }
+            bridge._handle_execution_frame(frame, None)
+
+    assert len(sent) == 1
+    assert sent[0]["content_type"] == "application/perun-execution-result"
+    assert sent[0]["payload"]["ok"] is False
+    assert "claim" in sent[0]["payload"]["error"]
+
+
+def test_package_end_rejects_size_mismatch(settings, tmp_path):
+    """package_end rejects when decoded bytes do not match the announced total_size."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit", "room_id": room},
+    )
+    proposal = action_proposals.approve(proposal["id"], "owner")
+    proposal = action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+
+    with patch.object(bridge, "_project_binding", return_value=(project, {})):
+        begin_frame = {
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {
+                "op": "package_begin",
+                "proposal_id": proposal["id"],
+                "transfer_id": "trf_size",
+                "sha256": package_handoff.sha256_hex(b"hello"),
+                "total_size": 999,
+                "total_chunks": 1,
+            },
+        }
+        bridge._handle_execution_frame(begin_frame, None)
+        chunk_frame = {
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-package",
+            "payload": {"transfer_id": "trf_size", "seq": 0, "total_chunks": 1, "data": "aGVsbG8="},
+        }
+        bridge._handle_package_frame(chunk_frame, None)
+
+    end_frame = {
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "content_type": "application/perun-execution",
+        "payload": {"op": "package_end", "transfer_id": "trf_size"},
+    }
+    bridge._handle_execution_frame(end_frame, None)
+    # Size mismatch is a retryable validation error; the slot stays claimed.
+    assert "trf_size" in bridge._package_transfers
+
+
+def test_persisted_transfer_ttl_drops_stale_slots_on_load(settings, tmp_path):
+    """A transfer slot older than the TTL is not reloaded on bridge startup."""
+    from perun import db as db_module
+
+    transfer_id = "trf_stale"
+    with db_module.db() as conn:
+        conn.execute(
+            """INSERT INTO package_transfers
+               (transfer_id, proposal_id, sender, direction, sha256, total_size,
+                total_chunks, received, started_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (transfer_id, "prop_x", "frambo", "upload", "abc", 100, 1, "{}", 1.0),
+        )
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    assert transfer_id not in bridge._package_transfers
+    with db_module.db() as conn:
+        row = db_module.one(conn, "SELECT * FROM package_transfers WHERE transfer_id=?", (transfer_id,))
+    # The sweep on startup should have deleted the stale row.
+    assert row is None
+
+

@@ -39,6 +39,48 @@ def _config_file() -> Path:
     return base / "opencode.json"
 
 
+def global_config_dirs() -> list[Path]:
+    """Return OpenCode config directories to read from, in precedence order.
+
+    Perun historically writes to ``~/.config/opencode`` (or ``XDG_CONFIG_HOME``).
+    OpenCode's desktop/TUI builds on Windows may store config under the
+    APPDATA/LOCALAPPDATA opencode directories instead. To avoid missing
+    providers, MCP servers, or other config the user added through the TUI,
+    we read from every known location and merge. The first directory is still
+    the one Perun writes to, so existing installs are not disrupted.
+    """
+    # Use the canonical config file's parent so tests that patch _config_file()
+    # do not accidentally pick up the real user config.
+    primary = _config_file().parent
+    dirs: list[Path] = [primary]
+    if os.name == "nt":
+        for env_var in ("APPDATA", "LOCALAPPDATA"):
+            val = (os.environ.get(env_var) or "").strip()
+            if val:
+                candidate = Path(val).expanduser() / "opencode"
+                if candidate.resolve() not in {d.resolve() for d in dirs}:
+                    dirs.append(candidate)
+    return dirs
+
+
+def global_config_files() -> list[Path]:
+    """Return all existing global OpenCode config files across known dirs."""
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for base in global_config_dirs():
+        for name in ("opencode.json", "opencode.jsonc"):
+            p = (base / name).resolve()
+            if p.is_file() and p not in seen:
+                files.append(p)
+                seen.add(p)
+    return files
+
+
+# Keep older private names for backwards compatibility inside this module.
+_global_config_dirs = global_config_dirs
+_global_config_files = global_config_files
+
+
 # --------------------------------------------------------------------------- #
 # JSON / JSONC helpers
 # --------------------------------------------------------------------------- #
@@ -134,24 +176,24 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- #
 # Public load/save
 # --------------------------------------------------------------------------- #
-def load_config() -> tuple[dict[str, Any], Path, bool]:
+def load_config(path: Path | None = None) -> tuple[dict[str, Any], Path, bool]:
     """Return ``(data, path, had_comments)`` for the user's OpenCode config.
 
     ``had_comments`` is ``True`` when the file contained JSONC comments or
     trailing commas that will be lost on rewrite.
     """
-    path = _config_file()
+    target = path or _config_file()
     try:
-        if not path.is_file():
-            return {}, path, False
-        raw = path.read_text(encoding="utf-8")
-        data = _read_json(path)
+        if not target.is_file():
+            return {}, target, False
+        raw = target.read_text(encoding="utf-8")
+        data = _read_json(target)
         stripped = _strip_jsonc(raw)
         # Normalise whitespace so we only flag real content differences.
         had_comments = " ".join(stripped.split()) != " ".join(raw.split())
-        return data, path, had_comments
+        return data, target, had_comments
     except Exception as exc:
-        raise RuntimeError(f"Cannot read OpenCode config {path}: {exc}") from exc
+        raise RuntimeError(f"Cannot read OpenCode config {target}: {exc}") from exc
 
 
 def save_config(data: dict[str, Any], path: Path | None = None) -> Path:
@@ -162,11 +204,11 @@ def save_config(data: dict[str, Any], path: Path | None = None) -> Path:
     return path
 
 
-def providers_section(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the provider map, honouring both legacy ``provider`` and V2 ``providers``."""
+def providers_section(data: dict[str, Any]) -> dict[str, Any] | list[Any]:
+    """Return the provider map/list, honouring both legacy ``provider`` and V2 ``providers``."""
     for key in ("providers", "provider"):
         val = data.get(key)
-        if isinstance(val, dict):
+        if isinstance(val, (dict, list)):
             return val
     return {}
 
@@ -184,24 +226,66 @@ def set_providers_section(data: dict[str, Any], providers: dict[str, Any]) -> No
 # Provider helpers
 # --------------------------------------------------------------------------- #
 def configured_providers() -> tuple[list[dict[str, Any]], bool]:
-    """Return ``(providers, had_comments)`` for the OpenCode config."""
-    data, path, had_comments = load_config()
-    section = providers_section(data)
+    """Return ``(providers, had_comments)`` for the OpenCode config.
+
+    Tolerates both the canonical dict form (``providers: {"id": {...}}``) and
+    list forms (``providers: [{"id": "...", ...}]``) that some OpenCode TUI
+    flows produce. Providers are merged from all known global config directories
+    so entries added by the OpenCode desktop/TUI (which may use a different
+    platform-specific config dir) are still visible in Perun.
+    """
+    had_comments = False
+    seen_ids: set[str] = set()
     out: list[dict[str, Any]] = []
-    for pid, entry in section.items():
+
+    def _parse_entry(entry: Any, source_path: Path, fallback_id: str = "") -> dict[str, Any] | None:
         if not isinstance(entry, dict):
-            continue
+            return None
+        pid = (
+            entry.get("id")
+            or entry.get("providerId")
+            or entry.get("provider")
+            or fallback_id
+        )
+        if not pid or not isinstance(pid, str):
+            return None
+        name = entry.get("name") or pid
         settings = entry.get("settings") or entry.get("options") or {}
         if not isinstance(settings, dict):
             settings = {}
-        out.append({
+        # API key / base URL may live either under ``settings`` or at the top
+        # level of the provider entry depending on the OpenCode version.
+        api_key = settings.get("apiKey") or entry.get("apiKey") or entry.get("api_key")
+        base_url = settings.get("baseURL") or entry.get("baseURL") or entry.get("base_url")
+        return {
             "id": pid,
-            "name": entry.get("name", pid),
+            "name": name,
             "configured": True,
-            "has_key": bool(settings.get("apiKey")),
-            "base_url": settings.get("baseURL", ""),
-            "source": str(path),
-        })
+            "has_key": bool(api_key),
+            "base_url": base_url or "",
+            "source": str(source_path),
+        }
+
+    for path in global_config_files():
+        try:
+            data, _, file_had_comments = load_config(path)
+        except Exception:
+            continue
+        if file_had_comments:
+            had_comments = True
+        section = providers_section(data)
+        if isinstance(section, dict):
+            for pid, entry in section.items():
+                parsed = _parse_entry(entry, path, fallback_id=pid)
+                if parsed is not None and parsed["id"] not in seen_ids:
+                    seen_ids.add(parsed["id"])
+                    out.append(parsed)
+        elif isinstance(section, list):
+            for entry in section:
+                parsed = _parse_entry(entry, path)
+                if parsed is not None and parsed["id"] not in seen_ids:
+                    seen_ids.add(parsed["id"])
+                    out.append(parsed)
     return out, had_comments
 
 

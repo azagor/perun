@@ -165,6 +165,14 @@ def check_prerequisites() -> list[dict[str, Any]]:
         "detail": opencode_version or "not found on PATH (needed to run agents)",
     })
 
+    node_version = which_version("node", "--version")
+    checks.append({
+        "name": "node",
+        "ok": bool(node_version),
+        "required": False,
+        "detail": node_version or "not found on PATH (Node.js is required by OpenCode CLI)",
+    })
+
     ok, detail = ollama_status()
     checks.append({
         "name": "ollama",

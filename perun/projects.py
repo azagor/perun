@@ -153,11 +153,19 @@ def sync_manifest(project: dict[str, Any], *, sync_chat: bool = True) -> dict[st
                                       snap["path"])
         registry.sync_dependencies(project["slug"], snap["data"].get("dependencies"))
         cfg = shared_projects.load(project["path"])
-        if sync_chat and cfg.get("shared"):
+        if cfg.get("shared"):
+            # Keep the project's opencode.json in sync so shared-project MCP
+            # servers (perun-guard, perun-proposals) are present whenever the
+            # manifest declares sharing.
             try:
-                shared_project_sync.sync_project_chat(project, cfg)
-            except Exception:  # pragma: no cover - best-effort chat sync
+                sync_opencode_config(project)
+            except Exception:  # pragma: no cover - best-effort config sync
                 pass
+            if sync_chat:
+                try:
+                    shared_project_sync.sync_project_chat(project, cfg)
+                except Exception:  # pragma: no cover - best-effort chat sync
+                    pass
     return snap
 
 

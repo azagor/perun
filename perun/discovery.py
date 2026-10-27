@@ -363,8 +363,14 @@ def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]
 def register_self() -> tuple[dict[str, Any], bool]:
     """Ensure the Perun repository itself is a registered project.
 
-    Perun is the natural "home" project — it should always be manageable from
-    the dashboard, even when it lives outside the configured scan roots.
+    The control plane is hidden from the dashboard project list by default so
+    users of a shared Perun installation do not see the source-code project. It
+    remains reachable through the dedicated control-plane helpers.
+
+    The project's manifest and design docs live in the internal companion repo
+    (https://github.com/azagor/perun_internal) and are excluded from the
+    runtime installer. On an external install, register_self() still creates a
+    safe synthetic control project even when perun.md/AGENTS.md/docs/ are absent.
     """
     from . import config
 
@@ -372,8 +378,11 @@ def register_self() -> tuple[dict[str, Any], bool]:
     name = "Perun"
     existing = registry.get_project_by_path(str(repo))
     if existing:
+        if not existing.get("hidden"):
+            registry.update_project(existing["slug"], hidden=1)
+            existing = registry.get_project(existing["slug"]) or existing
         return existing, False
-    return register({
+    project, created = register({
         "name": name,
         "path": str(repo),
         "root": str(repo.parent),
@@ -381,3 +390,5 @@ def register_self() -> tuple[dict[str, Any], bool]:
         "description": "Perun — overseer and orchestrator for all OpenCode projects.",
         "capabilities": capabilities(repo),
     })
+    registry.update_project(project["slug"], hidden=1)
+    return registry.get_project(project["slug"]) or project, created

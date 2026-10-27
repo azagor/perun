@@ -21,16 +21,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import (
-    config, db, fs_audit, hitl, path_guard, projects, registry, shared_agent,
-    shared_projects,
+    config, db, fs_audit, hitl, package_handoff, path_guard, projects, registry,
+    shared_agent, shared_projects,
 )
 
 logger = logging.getLogger(__name__)
 
 STATUSES = {
-    "pending", "approved", "rejected", "expired", "executing", "executed", "failed"
+    "pending", "approved", "rejected", "expired", "executing", "executed", "failed", "claimed"
 }
 DEFAULT_PENDING_TTL_SECONDS = 24 * 3600
+# External-agent execution handoff: how long a claimed proposal stays reserved.
+EXTERNAL_CLAIM_TTL_SECONDS = 3600
 # Approver identity recorded when a proposal is approved automatically by the
 # autonomous shared-project policy rather than by a human click.
 AUTO_APPROVER = "auto"
@@ -338,6 +340,260 @@ def reject(proposal_id: str, approver: str, reason: str = "") -> dict[str, Any]:
     return proposal
 
 
+def claim_execution(
+    proposal_id: str,
+    executor_id: str,
+    *,
+    owner: str | None = None,
+    trusted: list[str] | None = None,
+) -> dict[str, Any]:
+    """Reserve an approved proposal for an external rw agent to execute.
+
+    The agent will receive a ZIP of the approved targets, edit it with their own
+    model/tokens, and upload the result. Perun validates and applies the package
+    without running an LLM itself.
+    """
+    proposal = get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["status"] != "approved":
+        raise ValueError(f"proposal is {proposal['status']}")
+
+    project = registry.get_project(proposal["project_id"])
+    if not project:
+        raise ValueError("project not found")
+
+    cfg = shared_projects.load(project["path"])
+    requester_id = str(executor_id or "").strip().lower()
+    owner_id = str(owner or "").strip().lower()
+    is_owner = bool(owner_id) and requester_id == owner_id
+    if not shared_projects.can_write(cfg, requester_id) and not is_owner:
+        raise ValueError(f"participant {executor_id} has read-only access to this project")
+    if trusted is not None and not is_owner:
+        allowed = {str(a).strip().lower() for a in trusted if str(a).strip()}
+        if requester_id not in allowed:
+            raise ValueError(f"participant {executor_id} is not on the PerunChat trust list")
+
+    # Snapshot before the external agent touches anything; this is the audit baseline.
+    snapshot = fs_audit.snapshot(project, targets=proposal["targets"])
+    ts = _now()
+    claim_expires_at = int(time.time()) + EXTERNAL_CLAIM_TTL_SECONDS
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE action_proposals SET status=?, executor_id=?, execution_mode=?,
+               claimed_at=?, claim_expires_at=?, claim_snapshot=?, updated_at=?
+               WHERE id=? AND status='approved'""",
+            (
+                "claimed",
+                requester_id,
+                "external",
+                ts,
+                claim_expires_at,
+                _to_json(snapshot),
+                ts,
+                proposal_id,
+            ),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("proposal is no longer approved")
+
+    proposal = get(proposal_id)
+    if proposal:
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_claimed",
+            f"Proposal {proposal_id} claimed for external execution by {executor_id}",
+            {
+                "proposal_id": proposal_id,
+                "executor_id": executor_id,
+                "execution_mode": "external",
+            },
+        )
+    return proposal
+
+
+def complete_external_execution(
+    proposal_id: str,
+    executor_id: str,
+    archive_bytes: bytes,
+    *,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    """Validate and apply an externally-built package for a claimed proposal.
+
+    On validation failure the proposal stays ``claimed`` so the agent can retry.
+    On audit/policy failure the proposal is marked ``failed``. On success it is
+    marked ``executed``.
+    """
+    proposal = get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["status"] != "claimed":
+        raise ValueError(f"proposal is {proposal['status']}")
+    if str(proposal.get("executor_id") or "").lower() != str(executor_id or "").lower():
+        raise ValueError("proposal is claimed by another executor")
+
+    project = registry.get_project(proposal["project_id"])
+    if not project:
+        raise ValueError("project not found")
+
+    cfg = shared_projects.load(project["path"])
+    requester_id = str(executor_id or "").strip().lower()
+    owner_id = str(owner or "").strip().lower()
+    is_owner = bool(owner_id) and requester_id == owner_id
+    if not shared_projects.can_write(cfg, requester_id) and not is_owner:
+        raise ValueError(f"participant {executor_id} has read-only access to this project")
+
+    # Decode and validate the ZIP without touching the filesystem yet.
+    try:
+        files = package_handoff.unpack(archive_bytes)
+    except package_handoff.PackageError as exc:
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_handoff_rejected",
+            f"Proposal {proposal_id} handoff rejected: {exc}",
+            {"proposal_id": proposal_id, "executor_id": executor_id, "reason": str(exc)},
+        )
+        return {"ok": False, "reason": str(exc)}
+
+    errors = package_handoff.validate_package(project, proposal, files)
+    if errors:
+        reason = "; ".join(errors)
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_handoff_rejected",
+            f"Proposal {proposal_id} handoff rejected: {reason}",
+            {"proposal_id": proposal_id, "executor_id": executor_id, "reason": reason},
+        )
+        return {"ok": False, "reason": reason}
+
+    # Apply atomically (per-file temp + rename). Validation already passed.
+    package_handoff.apply_package(project, files)
+
+    # Audit against the claim-time snapshot. The snapshot is stored as JSON in
+    # the DB but parsed to a dict by `_row_to_dict`; accept either form.
+    raw_snapshot = proposal.get("claim_snapshot") or {}
+    before_snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else _from_json(raw_snapshot, {})
+    audit_result: dict[str, Any] = {}
+    status = "executed"
+    output = "External execution completed"
+    try:
+        audit_result = fs_audit.diff(project, before_snapshot)
+        fs_audit.log_result(project["id"], proposal_id, audit_result)
+        violations = list(audit_result.get("violations") or [])
+        escaped = list(audit_result.get("escaped") or [])
+        if violations or escaped:
+            status = "failed"
+            shown = ", ".join(str(v) for v in (violations + escaped)[:10])
+            counts = f"{len(violations)} allowlist violation(s)"
+            if escaped:
+                counts += f", {len(escaped)} escape(s) outside the project root"
+            output = f"[POLICY VIOLATION: {counts}: {shown}]"
+    except Exception as exc:
+        status = "failed"
+        output = f"[POLICY AUDIT FAILED: {exc}]"
+        logger.warning("Filesystem audit failed for proposal %s: %s", proposal_id, exc)
+
+    # Require real changes under at least one approved target (same rule as
+    # _run_execution). A no-op handoff must not claim success.
+    if status == "executed":
+        target_paths = [
+            path_guard.resolve_target(project["path"], t)
+            for t in (proposal.get("targets") or [])
+        ]
+        changed_paths = [
+            Path(p)
+            for p in (
+                list(audit_result.get("created") or [])
+                + list(audit_result.get("modified") or [])
+                + list(audit_result.get("deleted") or [])
+            )
+        ]
+        if target_paths and not any(
+            _path_under(path, target)
+            for path in changed_paths
+            for target in target_paths
+        ):
+            status = "failed"
+            shown = ", ".join(str(t) for t in target_paths[:10])
+            output = (
+                output
+                + "\n\n[NO TARGET CHANGES: the handoff reported success but none of "
+                f"the approved targets were created, modified or deleted: {shown}]"
+            ).strip()
+
+    _set_status(proposal_id, status, output[:4000])
+    proposal = get(proposal_id)
+    if proposal:
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_executed",
+            f"Proposal {proposal_id} executed with status {proposal['status']}",
+            {
+                "proposal_id": proposal_id,
+                "status": proposal["status"],
+                "result": proposal.get("result", "")[:200],
+                "execution_mode": "external",
+                "executor_id": executor_id,
+            },
+        )
+    return proposal
+
+
+def revoke_execution_claim(
+    proposal_id: str,
+    actor: str,
+    *,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    """Return a claimed proposal to ``approved``.
+
+    Only the current claim holder or the room owner may revoke a claim.
+    """
+    proposal = get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["status"] != "claimed":
+        raise ValueError(f"proposal is {proposal['status']}")
+
+    actor_id = str(actor or "").strip().lower()
+    owner_id = str(owner or "").strip().lower()
+    executor_id = str(proposal.get("executor_id") or "").lower()
+    is_owner = bool(owner_id) and actor_id == owner_id
+    if actor_id != executor_id and not is_owner:
+        raise ValueError("only the claim holder or the room owner can revoke a claim")
+
+    ts = _now()
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE action_proposals SET status=?, executor_id=?, execution_mode=?,
+               claimed_at=?, claim_expires_at=?, claim_snapshot=?, updated_at=?
+               WHERE id=? AND status='claimed'""",
+            (
+                "approved",
+                "",
+                "perun",
+                "",
+                0,
+                "{}",
+                ts,
+                proposal_id,
+            ),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("proposal is no longer claimed")
+
+    proposal = get(proposal_id)
+    if proposal:
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_claim_revoked",
+            f"Claim on proposal {proposal_id} revoked by {actor}",
+            {"proposal_id": proposal_id, "actor": actor},
+        )
+    return proposal
+
+
 def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str]:
     """Mark pending proposals whose *expires_at* has passed as expired.
 
@@ -377,7 +633,42 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
             f"Proposal {proposal_id} expired after {max_age_seconds} seconds",
             {"proposal_id": proposal_id},
         )
-    return expired_ids
+    # Return externally-claimed proposals to "approved" when their claim TTL
+    # has passed. This is independent of the pending TTL.
+    reclaimed_ids: list[str] = []
+    try:
+        with db.db() as conn:
+            rows = db.rows(
+                conn,
+                "SELECT id, project_id FROM action_proposals "
+                "WHERE status='claimed' AND claim_expires_at>0 AND claim_expires_at<?",
+                (now,),
+            )
+            reclaimed_ids = [r["id"] for r in rows]
+            if reclaimed_ids:
+                placeholders = ",".join("?" * len(reclaimed_ids))
+                conn.execute(
+                    f"UPDATE action_proposals SET status='approved', executor_id='', "
+                    f"execution_mode='perun', claimed_at='', claim_expires_at=0, "
+                    f"claim_snapshot='', updated_at=? WHERE id IN ({placeholders}) AND status='claimed'",
+                    (_now(), *reclaimed_ids),
+                )
+    except Exception as exc:
+        if "no such column" not in str(exc).lower():
+            raise
+        logger.warning(
+            "Skipping claim expiry sweep: action_proposals claim columns are missing. "
+            "Restart the Perun service so db.init_db() can migrate the schema."
+        )
+        return expired_ids
+    for proposal_id in reclaimed_ids:
+        registry.log_activity(
+            None,
+            "proposal_claim_expired",
+            f"Claim on proposal {proposal_id} expired; returned to approved",
+            {"proposal_id": proposal_id},
+        )
+    return expired_ids + reclaimed_ids
 
 
 def _prepare_execution(proposal_id: str) -> dict[str, Any]:
@@ -390,6 +681,8 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
     proposal = get(proposal_id)
     if not proposal:
         raise ValueError("proposal not found")
+    if proposal["status"] == "claimed":
+        raise ValueError("proposal is claimed for external execution")
     if proposal["status"] != "approved":
         raise ValueError(f"proposal is {proposal['status']}")
 
@@ -758,6 +1051,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     d = dict(row)
     d["targets"] = _from_json(d.get("targets") or "[]", [])
     d["details"] = _from_json(d.get("details") or "{}", {})
+    d["claim_snapshot"] = _from_json(d.get("claim_snapshot") or "{}", {})
     return d
 
 
@@ -849,8 +1143,8 @@ def delete(proposal_id: str, deleted_by: str | None = None) -> bool:
     proposal = get(proposal_id)
     if not proposal:
         return False
-    if proposal["status"] == "executing":
-        raise ValueError("cannot delete a proposal while it is executing")
+    if proposal["status"] in ("executing", "claimed"):
+        raise ValueError("cannot delete a proposal while it is executing or claimed")
     with db.db() as conn:
         conn.execute("DELETE FROM action_proposals WHERE id=?", (proposal_id,))
     registry.log_activity(

@@ -95,6 +95,22 @@ def test_health_exposes_control_slug(control_repo):  # noqa: ARG001
         assert "control" in body and body["control"]
 
 
+def test_control_project_is_hidden_from_project_list(control_repo):  # noqa: ARG001
+    """The Perun source-code project is not advertised in the dashboard list."""
+    from fastapi.testclient import TestClient
+
+    from perun import server
+
+    control.ensure()
+    server.SETTINGS.auto_discover_on_start = False
+    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+        default = client.get("/api/projects").json()
+        assert "perun" not in {p["slug"] for p in default["projects"]}
+
+        included = client.get("/api/projects?include_hidden=true").json()
+        assert "perun" in {p["slug"] for p in included["projects"]}
+
+
 def test_models_endpoint_is_structured(control_repo):  # noqa: ARG001
     from fastapi.testclient import TestClient
 

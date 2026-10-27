@@ -2,7 +2,97 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## v0.8.14
+## v0.8.17
+
+### Added
+
+- **External execution handoff for shared projects.** RW participants (or the room
+  owner) can claim an approved proposal and upload a ZIP of file changes over
+  PerunChat using their own model/tokens; Perun validates and applies the package
+  locally without burning its own LLM tokens. Uses `application/perun-execution`
+  control frames and `application/perun-package` base64 ZIP chunks over the
+  existing WebSocket. Added `claim_execution`, `complete_external_execution`,
+  `revoke_execution_claim`, claim expiry sweep, and guards on local
+  execution/deletion of claimed proposals.
+- **Safe ZIP work-package module.** New `perun/package_handoff.py` packs,
+  unpacks, validates, and applies ZIP archives with guards against traversal,
+  symlinks, encrypted entries, zip-bombs, size caps, and writes outside the
+  approved targets.
+- **Persisted transfer reassembly.** Upload transfer slots are persisted to
+  SQLite (`package_transfers` table) and reloaded on bridge restart so interrupted
+  chunked uploads can resume within the 30-minute TTL. Added `transfer_status`
+  control op so external agents can query received/missing chunks.
+- **Dashboard external-execution UI.** Proposal cards now show `claimed` status,
+  claim expiry countdown, a revoke button, clickable target chips, and polling.
+  Added `POST /api/projects/{slug}/proposals/{id}/claim` and
+  `.../revoke-claim` endpoints.
+- **Documentation and instructions.** New `perun/instructions/perun-external-execution.md`
+  protocol reference; updated `perun/instructions/perunchat_chat.md`, the
+  `[shared-project-context]` block, and approval notices to reference the handoff.
+
+### Changed
+
+- **Schema version 6.** Added `executor_id`, `execution_mode`, `claimed_at`,
+  `claim_expires_at`, `claim_snapshot`, and `executed_by` columns to
+  `action_proposals`, plus the new `package_transfers` table.
+- **Shared-agent install now mirrors within the same config base.**
+  `ensure_shared_agent()` writes the restricted agent to both `agents/` and
+  `agent/` under the canonical OpenCode config directory and returns the
+  canonical path, fixing test drift from multi-base auto-install.
+
+### Fixed
+
+- **OpenCode TUI providers now appear on the Perun providers page.**
+  `perun.providers` now tolerates list-form `providers` sections in
+  `opencode.json[c]`, normalises key capitalisation from `opencode auth list`,
+  and falls back to deriving connected providers from `opencode models` when
+  neither auth nor configured providers are present.
+- **`perunchat.md` agent loads cleanly.** Removed the invalid `tools.available`
+  list from the generated PerunChat agent front matter so OpenCode parses and
+  installs the agent successfully.
+- **Control plane hidden from the dashboard project list.** The self-registered
+  `Perun` source-code project is now marked `hidden` on registration and excluded
+  from `GET /api/projects` by default (opt-in via `?include_hidden=true`).
+- **Dashboard project list hides the orchestrator; Telegram still shows it to
+  the owner.** The self-registered Perun control project is excluded from
+  `GET /api/projects` (and therefore the web dashboard project list), but it
+  remains visible and selectable in the Telegram `/projects` list and keyboard
+  for the paired owner chat. It is also still reachable via `/orchestrator`
+  and as the default no-project target.
+- **Windows installer covers all runtime requirements.** Added Node.js 22.14.0
+  LTS as a first-class prerequisite component in `installer/PerunSetup.iss`
+  and `installer/install-prereqs.ps1`; the machine-install health check in
+  `perun/installer.py` now reports Node.js presence too.
+- **Shared-project MCP servers stay in sync.** `sync_manifest()` and the
+  manual `POST /api/projects/{slug}/shared/sync` endpoint now call
+  `sync_opencode_config()` so `perun-guard` and `perun-proposals` are added
+  to (or removed from) the project's `opencode.json` whenever the manifest or
+  room ACL is reconciled, not only when shared settings are explicitly updated.
+- **Provider and MCP discovery is more robust across OpenCode installs.**
+  Global OpenCode config discovery now reads from all known locations
+  (``~/.config/opencode`` plus ``APPDATA``/``LOCALAPPDATA`` opencode dirs on
+  Windows), so providers and MCP servers added through the OpenCode
+  desktop/TUI are visible in Perun even when they use a platform-specific
+  config directory. ``opencode auth list`` output is also accepted in both
+  top-level-list and ``{"providers": [...]}`` wrapped forms.
+
+### Security
+
+- **Installer ships source code, not owner documentation.** `perun.md`,
+  `AGENTS.md`, `README.md`, `docs/`, and `.perun/` are now excluded from the
+  Windows (`installer/PerunSetup.iss`) and macOS (`installer/macos/build.sh`)
+  installers so external users receive a working Perun service without the
+  project manifest, deployment details, or local context docs. Those internal
+  project files belong to the private companion repo
+  **<https://github.com/azagor/perun_internal>**. The external-execution
+  protocol reference lives in the shipped
+  `perun/instructions/perun-external-execution.md` so it remains available to
+  users. The control project still self-registers safely when `perun.md` is
+  absent.
+
+## v0.8.16
+
+### Added
 
 ### Changed
 

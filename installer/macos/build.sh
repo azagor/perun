@@ -22,6 +22,11 @@ mkdir -p "$OUTPUT_DIR"
 rsync -a \
     --exclude='.git' \
     --exclude='.gitignore' \
+    --exclude='perun.md' \
+    --exclude='AGENTS.md' \
+    --exclude='README.md' \
+    --exclude='docs/' \
+    --exclude='.perun/' \
     --exclude='*.pyc' \
     --exclude='__pycache__' \
     --exclude='.pytest_cache' \

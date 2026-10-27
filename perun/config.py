@@ -184,6 +184,13 @@ class Settings:
     # platforms it can be a shell binary. A blank value lets Perun use the OS
     # default (cmd.exe / powershell on Windows, the user's $SHELL elsewhere).
     terminal: str = ""
+    # External execution handoff: a rw participant may claim an approved
+    # proposal and upload a ZIP package of file changes over PerunChat.
+    external_execution_claim_ttl: int = 3600
+    external_execution_max_package_bytes: int = 50 * 1024 * 1024
+    external_execution_max_entry_bytes: int = 10 * 1024 * 1024
+    external_execution_max_entries: int = 500
+    external_execution_chunk_bytes: int = 360 * 1024
 
     @classmethod
     def load(cls) -> "Settings":

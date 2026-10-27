@@ -1958,7 +1958,7 @@ function scheduleSharedPoll(slug) {
         if (location.hash !== `#/project/${slug}/shared`) return;
         try {
             const res = await api(`/api/projects/${slug}/proposals`);
-            if ((res.proposals || []).some((prop) => prop.status === 'executing')) {
+            if ((res.proposals || []).some((prop) => prop.status === 'executing' || prop.status === 'claimed')) {
                 viewProject(slug, 'shared');
             }
         } catch (e) {
@@ -1984,19 +1984,25 @@ async function proposalsCard(detail) {
         return card;
     }
 
-    const activeStatuses = new Set(['pending', 'approved', 'executing']);
+    const activeStatuses = new Set(['pending', 'approved', 'executing', 'claimed']);
     const completedStatuses = new Set(['executed', 'failed', 'rejected', 'expired']);
     let active = proposals.filter((prop) => activeStatuses.has(prop.status));
     let completed = proposals.filter((prop) => completedStatuses.has(prop.status));
 
-    // Active: pending first, then approved, then executing.
-    const statusOrder = { pending: 0, approved: 1, executing: 2 };
+    // Active: pending first, then approved, then claimed, then executing.
+    const statusOrder = { pending: 0, approved: 1, claimed: 2, executing: 3 };
     active.sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
     // Completed: newest first.
     completed.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
     const renderRow = (prop) => {
-        const targets = (prop.targets || []).join(', ');
+        const targetList = prop.targets || [];
+        const targetChips = targetList.length
+            ? targetList.map((t) => {
+                const target = String(t).trim();
+                return `<button class="chip chip-link proposal-target" data-target="${esc(target)}" type="button" title="Open ${esc(target)}">${esc(target)}</button>`;
+              }).join('')
+            : '<span class="muted">(no targets)</span>';
         const actions = [];
         if (prop.status === 'pending') {
             actions.push(`<button class="btn sm primary" data-approve-run="${esc(prop.id)}">Approve &amp; run</button>`);
@@ -2006,15 +2012,22 @@ async function proposalsCard(detail) {
         } else if (prop.status === 'approved') {
             actions.push(`<button class="btn sm primary" data-execute="${esc(prop.id)}">Run now</button>`);
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
+        } else if (prop.status === 'claimed') {
+            actions.push(`<button class="btn sm ghost" data-revoke-claim="${esc(prop.id)}">Revoke claim</button>`);
         } else if (prop.status === 'executing') {
             actions.push(`<button class="btn sm ghost" data-cancel="${esc(prop.id)}">Cancel</button>`);
         } else if (completedStatuses.has(prop.status)) {
             actions.push(`<button class="btn sm primary" data-retry="${esc(prop.id)}">Retry</button>`);
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         }
-        let meta = `${esc(prop.requester)} · ${esc(targets)} · ${esc(timeAgo(prop.created_at))}`;
+        let meta = `${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
         if (prop.status === 'executing') {
             meta += ' · headless run in progress…';
+        }
+        if (prop.status === 'claimed') {
+            const executor = prop.executor_id || 'unknown';
+            const expires = prop.claim_expires_at ? new Date(prop.claim_expires_at * 1000).toLocaleString() : '';
+            meta += ` · claimed by ${esc(executor)}${expires ? ' · expires ' + esc(expires) : ''}`;
         }
         if (prop.status === 'approved' || prop.status === 'rejected') {
             const who = prop.approved_by || 'owner';
@@ -2043,6 +2056,12 @@ async function proposalsCard(detail) {
              <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
              <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}</span>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
+        row.querySelectorAll('.proposal-target').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openManifestPath(p.path, btn.dataset.target);
+            });
+        });
         row.querySelector('[data-approve-run]')?.addEventListener('click', async () => {
             try {
                 await api(`/api/projects/${p.slug}/proposals/${prop.id}/approve-and-execute`, { method: 'POST' });
@@ -2063,6 +2082,13 @@ async function proposalsCard(detail) {
             try {
                 await api(`/api/projects/${p.slug}/proposals/${prop.id}/execute`, { method: 'POST' });
                 toast('Headless run started', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-revoke-claim]')?.addEventListener('click', async () => {
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}/revoke-claim`, { method: 'POST' });
+                toast('Claim revoked', 'ok');
                 viewProject(p.slug, 'shared');
             } catch (e) { toast(e.message, 'err'); }
         });
@@ -2111,7 +2137,7 @@ async function proposalsCard(detail) {
         card.appendChild(completedWrap);
     }
 
-    if (proposals.some((prop) => prop.status === 'executing')) scheduleSharedPoll(p.slug);
+    if (proposals.some((prop) => prop.status === 'executing' || prop.status === 'claimed')) scheduleSharedPoll(p.slug);
     return card;
 }
 
