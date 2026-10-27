@@ -807,21 +807,28 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). 25 tools: `perun_list_projects`,
+stdio MCP server (`perun`). 28 tools: `perun_list_projects`,
 `perun_project_info`, `perun_create_project`, `perun_update_project`,
 `perun_delete_project`, `perun_discover`, `perun_memory_search`,
-`perun_memory_store`, `perun_docs_index`, `perun_get_instructions`,
-`perun_set_instructions`, `perun_list_instruction_files`, `perun_grep`,
-`perun_ast_grep`, `perun_global_grep`, `perun_global_ast_grep`,
-`perun_unified_search`, `perun_get_manifest`, `perun_set_manifest`,
-`perun_start_session`, `perun_ask`, `perun_run_status`, `perun_telegram_send`,
+`perun_memory_store`, `perunchat_room_memory`, `perun_docs_index`,
+`perun_get_instructions`, `perun_set_instructions`,
+`perun_list_instruction_files`, `perun_grep`, `perun_ast_grep`,
+`perun_global_grep`, `perun_global_ast_grep`, `perun_unified_search`,
+`perun_file_exists`, `perun_list_directory`, `perun_read_file`,
+`perun_get_manifest`, `perun_set_manifest`, `perun_start_session`,
+`perun_ask`, `perun_run_status`, `perun_telegram_send`,
 `perun_context` (**retrieve context docs — a key, or the context for a task**),
 `perun_secret` (**read/write a named secret in the encrypted store**).
 * `_resolve_project()`, `_project_line()`, `_validate_projects_list()`,
   `_normalize_project_instruction_filename()`, `_project_instruction_file_path()`,
-  `_safe_int()`, `_mcp_orchestrator()`, `main()`; calls `control.ensure()` at
-  import time so the orchestrator always exists, and `handbook.ensure_indexed()`
-  so the reference material is retrievable from the first call.
+  `_safe_int()`, `_mcp_orchestrator()`, `main()`.
+* Filesystem helpers: `_allowed_filesystem_roots()`,
+  `_is_path_within_allowed_roots()`, `_validate_readable_path()`,
+  `_validate_directory_path()` — scope read access to registered project paths,
+  the Perun home/config trees, and the Perun runtime source tree.
+* Calls `control.ensure()` at import time so the orchestrator always exists, and
+  `handbook.ensure_indexed()` so the reference material is retrievable from the
+  first call.
 
 ---
 

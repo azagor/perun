@@ -245,7 +245,7 @@ for details.
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{run_uid}/stream`, `/api/stream` | Server-Sent Events |
 | **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
-| **MCP server** | stdio, tool namespace `perun` | 25 tools, installed globally |
+| **MCP server** | stdio, tool namespace `perun` | 28 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL approval for actions |
 | **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), `perun-guard` MCP + post-run audit, configurable approver/HITL secret |

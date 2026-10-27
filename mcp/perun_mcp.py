@@ -27,6 +27,9 @@ Tools
 ``perun_global_grep``    Fast regex content search across *all* registered projects.
 ``perun_global_ast_grep`` Structural code search across *all* registered projects.
 ``perun_unified_search``  Unified cross-project search: vector memory + grep + ast-grep.
+``perun_file_exists``    Check whether one or more paths exist.
+``perun_list_directory`` List entries in a directory.
+``perun_read_file``      Read a text file with line numbers.
 ``perun_get_manifest``   Read a project's perun.md manifest (data + body).
 ``perun_set_manifest``   Write a project's perun.md manifest.
 ``perun_start_session``  Start an agent run in a project (returns run id).
@@ -191,6 +194,84 @@ def _validate_projects_list(projects) -> tuple[list | None, str]:
     if not isinstance(projects, list):
         return None, "[perun] projects must be a list of slugs or omitted"
     return projects, ""
+
+
+# --------------------------------------------------------------------------- #
+# Filesystem helpers (safe scoped access for the confined execute runtime)
+# --------------------------------------------------------------------------- #
+_MAX_READ_LINES = 2000          # hard upper bound for perun_read_file
+_MAX_READ_BYTES = 2 * 1024 * 1024  # 2 MiB per read
+
+
+def _allowed_filesystem_roots() -> list[Path]:
+    """Return the roots agents may read through the MCP filesystem tools.
+
+    Includes every registered project path, the Perun home/config trees, and
+    the Perun runtime source tree so docs and context files are reachable.
+    """
+    roots: list[Path] = [
+        config.HOME.resolve(),
+        config.REPO_ROOT.resolve(),
+        config.OPENCODE_CONFIG_DIR.resolve(),
+        config.INSTRUCTIONS_DIR.resolve(),
+    ]
+    try:
+        for p in registry.list_projects():
+            path = p.get("path")
+            if path:
+                roots.append(Path(path).resolve())
+    except Exception:
+        pass
+    return roots
+
+
+def _is_path_within_allowed_roots(path: Path) -> bool:
+    """True if ``path`` resolves inside at least one allowed root."""
+    try:
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return False
+    for root in _allowed_filesystem_roots():
+        try:
+            if resolved == root or resolved.is_relative_to(root):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _validate_readable_path(path_str: str) -> tuple[Path | None, str]:
+    """Validate a user-supplied path for read access.
+
+    Rejects empty strings, traversal outside allowed roots, and paths that do
+    not exist. Returns ``(path, "")`` on success.
+    """
+    path_str = (path_str or "").strip()
+    if not path_str:
+        return None, "[perun] path is required"
+    path = Path(path_str)
+    # Reject obvious traversal before resolving.
+    try:
+        # Resolve with strict=False so non-existent final components can be
+        # reported cleanly; parent resolution still catches "../etc/passwd".
+        resolved = path.resolve(strict=False)
+    except (OSError, ValueError) as exc:
+        return None, f"[perun] invalid path: {exc}"
+    if not _is_path_within_allowed_roots(resolved):
+        return None, "[perun] path is outside the allowed read scope"
+    if not resolved.exists():
+        return None, f"[perun] path does not exist: {path_str}"
+    return resolved, ""
+
+
+def _validate_directory_path(path_str: str) -> tuple[Path | None, str]:
+    """Validate a user-supplied directory path for listing."""
+    path, error = _validate_readable_path(path_str)
+    if error:
+        return None, error
+    if not path.is_dir():
+        return None, f"[perun] not a directory: {path_str}"
+    return path, ""
 
 
 # --------------------------------------------------------------------------- #
@@ -935,6 +1016,85 @@ def perun_unified_search(
         for m in result["code"]:
             lines.append(f"  {m['project']}/{m['file']}:{m['line']}:{m['column']}  {m['text']}")
     return "\n".join(lines)
+
+
+@mcp.tool
+def perun_file_exists(paths: list[str]) -> str:
+    """Check whether one or more paths exist within the allowed read scope.
+
+    Args:
+        paths: List of absolute or project-relative paths.
+    """
+    if not isinstance(paths, list) or not paths:
+        return "[perun] paths must be a non-empty list"
+    results = []
+    for raw in paths:
+        path, error = _validate_readable_path(raw)
+        if error:
+            results.append(f"{raw}: {error}")
+        else:
+            kind = "dir" if path.is_dir() else "file" if path.is_file() else "other"
+            results.append(f"{raw}: exists ({kind})")
+    return "[perun] File existence:\n" + "\n".join(results)
+
+
+@mcp.tool
+def perun_list_directory(path: str) -> str:
+    """List entries in a directory within the allowed read scope.
+
+    Args:
+        path: Absolute directory path.
+    """
+    directory, error = _validate_directory_path(path)
+    if error:
+        return error
+    try:
+        entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except OSError as exc:
+        return f"[perun] could not list directory: {exc}"
+    lines = [f"[perun] {len(entries)} entries in {path}:", ""]
+    for entry in entries:
+        marker = "d" if entry.is_dir() else "f" if entry.is_file() else "?"
+        lines.append(f"  [{marker}] {entry.name}")
+    return "\n".join(lines)
+
+
+@mcp.tool
+def perun_read_file(path: str, offset: int = 1, limit: int = 200) -> str:
+    """Read a text file with line numbers.
+
+    Args:
+        path: Absolute path to a text file within the allowed read scope.
+        offset: 1-based starting line (default 1).
+        limit: Maximum lines to return (default 200, max 2000).
+    """
+    file_path, error = _validate_readable_path(path)
+    if error:
+        return error
+    if not file_path.is_file():
+        return f"[perun] not a file: {path}"
+    offset, error = _safe_int(offset, "offset", min_val=1)
+    if error:
+        return error
+    limit, error = _safe_int(limit, "limit", min_val=1, max_val=_MAX_READ_LINES)
+    if error:
+        return error
+    try:
+        size = file_path.stat().st_size
+        if size > _MAX_READ_BYTES:
+            return f"[perun] file too large ({size} bytes; max {_MAX_READ_BYTES})"
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"[perun] could not read file: {exc}"
+    lines = text.splitlines()
+    total = len(lines)
+    start = offset - 1
+    end = min(start + limit, total)
+    if start >= total:
+        return f"[perun] file has {total} lines; offset {offset} is out of range"
+    numbered = [f"{i + 1}: {lines[i]}" for i in range(start, end)]
+    header = f"[perun] {path} (lines {offset}-{end} of {total})"
+    return header + "\n" + "\n".join(numbered)
 
 
 @mcp.tool

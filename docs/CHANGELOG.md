@@ -2,7 +2,30 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## Unreleased
+## v0.8.23
+
+### Added
+
+- **Confined filesystem MCP tools.** `mcp/perun_mcp.py` now exposes
+  `perun_file_exists`, `perun_list_directory`, and `perun_read_file`. Read
+  access is scoped to registered project paths, the Perun home/config trees,
+  and the Perun runtime source tree; paths outside those roots are rejected.
+  These tools let agents running in confined JavaScript environments (e.g. the
+  OpenCode `execute` runtime, which has no `require`/`fs` access) inspect files
+  without leaving the Perun MCP tool surface.
+
+### Changed
+
+- Updated `docs/CODEMAP.md` and `docs/TECHNICAL_DOCUMENTATION.md` to list all
+  current MCP tools, including `perunchat_room_memory` and the new filesystem
+  helpers.
+- Hardened the global instruction kernel
+  (`perun/integrations/templates/INSTRUCTIONS.md`) to require Perun's bundled
+  MCP search tools (`perun_unified_search`, `perun_grep`, `perun_ast_grep`,
+  global variants, `perun_memory_search`) over raw `grep`, and to point agents
+  at the new filesystem MCP tools when direct filesystem access is unavailable.
+
+## v0.8.22
 
 ### Fixed
 

@@ -19,5 +19,10 @@ Always true, never retrieved away:
 - Resolve cross-project paths with `perun.project_roots.resolve(name, …)` —
   never hand-craft a relative path.
 - Never commit secrets; never paste credentials into a file or a prompt.
-- Prefer `perun_unified_search` over ad-hoc grep for discovery.
+- **Use Perun's bundled MCP tools for discovery, search, and file inspection.**
+  Prefer `perun_unified_search`, `perun_grep`, `perun_ast_grep`,
+  `perun_global_grep`, `perun_global_ast_grep`, and `perun_memory_search` over
+  raw filesystem `grep` or the OpenCode built-in `grep` tool. For confined
+  environments without direct filesystem access, use `perun_file_exists`,
+  `perun_list_directory`, and `perun_read_file`.
 - Read the project's `perun.md` manifest before acting on its structure.

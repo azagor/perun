@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.22 (see §15). PerunChat room memory redesign: private, group, and shared-project rooms now store searchable room memory via a new `memory.room_id` column (schema v7), the `perunchat_room_memory` MCP tool lets agents recall history on demand, and public rooms remain ephemeral with no long-term transcript storage. Also fixed orchestrator chat on Windows for Ollama Cloud/local-style providers by forcing prompt-file mode for `cmd /c` invocations, reduced the PerunChat prompt cap from 100K to 12K characters, and stopped injecting the Perun control project's own `.perun/instructions/*.md` into control-plane prompts. Previous v0.8.21 release clarified shared-project execution instructions, added the v0.8.20 dashboard shutdown button, and bumped schema to v6 with external execution handoff support.
+**Latest release:** v0.8.23 (see §15). Added confined filesystem MCP tools (`perun_file_exists`, `perun_list_directory`, `perun_read_file`) so agents in restricted JavaScript runtimes can inspect files through the Perun MCP surface, and hardened the global instruction kernel to require Perun's bundled MCP search tools over raw `grep`. Previous v0.8.22 release brought the PerunChat room memory redesign (schema v7), the `perunchat_room_memory` MCP tool, and the Windows orchestrator chat fix.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1376,14 +1376,15 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
 `db.init_db()`s, calls `control.ensure()` at import, calls
 `handbook.ensure_indexed()` at import (so the reference material is retrievable
-from the first call), and exposes **twenty-five** tools:
+from the first call), and exposes **twenty-eight** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
   into the project's `opencode.json[c]` and reports the result), `perun_delete_project`
   (requires `confirm=True`; refuses the control plane), `perun_discover`.
 * **Memory & docs:** `perun_memory_search`, `perun_memory_store`,
-  `perun_docs_index`.
+  `perunchat_room_memory` (search PerunChat room transcripts and durable room
+  facts), `perun_docs_index`.
 * **Context & secrets:** `perun_context` (retrieve the Context layer — by
   exact key, by anchor label, or by describing the task; the key inventory is
   always visible), `perun_secret` (read/write a named value in the encrypted
@@ -1399,6 +1400,12 @@ from the first call), and exposes **twenty-five** tools:
   configuration. `perun_unified_search` is the preferred bundled search tool,
   fusing memory, ripgrep, and ast-grep behind a single MCP call; code results from
   ripgrep and ast-grep are combined with Reciprocal Rank Fusion (see §8).
+* **Filesystem (confined):** `perun_file_exists`, `perun_list_directory`,
+  `perun_read_file`. Read access is scoped to registered project paths, the
+  Perun home/config trees, and the Perun runtime source tree; paths outside
+  those roots are rejected. These tools let agents running in confined
+  environments (e.g. the OpenCode `execute` runtime, which has no `require`/
+  `fs` access) inspect files without leaving the Perun tool surface.
 
 `_resolve_project()` accepts a slug, a path, or `None` — for `None` it walks up
 from the current working directory to the nearest registered project. Project
@@ -1557,6 +1564,22 @@ setting.
 ---
 
 ## 15. Revision history
+
+### 2026-10-27 — v0.8.23: filesystem MCP tools + global search-tool enforcement
+
+* **Confined filesystem helpers in the MCP server.** `mcp/perun_mcp.py` adds
+  `perun_file_exists`, `perun_list_directory`, and `perun_read_file`. Access is
+  scoped to registered project paths, the Perun home/config trees, and the Perun
+  runtime source tree; traversal outside those roots is rejected. This lets
+  agents in confined JavaScript runtimes (e.g. OpenCode `execute`) inspect files
+  through the Perun MCP surface instead of relying on unavailable Node.js APIs.
+* **Global instruction kernel hardened.**
+  `perun/integrations/templates/INSTRUCTIONS.md` now requires Perun's bundled
+  MCP search tools over raw `grep` and points agents at the new filesystem MCP
+  tools when direct filesystem access is unavailable.
+* `docs/CODEMAP.md`, `docs/TECHNICAL_DOCUMENTATION.md`, and `README.md` updated
+  to list the full current MCP tool inventory (28 tools), including
+  `perunchat_room_memory` and the new filesystem helpers.
 
 ### 2026-10-27 — v0.8.22: PerunChat room memory + Windows orchestrator chat fix
 
