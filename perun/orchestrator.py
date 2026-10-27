@@ -755,22 +755,30 @@ class Orchestrator:
         # Callers that need a predictable, externally addressable run id (the
         # proposal executor) pass one; everything else gets a random id.
         run_uid = (run_uid or "").strip() or uuid.uuid4().hex[:16]
-        # Model/agent precedence: explicit call argument → the project's own
-        # override → (control plane only) the dedicated orchestrator model →
-        # the global default.
+        # Model/agent precedence:
+        #   - explicit call argument
+        #   - (regular projects) the project's own override
+        #   - (control plane only) the dedicated orchestrator model, then global default
+        #
+        # The control plane must ignore any stale model stored on the self-
+        # registered Perun project. That project is auto-created and its
+        # ``model`` field could have been set to a cloud provider before the
+        # owner configured the orchestrator model. Forcing it would make the
+        # orchestrator chat run on the wrong provider.
         requested_model = (model or "").strip()
         # Every source is stripped so a blank/whitespace override can never be
         # forwarded as an empty `--model` argument, and so a whitespace control-
         # plane value still falls through to the next fallback.
-        model = requested_model or (project.get("model") or "").strip()
-        if not model and control.is_control(project):
-            model = (self.settings.orchestrator_model or "").strip()
+        if control.is_control(project):
+            model = (requested_model
+                     or (self.settings.orchestrator_model or "").strip()
+                     or (self.settings.default_model or "").strip())
+        else:
+            model = requested_model or (project.get("model") or "").strip()
         # The global default_model is intentionally NOT forced onto project runs;
         # it is only used for the control plane (orchestrator). This lets regular
         # projects fall back to OpenCode's own default model instead of being
         # overridden by a possibly incompatible Perun setting.
-        if not model and control.is_control(project):
-            model = (self.settings.default_model or "").strip()
         # Whatever we resolved — the caller's argument, the project's own
         # override, or a control-plane setting — must be forwarded to
         # `opencode run` as `--model`. Otherwise OpenCode silently falls back to

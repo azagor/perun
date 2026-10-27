@@ -158,7 +158,9 @@ const STATUS_BADGE = { done: 'green', queued: 'muted', running: 'amber', failed:
 
 /* --------------------------------------------------------------- data --- */
 async function loadProjects() {
-    state.projects = (await api('/api/projects')).projects || [];
+    // The local dashboard is owner-only, so include the hidden control plane
+    // project (Perun itself) in the project list.
+    state.projects = (await api('/api/projects?include_hidden=true')).projects || [];
     // Projects drive which cards are awake; recompute so the pips update too.
     if (typeof computePresence === 'function') computePresence();
 }

@@ -96,7 +96,12 @@ def test_health_exposes_control_slug(control_repo):  # noqa: ARG001
 
 
 def test_control_project_is_hidden_from_project_list(control_repo):  # noqa: ARG001
-    """The Perun source-code project is not advertised in the dashboard list."""
+    """The default API list hides the Perun source-code project.
+
+    The local dashboard is owner-only and explicitly requests
+    ``?include_hidden=true`` so the owner can still manage the Perun project
+    from the UI; external/shared installs do not see it by default.
+    """
     from fastapi.testclient import TestClient
 
     from perun import server

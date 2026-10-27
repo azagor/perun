@@ -86,13 +86,19 @@ def test_zero_projects_status_reports_orchestrator(bridge):
     assert "(none)" not in bridge.sent[-1]
 
 
-def test_zero_projects_listing_includes_orchestrator(bridge):
+def test_zero_projects_listing_includes_orchestrator_for_allowed_chat(bridge):
     bridge.handle_command("1", "/projects", 1)
     assert "perun" in bridge.sent[-1]
     assert "orchestrator" in bridge.sent[-1]
 
 
-def test_projects_command_sends_inline_keyboard(bridge):
+def test_zero_projects_listing_hides_orchestrator_for_unlisted_chat(bridge):
+    """Runtime-paired / unknown chats must not see the hidden Perun project."""
+    bridge.handle_command("99", "/projects", 1)
+    assert "perun" not in bridge.sent[-1]
+    assert "orchestrator" not in bridge.sent[-1]
+
+
     _add("Alpha", r"C:\alpha")
     _add("Beta", r"C:\beta")
     bridge.handle_command("1", "/projects", 1)

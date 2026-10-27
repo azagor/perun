@@ -445,8 +445,10 @@ class PerunTelegramBridge:
                 control.ensure()
             except Exception:  # pragma: no cover - defensive
                 pass
-            # Only the allowed/owner chat sees the hidden orchestrator project.
-            include_hidden = self.authorised(chat_id)
+            # Only the static allow-list (owner) sees the hidden orchestrator
+            # project. Runtime-paired chats must not see it even though they are
+            # authorised to talk to the bot.
+            include_hidden = chat_id in self.allowed
             projects = registry.list_projects(include_hidden=include_hidden)
             if not projects:
                 self.send(chat_id, "No projects registered yet.", reply_to=message_id)
@@ -460,7 +462,7 @@ class PerunTelegramBridge:
             self.send(chat_id, "\n".join(lines), reply_to=message_id, reply_markup=keyboard)
             return True
         if root == "/project":
-            include_hidden = self.authorised(chat_id)
+            include_hidden = chat_id in self.allowed
             projects = registry.list_projects(include_hidden=include_hidden)
             if len(parts) < 2:
                 self.send(chat_id, "Usage: `/project <name|#>`", reply_to=message_id)

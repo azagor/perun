@@ -241,6 +241,27 @@ def test_orchestrator_control_plane_orchestrator_model_is_explicit(monkeypatch):
     assert run["model_explicit"] == 1
 
 
+def test_orchestrator_control_plane_orchestrator_model_overrides_project_model(monkeypatch):
+    """A stale model stored on the self-registered control project is ignored.
+
+    Regression: the control project can carry a model (e.g. set before the
+    orchestrator model was configured), and it used to override the
+    orchestrator_model/default_model fallback, making the orchestrator chat run
+    on the wrong provider.
+    """
+    from perun import orchestrator, config, control, registry
+
+    proj = control.ensure()
+    registry.update_project(proj["slug"], model="opencode/should-be-ignored")
+    settings = config.Settings.load()
+    settings.orchestrator_model = "ollama-cloud/deepseek-v4.1-flash"
+    o = orchestrator.Orchestrator(settings)
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("perun", "hi")
+    assert run["model"] == "ollama-cloud/deepseek-v4.1-flash"
+    assert run["model_explicit"] == 1
+
+
 def test_orchestrator_control_plane_default_model_is_explicit(monkeypatch):
     """With no orchestrator model, the control plane falls back to default_model."""
     from perun import orchestrator, config, control

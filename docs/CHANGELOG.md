@@ -2,6 +2,29 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.19
+
+### Fixed
+
+- **Dashboard shows the Perun control project for the owner again.** The
+  control plane is intentionally hidden from the default `GET /api/projects`
+  list so external/shared installs do not see the source-code project. The
+  local dashboard is owner-only, so it now requests
+  `/api/projects?include_hidden=true` and renders the Perun project alongside
+  the user's own projects. This fixes a regression where the owner's dashboard
+  appeared to lose the Perun project after v0.8.17.
+- **Orchestrator chat now honors the orchestrator model setting.** The control
+  project can carry a stale model override (e.g. `opencode/kimi-k2.7-code`), and
+  it used to take precedence over the dedicated `orchestrator_model` /
+  `default_model` settings. The orchestrator chat now ignores the self-registered
+  control project's stored model and uses `orchestrator_model` → `default_model`,
+  so requests to use Ollama DeepSeek models actually reach Ollama Cloud instead of
+  falling back to a cloud provider blocked by privacy settings.
+- **Telegram `/projects` only exposes the Perun project to the static owner
+  allow-list.** Runtime-paired chats are still authorised to talk to the bot,
+  but they no longer see the hidden Perun orchestrator project in the project
+  list or keyboard.
+
 ## v0.8.18
 
 ### Fixed
