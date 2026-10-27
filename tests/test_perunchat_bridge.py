@@ -1137,6 +1137,97 @@ def test_fact_visibility_is_room_scoped():
     assert not visible({"project_id": 7, "meta": {"room": "grp:y"}}, 42, "grp:x")
 
 
+def test_store_transcript_fact_skips_public_rooms(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_pub_1",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "payload": "hello public room",
+    }
+    bridge._store_transcript_fact(frame)
+    from perun import db
+
+    with db.db() as conn:
+        rows = db.rows(conn, "SELECT * FROM memory WHERE room_id=?", ("pub:global:test",))
+    assert len(rows) == 0
+
+
+def test_store_transcript_fact_stores_private_room_transcripts(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    room = "priv:alice-bob"
+    frame = {
+        "id": "msg_priv_1",
+        "room_id": room,
+        "sender": {"agent_id": "alice"},
+        "payload": "hello private room",
+    }
+    bridge._store_transcript_fact(frame)
+    from perun import db
+
+    with db.db() as conn:
+        rows = db.rows(conn, "SELECT * FROM memory WHERE room_id=?", (room,))
+    assert len(rows) == 1
+    assert rows[0]["project_id"] == -1
+    assert rows[0]["scope"] == "room"
+    assert "alice: hello private room" in rows[0]["content"]
+
+
+def test_store_transcript_fact_stores_project_room_transcripts(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path, slug="transcript-proj")
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_grp_1",
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "payload": "hello project room",
+    }
+    bridge._store_transcript_fact(frame)
+    from perun import db
+
+    with db.db() as conn:
+        rows = db.rows(conn, "SELECT * FROM memory WHERE room_id=?", (room,))
+    assert len(rows) == 1
+    assert rows[0]["project_id"] == project["id"]
+    assert rows[0]["scope"] == "project"
+
+
+def test_store_transcript_fact_prunes_old_transcripts(settings, monkeypatch):
+    from perun import perunchat_bridge as pb
+
+    monkeypatch.setattr(pb, "_MAX_ROOM_TRANSCRIPT_FACTS", 3)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    room = "priv:prune"
+    for i in range(5):
+        frame = {
+            "id": f"msg_prune_{i}",
+            "room_id": room,
+            "sender": {"agent_id": "alice"},
+            "payload": f"message {i}",
+        }
+        bridge._store_transcript_fact(frame)
+    from perun import db
+
+    with db.db() as conn:
+        rows = db.rows(conn, "SELECT * FROM memory WHERE room_id=? ORDER BY id", (room,))
+    assert len(rows) == 3
+    contents = [r["content"] for r in rows]
+    assert "alice: message 0" not in contents
+    assert "alice: message 1" not in contents
+    assert "alice: message 2" in contents
+    assert "alice: message 4" in contents
+
+
+def test_default_max_room_transcript_facts_is_250():
+    from perun import perunchat_bridge as pb
+
+    assert pb._MAX_ROOM_TRANSCRIPT_FACTS == 250
+
+
 def test_prompt_memory_filters_other_rooms(settings, monkeypatch):
     bridge = PerunChatBridge(MagicMock(settings=settings))
     facts = [
@@ -1258,6 +1349,65 @@ def test_build_prompt_first_message_discourages_introduction(settings):
     prompt = bridge._build_prompt(_chat_frame())
     assert "first message you see in this room" in prompt
     assert "Do not introduce yourself" in prompt
+
+
+def test_public_room_keeps_more_inline_history(settings, monkeypatch):
+    """Public rooms get more inline context because they have no room memory."""
+    from perun import memory
+
+    monkeypatch.setattr("perun.perunchat_bridge.memory.search_facts", lambda *a, **kw: [])
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    room_id = "pub:global:test"
+    hist = bridge._room_history.setdefault(room_id, deque(maxlen=40))
+    for i in range(5):
+        hist.append({
+            "id": f"msg_ctx_{i}",
+            "room_id": room_id,
+            "sender": {"agent_id": "other-agent"},
+            "payload": f"context-message-{i}",
+        })
+    frame = {
+        "id": "msg_current",
+        "room_id": room_id,
+        "sender": {"agent_id": "other-agent"},
+        "payload": "current question",
+    }
+    prompt = bridge._build_prompt(frame)
+    # All five history lines should survive (public limit is 6).
+    for i in range(5):
+        assert f"context-message-{i}" in prompt
+
+
+def test_private_room_keeps_limited_inline_history(settings, monkeypatch):
+    """Private rooms rely on room memory; only the 4 most recent lines are inline."""
+    from perun import memory
+
+    monkeypatch.setattr("perun.perunchat_bridge.memory.search_facts", lambda *a, **kw: [])
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    room_id = "priv:alice-bob"
+    hist = bridge._room_history.setdefault(room_id, deque(maxlen=40))
+    for i in range(5):
+        hist.append({
+            "id": f"msg_ctx_{i}",
+            "room_id": room_id,
+            "sender": {"agent_id": "other-agent"},
+            "payload": f"context-message-{i}",
+        })
+    frame = {
+        "id": "msg_current",
+        "room_id": room_id,
+        "sender": {"agent_id": "other-agent"},
+        "payload": "current question",
+    }
+    prompt = bridge._build_prompt(frame)
+    # The four newest history lines are inline.
+    assert "context-message-1" in prompt
+    assert "context-message-2" in prompt
+    assert "context-message-3" in prompt
+    assert "context-message-4" in prompt
+    assert "context-message-0" not in prompt
 
 
 # ---------------------------------------------------------------------------

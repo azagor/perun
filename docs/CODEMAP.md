@@ -204,8 +204,8 @@ Reciprocal Rank Fusion (RRF).
 Unified facts + document vector store + search.
 * `content_hash()`, `is_sensitive()`, `_freshness_weight()`, `_keywords()`,
   `_embed()`.
-* Facts: `remember()`, `search_facts()`, `_fact_rows()`, `recent_facts()`,
-  `prune()`.
+* Facts: `remember()`, `search_facts()`, `search_room_facts()`, `_fact_rows()`,
+  `recent_facts()`, `prune()`. `room_id` lets PerunChat scope facts to a room.
 * Docs: `chunk_markdown()`, `_index_text_impl()`, `index_text()`,
   `index_project_docs()`, `search_docs()`.
 * Unified / maintenance: `unified_search()`, `stats()`, `reembed_missing()`
@@ -530,6 +530,14 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `_fact_visible_in_room()` prevents public/other-room facts from crossing into
   project prompts. `_maybe_store_facts()` applies heuristic + explicit
   `[FACT(type=...)]` extraction with semantic deduplication.
+* Room transcript memory: `_store_transcript_fact()` stores each non-public
+  chat message as a transcript fact, `_prune_room_transcripts()` keeps the most
+  recent `_MAX_ROOM_TRANSCRIPT_FACTS` (250) per room, and the MCP tool
+  `perunchat_room_memory()` lets agents query that history on demand. Public
+  rooms are ephemeral and skip long-term transcript storage entirely.
+* Inline history split: `_max_context_messages_for_room()` keeps the last 4
+  messages inline for rooms with durable memory (private/group/project) and
+  6 messages for public rooms, which have no room memory.
 * Private-room support: `_is_private_room()` and `_room_type()` accept `priv:`
   and `private:` prefixes; the dashboard proxies create/invite/remove calls to
   the gateway.

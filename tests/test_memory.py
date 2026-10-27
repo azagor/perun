@@ -178,3 +178,83 @@ def test_reembed_missing_repairs_fact_embedding(monkeypatch):
     assert row["embedding"] is not None
     unpacked = embeddings.unpack_vector(row["embedding"])
     assert unpacked == pytest.approx(fake_vec)
+
+
+def test_search_room_facts_returns_room_scoped_rows():
+    room = "priv:test"
+    memory.remember(
+        "alice: project update",
+        project_id=-1, scope="room", topic="perunchat", source="perunchat",
+        meta={"room": room, "sender": "alice", "type": "transcript"},
+        room_id=room,
+    )
+    memory.remember(
+        "bob: unrelated",
+        project_id=-1, scope="room", topic="perunchat", source="perunchat",
+        meta={"room": "priv:other", "sender": "bob", "type": "transcript"},
+        room_id="priv:other",
+    )
+    results = memory.search_room_facts("project update", room, project_id=-1)
+    assert len(results) == 1
+    assert results[0]["content"] == "alice: project update"
+    assert results[0]["meta"]["room"] == room
+
+
+def test_search_room_facts_empty_query_or_room():
+    assert memory.search_room_facts("", "priv:test", project_id=-1) == []
+    assert memory.search_room_facts("hello", "", project_id=-1) == []
+
+
+def test_search_room_facts_project_room_uses_project_id(tmp_path):
+    project = registry.add_project("room-mem", str(tmp_path))
+    registry.set_project_chat(project["id"], "grp:perun:room-mem:chat", "perun", "active", 1)
+    room = "grp:perun:room-mem:chat"
+    memory.remember(
+        "alice: project update",
+        project_id=project["id"], scope="project", topic="perunchat", source="perunchat",
+        meta={"room": room, "sender": "alice", "type": "transcript"},
+        room_id=room,
+    )
+    # Searching with the wrong project_id should find nothing.
+    assert memory.search_room_facts("update", room, project_id=-1) == []
+    results = memory.search_room_facts("update", room, project_id=project["id"])
+    assert len(results) == 1
+    assert results[0]["project_id"] == project["id"]
+
+
+def test_search_room_facts_boosts_durable_facts_over_transcripts():
+    room = "priv:test"
+    memory.remember(
+        "alice: project update",
+        project_id=-1, scope="room", topic="perunchat", source="perunchat",
+        meta={"room": room, "sender": "alice", "type": "transcript"},
+        room_id=room,
+    )
+    memory.remember(
+        "Decision: use FastAPI",
+        project_id=-1, scope="room", topic="perunchat", source="perunchat",
+        meta={"room": room, "sender": "alice", "type": "decision"},
+        room_id=room,
+    )
+    results = memory.search_room_facts("FastAPI", room, project_id=-1)
+    assert results
+    assert results[0]["content"] == "Decision: use FastAPI"
+    assert results[0]["meta"]["type"] == "decision"
+
+
+def test_search_room_facts_falls_back_to_meta_room():
+    """Rows with room only in meta (pre-v7 style) are still searchable."""
+    room = "priv:legacy"
+    from perun import db
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO memory (project_id, scope, topic, content, content_hash, ts, meta, room_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (-1, "room", "perunchat", "alice: legacy fact",
+             memory.content_hash("alice: legacy fact"), registry.now_iso(),
+             '{"room": "priv:legacy", "sender": "alice", "type": "transcript"}', "")
+        )
+    results = memory.search_room_facts("legacy fact", room, project_id=-1)
+    assert len(results) == 1
+    assert results[0]["content"] == "alice: legacy fact"
+    assert results[0]["meta"]["room"] == room

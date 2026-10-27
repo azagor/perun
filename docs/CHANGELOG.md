@@ -4,6 +4,45 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Fixed
+
+- **Orchestrator chat works with Ollama Cloud and other local-style providers
+  on Windows.** The root cause was the way `opencode` is launched: on Windows it
+  resolves to a `.cmd` file executed via `cmd /c`. Even prompts well below the
+  8191-character cmd.exe limit were being mangled by cmd.exe's parser when they
+  contained newlines or Unicode, so the model saw an empty instruction block
+  instead of the user's request. `_execute` now forces a temporary prompt file
+  whenever the resolved `opencode` invocation goes through `cmd /c`, and it
+  still auto-switches for long prompts on other platforms. Control-plane runs
+  also stop injecting the Perun source-code project's own
+  `.perun/instructions/*.md` files, cutting the prompt from ~13K to ~2.7K
+  characters. The orchestrator persona now mentions `perun_context` so the
+  overseer can fetch reference docs on demand instead of carrying them inline.
+- **PerunChat prompt cap reduced from 100K to 12K characters.** PerunChat
+  already passes prompts via a temp file, so it was not affected by the Windows
+  command-line bug, but the 100K cap left too much room for models with smaller
+  context windows. The lower cap trims older room history first and keeps the
+  latest message, making reply generation more reliable on 8K-context local
+  models.
+
+### Added
+
+- **PerunChat room memory redesign.** Private, group, and shared-project rooms
+  now store searchable room memory instead of inlining entire conversations
+  into every prompt:
+  - New `room_id` column on the `memory` table (schema v7) with a covering
+    index, plus `memory.search_room_facts()` for scoped recall.
+  - New MCP tool `perunchat_room_memory(query, room, k)` lets agents query room
+    history on demand.
+  - PerunChat stores transcript facts for private/group/project rooms, pruning
+    each room to the most recent 250 transcripts. Public-room transcripts are
+    intentionally skipped.
+  - Inline recent history reduced from 6 to 4 messages for rooms that have
+    long-term memory; public rooms keep 6 messages inline because they have no
+    room memory.
+  - Updated perunchat agent instructions and `perun/instructions/perunchat_chat.md`
+    to describe the new recall tool and public-room ephemeral behavior.
+
 ### Changed
 
 - Updated `docs/CODEMAP.md`, `docs/TECHNICAL_DOCUMENTATION.md`, and `README.md`

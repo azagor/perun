@@ -128,7 +128,8 @@ def _embed(text: str, prefix: str) -> bytes | None:
 # --------------------------------------------------------------------------- #
 def remember(content: str, *, project_id: int = 0, scope: str | None = None,
              topic: str = "general", source: str = "manual",
-             meta: dict[str, Any] | None = None) -> dict[str, Any]:
+             meta: dict[str, Any] | None = None,
+             room_id: str = "") -> dict[str, Any]:
     content = (content or "").strip()
     if not content:
         return {"ok": False, "reason": "empty"}
@@ -145,6 +146,7 @@ def remember(content: str, *, project_id: int = 0, scope: str | None = None,
     ts = registry.now_iso()
     import json
     meta_json = json.dumps(meta or {})
+    room = str(room_id or "").strip()
     # Compute the embedding before opening the connection: _embed performs an
     # HTTP call and a DB connection must never be held across a network call.
     emb = _embed(content, QUERY_PREFIX)
@@ -152,18 +154,18 @@ def remember(content: str, *, project_id: int = 0, scope: str | None = None,
         try:
             cur = conn.execute(
                 """INSERT INTO memory
-                   (project_id,scope,topic,content,embedding,source,content_hash,ts,meta)
-                   VALUES (?,?,?,?,?,?,?,?,?)
+                   (project_id,scope,topic,content,embedding,source,content_hash,ts,meta,room_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(scope, project_id, content_hash) DO NOTHING""",
-                (pid, scope, topic, content, emb, source, h, ts, meta_json),
+                (pid, scope, topic, content, emb, source, h, ts, meta_json, room),
             )
         except sqlite3.OperationalError:
             cur = conn.execute(
                 """INSERT INTO memory
-                   (project_id,scope,topic,content,embedding,source,content_hash,ts)
-                   VALUES (?,?,?,?,?,?,?,?)
+                   (project_id,scope,topic,content,embedding,source,content_hash,ts,meta)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(scope, project_id, content_hash) DO NOTHING""",
-                (pid, scope, topic, content, emb, source, h, ts),
+                (pid, scope, topic, content, emb, source, h, ts, meta_json),
             )
         if cur.lastrowid:
             return {"ok": True, "id": cur.lastrowid, "embedded": emb is not None}
@@ -276,6 +278,86 @@ def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
     for s in scored:
         s.pop("_rank", None)
     return scored[:min(top_k, MAX_TOP_K)]
+
+
+def search_room_facts(query: str, room_id: str, *, project_id: int = -1,
+                      top_k: int = 6) -> list[dict[str, Any]]:
+    """Search facts scoped to a PerunChat room.
+
+    Room facts are stored with ``room_id`` set and ``meta["room"] == room_id``.
+    Project rooms use the real project_id; public/private rooms use
+    project_id=-1. The search returns the most relevant room facts, boosting
+    durable (non-transcript) facts so decisions and preferences surface above
+    raw message noise.
+    """
+    if not room_id or not (query or "").strip():
+        return []
+    top_k = max(1, min(int(top_k), MAX_TOP_K))
+    words = _keywords(query)
+    low_q = query.casefold()
+    import json as _json
+    room_pat = f'%"room": {_json.dumps(str(room_id))}%'
+    with db.db() as conn:
+        if words:
+            kw_clause, patterns = _keyword_clause(["content", "topic"], words)
+            sql = (
+                f"SELECT * FROM memory WHERE project_id=? AND "
+                f"(room_id=? OR (room_id='' AND meta LIKE ?)) "
+                f"AND ({kw_clause}) ORDER BY id DESC LIMIT ?"
+            )
+            params = (project_id, room_id, room_pat, *patterns, MAX_SEARCH_CANDIDATES)
+        else:
+            sql = (
+                "SELECT * FROM memory WHERE project_id=? AND "
+                "(room_id=? OR (room_id='' AND meta LIKE ?)) "
+                "ORDER BY id DESC LIMIT ?"
+            )
+            params = (project_id, room_id, room_pat, MAX_SEARCH_CANDIDATES)
+        rows = db.rows(conn, sql, params)
+    try:
+        q_emb = embed_texts([query], prefix=QUERY_PREFIX)[0]
+    except Exception:
+        q_emb = None
+    scored: list[dict[str, Any]] = []
+    for r in rows:
+        content = r["content"] or ""
+        raw = 0.0
+        if q_emb and r["embedding"]:
+            raw = cosine_similarity(q_emb, unpack_vector(r["embedding"]))
+        low = ((r["topic"] or "") + " " + content).casefold()
+        if low_q in low:
+            raw += 0.3
+        elif words and any(w in low for w in words):
+            raw += 0.15
+        # Boost durable facts slightly over raw transcripts so decisions and
+        # preferences surface above message noise.
+        meta = {}
+        try:
+            if "meta" in r.keys() and r["meta"]:
+                meta = _json.loads(r["meta"]) if isinstance(r["meta"], str) else (r["meta"] or {})
+        except Exception:
+            meta = {}
+        if meta.get("type") != "transcript":
+            raw += 0.05
+        if raw > 0.15:
+            freshness = _freshness_weight(r["ts"])
+            scored.append({
+                "id": r["id"],
+                "source_type": "fact",
+                "scope": r["scope"],
+                "project_id": r["project_id"],
+                "topic": r["topic"],
+                "content": content,
+                "source": r["source"],
+                "ts": r["ts"],
+                "meta": meta,
+                "score": round(raw * freshness, 4),
+                "_rank": raw * freshness,
+            })
+    scored.sort(key=lambda x: x["_rank"], reverse=True)
+    for s in scored:
+        s.pop("_rank", None)
+    return scored[:top_k]
 
 
 # --------------------------------------------------------------------------- #

@@ -69,9 +69,12 @@ with `python -m perun project-roots --add <name> <path>`.
 ## Core rules for working here
 
 * **CODEMAP-first.** `docs/CODEMAP.md` is the navigation source of truth. Read it
-  (and the relevant `docs/TECHNICAL_DOCUMENTATION.md` section) before grepping.
-  Use `perun_ast_grep` for structural code search and `perun_grep` (ripgrep) only
-  to confirm.
+  (and the relevant `docs/TECHNICAL_DOCUMENTATION.md` section) before searching.
+  Prefer Perun's bundled MCP search tools (`perun_unified_search`, `perun_grep`,
+  `perun_ast_grep`, `perun_global_grep`, `perun_global_ast_grep`,
+  `perun_memory_search`) for discovery and structural search. Use `perun_grep` or
+  `perun_ast_grep` only to confirm; avoid raw filesystem `grep` or ad-hoc
+  directory scanning.
 * **Keep the layers separate.** `registry.py`/`db.py` = persistence;
   `memory.py` = facts + docs; `context.py` = keyed reference docs;
   `secret_store.py` = encrypted named secrets; `orchestrator.py` =

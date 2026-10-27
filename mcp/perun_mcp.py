@@ -15,6 +15,7 @@ Tools
 ``perun_discover``       Rescan the configured roots for projects.
 ``perun_memory_search``  Search facts + indexed docs (this or all projects).
 ``perun_memory_store``   Store a durable fact (global or project scope).
+``perunchat_room_memory`` Search PerunChat room memory (transcripts + durable facts).
 ``perun_context``        Retrieve context docs — keys, or the context for a task.
 ``perun_secret``         Read/write a named secret from the encrypted store.
 ``perun_docs_index``     (Re)index a project's docs into the vector store.
@@ -454,6 +455,51 @@ def perun_memory_store(content: str, project: str | None = None,
     if res.get("duplicate"):
         return "[perun] Already remembered (duplicate)."
     return f"[perun] Stored ({scope} scope, id={res['id']})."
+
+
+@mcp.tool
+def perunchat_room_memory(query: str, room: str, k: int = 5) -> str:
+    """Search the memory of one PerunChat room.
+
+    Returns transcripts and durable facts from the room, scoped by the room id.
+    Use this when a participant references something that happened earlier in
+    the conversation or when you need context beyond the most recent messages.
+
+    Args:
+        query: Natural-language question or keywords about the room history.
+        room: The PerunChat room id (e.g. ``pub:global:general`` or ``grp:myproject:chat``).
+            ``grp:`` rooms resolve to their bound project scope; all other rooms
+            default to the reserved ``project_id=-1`` scope.
+        k: Maximum number of entries to return (1-8).
+    """
+    k, error = _safe_int(k, "k", min_val=1, max_val=8)
+    if error:
+        return error
+    if not room:
+        return "[perun] room id is required."
+    # Project rooms store under the real project id; public/private rooms use -1.
+    pid = -1
+    if room.startswith("grp:"):
+        try:
+            chat = registry.get_project_chat_by_room(room)
+            if chat:
+                proj = registry.get_project(chat.get("project_id"))
+                if proj:
+                    pid = int(proj["id"])
+        except Exception:
+            pass
+    results = memory.search_room_facts(query, room_id=room, project_id=pid, top_k=k)
+    if not results:
+        return "[perun] No matching room memory."
+    out = []
+    for i, r in enumerate(results, 1):
+        meta = r.get("meta") or {}
+        sender = meta.get("sender") or "?"
+        ttype = meta.get("type") or "fact"
+        ts = r.get("ts", "")[:19]
+        preview = " ".join((r.get("content") or "").split())[:300]
+        out.append(f"[{i}] {ts} {sender} ({ttype}) score={r.get('score')}\n    {preview}")
+    return "\n".join(out)
 
 
 @mcp.tool

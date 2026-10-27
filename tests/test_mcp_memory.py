@@ -55,3 +55,74 @@ def test_memory_store_without_project_or_cwd_is_global(monkeypatch, tmp_path):
     assert "global scope" in result
     after = memory.stats(None)["facts_global"]
     assert after == before + 1
+
+
+def test_perunchat_room_memory_returns_formatted_results():
+    room = "priv:mcp"
+    memory.remember(
+        "alice: project update",
+        project_id=-1, scope="room", topic="perunchat", source="perunchat",
+        meta={"room": room, "sender": "alice", "type": "transcript"},
+        room_id=room,
+    )
+    result = mcp_mod.perunchat_room_memory("project update", room, k=5)
+    assert "alice" in result
+    assert "project update" in result
+    assert "transcript" in result
+
+
+def test_perunchat_room_memory_no_match():
+    result = mcp_mod.perunchat_room_memory("nothing", "priv:empty", k=5)
+    assert "No matching room memory" in result
+
+
+def test_perunchat_room_memory_rejects_invalid_k():
+    result = mcp_mod.perunchat_room_memory("q", "priv:test", k=0)
+    assert "k must be at least 1" in result
+    result = mcp_mod.perunchat_room_memory("q", "priv:test", k=9)
+    assert "k must be at most 8" in result
+
+
+def test_perunchat_room_memory_requires_room():
+    result = mcp_mod.perunchat_room_memory("q", "", k=5)
+    assert "room id is required" in result
+
+
+def test_perunchat_room_memory_project_room_resolves_project_id(tmp_path):
+    project = registry.add_project("mcp-room-proj", str(tmp_path))
+    room = "grp:perun:mcp-room-proj:chat"
+    registry.set_project_chat(project["id"], room, "perun", "active", 1)
+    memory.remember(
+        "bob: project update",
+        project_id=project["id"], scope="project", topic="perunchat", source="perunchat",
+        meta={"room": room, "sender": "bob", "type": "transcript"},
+        room_id=room,
+    )
+    # The tool resolves the project id from the room binding.
+    result = mcp_mod.perunchat_room_memory("update", room, k=5)
+    assert "bob" in result
+    assert "project update" in result
+
+
+def test_perunchat_room_memory_public_room_is_empty():
+    """Public rooms intentionally store no long-term transcript memory."""
+    result = mcp_mod.perunchat_room_memory("hello", "pub:global:test", k=5)
+    assert "No matching room memory" in result
+
+
+def test_perunchat_room_memory_falls_back_to_meta_room():
+    """Pre-v7 rows with room in meta but no room_id column remain searchable."""
+    room = "priv:legacy"
+    # Insert a row with empty room_id but room in meta by bypassing remember().
+    from perun import db
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO memory (project_id, scope, topic, content, content_hash, ts, meta, room_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (-1, "room", "perunchat", "alice: legacy fact",
+             memory.content_hash("alice: legacy fact"), registry.now_iso(),
+             '{"room": "priv:legacy", "sender": "alice", "type": "transcript"}', "")
+        )
+    result = mcp_mod.perunchat_room_memory("legacy fact", room, k=5)
+    assert "alice" in result
+    assert "legacy fact" in result

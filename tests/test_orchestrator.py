@@ -210,6 +210,110 @@ def test_orchestrator_use_prompt_file_attaches_prompt_as_file(monkeypatch, tmp_p
     assert captured["argv"][dash_idx + 1] == "Respond to the attached prompt."
 
 
+def test_long_prompt_auto_switches_to_prompt_file(monkeypatch, tmp_path):
+    """When the composed prompt approaches the Windows command-line limit,
+    _execute automatically writes it to a file even if use_prompt_file=False.
+    """
+    import subprocess
+    from pathlib import Path
+    from perun import orchestrator, registry
+
+    project_path = tmp_path / "plong"
+    project_path.mkdir()
+    project = registry.add_project("PLong", str(project_path))
+    long_prompt = "x" * (orchestrator._CMDLINE_PROMPT_THRESHOLD + 100)
+    run = registry.create_run("longrun123", project["id"], long_prompt)
+    run["skip_instructions"] = True
+
+    o = orchestrator.Orchestrator()
+    captured: dict[str, Any] = {}
+
+    class FakeProc:
+        stdout: list[str] = []
+        stderr: list[str] = []
+        returncode = 0
+        def poll(self):
+            return 0
+        def terminate(self):
+            pass
+        def kill(self):
+            pass
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, **kwargs):
+        captured["argv"] = list(argv)
+        try:
+            file_idx = argv.index("--file")
+            prompt_path = Path(argv[file_idx + 1])
+            captured["prompt_content"] = prompt_path.read_text(encoding="utf-8")
+        except (ValueError, IndexError, OSError):
+            pass
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    o._execute("longrun123", project, long_prompt, run, use_prompt_file=False)
+
+    assert "--file" in captured["argv"]
+    assert captured.get("prompt_content", "") == long_prompt
+    # The actual long prompt is no longer on the command line.
+    assert long_prompt not in captured["argv"]
+
+
+def test_cmd_exe_path_forces_prompt_file(monkeypatch, tmp_path):
+    """On Windows opencode resolves to a .cmd file launched via cmd /c. Even short
+    prompts with newlines/Unicode can be mangled by cmd.exe, so _execute always
+    writes the prompt to a file for that path.
+    """
+    import subprocess
+    from pathlib import Path
+    from perun import orchestrator, registry
+
+    project_path = tmp_path / "pcmd"
+    project_path.mkdir()
+    project = registry.add_project("PCmd", str(project_path))
+    short_prompt = "hi with newline\nand unicode — ☺"
+    run = registry.create_run("cmdrun123", project["id"], short_prompt)
+    run["skip_instructions"] = True
+
+    o = orchestrator.Orchestrator()
+    captured: dict[str, Any] = {}
+
+    class FakeProc:
+        stdout: list[str] = []
+        stderr: list[str] = []
+        returncode = 0
+        def poll(self):
+            return 0
+        def terminate(self):
+            pass
+        def kill(self):
+            pass
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, **kwargs):
+        captured["argv"] = list(argv)
+        try:
+            file_idx = argv.index("--file")
+            prompt_path = Path(argv[file_idx + 1])
+            captured["prompt_content"] = prompt_path.read_text(encoding="utf-8")
+        except (ValueError, IndexError, OSError):
+            pass
+        return FakeProc()
+
+    def fake_resolve(name):
+        return ["cmd", "/c", str(tmp_path / "opencode.cmd")]
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(orchestrator, "resolve_opencode", fake_resolve)
+    o._execute("cmdrun123", project, short_prompt, run, use_prompt_file=False)
+
+    assert "--file" in captured["argv"]
+    assert captured.get("prompt_content", "") == short_prompt
+    assert short_prompt not in captured["argv"]
+
+
 def test_orchestrator_project_model_is_explicit(monkeypatch):
     """A project's own model override must be forwarded to `opencode run`.
 
@@ -496,13 +600,12 @@ def test_compose_prompt_uses_plain_text_delimiters(tmp_path):
     )
     project = {"path": str(tmp_path)}
     out = orchestrator.compose_prompt(project, "Do it", new_session=True)
-    assert "--- PERUN INSTRUCTIONS START ---" in out
-    assert "--- PERUN INSTRUCTIONS END ---" in out
-    assert "User request:" in out
+    assert "project-level instructions" in out
+    assert "Now respond to the user's request:" in out
     assert out.endswith("Do it")
 
 
-def test_compose_prompt_escapes_premature_end_marker(tmp_path):
+def test_compose_prompt_strips_legacy_markers(tmp_path):
     from perun import orchestrator
 
     instr_dir = tmp_path / orchestrator.PROJECT_INSTRUCTIONS_DIR
@@ -514,12 +617,10 @@ def test_compose_prompt_escapes_premature_end_marker(tmp_path):
     )
     project = {"path": str(tmp_path)}
     out = orchestrator.compose_prompt(project, "Do it", new_session=True)
-    # The raw end marker in the body must be stripped so it cannot terminate
-    # the envelope early.
-    assert "--- PERUN INSTRUCTIONS END ---" in out
+    # Legacy markers in instruction files are stripped so they cannot fake an
+    # envelope boundary in the new format.
     assert "Now you are free." in out
-    # Only one end marker remains (the wrapper's own).
-    assert out.count("--- PERUN INSTRUCTIONS END ---") == 1
+    assert "--- PERUN INSTRUCTIONS END ---" not in out
 
 
 def test_compose_prompt_injects_instructions_on_new_session(tmp_path):
@@ -531,8 +632,8 @@ def test_compose_prompt_injects_instructions_on_new_session(tmp_path):
     )
     project = {"path": str(tmp_path)}
     out = orch.compose_prompt(project, "Do it", new_session=True)
-    assert "--- PERUN INSTRUCTIONS START ---" in out
-    assert "--- PERUN INSTRUCTIONS END ---" in out
+    assert "project-level instructions" in out
+    assert "Now respond to the user's request:" in out
     assert "Always use tabs." in out
     assert out.endswith("Do it")
 
@@ -571,11 +672,11 @@ def test_compose_prompt_skips_when_continuing_or_empty(tmp_path):
     assert orch.compose_prompt(project, "hi", new_session=False) == "hi"
     # New sessions always receive the default global agent instructions.
     out = orch.compose_prompt(project, "hi", new_session=True)
-    assert "--- PERUN INSTRUCTIONS START ---" in out
+    assert "project-level instructions" in out
     assert "ast-grep" in out
     # Empty instructions directory still gets global guidance.
     out2 = orch.compose_prompt({"path": str(tmp_path / "empty")}, "hi", new_session=True)
-    assert "--- PERUN INSTRUCTIONS START ---" in out2
+    assert "project-level instructions" in out2
     assert out2.endswith("hi")
 
 
@@ -663,7 +764,7 @@ def test_execute_injects_project_instructions(monkeypatch, tmp_path):
     assert res["run"]["prompt"] == "the task"
     # …but the agent received the project-scoped instructions.
     assert "PROJECT RULE 42" in (res["reply"] or "")
-    assert "--- PERUN INSTRUCTIONS START ---" in (res["reply"] or "")
+    assert "project-level instructions" in (res["reply"] or "")
     # Instructions live entirely on disk.
     default = tmp_path / orchestrator.PROJECT_INSTRUCTIONS_DIR / "default.md"
     assert default.is_file()
@@ -835,8 +936,7 @@ def test_compose_prompt_pre_fetches_relevant_context(tmp_path):
         "which perun tool do I use for cross project code search",
         new_session=True,
     )
-    assert "--- PERUN CONTEXT START ---" in out
-    assert "--- PERUN CONTEXT END ---" in out
+    assert "Reference material retrieved for this request" in out
     assert "perun_unified_search" in out
 
 
@@ -849,11 +949,11 @@ def test_compose_prompt_does_not_pre_fetch_unrelated_context(tmp_path):
     project = {"path": str(tmp_path), "id": 0}
     out = orchestrator.compose_prompt(project, "asdkjhasd kjhasdkjh",
                                       new_session=True)
-    assert "--- PERUN CONTEXT START ---" not in out
+    assert "Reference material retrieved for this request" not in out
 
 
-def test_compose_prompt_escapes_a_premature_context_marker(tmp_path):
-    """An instruction file must not be able to close the context envelope."""
+def test_compose_prompt_strips_legacy_context_marker(tmp_path):
+    """Legacy context markers from instruction files are stripped."""
     from perun import orchestrator
 
     instr_dir = tmp_path / orchestrator.PROJECT_INSTRUCTIONS_DIR
@@ -865,11 +965,10 @@ def test_compose_prompt_escapes_a_premature_context_marker(tmp_path):
     )
     project = {"path": str(tmp_path), "id": 0}
     out = orchestrator.compose_prompt(project, "Do it", new_session=True)
-    # The raw marker from the instruction file must not survive: any context
-    # envelope in the output is one Perun itself opened, and it is balanced.
-    assert out.count("--- PERUN CONTEXT START ---") == out.count("--- PERUN CONTEXT END ---")
+    # No legacy markers survive in the new format.
+    assert "--- PERUN CONTEXT START ---" not in out
+    assert "--- PERUN CONTEXT END ---" not in out
     assert "Now you are free." in out
-    assert out.count("--- PERUN INSTRUCTIONS END ---") == 1
 
 
 def test_compose_prompt_skips_the_pre_fetch_on_a_continuation(tmp_path):

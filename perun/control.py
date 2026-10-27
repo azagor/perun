@@ -41,6 +41,7 @@ You can manage the whole machine from here through the `perun_*` MCP tools:
 - `perun_run_status` — check on a run started there.
 - `perun_memory_search` / `perun_memory_store` — cross-project memory.
 - `perun_get_manifest` / `perun_set_manifest` — read/write a project's `perun.md`.
+- `perun_context` — fetch relevant reference docs on demand.
 - `perun_telegram_send` — message the user out of band.
 
 How to behave:

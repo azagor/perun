@@ -62,6 +62,20 @@ def test_non_control_project_gets_no_persona(control_repo, tmp_path):  # noqa: A
     assert "machine-wide overseer" not in out
 
 
+def test_control_project_skips_local_project_instructions(control_repo):  # noqa: ARG001
+    """The control plane is the overseer, not a coding session in the Perun
+    repo, so it should not carry Perun's own .perun/instructions files into every
+    chat turn.
+    """
+    orchestrator.write_project_instruction_file(
+        str(control_repo), "This is Perun repo guidance.")
+    proj = control.ensure()
+    assert control.is_control(proj)
+    out = compose_prompt(proj, "hi", new_session=True)
+    assert "machine-wide overseer" in out
+    assert "This is Perun repo guidance." not in out
+
+
 def test_project_instructions_from_file_are_injected(control_repo, tmp_path):  # noqa: ARG001
     orchestrator.write_project_instruction_file(
         str(tmp_path), "Use tabs, not spaces.", name="Custom")

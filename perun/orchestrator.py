@@ -41,6 +41,13 @@ HISTORY_TTL_SECONDS = 300.0
 # Blocking workshop timeout for a run stream; short enough to notice a
 # disconnect quickly without busy-waiting.
 STREAM_POLL_SECONDS = 15.0
+# On Windows opencode resolves to a ``.cmd`` file and is launched through
+# ``cmd /c``. cmd.exe has a 8191-character command-line limit, while the raw
+# CreateProcess limit is 32767. Stay well below the lower of the two so long
+# prompts never fail with "The command line is too long."
+_CMDLINE_LIMIT = 32767
+_CMDLINE_CMD_MAX = 8191
+_CMDLINE_PROMPT_THRESHOLD = 6500
 # Environment variables that must not leak into the agent's own subprocesses
 # (the agent runs ``opencode`` with ``--auto`` and could echo its environment).
 # The resolved Telegram token is injected separately as PERUN_TELEGRAM_TOKEN.
@@ -68,17 +75,16 @@ explicitly overrides it:
 1. Start with `docs/CODEMAP.md` (and any relevant `AGENTS.md` sections). Use the
    anchor links and file/identifier tables to navigate to the right module before
    doing broad searches.
-2. Use `perun_unified_search` as the single entry point for cross-project
-   discovery. It fuses vector memory, global ripgrep, and global ast-grep in one
-   call, so prefer it over running the individual search tools separately.
-3. If you need a targeted second pass, use the global code-search tools:
-   * `perun_global_grep` for regex/lexical searches across all projects.
-   * `perun_global_ast_grep` for structural/AST searches across all projects.
-4. For work inside a single project, use `perun_grep` and `perun_ast_grep`.
-5. Use the OpenCode built-in `grep` tool only as a last resort, when Perun's
-   bundled search tools are unavailable or the query is trivial.
-6. Prefer `perun_memory_search` / `perun_memory_store` (or the Perun dashboard)
-   for durable facts and cross-project context that should outlive the session.
+2. Use Perun's bundled MCP search tools for all discovery and structural code
+   search. Do not use raw filesystem `grep`/ripgrep or the OpenCode built-in
+   `grep` tool unless Perun's search tools are unavailable or the query is
+   trivial (a single known file or identifier).
+   * `perun_unified_search` for cross-project discovery.
+   * `perun_global_grep` / `perun_global_ast_grep` for machine-wide searches.
+   * `perun_grep` / `perun_ast_grep` for single-project searches.
+   * `perun_memory_search` for durable facts and cross-project context.
+3. Prefer `perun_memory_store` / `perun_memory_search` (or the Perun dashboard)
+   for facts and cross-project context that should outlive the session.
 """.strip()
 
 
@@ -178,22 +184,37 @@ def instruction_blocks(scope: str) -> list[str]:
 
 
 def _seed_default_instructions() -> None:
-    """Create the default tool-preference instruction file if needed.
+    """Create or update the default tool-preference instruction file.
 
-    A file is seeded when no enabled ``all_projects`` instruction file exists,
-    so a previously disabled or scoped file does not block global guidance.
+    The default guidance is seeded on first install and updated in place when
+    it carries the ``managed: true`` marker, so bundled guidance can evolve
+    without touching user-authored instruction files.
     """
     config.ensure_dirs()
-    for path in _instruction_files():
-        name, file_scope, enabled, body = _load_instruction_file(path)
-        if enabled and file_scope == "all_projects":
-            return
     default_path = config.INSTRUCTIONS_DIR / "default-agent-guidance.md"
+
+    if default_path.is_file():
+        _, _, enabled, body = _load_instruction_file(default_path)
+        if not enabled:
+            return
+        meta, _ = _parse_frontmatter(default_path.read_text(encoding="utf-8"))
+        if not meta.get("managed"):
+            # User has taken ownership of the default file; leave it alone.
+            return
+    else:
+        # Only seed a new default if the user has not provided their own enabled
+        # all_projects guidance.
+        for path in _instruction_files():
+            name, file_scope, enabled, body = _load_instruction_file(path)
+            if enabled and file_scope == "all_projects":
+                return
+
     default_path.write_text(
         _build_frontmatter({
             "name": "Default agent guidance",
             "scope": "all_projects",
             "enabled": True,
+            "managed": True,
         }) + DEFAULT_AGENT_INSTRUCTIONS + "\n",
         encoding="utf-8",
     )
@@ -342,12 +363,10 @@ def _prefetch_blocks(project: dict[str, Any], prompt: str) -> list[str]:
         return []
     rendered = [context_mod.render_hit(h) for h in hits]
     return [
-        "--- PERUN CONTEXT START ---\n"
         "Reference material retrieved for this request. It was selected for "
         "this task specifically — use it instead of re-deriving what it "
         "states.\n\n"
         + "\n\n".join(rendered)
-        + "\n--- PERUN CONTEXT END ---"
     ]
 
 
@@ -360,7 +379,9 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
     1. The **orchestrator persona** (control plane only — see :mod:`perun.control`).
     2. The user's **orchestrator-scoped** Markdown instruction files (control plane only).
     3. The user's **all-projects-scoped** Markdown instruction files (every project).
-    4. The project's own multi-file instructions under ``.perun/instructions/*.md``.
+    4. The project's own multi-file instructions under ``.perun/instructions/*.md``
+       (skipped for the control plane — the overseer should query projects via the
+       `perun_*` tools rather than carry one project's local coding workflow).
     5. **Task-driven context pre-fetch** — the reference material this request
        actually needs (see :func:`_prefetch_blocks`).
 
@@ -377,30 +398,25 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
         blocks.append(control.ORCHESTRATOR_INSTRUCTIONS.strip())
         blocks.extend(instruction_blocks("orchestrator"))
     blocks.extend(instruction_blocks("all_projects"))
-    blocks.extend(_project_instruction_blocks(project))
+    if not control.is_control(project):
+        blocks.extend(_project_instruction_blocks(project))
     body = "\n\n".join(b for b in blocks if b)
-    # Use plain-text markers instead of XML-like tags. Some models interpret
-    # <perun_instructions> as part of the user request and ignore the actual
-    # prompt that follows the closing tag. Strip any injected markers from the
-    # body so a malicious instruction file cannot prematurely close the envelope.
+    # Older instruction files may still contain the legacy marker strings.
+    # Drop them so they cannot prematurely end the instruction envelope.
     safe_body = body.replace("--- PERUN INSTRUCTIONS START ---", "")
     safe_body = safe_body.replace("--- PERUN INSTRUCTIONS END ---", "")
     safe_body = safe_body.replace("--- PERUN CONTEXT START ---", "")
     safe_body = safe_body.replace("--- PERUN CONTEXT END ---", "")
-    # The pre-fetch envelope is Perun's own, so its markers are added after
-    # the strip above — otherwise the strip would erase them too.
     prefetch = "\n\n".join(b for b in _prefetch_blocks(project, prompt) if b)
     if prefetch:
         safe_body = f"{safe_body}\n\n{prefetch}" if safe_body else prefetch
     if not safe_body:
         return prompt
     return (
-        "--- PERUN INSTRUCTIONS START ---\n"
-        "The following are project-level instructions. Follow them for every task "
-        "in this session unless the user explicitly says otherwise.\n\n"
-        f"{safe_body}\n"
-        "--- PERUN INSTRUCTIONS END ---\n\n"
-        f"User request:\n{prompt}"
+        "The project-level instructions below apply to every task in this "
+        "session unless the user explicitly says otherwise.\n\n"
+        f"{safe_body}\n\n"
+        f"Now respond to the user's request:\n{prompt}"
     )
 
 
@@ -955,6 +971,23 @@ class Orchestrator:
             argv += ["--session", oc_sid]
         if run_uid:
             argv += ["--title", f"Perun · {project['name']} · {run_uid[:6]}"]
+        # If the composed prompt is long enough to approach the Windows command-
+        # line limit, automatically switch to a prompt file so the run does not
+        # fail with "The command line is too long." This is common for control-
+        # plane chats where orchestrator instructions + context pre-fetch are
+        # prepended to a short user message.
+        if not use_prompt_file:
+            estimated = sum(len(a) for a in argv) + len(prompt) + len(argv)
+            if estimated > _CMDLINE_PROMPT_THRESHOLD:
+                use_prompt_file = True
+        # On Windows ``opencode`` resolves to a ``.cmd`` file and is launched
+        # through ``cmd /c``. cmd.exe's parser can mangle or truncate prompts
+        # with newlines/Unicode even when the total length is below 8191, so
+        # always use a prompt file for that path.
+        if not use_prompt_file:
+            oc_argv = resolve_opencode("opencode")
+            if len(oc_argv) >= 3 and oc_argv[0].lower() == "cmd" and oc_argv[1].lower() == "/c":
+                use_prompt_file = True
         prompt_file = ""
         if use_prompt_file:
             # Write the prompt to a temp file and attach it with --file. This

@@ -122,10 +122,12 @@ CREATE TABLE IF NOT EXISTS memory (
     content_hash  TEXT NOT NULL,
     ts            TEXT NOT NULL,
     meta          TEXT DEFAULT '{}',
+    room_id       TEXT DEFAULT '',
     UNIQUE(scope, project_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project_id);
 CREATE INDEX IF NOT EXISTS idx_memory_project_id_desc ON memory(project_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_room ON memory(room_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS doc_chunks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -341,6 +343,8 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "memory": [
         ("meta", "TEXT DEFAULT '{}'"),
+        # Room-scoped PerunChat memory (v0.8.22).
+        ("room_id", "TEXT DEFAULT ''"),
     ],
     # Added with the Shared Projects release. ``CREATE TABLE IF NOT EXISTS``
     # cannot add it to a database whose table was created by an earlier build,
@@ -414,7 +418,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def init_db() -> None:
