@@ -13,6 +13,9 @@ All notable changes are recorded here. Single source of truth for release notes.
   These tools let agents running in confined JavaScript environments (e.g. the
   OpenCode `execute` runtime, which has no `require`/`fs` access) inspect files
   without leaving the Perun MCP tool surface.
+- **Release automation script** (`tools/release.py`). One command bumps the
+  version, updates docs, syncs internal project content to the private
+  `perun_internal` companion repo, commits, tags, and pushes both repos.
 
 ### Changed
 
