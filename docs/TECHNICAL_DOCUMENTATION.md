@@ -651,6 +651,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
+| GET/POST | `/api/health/check` | check and optionally fix missing agent files (`perunchat`, `perun-shared`) across OpenCode config dirs; returns `{ok, fixes, issues}` |
 | GET | `/api/update/check` | latest GitHub release vs running version; `update_available`, `release`, install `mode`; cached 30 min |
 | GET | `/api/update/status` | persisted update job (`state`, `progress`, `log`, `from_version`, `to_version`) plus live `current` version |
 | POST | `/api/update/apply` | start the update; requires `{}` and the API token; refuses if no update, unsupported install mode, or dirty git checkout |
@@ -1609,6 +1610,7 @@ setting.
   questions using the provided participant roster and conversation context, and
   to avoid generic greetings when a question was asked. The agent file is
   overwritten on bridge start whenever the embedded content changes.
+* **Agent auto-install and health check.** The `perunchat` and `perun-shared` agents are auto-installed/updated into both `agents/` and `agent/` OpenCode config directories (respecting `OPENCODE_CONFIG_DIR`/`XDG_CONFIG_HOME`). Added `GET/POST /api/health/check` and a Dashboard "Health check & fix" button.
 
 ### 2026-10-20 — v0.7.18: no-loss PerunChat reply delivery
 
