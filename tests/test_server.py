@@ -33,6 +33,19 @@ def test_dashboard_served(client):
     assert "PERUN" in r.text
 
 
+
+
+def test_shutdown_endpoint_returns_ok(client, monkeypatch):
+    """POST /api/shutdown is reachable and reports whether it could signal uvicorn."""
+    from perun import config
+    token = config.api_token() or ""
+    r = client.post("/api/shutdown", headers={"X-Perun-Token": token})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert "stopped" in body
+
+
 def test_projects_crud(client):
     r = client.post("/api/projects", json={"name": "Demo", "path": r"C:\demo"})
     assert r.status_code == 200

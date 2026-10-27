@@ -5296,6 +5296,17 @@ function wireChrome() {
     $('#btn-refresh').addEventListener('click', router);
     $('#btn-update').addEventListener('click', () => goto('#/updates'));
     $('#btn-quick-run').addEventListener('click', () => goto('#/console'));
+    $('#btn-shutdown').addEventListener('click', () => {
+        confirmDialog('Shut down Perun?',
+            'This stops the local Perun service. Restart it with your Perun shortcut or by running python -m perun serve.',
+            async () => {
+                try {
+                    await api('/api/shutdown', { method: 'POST' });
+                    toast('Perun is shutting down… restart with your shortcut when ready.', 'ok');
+                } catch (e) { toast(e.message, 'err'); }
+            },
+            'Shut down');
+    });
     $('#global-search').addEventListener('submit', (e) => {
         e.preventDefault();
         const q = $('#global-q').value.trim();

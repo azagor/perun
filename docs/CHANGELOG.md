@@ -2,6 +2,16 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.20
+
+### Added
+
+- **Dashboard shutdown button.** Added a **Shutdown Perun** button to the
+  topbar, next to Quick Run. It calls `POST /api/shutdown`, which gracefully
+  signals uvicorn to exit, so users can stop the local service without leaving
+  the dashboard. A confirmation dialog prevents accidental shutdowns, and the
+  button points out that Perun can be restarted with the usual shortcut.
+
 ## v0.8.19
 
 ### Fixed

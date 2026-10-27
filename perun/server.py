@@ -3324,6 +3324,38 @@ def _new_activity(after_id: int, limit: int = 50) -> list[dict[str, Any]]:
     return out
 
 
+def request_shutdown() -> bool:
+    """Ask uvicorn to exit gracefully by setting ``should_exit`` on the running
+    ``Server`` instance(s). Returns ``True`` when at least one server was told to
+    stop; ``False`` when no handle was found and the caller should fall back to
+    sending a signal."""
+    try:
+        from uvicorn.server import Server
+
+        stopped = False
+        for server in list(getattr(Server, "servers", [])):
+            try:
+                server.should_exit = True
+                stopped = True
+            except Exception:
+                continue
+        return stopped
+    except Exception:
+        return False
+
+
+@app.post("/api/shutdown")
+def api_shutdown() -> dict[str, Any]:
+    """Gracefully shut down the running Perun service from the dashboard.
+
+    The endpoint requires the local API token (like other state-changing
+    endpoints) and delegates to :func:`request_shutdown`, which signals uvicorn
+    to exit. The dashboard can then be restarted with the usual shortcut.
+    """
+    stopped = request_shutdown()
+    return _ok(stopped=stopped, detail="Perun is shutting down")
+
+
 # --------------------------------------------------------------------------- #
 # Static dashboard (mounted last so /api/* always wins)
 # --------------------------------------------------------------------------- #
@@ -3354,26 +3386,6 @@ else:  # pragma: no cover
     def _no_web() -> JSONResponse:
         return JSONResponse({"ok": True, "detail": "web/ dashboard not found",
                              "home": str(config.HOME)})
-
-
-def request_shutdown() -> bool:
-    """Ask uvicorn to exit gracefully by setting ``should_exit`` on the running
-    ``Server`` instance(s). Returns ``True`` when at least one server was told to
-    stop; ``False`` when no handle was found and the caller should fall back to
-    sending a signal."""
-    try:
-        from uvicorn.server import Server
-
-        stopped = False
-        for server in list(getattr(Server, "servers", [])):
-            try:
-                server.should_exit = True
-                stopped = True
-            except Exception:
-                continue
-        return stopped
-    except Exception:
-        return False
 
 
 def serve(host: str | None = None, port: int | None = None, *,
