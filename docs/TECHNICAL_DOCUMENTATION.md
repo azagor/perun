@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.23 (see §15). Added confined filesystem MCP tools (`perun_file_exists`, `perun_list_directory`, `perun_read_file`) so agents in restricted JavaScript runtimes can inspect files through the Perun MCP surface, hardened the global instruction kernel to require Perun's bundled MCP search tools over raw `grep`, and added a release automation script (`tools/release.py`) that keeps the public repo and the private `perun_internal` companion repo in sync. Previous v0.8.22 release brought the PerunChat room memory redesign (schema v7), the `perunchat_room_memory` MCP tool, and the Windows orchestrator chat fix.
+**Latest release:** v0.8.24 (see §15). Added confined filesystem MCP tools (`perun_file_exists`, `perun_list_directory`, `perun_read_file`) so agents in restricted JavaScript runtimes can inspect files through the Perun MCP surface, hardened the global instruction kernel to require Perun's bundled MCP search tools over raw `grep`, and added a release automation script (`tools/release.py`) that keeps the public repo and the private `perun_internal` companion repo in sync. Previous v0.8.22 release brought the PerunChat room memory redesign (schema v7), the `perunchat_room_memory` MCP tool, and the Windows orchestrator chat fix.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1565,7 +1565,7 @@ setting.
 
 ## 15. Revision history
 
-### 2026-10-27 — v0.8.23: filesystem MCP tools + global search-tool enforcement
+### 2026-10-27 — v0.8.24: filesystem MCP tools + global search-tool enforcement + release automation
 
 * **Confined filesystem helpers in the MCP server.** `mcp/perun_mcp.py` adds
   `perun_file_exists`, `perun_list_directory`, and `perun_read_file`. Access is
@@ -1583,6 +1583,11 @@ setting.
 * `docs/CODEMAP.md`, `docs/TECHNICAL_DOCUMENTATION.md`, and `README.md` updated
   to list the full current MCP tool inventory (28 tools), including
   `perunchat_room_memory` and the new filesystem helpers.
+
+### 2026-10-27 — v0.8.23: filesystem MCP tools + global search-tool enforcement
+
+*Placeholder release; changes moved into v0.8.24 when the release automation
+script was added.*
 
 ### 2026-10-27 — v0.8.22: PerunChat room memory + Windows orchestrator chat fix
 

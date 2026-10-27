@@ -2,7 +2,7 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## v0.8.23
+## v0.8.24
 
 ### Added
 
@@ -27,6 +27,10 @@ All notable changes are recorded here. Single source of truth for release notes.
   MCP search tools (`perun_unified_search`, `perun_grep`, `perun_ast_grep`,
   global variants, `perun_memory_search`) over raw `grep`, and to point agents
   at the new filesystem MCP tools when direct filesystem access is unavailable.
+
+## v0.8.23
+
+_No user-facing changes; placeholder entry._
 
 ## v0.8.22
 
