@@ -43,7 +43,12 @@ summarise exactly what changed.
 
 
 def _agent_path() -> Path:
-    return Path.home() / ".config" / "opencode" / "agents" / f"{SHARED_AGENT_ID}.md"
+    from . import config
+
+    try:
+        return config.OPENCODE_CONFIG_DIR / "agents" / f"{SHARED_AGENT_ID}.md"
+    except Exception:
+        return Path.home() / ".config" / "opencode" / "agents" / f"{SHARED_AGENT_ID}.md"
 
 
 # Public accessor so callers can check the file without importing the private name.
@@ -59,12 +64,44 @@ def ensure_shared_agent() -> Path:
     tools if the file cannot be installed.
     """
     try:
-        target = _agent_path()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.is_file() or target.read_text(encoding="utf-8").strip() != SHARED_AGENT_MD.strip():
-            target.write_text(SHARED_AGENT_MD, encoding="utf-8")
-            logger.info("Installed restricted shared-project agent at %s", target)
-        return target
+        from . import config
+
+        candidates = []
+        try:
+            candidates.append(config.OPENCODE_CONFIG_DIR)
+        except Exception:
+            pass
+        candidates.append(Path.home() / ".config" / "opencode")
+        try:
+            import os
+
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            if xdg:
+                candidates.append(Path(xdg).expanduser() / "opencode")
+        except Exception:
+            pass
+
+        seen = set()
+        last = None
+        for base in candidates:
+            try:
+                base_res = base.resolve()
+            except Exception:
+                base_res = base
+            if base_res in seen:
+                continue
+            seen.add(base_res)
+            for name in ("agents", "agent"):
+                try:
+                    target = base / name / f"{SHARED_AGENT_ID}.md"
+                    last = target
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if not target.is_file() or target.read_text(encoding="utf-8").strip() != SHARED_AGENT_MD.strip():
+                        target.write_text(SHARED_AGENT_MD, encoding="utf-8")
+                        logger.info("Installed restricted shared-project agent at %s", target)
+                except Exception:
+                    continue
+        return last or _agent_path()
     except Exception as exc:  # pragma: no cover - environment dependent
         logger.warning("Could not install shared-project agent: %s", exc)
         return _agent_path()

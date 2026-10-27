@@ -45,6 +45,8 @@ from . import (__version__, action_proposals, config, context, control, db,
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
+from .perunchat_bridge import ensure_perunchat_agent as _ensure_perunchat_agent
+from . import shared_agent as _shared_agent
 
 STARTED_AT = time.time()
 
@@ -598,6 +600,57 @@ def health() -> dict[str, Any]:
         # with the orchestrator even when nothing else is registered.
         "control": _control_slug(),
     }
+
+
+@app.get("/api/health/check")
+@app.post("/api/health/check")
+def health_check(fix: bool = True) -> dict[str, Any]:
+    """Check setup and optionally apply fixes for common missing files."""
+    from pathlib import Path
+
+    report: dict[str, Any] = {"ok": True, "fix_applied": bool(fix), "issues": [], "fixes": []}
+
+    # Check perunchat agent
+    try:
+        pc_res = _ensure_perunchat_agent() if fix else {"created": [], "updated": [], "errors": []}
+        if fix:
+            report["fixes"].append({"name": "perunchat_agent", "result": pc_res})
+        else:
+            # quick check
+            candidates = []
+            try:
+                candidates.append(config.OPENCODE_CONFIG_DIR)
+            except Exception:
+                pass
+            candidates.append(Path.home() / ".config" / "opencode")
+            found = False
+            for base in candidates:
+                for name in ("agents", "agent"):
+                    if (base / name / "perunchat.md").exists():
+                        found = True
+                        break
+                if found:
+                    break
+            if not found:
+                report["issues"].append("perunchat_agent_missing")
+    except Exception as exc:
+        report["issues"].append(f"perunchat_agent_error:{exc}")
+
+    # Check shared agent
+    try:
+        sh_res = _shared_agent.ensure_shared_agent() if fix else None
+        if fix and sh_res:
+            report["fixes"].append({"name": "shared_agent", "path": str(sh_res)})
+        else:
+            p = _shared_agent.agent_path()
+            if not p.exists():
+                report["issues"].append("shared_agent_missing")
+    except Exception as exc:
+        report["issues"].append(f"shared_agent_error:{exc}")
+
+    if report["issues"]:
+        report["ok"] = False
+    return report
 
 
 # --------------------------------------------------------------------------- #

@@ -310,32 +310,74 @@ Rules:
 """
 
 
-def _ensure_opencode_agent() -> None:
+def ensure_perunchat_agent() -> Dict[str, Any]:
     """Install or update the perunchat agent in the user's OpenCode config.
 
-    The agent file is managed by Perun, so it is overwritten whenever the
-    embedded content changes. This guarantees that prompt/agent fixes in the
-    codebase actually reach the next chat run.
+    Public version so other components can trigger installation on demand.
     """
+    results: Dict[str, Any] = {"created": [], "updated": [], "errors": []}
     try:
-        agents_dir = Path.home() / ".config" / "opencode" / "agents"
-        agents_dir.mkdir(parents=True, exist_ok=True)
-        agent_file = agents_dir / f"{_OPENCODE_AGENT_NAME}.md"
-        if (
-            not agent_file.exists()
-            or agent_file.read_text(encoding="utf-8").strip() != _OPENCODE_AGENT_MD.strip()
-        ):
-            # Atomic write: a crash mid-write cannot leave a half-written file.
-            tmp = agent_file.with_suffix(".tmp")
-            tmp.write_text(_OPENCODE_AGENT_MD, encoding="utf-8")
-            tmp.replace(agent_file)
-            logger.info("PerunChat bridge updated OpenCode agent %s", agent_file)
+        from . import config as _config
+
+        candidates = []
+        try:
+            candidates.append(_config.OPENCODE_CONFIG_DIR)
+        except Exception:
+            pass
+        candidates.append(Path.home() / ".config" / "opencode")
+        try:
+            import os
+
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            if xdg:
+                candidates.append(Path(xdg).expanduser() / "opencode")
+        except Exception:
+            pass
+
+        seen = set()
+        for base in candidates:
+            try:
+                base_res = base.resolve()
+            except Exception:
+                base_res = base
+            if base_res in seen:
+                continue
+            seen.add(base_res)
+            for name in ("agents", "agent"):
+                agents_dir = base / name
+                try:
+                    agents_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as exc:
+                    results["errors"].append(f"mkdir {agents_dir}: {exc}")
+                    continue
+                agent_file = agents_dir / f"{_OPENCODE_AGENT_NAME}.md"
+                try:
+                    existed = agent_file.exists()
+                    current = agent_file.read_text(encoding="utf-8").strip() if existed else ""
+                    if not existed or current != _OPENCODE_AGENT_MD.strip():
+                        tmp = agent_file.with_suffix(".tmp")
+                        tmp.write_text(_OPENCODE_AGENT_MD, encoding="utf-8")
+                        tmp.replace(agent_file)
+                        if existed:
+                            results["updated"].append(str(agent_file))
+                        else:
+                            results["created"].append(str(agent_file))
+                        logger.info("PerunChat bridge updated OpenCode agent %s", agent_file)
+                except Exception as exc:
+                    results["errors"].append(f"write {agent_file}: {exc}")
+                    continue
     except PermissionError as exc:
         logger.warning(
             "PerunChat bridge could not install agent file (permission denied): %s", exc
         )
+        results["errors"].append(str(exc))
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("PerunChat bridge could not install agent file: %s", exc)
+        results["errors"].append(str(exc))
+    return results
+
+
+_ensure_opencode_agent = ensure_perunchat_agent
 
 
 def _strip_instruction_wrappers(text: str) -> str:

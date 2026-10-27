@@ -878,7 +878,28 @@ async function viewDashboard() {
     v.appendChild(workingNowBox);
 
     // Projects grid
-    v.appendChild(sectionTitle('Projects', el('button', { class: 'btn sm ghost', onclick: () => goto('#/projects') }, 'Manage →')));
+    const projActions = el('div', { class: 'row', style: 'gap:6px' });
+    projActions.appendChild(el('button', { class: 'btn sm ghost', onclick: () => goto('#/projects') }, 'Manage →'));
+    const hcBtn = el('button', { class: 'btn sm ghost', id: 'btn-health-check' }, '🩺 Health check & fix');
+    hcBtn.addEventListener('click', async () => {
+        hcBtn.disabled = true;
+        try {
+            const r = await api('/api/health/check', { method: 'POST', body: {} });
+            if (r.ok) {
+                toast('Health check passed — all fixes applied', 'ok');
+            } else {
+                const issues = (r.issues || []).join(', ');
+                toast(`Fixes applied, remaining issues: ${issues || 'see details'}`, issues ? 'warn' : 'ok');
+            }
+        } catch (e) {
+            toast(e.message, 'err');
+        } finally {
+            hcBtn.disabled = false;
+            await refreshHealth();
+        }
+    });
+    projActions.appendChild(hcBtn);
+    v.appendChild(sectionTitle('Projects', projActions));
     v.appendChild(projectGrid(state.projects.slice(0, 8)));
 
     // Recent activity

@@ -60,6 +60,22 @@ def test_project_requires_path(client):
     assert r.status_code == 400
 
 
+def test_health_check(client):
+    r = client.post("/api/health/check")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert "fixes" in body
+    assert isinstance(body["fixes"], list)
+    # should have ensured both agents
+    names = [f.get("name") for f in body["fixes"]]
+    assert "perunchat_agent" in names
+    assert "shared_agent" in names
+
+    r = client.get("/api/health/check")
+    assert r.status_code == 200
+
+
 def test_memory_remember_and_search(client):
     r = client.post("/api/memory/remember",
                     json={"content": "the widget pipeline is deterministic"})
