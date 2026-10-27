@@ -18,6 +18,12 @@ All notable changes are recorded here. Single source of truth for release notes.
   `_on_proposal_completed` (manifest sync + doc re-index) and for manifest
   dependency rendering in `_shared_project_context`.
 
+## v0.8.16
+
+### Added
+
+- **PerunChat agent auto-install and health check.** The `perunchat` and `perun-shared` OpenCode agents are now auto-installed/updated in both `agents/` and `agent/` config directories (respecting `OPENCODE_CONFIG_DIR`/`XDG_CONFIG_HOME`), fixing cases where the agent was missing on other instances. Added `GET/POST /api/health/check` endpoint and a "Health check & fix" button on the Dashboard. Broader config discovery fallbacks added.
+
 ## v0.8.15
 
 ### Added
