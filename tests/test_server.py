@@ -36,14 +36,36 @@ def test_dashboard_served(client):
 
 
 def test_shutdown_endpoint_returns_ok(client, monkeypatch):
-    """POST /api/shutdown is reachable and reports whether it could signal uvicorn."""
-    from perun import config
+    """POST /api/shutdown is reachable and reports whether it could signal uvicorn.
+
+    Regression: the endpoint must be registered *before* the StaticFiles mount
+    at '/', otherwise StaticFiles catches POST /api/shutdown and returns 405.
+    """
+    from perun import config, server
     token = config.api_token() or ""
     r = client.post("/api/shutdown", headers={"X-Perun-Token": token})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
     assert "stopped" in body
+
+
+def test_shutdown_endpoint_rejects_missing_token(client):
+    """POST /api/shutdown is a state-changing endpoint and requires the local token."""
+    # The autouse _api_token_header fixture injects the token by default, so we
+    # must explicitly pass an empty value to test the missing-token path.
+    r = client.post("/api/shutdown", headers={"X-Perun-Token": ""})
+    assert r.status_code == 401
+
+
+def test_shutdown_endpoint_reports_stopped_false(monkeypatch, client):
+    """When request_shutdown cannot find a server, the endpoint reports stopped=False."""
+    from perun import config, server
+    monkeypatch.setattr(server, "request_shutdown", lambda: False)
+    token = config.api_token() or ""
+    r = client.post("/api/shutdown", headers={"X-Perun-Token": token})
+    assert r.status_code == 200
+    assert r.json()["stopped"] is False
 
 
 def test_projects_crud(client):

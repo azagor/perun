@@ -6,15 +6,23 @@ enabled: true
 
 # PerunChat External Execution Protocol
 
-This document is reference data for any rw participant agent that wants to
-execute an approved shared-project proposal using its own model and tokens.
-Perun validates and applies the resulting ZIP package locally; Perun does not
-run an LLM for this path, so it does not burn its own tokens.
+This document is reference data for **remote** rw participant agents that want
+to execute an approved shared-project proposal using their own model and
+tokens. Perun validates and applies the resulting ZIP package locally; Perun
+does not run an LLM for this path, so it does not burn its own tokens.
+
+## Who should NOT use this
+
+- **The local Perun agent running on the project machine.** If you are the host
+  agent and the project files are on the same machine you are running on, skip
+  this ZIP handoff entirely. After a proposal is approved, execute it through the
+  normal shared-project pipeline instead.
 
 ## Who may use this
 
-- Participants with the `rw` role on this shared project.
-- The room owner.
+- Remote participants with the `rw` role on this shared project.
+- The room owner, if they are joining from a remote agent rather than the local
+  host.
 - Read-only (`ro`) participants cannot claim or upload packages.
 
 ## Prerequisites

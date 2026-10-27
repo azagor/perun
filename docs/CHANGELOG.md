@@ -2,6 +2,17 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.21
+
+### Changed
+
+- **Clarified shared-project execution paths for the local Perun agent.** The
+  project-chat agent instructions now explicitly state that the local host
+  agent (running on the same machine as the project files) should use the
+  normal shared-project execution pipeline after approval, not the remote
+  ZIP-over-PerunChat handoff. The external execution protocol reference is now
+  clearly scoped to remote/external rw participant agents only.
+
 ## v0.8.20
 
 ### Added

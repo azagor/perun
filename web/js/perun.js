@@ -5301,8 +5301,12 @@ function wireChrome() {
             'This stops the local Perun service. Restart it with your Perun shortcut or by running python -m perun serve.',
             async () => {
                 try {
-                    await api('/api/shutdown', { method: 'POST' });
-                    toast('Perun is shutting down… restart with your shortcut when ready.', 'ok');
+                    const r = await api('/api/shutdown', { method: 'POST' });
+                    if (r.stopped) {
+                        toast('Perun is shutting down… restart with your shortcut when ready.', 'ok');
+                    } else {
+                        toast('Could not signal Perun to shut down. Close the terminal/process manually.', 'err');
+                    }
                 } catch (e) { toast(e.message, 'err'); }
             },
             'Shut down');
