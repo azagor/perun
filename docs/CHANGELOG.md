@@ -2,6 +2,20 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.26
+
+### Fixed
+
+- **Schema v7 migration ordering.** Existing databases that predated the
+  `memory.room_id` column failed to start after updating to v0.8.24 because
+  `db.init_db()` executed SCHEMA (which creates an index on `room_id`) before
+  running migrations that add the column. `_migrate()` is now invoked before
+  `executescript(SCHEMA)`, and again afterward for newly-created tables.
+
+## v0.8.25
+
+_No user-facing changes; placeholder entry correcting the version tag._
+
 ## v0.8.24
 
 ### Added
