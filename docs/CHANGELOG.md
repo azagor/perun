@@ -2,6 +2,18 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.18
+
+### Fixed
+
+- **PerunChat bridge now starts after saving credentials in the dashboard.**
+  The bridge previously cached its settings object at startup; when the
+  dashboard saved PerunChat credentials, `server.py` replaced
+  `ORCH.settings` with a new object, so the bridge kept reading the old
+  `perunchat_auto_reply = False` value and reported `bridge: stopped`. The
+  `settings` property now always reads from `self.orchestrator.settings`, and a
+  regression test guards the fix.
+
 ## v0.8.17
 
 ### Added

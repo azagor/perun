@@ -49,6 +49,26 @@ def test_bridge_enabled(settings):
     assert bridge.enabled
 
 
+def test_bridge_reads_current_settings_from_orchestrator(settings):
+    """After server.py replaces ORCH.settings, the bridge must read the new object.
+
+    Regression: the bridge used to cache self.settings at __init__ time, so a
+    dashboard settings save (which creates a new Settings instance) left the
+    bridge reading the old auto_reply value and reporting 'bridge: stopped'.
+    """
+    settings.perunchat_auto_reply = False
+    new_settings = config.Settings.load()
+    new_settings.perunchat_api_key = "prn_test_secret"
+    new_settings.perunchat_auto_reply = True
+
+    orch = MagicMock(settings=settings)
+    bridge = PerunChatBridge(orch)
+    assert not bridge.enabled  # old settings say disabled
+
+    orch.settings = new_settings
+    assert bridge.enabled      # property reads the new settings object
+
+
 def test_default_rooms_when_empty(settings):
     settings.perunchat_auto_join = []
     bridge = PerunChatBridge(MagicMock(settings=settings))

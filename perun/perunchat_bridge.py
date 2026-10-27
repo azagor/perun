@@ -421,7 +421,6 @@ class PerunChatBridge:
 
     def __init__(self, orchestrator: "Orchestrator") -> None:
         self.orchestrator = orchestrator
-        self.settings = orchestrator.settings
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._ws: Optional[Any] = None
@@ -481,6 +480,16 @@ class PerunChatBridge:
         self._package_transfers: Dict[str, Dict[str, Any]] = self._load_package_transfers()
         self._package_transfers_lock = threading.RLock()
         self._next_package_sweep = 0.0
+
+    @property
+    def settings(self) -> Any:
+        """Always read the current settings from the orchestrator.
+
+        ``server.py`` replaces ``ORCH.settings`` after a settings PATCH, so we
+        must not cache the settings object or the bridge will keep reading the
+        old values.
+        """
+        return self.orchestrator.settings
 
     @property
     def available(self) -> bool:
