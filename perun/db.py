@@ -424,10 +424,14 @@ SCHEMA_VERSION = 7
 def init_db() -> None:
     global _initialized
     with db() as conn:
+        # Reconcile columns on existing tables *before* executing SCHEMA.
+        # SCHEMA contains indexes that reference newer columns (e.g.
+        # ``idx_memory_room`` needs ``memory.room_id``); if the table predates
+        # the column, creating the index would fail before migrations run.
+        _migrate(conn)
         conn.executescript(SCHEMA)
-        # Always reconcile columns (introspection-driven, idempotent); the
-        # version marker below exists so *future* non-additive migrations can
-        # tell what already ran, and so tooling can read the schema age.
+        # Run migrations again in case any newly-created tables need retired
+        # columns dropped or future non-additive fixes.
         _migrate(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     _initialized = True
