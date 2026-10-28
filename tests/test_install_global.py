@@ -198,3 +198,34 @@ def test_reinstall_does_not_pile_up_backups(fake_xdg):
     install_global.install(index=False)
     backups = list(cfg_path.parent.glob("opencode.json.perun-backup-*"))
     assert len(backups) == 1, f"expected a single backup, got {len(backups)}"
+
+
+def test_instructions_pointer_is_written(fake_xdg):
+    """Install writes the thin pointer, not the full kernel."""
+    assert install_global.install(index=False) == 0
+    pointer = install_global.instructions_target()
+    assert pointer.is_file()
+    text = pointer.read_text(encoding="utf-8")
+    assert text == install_global._INSTRUCTIONS_POINTER
+    # It must not contain the full AGENTS.md kernel again.
+    assert install_global.AGENTS_BEGIN not in text
+
+
+def test_instructions_pointer_is_idempotent(fake_xdg):
+    """Re-installing does not backup the pointer when it has not changed."""
+    install_global.install(index=False)
+    pointer = install_global.instructions_target()
+    first_mtime = pointer.stat().st_mtime_ns
+    install_global.install(index=False)
+    assert pointer.read_text(encoding="utf-8") == install_global._INSTRUCTIONS_POINTER
+    # No backup of the pointer should have been created.
+    backups = list(pointer.parent.glob("INSTRUCTIONS.md.perun-backup-*"))
+    assert backups == []
+
+
+def test_uninstall_removes_instructions_pointer(fake_xdg):
+    install_global.install(index=False)
+    pointer = install_global.instructions_target()
+    assert pointer.is_file()
+    install_global.uninstall()
+    assert not pointer.exists()

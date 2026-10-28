@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.26 (see §15). Hotfix for schema v7 migration ordering: existing databases that predated the `memory.room_id` column failed to start after updating to v0.8.24 because `db.init_db()` created an index on `room_id` before migrations added the column. v0.8.26 runs `_migrate()` before `executescript(SCHEMA)`. Previous v0.8.24 release added confined filesystem MCP tools and global MCP-search enforcement.
+**Latest release:** v0.8.27 (see §15). Token-efficiency tooling: `perun context dedupe`, a thin global instructions pointer, expanded ambient-context stats with the per-session token floor, and a harder losslessness check that flags repeated inline subsections and stale pointer files. A production-readiness audit hardened the implementation: `tool_schema_stats()` degrades on serialization errors, `instructions[]` resolution is confined to the config/project root, and the verify size guardrail now measures the live inline portion for mixed destinations.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1572,6 +1572,20 @@ setting.
   `memory.room_id`, so older databases that did not yet have the column failed
   to start after updating to v0.8.24. The fix is idempotent and also runs
   migrations again after SCHEMA for newly-created tables.
+
+### 2026-10-28 — v0.8.27: token-efficiency tooling + production-readiness audit
+
+* **`perun context dedupe`** removes byte-identical duplicate `###` sections from
+  project `AGENTS.md` files.
+* **`perun context stats`** now reports the full ambient-context ledger: global
+  `AGENTS.md`, every `instructions[]` file, live MCP schema size, skill
+  frontmatter, and the computed per-session token floor.
+* **`perun context verify`** accepts mixed `inline` + `context` destinations,
+  flags repeated inline subsections, and checks the global instructions pointer.
+* **Audit hardening:** `tool_schema_stats()` degrades on serialization errors;
+  `instructions[]` paths are confined to the config/project root; the inline-size
+  guardrail measures the live inline portion for mixed destinations. Regression
+  tests added for all new paths.
 
 ### 2026-10-27 — v0.8.24: filesystem MCP tools + global search-tool enforcement + release automation
 

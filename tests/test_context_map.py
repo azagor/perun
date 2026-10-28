@@ -320,3 +320,148 @@ def test_the_retained_original_is_never_overwritten_by_a_sync(migrated, monkeypa
     doc = context.get(context_map.retained_key(migrated["slug"]),
                       project_id=migrated["id"], scope=context.PROJECT_SCOPE)
     assert doc["body"] == ORIGINAL.strip()
+
+
+# --------------------------------------------------------------------------- #
+# Mixed destinations
+# --------------------------------------------------------------------------- #
+MIXED_ORIGINAL = """# Demo project
+
+## Rules
+
+* Rule one stays.
+* Rule two stays.
+
+### Shared module
+
+Alpha.
+Bravo.
+
+### Another shared module
+
+Charlie.
+
+## Reference
+
+Some reference material.
+"""
+
+
+def test_check_accepts_mixed_inline_and_context_destination(project):
+    """A section can keep bullets inline and point modules at a context doc."""
+    root = Path(project["path"])
+    slug = project["slug"]
+    (root / "AGENTS.md").write_text(MIXED_ORIGINAL, encoding="utf-8")
+    module_body = "### Shared module\n\nAlpha.\nBravo.\n"
+    context.index_doc(context_map.retained_key(slug), "Demo agent reference",
+                      MIXED_ORIGINAL, scope=context.PROJECT_SCOPE,
+                      project_id=project["id"])
+    context.index_doc(context_map.context_key(slug, "modules"), "Modules",
+                      module_body, scope=context.PROJECT_SCOPE,
+                      project_id=project["id"])
+
+    live = """# Demo project
+
+## Rules
+
+* Rule one stays.
+* Rule two stays.
+
+The following modules are retrievable on demand via `perun_context("demo.context.modules")`:
+- **Shared module**
+- **Another shared module**
+
+## Reference
+
+Some reference material.
+"""
+    (root / "AGENTS.md").write_text(live, encoding="utf-8")
+
+    data = context_map.build_map(slug, MIXED_ORIGINAL)
+    for section in data["sections"]:
+        if section["heading"] == "Rules":
+            section["dest"] = [
+                {"kind": "inline", "required": ["Rule one stays."]},
+                {"kind": "context",
+                 "key": context_map.context_key(slug, "modules"),
+                 "required": ["Shared module"]},
+            ]
+        else:
+            section["dest"] = [{"kind": "inline", "required": []}]
+    context_map.save_map(root, data)
+
+    res = context_map.check(project)
+    assert res["ok"], res["problems"]
+
+
+def test_check_mixed_destination_requires_context_fragments(project):
+    """A mixed destination still fails if the context doc loses a fragment."""
+    root = Path(project["path"])
+    slug = project["slug"]
+    (root / "AGENTS.md").write_text(MIXED_ORIGINAL, encoding="utf-8")
+    context.index_doc(context_map.retained_key(slug), "Demo agent reference",
+                      MIXED_ORIGINAL, scope=context.PROJECT_SCOPE,
+                      project_id=project["id"])
+    # Context doc exists but does not contain the required fragment.
+    context.index_doc(context_map.context_key(slug, "modules"), "Modules",
+                      "Some unrelated content that omits the heading.\n",
+                      scope=context.PROJECT_SCOPE,
+                      project_id=project["id"])
+
+    live = """# Demo project
+
+## Rules
+
+* Rule one stays.
+
+"""
+    (root / "AGENTS.md").write_text(live, encoding="utf-8")
+
+    data = context_map.build_map(slug, MIXED_ORIGINAL)
+    for section in data["sections"]:
+        if section["heading"] == "Rules":
+            section["dest"] = [
+                {"kind": "inline", "required": ["Rule one stays."]},
+                {"kind": "context",
+                 "key": context_map.context_key(slug, "modules"),
+                 "required": ["Shared module"]},
+            ]
+    context_map.save_map(root, data)
+
+    res = context_map.check(project)
+    assert not res["ok"]
+    assert any("not fully present" in p for p in res["problems"])
+
+
+def test_check_fails_on_repeated_inline_subsections(project):
+    """An inline section that repeats the same ``###`` block is not lossless."""
+    root = Path(project["path"])
+    slug = project["slug"]
+    # The duplicate detector ignores tiny blocks; the body must exceed 200 B.
+    module_body = "### Shared module\n\n" + "Alpha.\n" * 50 + "Bravo.\n"
+    repeated = f"""# Demo project
+
+## Rules
+
+* Rule one stays.
+
+{module_body}
+{module_body}
+
+## Reference
+
+Some reference material.
+"""
+    (root / "AGENTS.md").write_text(repeated, encoding="utf-8")
+    context.index_doc(context_map.retained_key(slug), "Demo agent reference",
+                      repeated, scope=context.PROJECT_SCOPE,
+                      project_id=project["id"])
+
+    data = context_map.build_map(slug, repeated)
+    for section in data["sections"]:
+        section["dest"] = [{"kind": "inline", "required": []}]
+    context_map.save_map(root, data)
+
+    res = context_map.check(project)
+    assert not res["ok"], res["problems"]
+    assert any("repeats subsection" in p for p in res["problems"])

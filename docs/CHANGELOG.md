@@ -2,6 +2,47 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.27
+
+_Released 2026-10-28._
+
+### Added
+
+- **`perun context dedupe`** removes byte-identical duplicate `###` sections
+  from a project's `AGENTS.md`, keeping the first occurrence. This is a safe,
+  mechanical cleanup that lowers the ambient prompt cost without removing
+  awareness.
+- **`perun context verify`** now accepts mixed `inline` + `context` destinations,
+  so a section can keep its behavioural bullets inline and point the rest at a
+  context doc without breaking the losslessness proof.
+- **Global instructions pointer.** `perun context sync` now refreshes both the
+  managed `AGENTS.md` kernel *and* the `perun/INSTRUCTIONS.md` pointer. The
+  pointer replaces the previous full duplicate of the kernel that OpenCode's
+  `instructions[]` array loaded into every session.
+- **Full ambient-context ledger in `perun context stats`.** The report now
+  includes the global `AGENTS.md` block, every `instructions[]` file, the
+  live MCP tool-schema size, and OpenCode skill frontmatter, plus the computed
+  per-session token floor. It also detects within-file `###`-level duplicates
+  and emits budget warnings for large inline sections.
+- **Hardened `perun context verify`.** The losslessness check now fails when an
+  inline section repeats the same `###` module multiple times, and when the
+  global `perun/INSTRUCTIONS.md` file is not the thin pointer.
+
+### Changed
+
+- **Production-readiness audit hardening:**
+  - `tool_schema_stats()` now degrades gracefully if a live tool schema cannot
+    be serialised.
+  - `_context_instruction_files()` resolves `instructions[]` entries strictly
+    inside the global config directory or the project root; escaping paths are
+    ignored.
+  - The `perun context verify` size guardrail now measures the *live* inline
+    portion of a section, so mixed `inline` + `context` destinations report an
+    accurate ambient cost.
+  - New regression tests cover mixed destinations, repeated inline
+    subsections, `perun context dedupe`, `perun context stats`, pointer drift,
+    path escaping, and the thin instructions pointer lifecycle.
+
 ## v0.8.26
 
 ### Fixed

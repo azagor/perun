@@ -108,10 +108,39 @@ def kernel_text() -> str:
         return raw.strip()
 
 
+# A minimal pointer file written to ``perun/INSTRUCTIONS.md``.  OpenCode V2
+# loads ``instructions[]`` files into the prompt, so keeping a second copy of
+# the kernel there duplicated the managed ``AGENTS.md`` block.  The previous
+# full guide is retrievable as ``handbook.global``; the tool table lives in
+# ``handbook.tools``.
+_INSTRUCTIONS_POINTER = """\
+# Perun — global instructions
+
+Perun's machine-wide guidance lives in the managed block of your global
+``AGENTS.md`` and in retrievable handbook docs. Call ``perun_context(\"list\")``
+to see the available keys, ``perun_context(\"handbook.global\")`` for the
+complete previous guide, and ``perun_context(\"handbook.tools\")`` for the
+live MCP tool reference.
+"""
+
+
 def _managed_block() -> str:
     """The AGENTS.md block, sourced from the packaged kernel template."""
     body = kernel_text()
     return f"{AGENTS_BEGIN}\n{body}\n{AGENTS_END}\n"
+
+
+def _sync_instructions_file() -> Path:
+    """Write the thin ``perun/INSTRUCTIONS.md`` pointer, idempotently."""
+    target = instructions_target()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = _INSTRUCTIONS_POINTER
+    if target.is_file() and target.read_text(encoding="utf-8") == text:
+        return target
+    if target.is_file():
+        _backup(target)
+    target.write_text(text, encoding="utf-8")
+    return target
 
 
 def _strip_block(text: str) -> str:
@@ -217,13 +246,15 @@ def install(*, force: bool = False, index: bool = True) -> int:
     cfg_dir = config_dir()
     cfg_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Write the Perun instructions + command templates.
+    # 1. Write the Perun instructions pointer + command templates.
     perun_dir().mkdir(parents=True, exist_ok=True)
     templates = config.TEMPLATES_DIR
     ins_src = templates / INSTRUCTIONS_FILE
     if ins_src.is_file():
-        # The kernel is rendered (key table generated), not copied verbatim.
-        instructions_target().write_text(kernel_text() + "\n", encoding="utf-8")
+        # Write only a pointer: the managed AGENTS.md block already carries the
+        # kernel, and duplicating it here cost ~1,500 tokens per session. The
+        # previous full guide is retrievable as handbook.global.
+        _sync_instructions_file()
     commands_dir = cfg_dir / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
     installed_commands: list[str] = []

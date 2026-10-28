@@ -242,18 +242,23 @@ moving reference material into the Context layer did not lose anything.
 * Sections: `split_sections()` (level-2 headings; the text before the first
   heading is the `"(top)"` section), `contains()` (whitespace-insensitive
   substring), `_verbatim()` (a body is present *unchanged* — as a substring or
-  as a section with the same content hash).
+  as a section with the same content hash), `_live_section()` (the current body
+  of a level-2 heading in the live `AGENTS.md`).
 * The map file: `MAP_DIR`/`.perun/context-map.json`, `map_path()`,
   `load_map()`, `save_map()`, `build_map()` (a draft — every section starts
   unclassified).
 * Destinations: `inline` (stays in `AGENTS.md`; the `required` fragments must
   still be there), `context` (relocated to a Context-layer doc, by key),
   `secret` (moved to the encrypted store), `retained` (lives only in the
-  retained original). `DEST_KINDS`.
+  retained original). `DEST_KINDS`. Sections may declare **mixed**
+  destinations (`inline` + `context`) to keep rule bullets inline and point
+  elaboration at a context doc.
 * `check()` — the gate: the retained original still hashes to the map's
   `source_hash` (nothing was deleted), every section of that original is
   accounted for (nothing is unaccounted for), and every destination still
-  holds its content (nothing was paraphrased away).
+  holds its content (nothing was paraphrased away). It also flags repeated
+  inline `###` blocks (`_inline_subsection_duplicates()`) and reports the
+  largest inline subsections (`_inline_subsection_sizes()`).
 * Per-project context docs: `context_dir()` (`.perun/context/`),
   `context_key()`, `retained_key()`, `project_context_files()`,
   `project_context_key()`, `write_context_doc()`.
@@ -266,6 +271,8 @@ Perun's own reference material, as retrievable context docs.
   re-entrancy guard — rendering the tool reference loads the MCP module, which
   calls back into `ensure_indexed()`).
 * `collect()`, `ensure_indexed()`, `_load_mcp_module()`,
+  `_list_mcp_tools()` (live tool list, sync-only helper), `tool_schema_stats()`
+  (byte size of the live tool schemas for the ambient ledger),
   `render_tool_reference()` (generated from the **live** MCP registry, so it
   cannot drift), `render_key_table()`, `render_kernel()`.
 
@@ -714,7 +721,7 @@ delegate to `installer.machine_install()`; `backfill-docs [slug] [--all]`
 creates missing scaffold docs/manifest; `validate-docs [slug] [--all]` checks
 for stale docs/anchors; `refresh-deps [slug] [--all]` parses dependencies into
 memory facts),
-`cmd_context` (**`perun context list|get|search|sync|map|index|verify|stats`** —
+`cmd_context` (**`perun context list|get|search|sync|map|index|verify|stats|dedupe`** —
 the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|status`**),
 `cmd_update` (**`perun update check|status|apply|dismiss`** — check GitHub releases and self-update Perun from the CLI or dashboard), `cmd_mcp`, `build_parser()`, `main()`.
 * `_context_project_id()` (slug/path → project id; the cwd's project by
@@ -722,10 +729,15 @@ the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|s
   project's `AGENTS.md` as `<slug>.agents.full` and its `.perun/context/*.md`
   as `<slug>.context.<name>` — the retained original is a **snapshot** and is
   never overwritten once a context map pins it), `_context_map()` (show or draft
-  the losslessness map), `_context_verify()` (kernel drift, handbook coverage,
-  `memory:`-bound anchors, `kind: secret` anchors, and the **losslessness
-  check**), `_context_stats()` (AGENTS.md sizes, token estimates and duplicated
-  sections), `_split_sections()`.
+  the losslessness map), `_context_verify()` (kernel drift, instructions
+  pointer drift, handbook coverage, `memory:`-bound anchors, `kind: secret`
+  anchors, and the **losslessness check**), `_context_stats()` (AGENTS.md
+  sizes, instruction files, MCP schema size, skill frontmatter, computed
+  per-session token floor, duplicated `##`/`###` sections, and budget
+  warnings), `_context_dedupe_agents()` (removes byte-identical duplicate
+  `###` blocks from a project's `AGENTS.md`), `_context_instruction_files()`
+  (ledger of every `instructions[]` file, with path escaping protection),
+  `_skill_frontmatter_stats()`, `_split_sections()`, `_split_subsections()`.
 * `_start_bridge_thread()` with process-lifetime `_BRIDGE_LOCK` / `_BRIDGE_THREAD`
   / `_IN_PROCESS_BRIDGE` — the `serve --bridge` path starts the bridge at most once
   per *machine* and keeps the single-instance mutex alive for the whole process.
@@ -759,11 +771,14 @@ Idempotent, additive global install into `~/.config/opencode` (honours
   `agents_target()`.
 * `AGENTS_BEGIN`, `AGENTS_END`, `INSTRUCTIONS_FILE`, `AGENTS_FILE`, `MCP_NAME`,
   `PERUN_SUBDIR` — the managed block markers and install names.
+* `_INSTRUCTIONS_POINTER` — the thin pointer written to `perun/INSTRUCTIONS.md`
+  so OpenCode's `instructions[]` array no longer duplicates the full kernel.
 * `kernel_text()` — renders the **context kernel** from
   `perun/integrations/templates/INSTRUCTIONS.md` (with `{{KEY_TABLE}}` filled
   by `handbook.render_key_table()`); `_managed_block()`, `_strip_block()`,
   `_sync_agents_block()` (rewrites only the managed block, preserving
-  everything the user wrote around it).
+  everything the user wrote around it), `_sync_instructions_file()` (writes the
+  thin `perun/INSTRUCTIONS.md` pointer idempotently).
 * `_read_json()` (JSONC-tolerant; raises `ConfigParseError` rather than silently
   discarding an unparseable config), `_write_json()`, `_backup()` (uniquely named
   within a second), `_python_cmd()`, `_relative_to_config()`, `ConfigParseError`.

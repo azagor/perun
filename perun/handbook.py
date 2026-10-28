@@ -123,19 +123,28 @@ def _describe_param(name: str, spec: dict[str, Any], required: bool) -> str:
     return f"| `{name}` | {kind} | {'yes' if required else 'no'} | {desc} |"
 
 
+def _list_mcp_tools() -> list[Any]:
+    """Return the live MCP tool list, or an empty list on failure.
+
+    Note: this helper uses ``asyncio.run()`` and must only be called from
+    synchronous contexts (CLI, install paths, or threadpool workers).
+    """
+    module = _load_mcp_module()
+    if module is None:
+        return []
+    try:
+        return asyncio.run(module.mcp.list_tools())
+    except Exception:
+        return []
+
+
 def render_tool_reference() -> str:
     """Render the MCP tool reference from the live registry.
 
     Returns an empty string when the MCP server cannot be loaded — the caller
     then skips the doc rather than indexing a stale copy.
     """
-    module = _load_mcp_module()
-    if module is None:
-        return ""
-    try:
-        tools = asyncio.run(module.mcp.list_tools())
-    except Exception:
-        return ""
+    tools = _list_mcp_tools()
     if not tools:
         return ""
     lines = [
@@ -166,6 +175,37 @@ def render_tool_reference() -> str:
                 lines.append(_describe_param(name, spec, name in required))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def tool_schema_stats() -> dict[str, Any]:
+    """Return the size of the live MCP tool schema surface.
+
+    This is the part of the prompt floor that comes from tool definitions,
+    not from instruction files. It is measured so the ambient ledger is
+    complete.
+
+    Note: this helper uses ``asyncio.run()`` internally and must only be called
+    from synchronous contexts (CLI, install paths, or threadpool workers).
+    """
+    import json as _json
+
+    tools = _list_mcp_tools()
+    if not tools:
+        return {"tools": 0, "schema_bytes": 0, "approx_tokens": 0}
+    payload = []
+    for tool in sorted(tools, key=lambda t: t.name):
+        payload.append({
+            "name": tool.name,
+            "description": tool.description,
+            "inputSchema": getattr(tool, "inputSchema", None) or {},
+        })
+    try:
+        raw = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"tools": len(tools), "schema_bytes": 0, "approx_tokens": 0,
+                "error": f"could not serialise tool schemas: {exc}"}
+    return {"tools": len(tools), "schema_bytes": len(raw),
+            "approx_tokens": len(raw) // 4}
 
 
 # --------------------------------------------------------------------------- #

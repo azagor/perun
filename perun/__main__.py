@@ -10,7 +10,7 @@ Usage::
     python -m perun projects
     python -m perun add <name> <path> [--model M] [--agent A]
     python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
-    python -m perun context list|get|search|sync|map|index|verify|stats [--project SLUG]
+    python -m perun context list|get|search|sync|map|index|verify|stats|dedupe [--project SLUG]
     python -m perun secret list|get|set|delete|password|status
     python -m perun status [--json]
     python -m perun encrypt-config [--password PWD]
@@ -855,6 +855,8 @@ def cmd_context(args: argparse.Namespace) -> int:
 
             path = install_global._sync_agents_block()
             print(f"[perun] kernel:   refreshed {path}")
+            ins_path = install_global._sync_instructions_file()
+            print(f"[perun] instructions pointer: refreshed {ins_path}")
         except Exception as exc:
             print(f"[perun] warning: could not refresh the kernel ({exc})")
         for line in _context_sync_projects(getattr(args, "project", None)):
@@ -910,6 +912,9 @@ def cmd_context(args: argparse.Namespace) -> int:
     if action == "stats":
         _print(_context_stats())
         return 0
+
+    if action == "dedupe":
+        return _context_dedupe_agents(getattr(args, "project", None))
 
     print(f"[perun] unknown context action: {action}")
     return 2
@@ -1081,7 +1086,28 @@ def _context_verify() -> dict[str, Any]:
         problems.append(f"kernel check failed: {exc}")
         report.append(f"kernel:      ERROR {exc}")
 
-    # 2. Every handbook key must be indexed.
+    # 2. The global instructions pointer must be the thin pointer, not a
+    # second copy of the kernel.
+    try:
+        from .integrations import install_global
+
+        ins_path = install_global.instructions_target()
+        ins_text = ins_path.read_text(encoding="utf-8") if ins_path.is_file() else ""
+        expected_pointer = install_global._INSTRUCTIONS_POINTER
+        if not ins_text.strip():
+            problems.append("global instructions file is missing")
+            report.append("instructions: MISSING")
+        elif ins_text.strip() != expected_pointer.strip():
+            # Tolerate a fresh pointer even if it differs only in whitespace.
+            problems.append("global instructions file is not the thin pointer")
+            report.append("instructions: POINTER DRIFT  (run: perun context sync)")
+        else:
+            report.append("instructions: ok (pointer)")
+    except Exception as exc:
+        problems.append(f"instructions check failed: {exc}")
+        report.append(f"instructions: ERROR {exc}")
+
+    # 3. Every handbook key must be indexed.
     indexed = {k["key"] for k in context.list_keys(project_id=0, scope="global")}
     missing = [e["key"] for e in handbook.ENTRIES if e["key"] not in indexed]
     if missing:
@@ -1090,7 +1116,7 @@ def _context_verify() -> dict[str, Any]:
     else:
         report.append(f"handbook:    ok ({len(indexed)} global key(s))")
 
-    # 3. Every manifest anchor that declares a `memory:` key must resolve.
+    # 4. Every manifest anchor that declares a `memory:` key must resolve.
     unresolved: list[str] = []
     missing_secrets: list[str] = []
     anchors_seen = 0
@@ -1125,7 +1151,7 @@ def _context_verify() -> dict[str, Any]:
     else:
         report.append("secrets:     ok")
 
-    # 4. Every migrated project's AGENTS.md must be provably lossless.
+    # 5. Every migrated project's AGENTS.md must be provably lossless.
     lossy: list[str] = []
     checked = 0
     for proj in registry.list_projects():
@@ -1153,9 +1179,15 @@ def _context_verify() -> dict[str, Any]:
 
 
 def _context_stats() -> dict[str, Any]:
-    """Ambient-context budget: how big the AGENTS.md files are, and what repeats."""
+    """Ambient-context budget: AGENTS.md files, instruction files, MCP schemas,
+    skill frontmatter, and duplicated sections at both ``##`` and ``###``
+    granularity.
+    """
+    from .integrations import install_global
+
     projects: list[dict[str, Any]] = []
     section_index: dict[str, list[str]] = {}
+    subsection_index: dict[str, list[str]] = {}
 
     for proj in registry.list_projects():
         f = Path(proj["path"]) / "AGENTS.md"
@@ -1172,12 +1204,17 @@ def _context_stats() -> dict[str, Any]:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 text = ""
-            entry["bytes"] = len(text.encode("utf-8"))
+            raw_bytes = len(text.encode("utf-8"))
+            entry["bytes"] = raw_bytes
             entry["lines"] = text.count("\n") + 1
-            entry["approx_tokens"] = len(text) // 4
+            entry["approx_tokens"] = raw_bytes // 4
             for heading, body in _split_sections(text):
                 digest = memory.content_hash(f"{heading}\n{body}")
                 section_index.setdefault(digest, []).append(
+                    f"{proj['slug']}#{heading}")
+            for heading, body in _split_subsections(text):
+                digest = memory.content_hash(f"{heading}\n{body}")
+                subsection_index.setdefault(digest, []).append(
                     f"{proj['slug']}#{heading}")
         projects.append(entry)
 
@@ -1187,10 +1224,14 @@ def _context_stats() -> dict[str, Any]:
     ]
     duplicated.sort(key=lambda d: d["sections"], reverse=True)
 
+    duplicated_sub = [
+        {"copies": sorted(slugs), "subsections": len(slugs)}
+        for slugs in subsection_index.values() if len(slugs) > 1
+    ]
+    duplicated_sub.sort(key=lambda d: d["subsections"], reverse=True)
+
     global_block: dict[str, Any] = {}
     try:
-        from .integrations import install_global
-
         gpath = install_global.agents_target()
         gtext = gpath.read_text(encoding="utf-8") if gpath.is_file() else ""
         global_block = {
@@ -1201,16 +1242,146 @@ def _context_stats() -> dict[str, Any]:
     except Exception:
         pass
 
-    total_bytes = sum(p["bytes"] for p in projects) + global_block.get("bytes", 0)
+    instructions = _context_instruction_files()
+    mcp_stats = handbook.tool_schema_stats()
+    skill_stats = _skill_frontmatter_stats()
+
+    project_total = sum(p["bytes"] for p in projects)
+    instruction_total = sum(i["bytes"] for i in instructions)
+    # The global AGENTS.md block is already counted in ``global_block``; the
+    # ``instructions[]`` ledger lists it again as a source, so subtract it from
+    # the floor to avoid double-counting.
+    duplicate_global = sum(
+        i["bytes"] for i in instructions if i["source"] == "global-agents-md")
+    floor_bytes = (
+        project_total + instruction_total - duplicate_global
+        + global_block.get("bytes", 0)
+        + mcp_stats.get("schema_bytes", 0)
+        + skill_stats.get("frontmatter_bytes", 0)
+    )
+
+    budget_warnings: list[str] = []
+    for p in projects:
+        if p["bytes"] > 6_000:
+            budget_warnings.append(
+                f"{p['slug']}: AGENTS.md is {p['bytes']:,} B "
+                f"(~{p['bytes'] // 4:,} tok) — consider moving reference sections to context docs")
+    if global_block.get("bytes", 0) > 2_500:
+        budget_warnings.append(
+            f"global AGENTS.md is {global_block['bytes']:,} B — kernel may have grown")
+
     return {
         "global_agents_md": global_block,
+        "global_instructions": instructions,
+        "mcp_server": mcp_stats,
+        "skills": skill_stats,
         "projects": projects,
         "worst_project": max(projects, key=lambda p: p["bytes"]) if projects else None,
-        "total_bytes": total_bytes,
-        "total_approx_tokens": total_bytes // 4,
+        "project_total_bytes": project_total,
+        "instruction_total_bytes": instruction_total,
+        "floor_bytes": floor_bytes,
+        "floor_tokens": floor_bytes // 4,
         "duplicated_sections": duplicated[:40],
         "duplicated_section_count": len(duplicated),
+        "duplicated_subsections": duplicated_sub[:40],
+        "duplicated_subsection_count": len(duplicated_sub),
+        "budget_warnings": budget_warnings,
     }
+
+
+def _context_instruction_files() -> list[dict[str, Any]]:
+    """Return every OpenCode ``instructions[]`` file and its size.
+
+    Paths in ``opencode.json`` are resolved relative to the containing config
+    directory (global) or project root, and any entry that escapes that root
+    is ignored. This prevents a malicious ``instructions[]`` entry from
+    causing Perun to read arbitrary files.
+    """
+    from .integrations import install_global
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(path: Path, source: str) -> None:
+        if not path.is_file():
+            return
+        key = str(path.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        out.append({
+            "source": source,
+            "path": str(path),
+            "bytes": len(text.encode("utf-8")),
+            "approx_tokens": len(text) // 4,
+        })
+
+    def within(root: Path, target: Path) -> bool:
+        """Is *target* the same as or inside *root* after resolving both?"""
+        try:
+            return target.resolve().is_relative_to(root.resolve())
+        except Exception:
+            return False
+
+    # Global instructions from the managed block and the perun pointer file.
+    try:
+        add(install_global.agents_target(), "global-agents-md")
+        add(install_global.instructions_target(), "global-instructions")
+    except Exception:
+        pass
+
+    # Explicit instructions[] entries in the global opencode.json.
+    try:
+        cfg_dir = install_global.config_dir()
+        data = json.loads(
+            install_global.opencode_json().read_text(encoding="utf-8"))
+        for ref in data.get("instructions") or []:
+            if not isinstance(ref, str):
+                continue
+            p = (cfg_dir / ref.replace("/", os.sep)).resolve()
+            if p.is_file() and within(cfg_dir, p):
+                add(p, "global-opencode-json")
+    except Exception:
+        pass
+
+    # Per-project opencode.json instructions[] entries.
+    for proj in registry.list_projects():
+        try:
+            p = Path(proj["path"]) / "opencode.json"
+            if not p.is_file():
+                continue
+            root = p.parent
+            data = json.loads(p.read_text(encoding="utf-8"))
+            for ref in data.get("instructions") or []:
+                if not isinstance(ref, str):
+                    continue
+                target = (root / ref.replace("/", os.sep)).resolve()
+                if target.is_file() and within(root, target):
+                    add(target, f"project:{proj['slug']}")
+        except Exception:
+            pass
+
+    return out
+
+
+def _skill_frontmatter_stats() -> dict[str, Any]:
+    """Return the size of OpenCode skill frontmatter loaded as ambient context."""
+    total = 0
+    count = 0
+    d = config.GLOBAL_SKILLS_DIR
+    if d.is_dir():
+        for skill_dir in d.iterdir():
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            text = skill_md.read_text(encoding="utf-8", errors="replace")
+            if text.startswith("---"):
+                end = text.find("\n---", 3)
+                if end > 0:
+                    total += len(text[:end + 4].encode("utf-8"))
+                    count += 1
+    return {"count": count, "frontmatter_bytes": total, "approx_tokens": total // 4}
 
 
 def _split_sections(text: str) -> list[tuple[str, str]]:
@@ -1231,6 +1402,108 @@ def _split_sections(text: str) -> list[tuple[str, str]]:
     if body:
         sections.append((heading, body))
     return sections
+
+
+def _split_subsections(text: str) -> list[tuple[str, str]]:
+    """Split Markdown into ``(heading, body)`` pairs at level-3 headings."""
+    sections: list[tuple[str, str]] = []
+    heading = "(top)"
+    buf: list[str] = []
+    for line in (text or "").splitlines():
+        if line.startswith("### "):
+            body = "\n".join(buf).strip()
+            if body:
+                sections.append((heading, body))
+            heading = line[4:].strip() or "(untitled)"
+            buf = []
+        else:
+            buf.append(line)
+    body = "\n".join(buf).strip()
+    if body:
+        sections.append((heading, body))
+    return sections
+
+
+def _context_dedupe_agents(slug: str | None) -> int:
+    """Remove byte-identical duplicate ``###`` sections from a project's AGENTS.md.
+
+    Keeps the first occurrence of each repeated block. This is a safe,
+    mechanical cleanup: exact duplicates add tokens without adding awareness.
+    The file is backed up before writing.
+    """
+    from .integrations import install_global
+
+    projects = _context_targets(slug)
+    if not projects:
+        print("[perun] no project to dedupe.")
+        return 1
+    rc = 0
+    for proj in projects:
+        root = Path(proj.get("path") or "")
+        pslug = str(proj.get("slug") or "")
+        agents = root / "AGENTS.md"
+        if not agents.is_file():
+            print(f"[perun] {pslug}: no AGENTS.md")
+            continue
+        try:
+            text = agents.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"[perun] {pslug}: could not read {agents} ({exc})")
+            rc = 1
+            continue
+
+        lines = text.splitlines()
+        blocks: list[list[str]] = []
+        buf: list[str] = []
+        for line in lines:
+            if line.startswith("### "):
+                if buf:
+                    blocks.append(buf)
+                buf = [line]
+            else:
+                buf.append(line)
+        if buf:
+            blocks.append(buf)
+
+        seen: set[str] = set()
+        kept: list[list[str]] = []
+        removed = 0
+        saved = 0
+        for block in blocks:
+            body = "\n".join(block)
+            h = memory.content_hash(body)
+            if h in seen:
+                removed += 1
+                saved += len(body.encode("utf-8"))
+                continue
+            seen.add(h)
+            kept.append(block)
+
+        if not removed:
+            print(f"[perun] {pslug}: no duplicate ### sections found")
+            continue
+
+        new_lines: list[str] = []
+        for block in kept:
+            if new_lines and block and block[0].startswith("### "):
+                # keep a single blank line before the heading if the previous
+                # block did not end with one
+                if new_lines[-1].strip():
+                    new_lines.append("")
+            new_lines.extend(block)
+        new_text = "\n".join(new_lines)
+
+        try:
+            backup = install_global._backup(agents)
+            agents.write_text(new_text, encoding="utf-8")
+            backup_msg = f" (backup: {backup})" if backup else ""
+            print(f"[perun] {pslug}: removed {removed} duplicate ### section(s), "
+                  f"saved {saved:,} B{backup_msg}")
+        except OSError as exc:
+            print(f"[perun] {pslug}: could not write {agents} ({exc})")
+            rc = 1
+            continue
+    return rc
 
 
 def cmd_secret(args: argparse.Namespace) -> int:
@@ -1394,6 +1667,10 @@ def build_parser() -> argparse.ArgumentParser:
     pc_stats = ctx_sub.add_parser(
         "stats", help="Ambient-context budget: AGENTS.md sizes and duplication.")
     pc_stats.add_argument("--project", help="scope to a project slug or path")
+
+    pc_dedupe = ctx_sub.add_parser(
+        "dedupe", help="Remove byte-identical duplicate ### sections from a project's AGENTS.md.")
+    pc_dedupe.add_argument("--project", help="scope to a project slug or path")
 
     p_ctx.set_defaults(func=cmd_context)
 

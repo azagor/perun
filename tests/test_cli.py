@@ -9,6 +9,7 @@ lock that in.
 from __future__ import annotations
 
 import io
+import json
 import sys
 
 from perun import __main__ as cli
@@ -328,3 +329,131 @@ def test_restart_foreground_replays_recorded_flags(monkeypatch, tmp_path):
     assert cli.main(["restart", "--foreground"]) == 0
     assert served["args"].bridge is True
     assert detached == []
+
+
+# --------------------------------------------------------------------------- #
+# Context-budget tooling
+# --------------------------------------------------------------------------- #
+def test_context_dedupe_removes_duplicate_subsections(monkeypatch, tmp_path, capsys):
+    """``perun context dedupe`` removes byte-identical ``###`` blocks."""
+    from perun import registry
+
+    db.init_db()
+    root = tmp_path / "demo"
+    root.mkdir()
+    registry.add_project("demo", str(root))
+
+    agents = root / "AGENTS.md"
+    agents.write_text(
+        "# Demo\n\n## Rules\n\n- Rule one.\n\n### Module\n\nAlpha.\n\n### Module\n\nAlpha.\n\n",
+        encoding="utf-8")
+
+    assert cli.main(["context", "dedupe", "--project", "demo"]) == 0
+    text = agents.read_text(encoding="utf-8")
+    assert text.count("### Module") == 1
+    assert "Alpha." in text
+    captured = capsys.readouterr()
+    assert "removed 1 duplicate" in captured.out
+
+
+def test_context_dedupe_preserves_non_duplicate_content(monkeypatch, tmp_path, capsys):
+    """``perun context dedupe`` leaves non-duplicate sections untouched."""
+    from perun import registry
+
+    db.init_db()
+    root = tmp_path / "demo"
+    root.mkdir()
+    registry.add_project("demo", str(root))
+
+    agents = root / "AGENTS.md"
+    original = "# Demo\n\n## Rules\n\n- Rule one.\n\n### Module A\n\nAlpha.\n\n### Module B\n\nBravo.\n\n"
+    agents.write_text(original, encoding="utf-8")
+
+    assert cli.main(["context", "dedupe", "--project", "demo"]) == 0
+    assert agents.read_text(encoding="utf-8") == original
+    captured = capsys.readouterr()
+    assert "no duplicate" in captured.out
+
+
+def test_context_stats_returns_valid_json(capsys):
+    """``perun context stats`` emits a JSON object with the ledger keys."""
+    db.init_db()
+    rc = cli.main(["context", "stats"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    data = json.loads(captured.out)
+    assert "global_agents_md" in data
+    assert "global_instructions" in data
+    assert "mcp_server" in data
+    assert "skills" in data
+    assert "projects" in data
+    assert "floor_tokens" in data
+
+
+def test_context_stats_handles_empty_registry(capsys):
+    """``perun context stats`` does not crash when no projects are registered."""
+    db.init_db()
+    rc = cli.main(["context", "stats"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    data = json.loads(captured.out)
+    assert data["projects"] == []
+    assert data["floor_tokens"] is not None
+
+
+def test_context_verify_detects_pointer_drift(monkeypatch, tmp_path, capsys):
+    """``perun context verify`` fails when the instructions pointer is stale."""
+    from perun.integrations import install_global
+
+    db.init_db()
+    fake = tmp_path / "instructions.md"
+    fake.write_text("# Old full guide\n\nLots of duplicated text.\n", encoding="utf-8")
+    monkeypatch.setattr(install_global, "instructions_target", lambda: fake)
+
+    res = cli._context_verify()
+    captured = capsys.readouterr()
+    assert not res["ok"]
+    assert any("POINTER DRIFT" in line for line in res["report"])
+
+
+def test_context_verify_passes_for_fresh_pointer(monkeypatch, tmp_path):
+    """``perun context verify`` passes when the instructions pointer is current."""
+    from perun.integrations import install_global
+
+    db.init_db()
+    fake = tmp_path / "instructions.md"
+    fake.write_text(install_global._INSTRUCTIONS_POINTER, encoding="utf-8")
+    monkeypatch.setattr(install_global, "instructions_target", lambda: fake)
+
+    res = cli._context_verify()
+    assert any("instructions: ok (pointer)" in line for line in res["report"])
+
+
+def test_context_instruction_files_ignore_escaping_refs(monkeypatch, tmp_path):
+    """``instructions[]`` entries that escape the config root are ignored."""
+    from perun.integrations import install_global
+
+    db.init_db()
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    cfg_file = cfg_dir / "opencode.json"
+
+    # A legitimate file inside the config dir and one that escapes it.
+    legit = cfg_dir / "legit.md"
+    legit.write_text("ok", encoding="utf-8")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("leak", encoding="utf-8")
+
+    cfg_file.write_text(
+        json.dumps({"instructions": ["legit.md", "../../secret.txt"]}),
+        encoding="utf-8")
+    monkeypatch.setattr(install_global, "config_dir", lambda: cfg_dir)
+    monkeypatch.setattr(install_global, "opencode_json", lambda: cfg_file)
+    monkeypatch.setattr(install_global, "agents_target", lambda: cfg_dir / "agents.md")
+    monkeypatch.setattr(install_global, "instructions_target", lambda: cfg_dir / "perun.md")
+
+    files = cli._context_instruction_files()
+    paths = {f["path"] for f in files}
+    assert str(legit) in paths
+    assert str(outside) not in paths
+

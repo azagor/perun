@@ -169,6 +169,78 @@ def _verbatim(haystack: str, section_body: str) -> bool:
     return any(s["hash"] == target for s in split_sections(haystack))
 
 
+def _live_section(text: str, heading: str) -> str:
+    """Return the body of the ``## heading`` section from *text*, if present."""
+    target = heading.strip().casefold()
+    lines = (text or "").splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("## ") and line[3:].strip().casefold() == target:
+            start = i
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    return "\n".join(lines[start + 1:end]).strip()
+
+
+def _inline_subsection_duplicates(body: str) -> list[tuple[str, int]]:
+    """Return repeated level-3 blocks inside an inline section.
+
+    A long inline section that copy-pastes the same ``###`` module multiple
+    times pays the same tokens repeatedly.  The return value is a list of
+    ``(heading, copies)`` for duplicates with non-trivial bodies.
+    """
+    counts: dict[str, int] = {}
+    headings: dict[str, str] = {}
+    buf: list[str] = []
+    current_heading = "(tail)"
+    for line in (body or "").splitlines():
+        if line.startswith("### "):
+            block = "\n".join(buf).strip()
+            if block and len(block) > 200:
+                h = memory.content_hash(block)
+                counts[h] = counts.get(h, 0) + 1
+                headings.setdefault(h, current_heading)
+            current_heading = line[4:].strip() or "(untitled)"
+            buf = []
+        else:
+            buf.append(line)
+    block = "\n".join(buf).strip()
+    if block and len(block) > 200:
+        h = memory.content_hash(block)
+        counts[h] = counts.get(h, 0) + 1
+        headings.setdefault(h, current_heading)
+    return [(headings[h], n) for h, n in counts.items() if n > 1]
+
+
+def _inline_subsection_sizes(body: str) -> list[tuple[str, int]]:
+    """Return the size of every level-3 block inside an inline section.
+
+    Used to report which subsections dominate an inline section's byte budget.
+    """
+    sizes: list[tuple[str, int]] = []
+    buf: list[str] = []
+    current_heading = "(tail)"
+    for line in (body or "").splitlines():
+        if line.startswith("### "):
+            block = "\n".join(buf).strip()
+            if block:
+                sizes.append((current_heading, len(block.encode("utf-8"))))
+            current_heading = line[4:].strip() or "(untitled)"
+            buf = []
+        else:
+            buf.append(line)
+    block = "\n".join(buf).strip()
+    if block:
+        sizes.append((current_heading, len(block.encode("utf-8"))))
+    return sizes
+
+
 # --------------------------------------------------------------------------- #
 # Paths
 # --------------------------------------------------------------------------- #
@@ -307,6 +379,24 @@ def check(project: dict[str, Any], *, agents_path: str | Path | None = None) -> 
 
     # 3. Every destination holds its content.
     by_hash = {s["hash"]: s for s in original}
+
+    # Count how many times each inline-classified body appears in the live file.
+    # A body that is classified as inline but appears more than once is a
+    # contract violation: the map says it must be present, but repetition means
+    # the ambient prompt pays for it multiple times without adding awareness.
+    inline_hits: dict[str, list[str]] = {}
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        for dest in (section.get("dest") or []):
+            if isinstance(dest, dict) and str(dest.get("kind") or "").strip().lower() == "inline":
+                source = by_hash.get(str(section.get("hash") or ""))
+                source_body = source["body"] if source else ""
+                if source_body:
+                    key = memory.content_hash(source_body)
+                    inline_hits.setdefault(key, []).append(
+                        str(section.get("heading") or "(untitled)"))
+
     for section in sections:
         if not isinstance(section, dict):
             continue
@@ -323,12 +413,48 @@ def check(project: dict[str, Any], *, agents_path: str | Path | None = None) -> 
                 continue
             kind = str(dest.get("kind") or "").strip().lower()
             required = [str(r) for r in (dest.get("required") or [])]
+            # The part of the section that is actually inline in the live file.
+            # For mixed destinations this is only the retained bullets, so it
+            # is the honest measure of the ambient prompt cost.
+            live_section_body = _live_section(live_text, heading) if kind == "inline" else ""
+
             if kind == "inline":
                 missing = [r for r in required if not contains(live_text, r)]
                 if missing:
                     problems.append(
                         f"section '{heading}' lost content that must stay inline: "
                         f"{missing[0][:60]!r}")
+                # Size guardrail: the *live* inline portion over the budget
+                # should be reconsidered, but size alone is not a losslessness
+                # failure. For mixed destinations this measures only what is
+                # still ambient.
+                live_bytes = len(live_section_body.encode("utf-8"))
+                if live_bytes > 4_000:
+                    report.append(
+                        f"{slug}: section '{heading}' is {live_bytes:,} B "
+                        f"inline — consider moving to a context doc")
+                # Internal duplication guardrail: repeated ``###`` blocks inside
+                # the live inline section are wasted tokens, not extra awareness.
+                for dup_heading, copies in _inline_subsection_duplicates(live_section_body):
+                    problems.append(
+                        f"section '{heading}' repeats subsection "
+                        f"'{dup_heading}' {copies} times")
+                    report.append(
+                        f"{slug}: section '{heading}' has {copies} copies of "
+                        f"'{dup_heading[:50]}'")
+                # Size detail for large inline sections: list the subsections so
+                # the owner knows what to move next.
+                if live_bytes > 4_000:
+                    big_subs = sorted(
+                        _inline_subsection_sizes(live_section_body),
+                        key=lambda x: -x[1],
+                    )[:5]
+                    for sub_heading, sub_bytes in big_subs:
+                        if sub_bytes > 800:
+                            report.append(
+                                f"{slug}: section '{heading}' subsection "
+                                f"'{sub_heading[:50]}' is {sub_bytes:,} B")
+
             elif kind == "context":
                 key = str(dest.get("key") or "")
                 cdoc = context.get(key, project_id=project_id,
@@ -338,7 +464,12 @@ def check(project: dict[str, Any], *, agents_path: str | Path | None = None) -> 
                         f"section '{heading}' points at context doc '{key}', "
                         f"which does not exist")
                     continue
-                if source_body and not _verbatim(cdoc["body"], source_body):
+                # For mixed destinations (inline + context) the whole source
+                # body need not live in the context doc; require only the
+                # declared fragments.  When context is the sole destination, the
+                # full verbatim parity contract still applies.
+                context_is_sole = len(dests) == 1
+                if context_is_sole and source_body and not _verbatim(cdoc["body"], source_body):
                     problems.append(
                         f"section '{heading}' is not present verbatim in "
                         f"'{key}' — the relocation is not lossless")
@@ -366,6 +497,17 @@ def check(project: dict[str, Any], *, agents_path: str | Path | None = None) -> 
                 problems.append(
                     f"section '{heading}' has an unknown destination kind "
                     f"'{kind}' (expected one of {', '.join(DEST_KINDS)})")
+
+    # Inline duplication is a contract failure: the same content is classified
+    # as "must stay inline" but appears multiple times in the live file.
+    for key, headings in inline_hits.items():
+        if len(headings) > 1:
+            problems.append(
+                f"inline content appears {len(headings)} times: "
+                f"{', '.join(h[:50] for h in headings)}")
+            report.append(
+                f"{slug}: DUPLICATE-INLINE {len(headings)} copies of "
+                f"'{headings[0][:50]}'")
 
     # Informational: context docs the map does not mention.
     known = {str(d.get("key") or "") for s in sections
