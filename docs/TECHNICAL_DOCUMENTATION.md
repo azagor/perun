@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.32 (see §15). Per-project default plan and build model overrides, configurable from the dashboard Config tab or perun.md, mirrored into opencode.json under agent.<id>.model, with production-readiness hardening.
+**Latest release:** v0.8.33 (see §15). Fix blinking console windows on Windows for background opencode, search, and install subprocesses; clean up CODEMAP audit false positives.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1609,6 +1609,10 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-29 — v0.8.33: Fix blinking console windows on Windows for background opencode, search, and install subprocesses; clean up CODEMAP audit false positives.
+
+* (add release notes here or edit the changelog)
+
 ### 2026-10-28 — v0.8.32: Per-project default plan and build model overrides, configurable from the dashboard Config tab or perun.md, mirrored into opencode.json under agent.<id>.model, with production-readiness hardening.
 
 * (add release notes here or edit the changelog)
