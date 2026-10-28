@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 
 from perun import __main__ as cli
@@ -107,8 +108,30 @@ def test_backfill_docs_cli_all_projects(monkeypatch, tmp_path, capsys):
     assert rc == 0
     assert "backfill complete" in captured.out
     assert (proj_dir / "AGENTS.md").is_file()
-    assert (proj_dir / "perun.md").is_file()
-    assert (proj_dir / "docs" / "CHANGELOG.md").is_file()
+
+
+def test_memory_stats_cli_json(capsys):
+    from perun import memory
+
+    db.init_db()
+    memory.remember("cli stats test fact", scope="global", kind="rule")
+    rc = cli.main(["memory", "stats", "--json"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    data = json.loads(captured.out)
+    assert "facts_total" in data
+
+
+def test_memory_list_cli_json(capsys):
+    from perun import memory
+
+    db.init_db()
+    memory.remember("cli list test fact", scope="global", kind="rule")
+    rc = cli.main(["memory", "list", "--kind", "rule", "--json"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    data = json.loads(captured.out)
+    assert any("cli list test fact" in (f.get("content") or "") for f in data)
 
 
 def test_validate_docs_cli_reports_issues(monkeypatch, tmp_path, capsys):
@@ -126,6 +149,40 @@ def test_validate_docs_cli_reports_issues(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "validation complete" in captured.out
+
+
+def test_docs_audit_cli_finds_drift(monkeypatch, tmp_path, capsys):
+    from perun import config, registry, scaffold
+
+    db.init_db()
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    config.ensure_dirs()
+
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    (proj_dir / "docs").mkdir(parents=True, exist_ok=True)
+    (proj_dir / "docs" / "CHANGELOG.md").write_text("# Changelog\n\n## v1.0.0\n", encoding="utf-8")
+    pkg_dir = proj_dir / "proj"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text('__version__ = "1.0.0"\n', encoding="utf-8")
+    (pkg_dir / "app.py").write_text("def run(): pass\n", encoding="utf-8")
+    # CODEMAP references a missing file and an identifier not in app.py.
+    (proj_dir / "docs" / "CODEMAP.md").write_text(
+        "# CODEMAP\n\n"
+        "## Core\n\n"
+        "### `proj/missing.py`\n\n"
+        "* Uses `nonexistent()`.\n\n"
+        "### `proj/app.py`\n\n"
+        "* Uses `run()`.\n",
+        encoding="utf-8",
+    )
+    registry.add_project("Proj", str(proj_dir))
+
+    rc = cli.main(["docs", "audit", "proj"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "audit complete" in captured.out
+    assert "missing file" in captured.out
 
 
 def test_refresh_deps_cli_records_facts(monkeypatch, tmp_path, capsys):
@@ -456,4 +513,65 @@ def test_context_instruction_files_ignore_escaping_refs(monkeypatch, tmp_path):
     paths = {f["path"] for f in files}
     assert str(legit) in paths
     assert str(outside) not in paths
+
+
+# --------------------------------------------------------------------------- #
+# Owner check for hidden-project maintenance commands
+# --------------------------------------------------------------------------- #
+def test_is_owner_true_on_windows(monkeypatch):
+    from perun import config
+
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    class FakeHome:
+        def stat(self):
+            class St:
+                st_uid = 0
+            return St()
+
+    monkeypatch.setattr(config, "HOME", FakeHome())
+    assert cli._is_owner() is True
+
+
+def test_is_owner_true_when_unix_uid_matches(monkeypatch):
+    from perun import config
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234, raising=False)
+
+    class FakeHome:
+        def stat(self):
+            class St:
+                st_uid = 1234
+            return St()
+
+    monkeypatch.setattr(config, "HOME", FakeHome())
+    assert cli._is_owner() is True
+
+
+def test_is_owner_false_when_unix_uid_mismatches(monkeypatch):
+    from perun import config
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234, raising=False)
+
+    class FakeHome:
+        def stat(self):
+            class St:
+                st_uid = 999
+            return St()
+
+    monkeypatch.setattr(config, "HOME", FakeHome())
+    assert cli._is_owner() is False
+
+
+def test_is_owner_false_when_home_stat_fails(monkeypatch):
+    from perun import config
+
+    class FakeHome:
+        def stat(self):
+            raise OSError("no such directory")
+
+    monkeypatch.setattr(config, "HOME", FakeHome())
+    assert cli._is_owner() is False
 

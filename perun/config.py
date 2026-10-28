@@ -179,6 +179,7 @@ class Settings:
     shared_auto_approve: bool = False
     auto_discover_on_start: bool = True
     index_docs_on_discover: bool = False
+    memory_prefetch: str = "rules"
     # Dedicated terminal / command shell. On Windows the value can be a path to
     # powershell.exe, pwsh.exe, wt.exe, cmd.exe, or any other terminal; on other
     # platforms it can be a shell binary. A blank value lets Perun use the OS

@@ -341,6 +341,9 @@ def cmd_discover(args: argparse.Namespace) -> int:
             proj = registry.get_project(slug)
             if proj:
                 memory.index_project_docs(proj["id"])
+                _index_codemap_outline(
+                    proj["id"], Path(proj["path"]), proj["slug"],
+                    proj.get("name") or proj["slug"])
     _print({k: v for k, v in result.items() if k != "found"})
     return 0
 
@@ -468,7 +471,91 @@ def cmd_remember(args: argparse.Namespace) -> int:
     scope = "global" if args.global_scope else ("project" if project else "global")
     pid = 0 if scope == "global" else (project["id"] if project else 0)
     res = memory.remember(args.text, project_id=pid, scope=scope,
-                          topic=args.topic, source="cli")
+                          topic=args.topic, source="cli",
+                          kind=getattr(args, "kind", "note"),
+                          valid_to=getattr(args, "valid_to", ""))
+    _print(res)
+    return 0 if res.get("ok") else 1
+
+
+def cmd_forget(args: argparse.Namespace) -> int:
+    _ensure()
+    res = memory.forget(args.fact_id)
+    _print(res)
+    return 0 if res.get("ok") else 1
+
+
+def cmd_supersede(args: argparse.Namespace) -> int:
+    _ensure()
+    res = memory.supersede(args.fact_id, args.text,
+                           topic=args.topic,
+                           kind=getattr(args, "kind", ""),
+                           valid_to=getattr(args, "valid_to", ""))
+    _print(res)
+    return 0 if res.get("ok") else 1
+
+
+def cmd_memory_stats(args: argparse.Namespace) -> int:
+    _ensure()
+    project = registry.get_project(args.project) if args.project else None
+    pid = project["id"] if project else None
+    stats = memory.stats(pid)
+    if getattr(args, "json", False):
+        _print(stats)
+        return 0
+    print(f"facts total:      {stats.get('facts_total', 0)}")
+    print(f"facts global:     {stats.get('facts_global', 0)}")
+    if pid is not None:
+        print(f"facts project:    {stats.get('facts_project', 0)}")
+    print(f"facts embedded:   {stats.get('facts_embedded', 0)}")
+    print(f"facts pending:    {stats.get('facts_pending_embed', 0)}")
+    print(f"facts expired:    {stats.get('facts_expired', 0)}")
+    print(f"chunks total:     {stats.get('chunks_total', 0)}")
+    print(f"chunks pending:   {stats.get('chunks_pending_embed', 0)}")
+    print(f"ollama ok:        {stats.get('ollama_ok', False)}")
+    by_kind = stats.get("facts_by_kind", {})
+    if by_kind:
+        print("facts by kind:")
+        for k, n in sorted(by_kind.items()):
+            print(f"  {k:12s} {n}")
+    top = stats.get("facts_top_hits", [])
+    if top:
+        print("top hits:")
+        for f in top[:5]:
+            print(f"  [{f.get('hit_count', 0)}] {f.get('content', '')[:80]}")
+    last = stats.get("last_reembed")
+    if last:
+        print(f"last re-embed:    {last.get('ts', '')} facts={last.get('facts', 0)} chunks={last.get('chunks', 0)}")
+    return 0
+
+
+def cmd_memory_list(args: argparse.Namespace) -> int:
+    _ensure()
+    project = registry.get_project(args.project) if args.project else None
+    pid = project["id"] if project else None
+    facts = memory.recent_facts(pid, limit=args.limit)
+    kind_filter = (args.kind or "").strip().lower()
+    rows = []
+    for f in facts:
+        k = f.get("kind") or "note"
+        if kind_filter and k != kind_filter:
+            continue
+        rows.append(f)
+    if getattr(args, "json", False):
+        _print(rows)
+        return 0
+    if not rows:
+        print("no facts")
+        return 0
+    for f in rows:
+        print(f"[{f['id']:5d}] {f.get('kind','note'):8s} {f.get('scope','global'):7s} hits={f.get('hit_count',0):3d} "
+              f"{f.get('topic','general'):12s} {f['content'][:100]}")
+    return 0
+
+
+def cmd_memory_repair(args: argparse.Namespace) -> int:
+    _ensure()
+    res = memory.reembed_missing(limit=args.limit)
     _print(res)
     return 0 if res.get("ok") else 1
 
@@ -506,7 +593,13 @@ def cmd_index(args: argparse.Namespace) -> int:
     if not project:
         print(f"no such project: {args.slug}")
         return 1
-    _print(memory.index_project_docs(project["id"]))
+    res = memory.index_project_docs(project["id"])
+    outline_key = _index_codemap_outline(
+        project["id"], Path(project["path"]), project["slug"],
+        project.get("name") or project["slug"])
+    if outline_key:
+        res["codemap_outline_key"] = outline_key
+    _print(res)
     return 0
 
 
@@ -579,10 +672,31 @@ def cmd_backfill_docs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_owner() -> bool:
+    """Best-effort check that this process owns Perun's data directory.
+
+    On Windows Perun is currently single-user per machine, so we default to
+    True. On Unix we compare the data directory's uid to the process uid.
+    """
+    try:
+        st = config.HOME.stat()
+    except Exception:
+        return False
+    if sys.platform == "win32":
+        return True
+    try:
+        return st.st_uid == os.getuid()
+    except AttributeError:
+        return True
+
+
 def _resolve_project_targets(slug: str | None, all_projects: bool) -> list[dict[str, Any]] | None:
     """Resolve a CLI project argument into a list of project dicts."""
     if all_projects:
-        targets = registry.list_projects()
+        # Maintenance commands (audit, backfill, validate, refresh-deps) should
+        # operate on every project the owner can see, including the hidden
+        # control project on this machine.
+        targets = registry.list_projects(include_hidden=_is_owner())
         if not targets:
             print("no projects registered")
             return []
@@ -630,6 +744,36 @@ def cmd_validate_docs(args: argparse.Namespace) -> int:
             print(f"{proj['slug']}: ok")
     print(f"\nvalidation complete — {issues} issue(s) found")
     return 0 if issues == 0 else 1
+
+
+def cmd_docs_audit(args: argparse.Namespace) -> int:
+    """Audit CODEMAP file/identifier/version traceability."""
+    _ensure()
+    from . import docaudit
+
+    targets = _resolve_project_targets(args.slug, args.all)
+    if targets is None:
+        return 1
+
+    total_issues = 0
+    for proj in targets:
+        try:
+            result = docaudit.audit_project(proj["path"])
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"{proj['slug']}: error — {exc}")
+            total_issues += 1
+            continue
+        if result["issues"]:
+            print(f"{proj['slug']}:")
+            for issue in result["issues"]:
+                print(f"  {issue}")
+            total_issues += len(result["issues"])
+        else:
+            print(f"{proj['slug']}: ok "
+                  f"({result['files']} file link(s), "
+                  f"{result['identifiers']} identifier link(s)")
+    print(f"\naudit complete — {total_issues} issue(s) found")
+    return 0 if total_issues == 0 else 1
 
 
 def cmd_refresh_deps(args: argparse.Namespace) -> int:
@@ -928,6 +1072,33 @@ def _context_targets(slug: str | None) -> list[dict[str, Any]]:
     return registry.list_projects()
 
 
+def _index_codemap_outline(project_id: int, root: Path, pslug: str,
+                           name: str) -> str | None:
+    """Generate and index a compact CODEMAP outline for *project_id*."""
+    from . import scaffold
+
+    codemap = root / "docs" / "CODEMAP.md"
+    if not codemap.is_file():
+        return None
+    try:
+        text = codemap.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    outline = scaffold.generate_codemap_outline(text, pslug)
+    if not outline:
+        return None
+    res = context.index_doc(
+        f"{pslug}.codemap",
+        f"{name} CODEMAP outline",
+        outline,
+        scope=context.PROJECT_SCOPE,
+        project_id=project_id,
+        summary="navigation outline; fetch details with perun_unified_search",
+        source_file=str(codemap),
+    )
+    return None if res.get("skipped") and not res.get("indexed") and not res.get("unchanged") else f"{pslug}.codemap"
+
+
 def _context_sync_projects(slug: str | None) -> list[str]:
     """Index every project's per-project context docs and its original.
 
@@ -965,6 +1136,10 @@ def _context_sync_projects(slug: str | None) -> list[str]:
                 lines.append(f"[perun] {pslug}: '{key}' "
                              f"({res.get('indexed', 0)} written, "
                              f"{res.get('unchanged', 0)} unchanged)")
+
+        outline_key = _index_codemap_outline(pid, root, pslug, name)
+        if outline_key:
+            lines.append(f"[perun] {pslug}: '{outline_key}' outline indexed")
 
         agents = root / "AGENTS.md"
         if not agents.is_file():
@@ -1782,7 +1957,42 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", default=None)
     p.add_argument("--global", dest="global_scope", action="store_true")
     p.add_argument("--topic", default="general")
+    p.add_argument("--kind", default="note",
+                   help="rule|decision|note|log (rule/decision are prefetch candidates)")
+    p.add_argument("--valid-to", default="",
+                   help="ISO-8601 expiry after which the fact is invisible")
     p.set_defaults(func=cmd_remember)
+
+    p = sub.add_parser("forget", help="delete a fact by id")
+    p.add_argument("fact_id", type=int)
+    p.set_defaults(func=cmd_forget)
+
+    p = sub.add_parser("supersede", help="replace a fact by id")
+    p.add_argument("fact_id", type=int)
+    p.add_argument("text")
+    p.add_argument("--topic", default="general")
+    p.add_argument("--kind", default="")
+    p.add_argument("--valid-to", default="")
+    p.set_defaults(func=cmd_supersede)
+
+    mem = sub.add_parser("memory", help="inspect and maintain unified memory")
+    mem_sub = mem.add_subparsers(dest="memory_action")
+
+    mp = mem_sub.add_parser("stats", help="memory usage statistics")
+    mp.add_argument("--project", default=None, help="project slug")
+    mp.add_argument("--json", action="store_true", help="output raw JSON")
+    mp.set_defaults(func=cmd_memory_stats)
+
+    mp = mem_sub.add_parser("list", help="list recent facts")
+    mp.add_argument("--project", default=None, help="project slug")
+    mp.add_argument("--kind", default="", help="filter by kind (rule/decision/note/log/transcript)")
+    mp.add_argument("--limit", type=int, default=30)
+    mp.add_argument("--json", action="store_true", help="output raw JSON")
+    mp.set_defaults(func=cmd_memory_list)
+
+    mp = mem_sub.add_parser("repair", help="re-embed facts/chunks missing embeddings")
+    mp.add_argument("--limit", type=int, default=500, help="max items to process")
+    mp.set_defaults(func=cmd_memory_repair)
 
     p = sub.add_parser("recall", help="search unified memory")
     p.add_argument("query")
@@ -1828,6 +2038,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true",
                    help="validate every registered project")
     p.set_defaults(func=cmd_validate_docs)
+
+    p_docs = sub.add_parser("docs", help="Documentation audits and maintenance.")
+    docs_sub = p_docs.add_subparsers(dest="docs_action")
+    p_audit = docs_sub.add_parser(
+        "audit", help="Audit docs/CODEMAP.md traceability (files, identifiers, version)")
+    p_audit.add_argument("slug", nargs="?", default=None,
+                         help="project slug (defaults to current directory's project)")
+    p_audit.add_argument("--all", action="store_true",
+                         help="audit every registered project")
+    p_docs.set_defaults(func=cmd_docs_audit)
 
     p = sub.add_parser("refresh-deps",
                        help="parse dependency files and store them as memory facts")

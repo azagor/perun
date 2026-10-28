@@ -129,6 +129,7 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 .grid { display: grid; gap: 16px; }
 .stats-grid { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); }
 .proj-grid { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
+.grid.two-col { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 
 .card {
     background: var(--bg-card); border: 1px solid var(--border);
@@ -140,10 +141,19 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 .stat .stat-label { font-size: .72rem; text-transform: uppercase; letter-spacing: 1.6px; color: var(--text-muted); }
 .stat .stat-value { font-family: 'Cinzel', serif; font-size: 1.9rem; color: var(--gold-light); margin-top: 6px; line-height: 1; }
 .stat .stat-foot { font-size: .78rem; color: var(--text-secondary); margin-top: 8px; }
+.stat.warn .stat-value { color: var(--amber); }
+.stat.warn { border-color: rgba(224,168,60,.35); }
 
 .section-title { display: flex; align-items: center; gap: 12px; margin: 30px 0 14px; }
 .section-title h3 { font-size: .82rem; letter-spacing: 2px; text-transform: uppercase; color: var(--text-secondary); }
 .section-title .rule { flex: 1; height: 1px; background: var(--border); }
+
+.kv-table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+.kv-table td { padding: 8px 6px; border-bottom: 1px solid var(--border); }
+.kv-table tr:last-child td { border-bottom: none; }
+.kv-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.kv-table .muted { color: var(--text-muted); }
+.num.warn, .warn { color: var(--amber); }
 
 /* ---------- project card ---------- */
 .proj-card { position: relative; }
@@ -164,6 +174,7 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 .badge.blue { color: var(--blue); border-color: rgba(90,169,224,.35); background: rgba(90,169,224,.08); }
 .badge.amber { color: var(--amber); border-color: rgba(224,168,60,.35); background: rgba(224,168,60,.08); }
 .badge.muted { color: var(--text-muted); }
+.badge.purple { color: #c4a0e7; border-color: rgba(196,160,231,.35); background: rgba(196,160,231,.08); }
 
 /* ---------- buttons ---------- */
 .btn {

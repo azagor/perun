@@ -260,7 +260,73 @@ def test_prefetch_never_needs_an_embedding(monkeypatch):
 def test_prefetch_respects_the_size_budget():
     context.index_doc("a.big", "Big", "x" * (context.PREFETCH_MAX_CHARS + 500),
                       summary="cross project code search routing")
-    assert context.prefetch("cross project code search routing") == []
+    hits = context.prefetch("cross project code search routing")
+    assert hits
+    assert hits[0]["key"] == "a.big"
+    assert "truncated" in hits[0]["body"]
+    assert len(hits[0]["body"]) <= context.PREFETCH_MAX_CHARS
+
+
+def test_prefetch_truncates_an_oversized_exact_key_instead_of_skipping():
+    big_body = "x" * (context.PREFETCH_MAX_CHARS + 500)
+    context.index_doc("handbook.big", "Big", big_body)
+    hits = context.prefetch("handbook.big")
+    assert len(hits) == 1
+    assert hits[0]["matched_by"] == "exact-key"
+    assert "truncated" in hits[0]["body"]
+
+
+def test_anchor_lookup_matches_a_label_inside_a_longer_topic(tmp_path):
+    proj_dir = tmp_path / "anchored"
+    proj_dir.mkdir()
+    (proj_dir / "docs").mkdir()
+    (proj_dir / "perun.md").write_text(
+        "---\n"
+        "name: Anchored\n"
+        "slug: anchored\n"
+        "anchors:\n"
+        "- label: Technical documentation\n"
+        "  kind: doc\n"
+        "  path: docs/TECHNICAL.md\n"
+        "---\n\nBody\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "docs" / "TECHNICAL.md").write_text(
+        "# Tech\n\n## Build\n\nrun make\n", encoding="utf-8")
+    proj = registry.add_project("Anchored", str(proj_dir))
+    hits = context.search("read the technical documentation", project_id=proj["id"])
+    assert hits
+    assert hits[0]["source_file"] == "docs/TECHNICAL.md"
+    assert hits[0]["matched_by"] == "anchor"
+
+
+def test_anchor_lookup_returns_a_stub_for_an_unindexed_file_anchor(tmp_path):
+    proj_dir = tmp_path / "anchored"
+    proj_dir.mkdir()
+    (proj_dir / "perun.md").write_text(
+        "---\n"
+        "name: Anchored\n"
+        "slug: anchored\n"
+        "anchors:\n"
+        "- label: Makefile\n"
+        "  kind: file\n"
+        "  path: Makefile\n"
+        "---\n\nBody\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "Makefile").write_text("build:\n\techo ok\n", encoding="utf-8")
+    proj = registry.add_project("Anchored", str(proj_dir))
+    hits = context.search("Makefile", project_id=proj["id"])
+    assert hits
+    assert hits[0]["source_file"] == "Makefile"
+    assert hits[0]["matched_by"] == "anchor"
+    assert "perun_read_file" in hits[0]["body"]
+
+
+def test_stemmer_collapses_inflections():
+    assert context._stem("releasing") == context._stem("released") == context._stem("release")
+    assert context._stem("deploying") == context._stem("deployment") == context._stem("deploy")
+    assert context._stem("configuration") == context._stem("configure")
 
 def test_topical_overlap_ignores_body_only_matches():
     """A word that occurs in the body but not in the title is not a subject match."""
@@ -318,3 +384,84 @@ def test_handbook_keeps_the_original_global_guide():
     assert "perun_list_projects" in body
     assert "perun_unified_search" in body
     assert "MCP tools" in body
+
+
+# --------------------------------------------------------------------------- #
+# Embedding fallback paths
+# --------------------------------------------------------------------------- #
+def test_prefetch_embedding_fallback_matches_when_deterministic_misses(monkeypatch):
+    """When Ollama is up and deterministic rules miss, semantic fallback fires."""
+    def fake_ok():
+        return True
+
+    vec = [0.5] * 10
+    monkeypatch.setattr(context, "ollama_ok", fake_ok)
+    monkeypatch.setattr(context, "embed_texts", lambda texts, prefix="": [vec for _ in texts])
+    context.index_doc("handbook.widgets", "Widgets", "how to use the frobnitz",
+                      summary="summary")
+    hits = context.prefetch("frobnitz")
+    assert hits and hits[0]["key"] == "handbook.widgets"
+    assert hits[0]["matched_by"] == "semantic"
+
+
+def test_semantic_ignores_stale_embeddings(monkeypatch):
+    """A vector for an old body must not rank after the body is updated."""
+    from perun import db
+
+    def fake_ok():
+        return True
+
+    alpha_vec = [0.9] + [0.0] * 9
+    beta_vec = [0.0] * 9 + [0.9]
+
+    def fake_embed(texts, prefix=""):
+        return [alpha_vec if "alpha" in t.lower() else beta_vec for t in texts]
+
+    monkeypatch.setattr(context, "ollama_ok", fake_ok)
+    monkeypatch.setattr(context, "embed_texts", fake_embed)
+    context.index_doc("stale.doc", "Stale", "alpha alpha alpha")
+
+    new_body = "beta beta beta"
+    new_hash = context.memory.content_hash(new_body)
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE context_docs SET body=?, content_hash=? WHERE key=?",
+            (new_body, new_hash, "stale.doc"),
+        )
+
+    hits = context._semantic("alpha", context._scope_rows("any", 0), 3)
+    assert not any(h["key"] == "stale.doc" for h in hits)
+
+
+def test_anchor_lookup_embedding_fallback_for_unrelated_tokens(tmp_path, monkeypatch):
+    """Local embeddings can bridge labels that share no stemmed tokens."""
+    proj_dir = tmp_path / "anchored"
+    proj_dir.mkdir()
+    (proj_dir / "perun.md").write_text(
+        "---\n"
+        "name: Anchored\n"
+        "slug: anchored\n"
+        "anchors:\n"
+        "- label: Runbook\n"
+        "  kind: doc\n"
+        "  path: docs/RUNBOOK.md\n"
+        "---\n\nBody\n",
+        encoding="utf-8",
+    )
+    (proj_dir / "docs").mkdir()
+    (proj_dir / "docs" / "RUNBOOK.md").write_text(
+        "# Runbook\n\n## Steps\n\n1. run\n", encoding="utf-8")
+    proj = registry.add_project("Anchored", str(proj_dir))
+
+    def fake_ok():
+        return True
+
+    same_vec = [0.5] * 10
+    monkeypatch.setattr(context, "ollama_ok", fake_ok)
+    monkeypatch.setattr(context, "embed_texts",
+                        lambda texts, prefix="": [same_vec for _ in texts])
+
+    hits = context.search("how do I deploy this", project_id=proj["id"])
+    assert hits
+    assert hits[0]["source_file"] == "docs/RUNBOOK.md"
+    assert hits[0]["matched_by"] == "anchor"

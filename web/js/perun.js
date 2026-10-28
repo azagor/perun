@@ -3250,6 +3250,7 @@ async function viewMemory() {
          <div class="form-actions">
             <button class="btn primary" id="m-search">◇ Search</button>
             <button class="btn ghost" id="m-import">⤓ Import legacy memory</button>
+            <button class="btn ghost" id="m-repair">⟳ Repair embeddings</button>
          </div>`));
     const results = el('div', { id: 'm-results' });
     v.appendChild(results);
@@ -3267,17 +3268,13 @@ async function viewMemory() {
                 renderResults(results, res.results || []);
             } else {
                 const params = project ? `?project=${encodeURIComponent(project)}&limit=40` : '?limit=40';
-                const [recent, stats] = await Promise.all([
+                const [recent, stats, usage] = await Promise.all([
                     api('/api/memory/recent' + params),
                     api('/api/memory/stats' + (project ? `?project=${encodeURIComponent(project)}` : '')),
+                    api('/api/memory/usage' + (project ? `?project=${encodeURIComponent(project)}` : '')),
                 ]);
                 results.innerHTML = '';
-                results.appendChild(el('div', { class: 'grid stats-grid mb' },
-                    `<div class="card stat"><div class="stat-label">Facts</div><div class="stat-value">${stats.stats.facts_total ?? 0}</div></div>
-                     <div class="card stat"><div class="stat-label">Doc chunks</div><div class="stat-value">${stats.stats.chunks_total ?? 0}</div></div>
-                     <div class="card stat"><div class="stat-label">Embedded</div><div class="stat-value">${stats.stats.facts_embedded ?? 0}</div></div>`));
-                results.appendChild(sectionTitle(project ? 'Recent facts for project' : 'Recent facts'));
-                results.appendChild(memoryList(recent.facts || []));
+                results.appendChild(renderMemoryDashboard(stats.stats || {}, usage.usage || {}, recent.facts || []));
             }
         } catch (e) { results.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
     };
@@ -3289,9 +3286,90 @@ async function viewMemory() {
         try { const r = await api('/api/memory/import-legacy', { method: 'POST', body: {} }); toast(`Imported ${r.imported || 0} fact(s)`, 'ok'); }
         catch (e) { toast(e.message, 'err'); }
     });
+    $('#m-repair').addEventListener('click', async () => {
+        try {
+            const r = await api('/api/memory/reembed', { method: 'POST', body: { limit: 200 } });
+            toast(`Re-embedded ${r.embedded_facts ?? 0} facts, ${r.embedded_chunks ?? 0} chunks`, r.ok ? 'ok' : 'err');
+            await loadData();
+        } catch (e) { toast(e.message, 'err'); }
+    });
 
     // Initial load uses the default “All scopes” selection.
     await loadData();
+}
+
+function renderMemoryDashboard(stats, usage, recent) {
+    const wrap = el('div', { class: 'memory-dashboard' });
+
+    // Core counts
+    wrap.appendChild(el('div', { class: 'grid stats-grid mb' },
+        `<div class="card stat"><div class="stat-label">Facts</div><div class="stat-value">${stats.facts_total ?? 0}</div></div>
+         <div class="card stat"><div class="stat-label">Doc chunks</div><div class="stat-value">${stats.chunks_total ?? 0}</div></div>
+         <div class="card stat"><div class="stat-label">Embedded</div><div class="stat-value">${stats.facts_embedded ?? 0}</div></div>
+         <div class="card stat ${(stats.facts_pending_embed ?? 0) + (stats.chunks_pending_embed ?? 0) > 0 ? 'warn' : ''}"><div class="stat-label">Pending embed</div><div class="stat-value">${(stats.facts_pending_embed ?? 0) + (stats.chunks_pending_embed ?? 0)}</div></div>`));
+
+    // Kind breakdown
+    const byKind = stats.facts_by_kind || {};
+    const kindRows = Object.entries(byKind).sort((a, b) => b[1] - a[1]).map(([k, n]) =>
+        `<tr><td><span class="badge ${kindColor(k)}">${esc(k)}</span></td><td class="num">${n}</td></tr>`).join('') ||
+        '<tr><td colspan="2" class="muted">No facts</td></tr>';
+    const kindCard = el('div', { class: 'card mb' },
+        `<h3 class="section-title">Facts by kind</h3>
+         <table class="kv-table"><tbody>${kindRows}</tbody></table>`);
+
+    // Usage window
+    const zeroRate = Math.round((usage.zero_result_rate ?? 0) * 100);
+    const usageRows = [
+        `<tr><td>Searches in window</td><td class="num">${usage.total_searches ?? 0}</td></tr>`,
+        `<tr><td>Zero-result rate</td><td class="num ${zeroRate > 30 ? 'warn' : ''}">${zeroRate}%</td></tr>`,
+        `<tr><td>Avg results / search</td><td class="num">${usage.avg_results_per_search ?? 0}</td></tr>`,
+    ].join('');
+    const usageCard = el('div', { class: 'card mb' },
+        `<h3 class="section-title">Recent usage</h3>
+         <table class="kv-table"><tbody>${usageRows}</tbody></table>`);
+
+    const middle = el('div', { class: 'grid two-col mb' });
+    middle.appendChild(kindCard);
+    middle.appendChild(usageCard);
+    wrap.appendChild(middle);
+
+    // Top-hit rules
+    const top = (stats.facts_top_hits || []).filter(f => (f.hit_count || 0) > 0);
+    if (top.length) {
+        const topBox = el('div', { class: 'card mb' },
+            `<h3 class="section-title">Top-hit rules</h3>
+             <div class="list">${top.map(f =>
+                `<div class="list-row"><span class="badge green">${f.hit_count}</span><span class="grow msg">${esc(f.content)}</span></div>`
+             ).join('')}</div>`);
+        wrap.appendChild(topBox);
+    }
+
+    // Zero-hit rules
+    const zeroHit = recent.filter(f => (f.hit_count || 0) === 0 && ['rule', 'decision'].includes(f.kind || 'note'));
+    if (zeroHit.length) {
+        const zeroBox = el('div', { class: 'card mb' },
+            `<h3 class="section-title">Zero-hit rules</h3>
+             <div class="list">${zeroHit.slice(0, 10).map(f =>
+                `<div class="list-row"><span class="badge muted">0</span><span class="grow msg">${esc(f.content)}</span><span class="ts">${esc(timeAgo(f.ts))}</span></div>`
+             ).join('')}</div>`);
+        wrap.appendChild(zeroBox);
+    }
+
+    // Recent facts
+    wrap.appendChild(el('h3', { class: 'section-title' }, 'Recent facts'));
+    wrap.appendChild(memoryList(recent));
+    return wrap;
+}
+
+function kindColor(kind) {
+    switch (kind) {
+        case 'rule': return 'gold';
+        case 'decision': return 'blue';
+        case 'note': return 'green';
+        case 'log': return 'muted';
+        case 'transcript': return 'purple';
+        default: return 'muted';
+    }
 }
 
 function renderResults(container, results) {
@@ -3314,8 +3392,12 @@ function memoryList(facts) {
     if (!facts.length) { box.appendChild(el('div', { class: 'empty' }, 'No facts stored yet.')); return box; }
     const list = el('div', { class: 'list' });
     for (const f of facts) {
+        const kind = f.kind || 'note';
+        const hits = f.hit_count || 0;
         list.appendChild(el('div', { class: 'list-row' },
             `<span class="badge ${f.scope === 'global' ? 'gold' : 'muted'}">${esc(f.scope)}</span>
+             <span class="badge ${kindColor(kind)}">${esc(kind)}</span>
+             <span class="badge ${hits > 0 ? 'green' : 'muted'}">${hits} hit${hits === 1 ? '' : 's'}</span>
              <span class="grow msg">${esc(f.content)}</span>
              <span class="ts">${esc(timeAgo(f.ts))}</span>`));
     }

@@ -62,6 +62,7 @@ from .embeddings import (
     QUERY_PREFIX,
     cosine_similarity,
     embed_texts,
+    ollama_ok,
     pack_vector,
     unpack_vector,
 )
@@ -78,6 +79,11 @@ MAX_INLINE_CHARS = 12_000    # above this a body is returned as an outline
 MAX_OUTLINE_SECTIONS = 60
 
 _KEY_CLEAN = re.compile(r"[^a-z0-9._/-]+")
+
+# Cache for manifest parses used by anchor resolution. Keyed by project id;
+# invalidated when the manifest file's mtime or size changes.
+# The cached tuple is (mtime, size, manifest_snapshot, label_embeddings).
+_manifest_cache: dict[int, tuple[float, int, dict[str, Any], dict[str, list[float]]]] = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -116,6 +122,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "source_file": row["source_file"] or "",
         "updated_at": row["updated_at"],
         "embedding": row["embedding"],
+        "content_hash": row["content_hash"] or "",
+        "embedded_hash": row["embedded_hash"] or "",
     }
 
 
@@ -442,41 +450,375 @@ def slice_section(body: str, section: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Search
+# Anchor resolution
 # --------------------------------------------------------------------------- #
-def _anchor_lookup(topic: str, project_id: int) -> dict[str, Any] | None:
-    """Resolve an anchor *label* (or its ``memory`` key) through the manifest."""
+def _anchor_label_set(anchors: list[dict[str, Any]], docs: dict[str, str]) -> list[tuple[str, dict[str, Any]]]:
+    """Return (label, anchor) pairs for manifest anchors plus synthetic doc anchors."""
+    synth_labels = {
+        "readme": "README",
+        "agents": "Agent guide",
+        "changelog": "Changelog",
+        "technical": "Technical documentation",
+        "codemap": "CODEMAP",
+    }
+    seen_paths: set[str] = set()
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    for a in anchors:
+        if not isinstance(a, dict):
+            continue
+        label = str(a.get("label") or "").strip()
+        if label:
+            pairs.append((label, dict(a)))
+    for key, rel in (docs or {}).items():
+        rel = str(rel or "").strip()
+        if not rel or rel in seen_paths:
+            continue
+        seen_paths.add(rel)
+        label = synth_labels.get(key, _capitalize_words(key))
+        pairs.append((label, {"label": label, "kind": "doc", "path": rel}))
+    pairs.append(("manifest", {"label": "manifest", "kind": "doc", "path": "perun.md"}))
+    return pairs
+
+
+def _embed_labels(labels: list[str]) -> dict[str, list[float]] | None:
+    """Embed anchor labels when Ollama is available."""
+    if not labels or not ollama_ok():
+        return None
+    try:
+        vectors = embed_texts(labels, prefix=QUERY_PREFIX)
+        return {label: vec for label, vec in zip(labels, vectors)}
+    except Exception:
+        return None
+
+
+def _load_manifest(project_id: int) -> dict[str, Any] | None:
+    """Return the parsed manifest for *project_id*, cached by mtime/size."""
     if not project_id:
+        return None
+    project = registry.get_project(project_id)
+    if not project:
         return None
     try:
         from . import manifest as manifest_mod
 
-        project = registry.get_project(project_id)
-        if not project:
-            return None
-        data = manifest_mod.load(project["path"]).get("data") or {}
+        path = Path(project["path"]) / manifest_mod.MANIFEST_MD
+        st = path.stat()
+        cache_key = (project_id,)
+        cached = _manifest_cache.get(cache_key)
+        if cached and cached[:2] == (st.st_mtime, st.st_size):
+            return cached[2]
+        snap = manifest_mod.load(project["path"])
+        data = snap.get("data") or {}
         anchors = data.get("anchors") or []
+        docs = data.get("docs") or {}
+        label_vectors = _embed_labels([label for label, _ in _anchor_label_set(anchors, docs)])
+        _manifest_cache[cache_key] = (st.st_mtime, st.st_size, snap, label_vectors or {})
+        return snap
     except Exception:
         return None
-    wanted = topic.strip().casefold()
-    for anchor in anchors:
-        if not isinstance(anchor, dict):
+
+
+def _token_set(text: str) -> set[str]:
+    """The stemmed content tokens of *text* (same rules as ``_topic_terms``)."""
+    return _topic_terms(text)
+
+
+def _path_tokens(path: str) -> set[str]:
+    """Tokens extracted from a relative path."""
+    segments = re.split(r"[\\/]", path)
+    out: set[str] = set()
+    for segment in segments:
+        for piece in segment.split("."):
+            for w in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", piece.casefold()):
+                if w not in _STOPWORDS:
+                    out.add(_stem(w))
+    return out
+
+
+def _capitalize_words(text: str) -> str:
+    """Capitalise each word in a snake/kebab token."""
+    return " ".join(w.capitalize() for w in re.sub(r"[_-]+", " ", text).split())
+
+
+def _rank_anchors(wanted: str, anchors: list[dict[str, Any]],
+                  docs: dict[str, str]) -> list[dict[str, Any]]:
+    """Return anchors (plus synthetic doc anchors) sorted by match quality."""
+    wanted_tokens = _token_set(wanted)
+    wanted_path_tokens = _path_tokens(wanted)
+
+    synth_labels = {
+        "readme": "README",
+        "agents": "Agent guide",
+        "changelog": "Changelog",
+        "technical": "Technical documentation",
+        "codemap": "CODEMAP",
+    }
+    seen_paths: set[str] = set()
+    all_anchors: list[dict[str, Any]] = [dict(a) for a in anchors
+                                          if isinstance(a, dict)]
+    for key, rel in (docs or {}).items():
+        rel = str(rel or "").strip()
+        if not rel or rel in seen_paths:
             continue
+        seen_paths.add(rel)
+        all_anchors.append({
+            "label": synth_labels.get(key, _capitalize_words(key)),
+            "kind": "doc",
+            "path": rel,
+        })
+    # The manifest itself is also a document the agent may ask for.
+    all_anchors.append({"label": "manifest", "kind": "doc", "path": "perun.md"})
+
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for anchor in all_anchors:
         label = str(anchor.get("label") or "").strip().casefold()
+        path = str(anchor.get("path") or "").strip().casefold()
         mem = str(anchor.get("memory") or "").strip()
-        if (label and label == wanted) or (mem and normalize_key(mem) == normalize_key(topic)):
-            if mem:
-                doc = get(mem, project_id=project_id)
-                if doc:
-                    return doc
-            path = str(anchor.get("path") or "")
-            if path:
-                for row in _scope_rows("any", project_id):
-                    if row["source_file"] == path:
-                        return row
+        score = 0
+
+        if label:
+            if label == wanted:
+                score = 100
+            elif wanted_tokens and _token_set(label) <= wanted_tokens \
+                    and any(len(t) >= 4 for t in _token_set(label)):
+                score = 50
+            elif label in wanted:
+                score = 30
+            elif wanted_tokens and wanted_tokens & _token_set(label):
+                score = 10
+
+        if path:
+            if path == wanted or wanted.endswith(path) or path.endswith(wanted):
+                score = max(score, 40)
+            elif wanted_path_tokens and wanted_path_tokens & _path_tokens(path):
+                score = max(score, 20)
+
+        if mem and normalize_key(mem) == normalize_key(wanted):
+            score = max(score, 80)
+
+        if score:
+            scored.append((score, anchor))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [anchor for _, anchor in scored]
+
+
+def _anchor_path_hit(project_id: int, root: Path, anchor: dict[str, Any],
+                     wanted: str, q_vec: list[float] | None = None) -> dict[str, Any] | None:
+    """Resolve a file/doc anchor to a doc-chunk hit or a bounded stub."""
+    path = str(anchor.get("path") or "").strip()
+    label = str(anchor.get("label") or "").strip()
+    if not path or not root:
+        return None
+
+    full = root / path
+    # 1. If the file is already indexed in doc_chunks, return the best section.
+    try:
+        with db.db() as conn:
+            rows = db.rows(
+                conn,
+                "SELECT section, content, embedding, content_hash, embedded_hash "
+                "FROM doc_chunks WHERE project_id=? AND source_file=? ORDER BY section",
+                (project_id, path),
+            )
+        if rows:
+            wanted_tokens = _token_set(wanted) or _token_set(label)
+            if q_vec is None and ollama_ok():
+                try:
+                    q_vec = embed_texts([wanted or label], prefix=QUERY_PREFIX)[0]
+                except Exception:
+                    q_vec = None
+            best: sqlite3.Row | None = None
+            best_score = -1.0
+            for r in rows:
+                section = r["section"] or ""
+                score = 0.0
+                emb_blob = r["embedding"]
+                emb_hash = (r.get("embedded_hash") or "")
+                content_hash = (r.get("content_hash") or "")
+                if (q_vec is not None and emb_blob
+                        and emb_hash and emb_hash == content_hash):
+                    score = cosine_similarity(q_vec, unpack_vector(emb_blob))
+                # Keyword bonuses keep short/unembedded labels working.
+                if section == "(top)":
+                    score += 0.05
+                if wanted_tokens:
+                    inter = wanted_tokens & _token_set(section)
+                    score += 0.1 * len(inter)
+                if label.casefold() in section.casefold():
+                    score += 0.15
+                if score > best_score:
+                    best_score = score
+                    best = r
+            if best is None:
+                best = rows[0]
+            return {
+                "key": f"doc.{normalize_key(label) or normalize_key(path)}",
+                "title": label or path,
+                "body": best["content"],
+                "source_file": path,
+                "section": best["section"],
+                "scope": "project",
+                "matched_by": "anchor-doc",
+            }
+    except Exception:
+        pass
+
+    # 2. Otherwise return a small stub so the agent knows the anchor exists and
+    #    how to fetch the real content.
+    stub_lines: list[str] = [f"[{label or path}] {path}"]
+    kind = str(anchor.get("kind") or "").strip()
+    if kind:
+        stub_lines.append(f"kind={kind}")
+    if full.is_file():
+        stub_lines.append("status=exists")
+        try:
+            headings = [
+                line.strip()
+                for line in full.read_text(encoding="utf-8", errors="replace").splitlines()
+                if line.startswith("## ") or line.startswith("### ")
+            ]
+            if headings:
+                stub_lines.append("Sections:")
+                stub_lines.extend(f"  {h}" for h in headings[:20])
+        except Exception:
+            pass
+    else:
+        stub_lines.append("status=not found")
+    stub_lines.append("")
+    stub_lines.append(
+        f"Fetch the full content with perun_grep or perun_read_file(\"{path}\")."
+    )
+    return {
+        "key": f"anchor.{normalize_key(label) or normalize_key(path)}",
+        "title": label or path,
+        "body": "\n".join(stub_lines),
+        "source_file": path,
+        "scope": "project",
+        "matched_by": "anchor-stub",
+    }
+
+
+def _manifest_cache_entry(project_id: int) -> tuple[dict[str, Any], dict[str, list[float]]] | None:
+    """Return (manifest_snapshot, label_embeddings) from cache or disk."""
+    cache_key = (project_id,)
+    cached = _manifest_cache.get(cache_key)
+    if cached is None:
+        _load_manifest(project_id)
+        cached = _manifest_cache.get(cache_key)
+    if cached is None:
+        return None
+    return cached[2], cached[3]
+
+
+def _embedding_best_anchor(topic: str, pairs: list[tuple[str, dict[str, Any]]],
+                           label_vectors: dict[str, list[float]],
+                           q_vec: list[float] | None = None) -> dict[str, Any] | None:
+    """Return the anchor whose label is most similar to *topic* by embedding."""
+    if not label_vectors or not pairs:
+        return None
+    if q_vec is None:
+        try:
+            q_vec = embed_texts([topic], prefix=QUERY_PREFIX)[0]
+        except Exception:
+            return None
+    best_score = 0.0
+    best: dict[str, Any] | None = None
+    for label, anchor in pairs:
+        vec = label_vectors.get(label)
+        if not vec:
+            continue
+        score = cosine_similarity(q_vec, vec)
+        if score > best_score:
+            best_score = score
+            best = anchor
+    # Threshold: must be meaningfully similar, not just the least-distant option.
+    if best_score < 0.55:
+        return None
+    return best
+
+
+def _anchor_lookup(topic: str, project_id: int) -> dict[str, Any] | None:
+    """Resolve an anchor *label* (or its ``memory`` key) through the manifest.
+
+    Matches are, in order of preference:
+
+    1. exact label or memory-key equality;
+    2. token-bounded label overlap (``read the codemap`` → ``CODEMAP``);
+    3. local embedding similarity over anchor labels;
+    4. manifest ``docs`` entries and the manifest itself as synthetic anchors;
+    5. path overlap.
+
+    A matching anchor is returned as either the bound context doc, a
+    ``doc_chunks`` section, or a small stub with fetch instructions.
+    """
+    if not project_id:
+        return None
+    entry = _manifest_cache_entry(project_id)
+    if entry is None:
+        return None
+    snap, label_vectors = entry
+    if not snap.get("found"):
+        return None
+    data = snap.get("data") or {}
+    anchors = data.get("anchors") or []
+    docs = data.get("docs") or {}
+    wanted = topic.strip().casefold()
+
+    project = registry.get_project(project_id)
+    root = Path(project["path"]) if project else None
+
+    pairs = _anchor_label_set(anchors, docs)
+
+    # Embed the query once, then reuse it for label similarity and section
+    # selection. Deterministic rules still run first.
+    q_vec: list[float] | None = None
+    if label_vectors:
+        try:
+            q_vec = embed_texts([topic], prefix=QUERY_PREFIX)[0]
+        except Exception:
+            q_vec = None
+
+    # 1. Deterministic ranking.
+    candidates = _rank_anchors(wanted, anchors, docs)
+    for anchor in candidates:
+        resolved = _resolve_anchor(project_id, root, anchor, wanted, q_vec=q_vec)
+        if resolved:
+            return resolved
+
+    # 2. Embedding label similarity (local model, fallback to deterministic).
+    if label_vectors and q_vec is not None:
+        best = _embedding_best_anchor(topic, pairs, label_vectors, q_vec=q_vec)
+        if best:
+            resolved = _resolve_anchor(project_id, root, best, wanted, q_vec=q_vec)
+            if resolved:
+                return resolved
+
     return None
 
 
+def _resolve_anchor(project_id: int, root: Path | None, anchor: dict[str, Any],
+                    wanted: str, q_vec: list[float] | None = None) -> dict[str, Any] | None:
+    """Resolve a single matched anchor into a doc, chunk, or stub."""
+    mem = str(anchor.get("memory") or "").strip()
+    if mem:
+        doc = get(mem, project_id=project_id)
+        if doc:
+            return doc
+
+    kind = str(anchor.get("kind") or "").lower()
+    if kind in ("secret", "command", "url"):
+        return None
+
+    path = str(anchor.get("path") or "").strip()
+    if path and root is not None:
+        return _anchor_path_hit(project_id, root, anchor, wanted, q_vec=q_vec)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Search
+# --------------------------------------------------------------------------- #
 def _semantic(topic: str, rows: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
     """Rank context rows against a free-text topic."""
     if not rows:
@@ -491,7 +833,11 @@ def _semantic(topic: str, rows: list[dict[str, Any]], k: int) -> list[dict[str, 
     scored: list[tuple[float, dict[str, Any]]] = []
     for row in rows:
         score = 0.0
-        if q_emb and row.get("embedding"):
+        # Only trust an embedding that matches the current body; an edited doc
+        # indexed while Ollama was down can keep a stale vector otherwise.
+        emb_hash = (row.get("embedded_hash") or "")
+        content_hash = (row.get("content_hash") or "")
+        if q_emb and row.get("embedding") and emb_hash and emb_hash == content_hash:
             score = cosine_similarity(q_emb, unpack_vector(row["embedding"]))
         hay = " ".join([
             row["key"], row["title"], row["summary"], row["body"],
@@ -603,15 +949,74 @@ PREFETCH_MAX_DOCS = 2
 PREFETCH_MAX_CHARS = 4_000
 
 
+# Small equivalence map for forms that the suffix rules miss or over-stem.
+_STEM_EQUIV = {
+    "configuration": "configure",
+    "configura": "configure",
+    "configur": "configure",
+    "deployment": "deploy",
+    "releas": "release",
+    "releasing": "release",
+    "released": "release",
+    "testing": "test",
+    "indexing": "index",
+    "searching": "search",
+    "credential": "credential",
+    "credentials": "credential",
+    "validating": "validate",
+    "validat": "validate",
+    "orchestrating": "orchestrate",
+    "orchestrat": "orchestrate",
+    "routing": "route",
+}
+
+
 def _stem(word: str) -> str:
-    """A deliberately crude stemmer — enough to match ``credential``/``credentials``."""
+    """A deterministic stemmer covering plurals and common English morphology.
+
+    No embeddings are involved, so the pre-fetch gate stays Ollama-free.
+    """
     if len(word) > 4 and word.endswith("ies"):
-        return word[:-3] + "y"
-    if len(word) > 3 and word.endswith("es") and not word.endswith("ss"):
-        return word[:-2]
-    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
-        return word[:-1]
-    return word
+        word = word[:-3] + "y"
+    elif len(word) > 5 and word.endswith("ings"):
+        word = word[:-4]
+    elif len(word) > 4 and word.endswith("ing"):
+        word = word[:-3]
+    elif len(word) > 5 and word.endswith("ated"):
+        word = word[:-3]  # validate -> valid; configure -> configure? no
+    elif len(word) > 5 and word.endswith("ator"):
+        word = word[:-4] + "e"
+    elif len(word) > 6 and word.endswith("ations"):
+        word = word[:-5]
+    elif len(word) > 5 and word.endswith("ation"):
+        word = word[:-4]
+    elif len(word) > 5 and word.endswith("itions"):
+        word = word[:-5]
+    elif len(word) > 4 and word.endswith("ition"):
+        word = word[:-4]
+    elif len(word) > 5 and word.endswith("tions"):
+        word = word[:-4]
+    elif len(word) > 4 and word.endswith("tion"):
+        word = word[:-3]
+    elif len(word) > 5 and word.endswith("sions"):
+        word = word[:-4]
+    elif len(word) > 4 and word.endswith("sion"):
+        word = word[:-3]
+    elif len(word) > 5 and word.endswith("nesses"):
+        word = word[:-5]
+    elif len(word) > 4 and word.endswith("ness"):
+        word = word[:-4]
+    elif len(word) > 3 and word.endswith("ly"):
+        word = word[:-2]
+    elif len(word) > 4 and word.endswith("ed") and not word.endswith("eed"):
+        word = word[:-2]
+    elif len(word) > 3 and word.endswith("er"):
+        word = word[:-2]
+    elif len(word) > 3 and word.endswith("es") and not word.endswith("ss"):
+        word = word[:-2]
+    elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return _STEM_EQUIV.get(word, word)
 
 
 def _topic_terms(text: str) -> set[str]:
@@ -653,14 +1058,16 @@ def prefetch(topic: str, *, project_id: int = 0, k: int = PREFETCH_MAX_DOCS,
     request into the reference material it needs and injects it *before* the
     run starts.
 
-    The gate is deliberately conservative and **deterministic** — no embedding
-    is involved, so the run path never depends on Ollama being up:
+    The gate is deliberately conservative: wrong injections cost tokens and
+    can mislead, so deterministic rules are tried first. If a local embedding
+    model (Ollama) is available, it is used as a second-stage fallback; if not,
+    the deterministic path still works.
 
     1. an explicit key is a deliberate request and is always honoured;
     2. an anchor label resolves through the project's manifest;
     3. a short topic may name a key fragment;
-    4. otherwise the request's **subject** must match the document's declared
-       subject.
+    4. the request's **subject** must match the document's declared subject;
+    5. local embedding similarity over context doc subjects (when Ollama is up).
 
     A wrong injection costs tokens *and* can mislead, so the default is to
     inject nothing rather than something plausible. The total injected size
@@ -678,13 +1085,30 @@ def prefetch(topic: str, *, project_id: int = 0, k: int = PREFETCH_MAX_DOCS,
 
     def _take(hit: dict[str, Any], reason: str) -> None:
         nonlocal used
-        body = hit.get("body") or ""
-        if used + len(body) > max_chars:
+        remaining = max_chars - used
+        if remaining <= 0:
             return
-        used += len(body)
-        taken = dict(hit)
-        taken["matched_by"] = reason
-        out.append(taken)
+        body = hit.get("body") or ""
+        if len(body) <= remaining:
+            used += len(body)
+            taken = dict(hit)
+            taken["matched_by"] = reason
+            out.append(taken)
+            return
+        # The first matching document is always admitted, but truncated to the
+        # remaining budget so the agent gets the beginning of the right doc
+        # instead of a smaller, unrelated one.
+        if not out:
+            note = f"\n\n... [truncated at {remaining} of {len(body)} chars]"
+            if len(note) >= remaining:
+                note = "\n...[truncated]"
+            take_len = max(0, remaining - len(note))
+            truncated = body[:take_len].rstrip() + note
+            used += len(truncated)
+            taken = dict(hit)
+            taken["body"] = truncated
+            taken["matched_by"] = reason
+            out.append(taken)
 
     nk = normalize_key(topic)
 
@@ -708,7 +1132,7 @@ def prefetch(topic: str, *, project_id: int = 0, k: int = PREFETCH_MAX_DOCS,
                 if len(out) >= k:
                     break
 
-    # 4. Subject match against every visible document.
+    # 4. Deterministic subject match against every visible document.
     if not out:
         scored: list[tuple[float, dict[str, Any]]] = []
         for row in rows:
@@ -722,6 +1146,19 @@ def prefetch(topic: str, *, project_id: int = 0, k: int = PREFETCH_MAX_DOCS,
             _take(hit, "topical")
             if len(out) >= k:
                 break
+
+    # 5. Local embedding similarity (fallback if Ollama is up and the
+    #    deterministic gate found nothing).
+    if not out and ollama_ok():
+        try:
+            sem = _semantic(topic, rows, k * 2)
+            for hit in sem:
+                if hit.get("score", 0) >= 0.6:
+                    _take(hit, "semantic")
+                if len(out) >= k:
+                    break
+        except Exception:
+            pass
 
     return out[:k]
 

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.27 (see §15). Token-efficiency tooling: `perun context dedupe`, a thin global instructions pointer, expanded ambient-context stats with the per-session token floor, and a harder losslessness check that flags repeated inline subsections and stale pointer files. A production-readiness audit hardened the implementation: `tool_schema_stats()` degrades on serialization errors, `instructions[]` resolution is confined to the config/project root, and the verify size guardrail now measures the live inline portion for mixed destinations.
+**Latest release:** v0.8.31 (see §15). Anchoring + CODEMAP token-efficiency: anchors resolve via token/substring matching with doc-chunk/stub fallback, CODEMAP-aware chunking at `###` with `<H2> › <H3>` titles, compact `<slug>.codemap` outline docs, deterministic stemmer improvements, and `perun docs audit` for CODEMAP traceability; prefetch now truncates the first matching large doc instead of skipping it.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -217,12 +217,16 @@ the embedding is the only part that leaves the machine. Such a row is marked
 repair path) leaves it alone. Embeddings are always computed **before** a DB
 connection is opened, never held across a network call.
 
-**Pre-fetch gate.** `context.prefetch()` is deterministic and Ollama-free:
-exact key → anchor label → key fragment → **subject** match
+**Pre-fetch gate.** `context.prefetch()` is deterministic first, embedding
+second: exact key → anchor label → key fragment → **subject** match
 (`topical_overlap()` over stemmed content words of the key/title/summary,
-threshold 0.5). At most `PREFETCH_MAX_DOCS` docs and `PREFETCH_MAX_CHARS`
-characters are injected. A wrong injection costs tokens *and* can mislead, so
-the default is to inject nothing rather than something plausible.
+threshold 0.5). If Ollama is available and the deterministic gate finds nothing,
+`prefetch()` falls back to local embedding similarity over the context docs
+(score ≥ 0.6). Anchor label resolution and `doc_chunks` section selection also
+use local embeddings as a fallback. When Ollama is down the deterministic paths
+still work. At most `PREFETCH_MAX_DOCS` docs and `PREFETCH_MAX_CHARS` characters
+are injected. A wrong injection costs tokens *and* can mislead, so the default
+is to inject nothing rather than something plausible.
 
 **The two surfaces.**
 

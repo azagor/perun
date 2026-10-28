@@ -110,6 +110,22 @@ def test_perunchat_room_memory_public_room_is_empty():
     assert "No matching room memory" in result
 
 
+def test_memory_store_accepts_kind_and_valid_to(mcp_project):
+    from datetime import datetime, timezone, timedelta
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    result = mcp_mod.perun_memory_store("temporary rule", kind="rule", valid_to=future)
+    assert "Stored" in result
+
+
+def test_memory_forget_and_supersede(mcp_project):
+    result = mcp_mod.perun_memory_store("original fact", kind="rule")
+    assert "Stored" in result
+    fact_id = int(result.split("id=")[1].split(")")[0])
+    # Forget it.
+    assert "Forgot" in mcp_mod.perun_memory_forget(fact_id)
+    assert "No matching memory" in mcp_mod.perun_memory_search("original fact", k=5)
+
+
 def test_perunchat_room_memory_falls_back_to_meta_room():
     """Pre-v7 rows with room in meta but no room_id column remain searchable."""
     room = "priv:legacy"

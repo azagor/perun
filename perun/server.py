@@ -110,9 +110,21 @@ def _start_reembed_thread() -> threading.Event | None:
         delay = _REEMBED_INITIAL_DELAY_SECONDS
         while not stop.wait(delay):
             try:
-                memory.reembed_missing(limit=32)
-            except Exception:  # pragma: no cover - best effort
-                pass
+                res = memory.reembed_missing(limit=32)
+                try:
+                    if res and not res.get("ok") and res.get("error"):
+                        import logging
+
+                        logging.getLogger(__name__).warning("reembed_missing failed: %s", res.get("error"))
+                except Exception:
+                    pass
+            except Exception as exc:  # pragma: no cover - best effort
+                try:
+                    import logging
+
+                    logging.getLogger(__name__).warning("reembed_missing exception: %s", exc)
+                except Exception:
+                    pass
             try:
                 context.reembed_missing(limit=32)
             except Exception:  # pragma: no cover - best effort
@@ -2290,7 +2302,9 @@ def api_remember(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         scope = None
     result = memory.remember(content, project_id=pid, scope=scope,
                              topic=_str_field(payload, "topic") or "general",
-                             source=_str_field(payload, "source") or "api")
+                             source=_str_field(payload, "source") or "api",
+                             kind=_str_field(payload, "kind") or "",
+                             valid_to=_str_field(payload, "valid_to") or "")
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("reason", "rejected"))
     return _ok(**result)
@@ -2317,6 +2331,12 @@ def api_memory_search(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 def api_memory_stats(project: str | None = None) -> dict[str, Any]:
     p = registry.get_project(project) if project else None
     return _ok(stats=memory.stats(p["id"] if p else None))
+
+
+@app.get("/api/memory/usage")
+def api_memory_usage(project: str | None = None, window: int = 1000) -> dict[str, Any]:
+    p = registry.get_project(project) if project else None
+    return _ok(usage=memory.usage_stats(p["id"] if p else None, window=window))
 
 
 @app.get("/api/memory/recent")
@@ -2348,7 +2368,34 @@ def api_memory_prune(payload: dict[str, Any] = Body(default={})) -> dict[str, An
         keep=keep,
         min_age_days=min_age_days,
     )
-    return _ok(removed=removed)
+    return _ok(**removed)
+
+
+@app.delete("/api/memory/fact/{fact_id}")
+def api_forget_fact(fact_id: int) -> dict[str, Any]:
+    return memory.forget(fact_id)
+
+
+@app.post("/api/memory/fact/{fact_id}/supersede")
+def api_supersede_fact(fact_id: int, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    content = _str_field(payload, "content").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    result = memory.supersede(
+        fact_id, content,
+        topic=_str_field(payload, "topic") or None,
+        meta=payload.get("meta"),
+        kind=_str_field(payload, "kind") or "",
+        valid_to=_str_field(payload, "valid_to") or "",
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("reason", "rejected"))
+    return _ok(**result)
+
+
+@app.post("/api/memory/fact/{fact_id}/touch")
+def api_touch_fact(fact_id: int) -> dict[str, Any]:
+    return _ok(touched=memory.touch_fact(fact_id))
 
 
 @app.post("/api/memory/reembed")

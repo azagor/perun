@@ -123,11 +123,17 @@ CREATE TABLE IF NOT EXISTS memory (
     ts            TEXT NOT NULL,
     meta          TEXT DEFAULT '{}',
     room_id       TEXT DEFAULT '',
+    kind          TEXT DEFAULT 'note',
+    last_used_at  TEXT DEFAULT '',
+    hit_count     INTEGER DEFAULT 0,
+    valid_to      TEXT DEFAULT '',
     UNIQUE(scope, project_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_memory_project ON memory(project_id);
 CREATE INDEX IF NOT EXISTS idx_memory_project_id_desc ON memory(project_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_room ON memory(room_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
+CREATE INDEX IF NOT EXISTS idx_memory_valid_to ON memory(valid_to);
 
 CREATE TABLE IF NOT EXISTS doc_chunks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -345,6 +351,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("meta", "TEXT DEFAULT '{}'"),
         # Room-scoped PerunChat memory (v0.8.22).
         ("room_id", "TEXT DEFAULT ''"),
+        # Memory kind for rules-only prefetch (v0.8.28).
+        ("kind", "TEXT DEFAULT 'note'"),
+        # Fact lifecycle metrics (v0.8.29).
+        ("last_used_at", "TEXT DEFAULT ''"),
+        ("hit_count", "INTEGER DEFAULT 0"),
+        ("valid_to", "TEXT DEFAULT ''"),
     ],
     # Added with the Shared Projects release. ``CREATE TABLE IF NOT EXISTS``
     # cannot add it to a database whose table was created by an earlier build,
@@ -418,7 +430,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 
 def init_db() -> None:
@@ -428,13 +440,70 @@ def init_db() -> None:
         # SCHEMA contains indexes that reference newer columns (e.g.
         # ``idx_memory_room`` needs ``memory.room_id``); if the table predates
         # the column, creating the index would fail before migrations run.
+        try:
+            user_ver = conn.execute("PRAGMA user_version").fetchone()
+            ver = user_ver[0] if user_ver else 0
+        except Exception:
+            ver = 0
         _migrate(conn)
         conn.executescript(SCHEMA)
         # Run migrations again in case any newly-created tables need retired
         # columns dropped or future non-additive fixes.
         _migrate(conn)
+        if ver < 8:
+            try:
+                _backfill_memory_kind(conn)
+            except Exception:
+                pass
+        if ver < 9:
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_valid_to ON memory(valid_to)")
+            except Exception:
+                pass
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     _initialized = True
+
+
+def _backfill_memory_kind(conn: sqlite3.Connection) -> None:
+    import json
+    import re
+
+    log_verbs = re.compile(r"^(Released|Session checkpoint|Pushed|Applied|Fixed|Shipped|Implemented|Added|Synced|Updated|Committed|Deployed|Merged|Perun\b.*v\d|PerunChat\b.*v\d)", re.I)
+    rule_topics = {"architecture", "deployment", "infrastructure", "security"}
+    rows = conn.execute("SELECT id, project_id, scope, topic, source, content, meta, room_id FROM memory WHERE COALESCE(kind,'')='' OR kind='note'").fetchall()
+    for r in rows:
+        rid = r["id"]
+        meta = {}
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        mtype = str((meta or {}).get("type") or "").strip().lower()
+        if mtype == "transcript" or r["room_id"]:
+            conn.execute("UPDATE memory SET kind='log' WHERE id=?", (rid,))
+            continue
+        if (r["source"] or "") == "perunchat":
+            conn.execute("UPDATE memory SET kind='log' WHERE id=?", (rid,))
+            continue
+        topic = r["topic"] or ""
+        if topic in ("dependencies", "session_checkpoint", "perunchat", "work"):
+            conn.execute("UPDATE memory SET kind='log' WHERE id=?", (rid,))
+            continue
+        content = (r["content"] or "").strip()
+        if log_verbs.match(content):
+            conn.execute("UPDATE memory SET kind='log' WHERE id=?", (rid,))
+            continue
+        if topic in rule_topics:
+            conn.execute("UPDATE memory SET kind='rule' WHERE id=?", (rid,))
+            continue
+        if mtype == "decision":
+            conn.execute("UPDATE memory SET kind='decision' WHERE id=?", (rid,))
+            continue
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind)")
+    except Exception:
+        pass
 
 
 def rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[sqlite3.Row]:

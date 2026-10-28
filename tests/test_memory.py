@@ -128,7 +128,7 @@ def test_prune_removes_old_project_facts():
     with db.db() as conn:
         conn.execute("UPDATE memory SET ts=? WHERE project_id=?", (old, p["id"]))
     removed = memory.prune(project_id=p["id"], keep=0, min_age_days=30)
-    assert removed == 1
+    assert removed["removed_total"] == 1
 
 
 def test_search_facts_casefolds_german_eszett():
@@ -178,6 +178,226 @@ def test_reembed_missing_repairs_fact_embedding(monkeypatch):
     assert row["embedding"] is not None
     unpacked = embeddings.unpack_vector(row["embedding"])
     assert unpacked == pytest.approx(fake_vec)
+
+
+def test_reembed_missing_repairs_chunk_embedding(monkeypatch):
+    from perun import config, db, embeddings
+
+    p = registry.add_project("ChunkRepair", r"C:\cr")
+    content = "chunk repair me"
+    h = memory.content_hash(content)
+    with db.db() as conn:
+        cur = conn.execute(
+            "INSERT INTO doc_chunks (project_id, source_file, section, content, "
+            "embedding, content_hash, embedded_hash, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (p["id"], "docs/README.md", "x", content, None, h, "",
+             registry.now_iso()),
+        )
+        chunk_id = cur.lastrowid
+
+    fake_vec = [0.1] * config.Settings().embed_dim
+    monkeypatch.setattr(
+        memory, "embed_texts",
+        lambda texts, prefix="": [fake_vec for _ in texts])
+
+    result = memory.reembed_missing(limit=8)
+    assert result["chunks_embedded"] == 1
+
+    with db.db() as conn:
+        row = db.one(conn, "SELECT embedding, embedded_hash, content_hash FROM doc_chunks WHERE id=?", (chunk_id,))
+    assert row["embedding"] is not None
+    assert row["embedded_hash"] == row["content_hash"]
+    unpacked = embeddings.unpack_vector(row["embedding"])
+    assert unpacked == pytest.approx(fake_vec)
+
+
+def test_reembed_missing_records_error_on_bind_failure(monkeypatch):
+    """Simulate the original bug: raw list passed to SQLite raises ProgrammingError."""
+    from perun import db
+
+    p = registry.add_project("ReembedFail", r"C:\rf")
+    content = "chunk to fail"
+    h = memory.content_hash(content)
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO doc_chunks (project_id, source_file, section, content, "
+            "embedding, content_hash, embedded_hash, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (p["id"], "docs/README.md", "x", content, None, h, "", registry.now_iso()),
+        )
+
+    fake_vec = [0.1] * 10
+    monkeypatch.setattr(memory, "embed_texts", lambda texts, prefix="": [fake_vec for _ in texts])
+    monkeypatch.setattr(memory, "pack_vector", lambda vec: vec)  # wrong type, should be bytes
+    result = memory.reembed_missing(limit=2)
+    assert result["ok"] is False
+    assert "type 'list' is not supported" in result.get("error", "") or "Error binding" in result.get("error", "")
+
+
+def test_prefetch_rules_selects_rules_only():
+    p = registry.add_project("Prefetch", r"C:\pf")
+    memory.remember("deploy rule one", project_id=p["id"], scope="project",
+                    topic="deployment", source="user", kind="rule")
+    memory.remember("work log entry", project_id=p["id"], scope="project",
+                    topic="work", source="mcp", kind="log")
+    # Query must share at least 2 content terms with the rule to pass the gate.
+    rules = memory.prefetch_rules("deploy rule for this project", project_id=p["id"], k=3)
+    assert len(rules) == 1
+    assert rules[0]["content"] == "deploy rule one"
+
+
+def test_prefetch_rules_rejects_release_announcements():
+    p = registry.add_project("PrefetchRel", r"C:\pfr")
+    memory.remember("Released Perun v9.9.9 with deploy fix", project_id=p["id"],
+                    scope="project", topic="deployment", source="user", kind="rule")
+    rules = memory.prefetch_rules("deploy fix", project_id=p["id"], k=3)
+    assert rules == []
+
+
+def test_chunk_markdown_headings_only_for_large_changelog():
+    big = "x" * (memory.CHANGELOG_FULL_INDEX_MAX_CHARS + 1000)
+    text = f"# Changelog\n\n## Release 1\n\n{big}\n\n## Release 2\n\nmore\n"
+    prepared = memory._prepare_changelog("docs/CHANGELOG.md", text)
+    assert memory.RELEASE_INDEX_SECTION in prepared
+    assert "Release 1" in prepared
+    assert "Release 2" in prepared
+    # Big body should be gone from the prepared text.
+    assert big not in prepared
+
+
+def test_chunk_codemap_splits_at_modules():
+    text = (
+        "# Perun — CODEMAP\n\n"
+        "## Package perun/\n\n"
+        "### `perun/a.py`\n\nModule A does alpha.\n\n"
+        "### `perun/b.py`\n\nModule B does beta.\n\n"
+        "## Web dashboard `web/`\n\n"
+        "* `web/index.html` — shell.\n"
+    )
+    chunks = memory.chunk_markdown(text, source_file="docs/CODEMAP.md")
+    titles = [t for t, _ in chunks]
+    bodies = "\n".join(b for _, b in chunks)
+    assert any("perun/a.py" in t for t in titles)
+    assert "perun/b.py" in bodies
+    assert any("Web dashboard" in t for t in titles)
+    for t, body in chunks:
+        assert len(body) <= memory.CODEMAP_TARGET_CHUNK
+        if "perun" in t:
+            assert body.startswith("### ")
+
+
+def test_chunk_codemap_caps_oversized_modules():
+    big = "x" * 4000
+    text = (
+        "# Perun — CODEMAP\n\n"
+        "## Package perun/\n\n"
+        f"### `perun/big.py`\n\n{big}\n"
+    )
+    chunks = memory.chunk_markdown(text, source_file="docs/CODEMAP.md")
+    assert len(chunks) >= 2
+    assert all(len(body) <= memory.CODEMAP_TARGET_CHUNK for _, body in chunks)
+
+
+def test_codemap_outline_is_compact():
+    from perun import scaffold
+
+    text = (
+        "# CODEMAP\n\n"
+        "## Package perun/\n\n"
+        "### `perun/a.py`\n\nModule A summary.\n\n"
+        "### `perun/b.py`\n\nModule B summary.\n"
+    )
+    outline = scaffold.generate_codemap_outline(text, "perun")
+    assert "perun/a.py" in outline
+    assert "Module A summary" in outline
+    assert len(outline) <= scaffold._CODEMAP_OUTLINE_MAX_CHARS
+
+
+def test_forget_removes_fact():
+    r = memory.remember("forget me", scope="global")
+    assert r["ok"] and r["id"]
+    f = memory.forget(r["id"])
+    assert f["removed"] is True
+    assert memory.search_facts("forget me", 0, top_k=5) == []
+
+
+def test_supersede_updates_content():
+    r = memory.remember("old rule", scope="global", kind="rule")
+    s = memory.supersede(r["id"], "new rule", kind="rule")
+    assert s["ok"] and s["superseded"]
+    hits = memory.search_facts("new rule", 0, top_k=5)
+    assert any(h["content"] == "new rule" for h in hits)
+
+
+def test_expired_fact_not_searchable():
+    from datetime import datetime, timedelta, timezone
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    r = memory.remember("expired rule", scope="global", kind="rule", valid_to=past)
+    assert r["ok"]
+    assert memory.search_facts("expired rule", 0, top_k=5) == []
+
+
+def test_remember_valid_to_is_stored():
+    from datetime import datetime, timezone, timedelta
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    r = memory.remember("future rule", scope="global", kind="rule", valid_to=future)
+    assert r["ok"]
+    assert memory.search_facts("future rule", 0, top_k=5)
+
+
+def test_search_facts_records_hit_count():
+    r = memory.remember("hit counter rule", scope="global", kind="rule")
+    assert r["ok"]
+    memory.search_facts("hit counter rule", 0, top_k=5)
+    rows = memory.recent_facts(None, limit=1)
+    row = next((x for x in rows if x["content"] == "hit counter rule"), None)
+    assert row is not None
+    assert row.get("hit_count", 0) >= 1
+
+
+def test_prune_removes_expired():
+    from datetime import datetime, timedelta, timezone
+    from perun import db
+    p = registry.add_project("PruneExp", r"C:\px")
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    memory.remember("expired project rule", project_id=p["id"], scope="project", valid_to=past)
+    memory.remember("fresh project rule", project_id=p["id"], scope="project")
+    res = memory.prune(project_id=p["id"], keep=10, min_age_days=30)
+    with db.db() as conn:
+        after = db.one(conn, "SELECT COUNT(*) c FROM memory WHERE project_id=?", (p["id"],))["c"]
+    # keep=10 protects the fresh rule; only the expired one is removed.
+    assert after == 1
+    assert res["removed_expired"] >= 1
+
+
+def test_stopwords_do_not_pollute_results():
+    """Common words like 'the' must not turn every fact into a candidate."""
+    p = registry.add_project("Stopwords", r"C:\sw")
+    memory.remember("database connection uses postgres port", project_id=p["id"],
+                    scope="project", kind="rule")
+    memory.remember("the quick brown fox jumps over the lazy dog", project_id=p["id"],
+                    scope="project", kind="log")
+    results = memory.search_facts("what is the postgres port", p["id"], top_k=5)
+    assert results
+    # The unrelated log fact should not outrank the postgres rule.
+    assert results[0]["content"] == "database connection uses postgres port"
+
+
+def test_old_global_rule_not_dropped_by_recency_cap():
+    """Without ORDER BY id DESC, an old global rule can still rank above noise."""
+    from datetime import datetime, timedelta, timezone
+    from perun import db
+    p = registry.add_project("OldRule", r"C:\or")
+    old = (datetime.now(timezone.utc) - timedelta(days=365 * 2)).isoformat()
+    memory.remember("ancient global rule about deployment", scope="global", kind="rule")
+    with db.db() as conn:
+        conn.execute("UPDATE memory SET ts=? WHERE content=?", (old, "ancient global rule about deployment"))
+    # Create many newer project facts to overflow any implicit recency window.
+    for i in range(250):
+        memory.remember(f"newer project fact {i}", project_id=p["id"], scope="project", kind="log")
+    results = memory.search_facts("deployment rule", p["id"], top_k=5, include_global=True)
+    assert any(r["content"] == "ancient global rule about deployment" for r in results)
 
 
 def test_search_room_facts_returns_room_scoped_rows():
@@ -258,3 +478,29 @@ def test_search_room_facts_falls_back_to_meta_room():
     assert len(results) == 1
     assert results[0]["content"] == "alice: legacy fact"
     assert results[0]["meta"]["room"] == room
+
+
+def test_usage_stats_tracks_searches():
+    # Clear in-memory window for a deterministic test.
+    memory._usage_events.clear()
+    memory.search_facts("unique query for usage stats", 0, top_k=5)
+    usage = memory.usage_stats(0)
+    assert usage["total_searches"] >= 1
+    assert "search_facts" in usage["by_kind"]
+
+
+def test_stats_reports_zero_hit_rules():
+    memory.remember("zero hit rule for stats", scope="global", kind="rule")
+    stats = memory.stats()
+    assert "facts_zero_hit" in stats
+    assert stats["facts_zero_hit"] >= 1
+    assert "oldest_unhit_rule" in stats
+
+
+def test_stats_reports_expiring_facts():
+    from datetime import datetime, timezone, timedelta
+    future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    memory.remember("expiring soon", scope="global", kind="rule", valid_to=future)
+    stats = memory.stats()
+    assert stats["facts_expiring_7d"] >= 1
+    assert stats["facts_expiring_30d"] >= 1

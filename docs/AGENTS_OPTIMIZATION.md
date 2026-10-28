@@ -1,8 +1,9 @@
 # Perun — AGENTS.md context-budget optimisation
 
-> **Status:** phases 0–4, 6 and 7 **implemented** (2026-10-21). All five
-> managed projects migrated. Phase 5 — the eval-set half of the parity harness
-> — remains outstanding.
+> **Status:** phases 0–4, 6 and 7 **implemented** (2026-10-28); v0.8.27 shipped.
+> All five managed projects migrated and a production-readiness audit hardened
+> the implementation. Phase 5 — the eval-set half of the parity harness —
+> remains outstanding.
 > **Problem owner:** every Perun-managed project.
 > **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
 > [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
@@ -450,6 +451,7 @@ AGENTS.md tool table can never disagree with the MCP schema.
 | **5 — Parity harness** | Eval set per project: same questions answered with and without the distillation; gate migrations on parity | medium | Proves P4 | **partial** — the losslessness half is live (`perun context map` + `perun context verify`); the eval-set half is outstanding |
 | **6 — Orchestrator pre-fetch** | `compose_prompt` injects the top context docs | low | Removes the round trip on the orchestrated path | **done** |
 | **7 — Secrets** | `perun/secret_store.py`; `perun_secret` tool; `kind: secret` anchors | medium | Removes credentials from every prompt | **done** (mechanism; no real credentials to migrate) |
+| **8 — Production-readiness audit** | Harden the token-efficiency implementation: graceful schema serialization, confined instructions[] resolution, live inline-size measurement, regression tests | low | Makes the work safe to ship | **done — v0.8.27** |
 
 ### 4.1 What is live right now
 
@@ -472,26 +474,39 @@ AGENTS.md tool table can never disagree with the MCP schema.
   migrated project.
 * `perun/context_map.py` — the **context map**: `.perun/context-map.json`
   records, for every section of the original `AGENTS.md`, where that content
-  went (`inline` / `context:<key>` / `secret:<name>` / `retained`). `perun
-  context map --write` drafts it; `perun context verify` proves it.
-* `perun context sync` now indexes each project's `AGENTS.md` as
+  went (`inline` / `context:<key>` / `secret:<name>` / `retained`). Sections
+  may declare **mixed** destinations (`inline` + `context`) to keep rule
+  bullets inline and point elaboration at a context doc. `perun context map
+  --write` drafts it; `perun context verify` proves it.
+* `perun context sync` indexes each project's `AGENTS.md` as
   `<slug>.agents.full` and its `.perun/context/*.md` docs as
   `<slug>.context.<name>`.
+* `perun context dedupe` (v0.8.27) removes byte-identical duplicate `###`
+  sections from a project's `AGENTS.md`.
+* `perun context stats` (v0.8.27) reports the full ambient-context ledger:
+  global `AGENTS.md`, every `instructions[]` file, the live MCP tool-schema size,
+  OpenCode skill frontmatter, duplicated `##`/`###` blocks, budget warnings,
+  and the computed per-session token floor.
+* `perun context verify` (v0.8.27) also checks that the global
+  `perun/INSTRUCTIONS.md` file is the thin pointer, and flags repeated inline
+  `###` subsections.
 * **Perun's own `AGENTS.md` is migrated** — 9,435 B → 5,037 B (−47 %). The
   behavioural rules stay inline, verbatim; the project overview, the
   contributing checklists, the command list, the credential procedure and the
   release procedure moved to `.perun/context/`.
-* **trading-bot's `AGENTS.md` is migrated** — 62,631 B → 62,312 B (−319 B). The
-  behavioural rules (critical constraints, architecture, key files, code style,
-  testing, build notes) stay inline, verbatim; the build pipeline, other
-  commands, debugging/ADB commands, version history and inlined instruction
-  modules moved to `.perun/context/`.
-* **parental-control's `AGENTS.md` is migrated** — 78,055 B → 60,644 B
-  (−17.4 KB).
-* **perun-in-the-machine's `AGENTS.md` is migrated** — 6,024 B → 3,074 B.
-* **perunchat's `AGENTS.md` is migrated** — 3,446 B → 2,670 B.
+* **trading-bot's `AGENTS.md` is migrated** — 62,631 B → 22,038 B (−65 %).
+  Behavioural rules stay inline; shared instruction modules, build notes and
+  reference tables moved to `.perun/context/`.
+* **parental-control's `AGENTS.md` is migrated** — 78,055 B → 10,016 B
+  (−87 %).
+* **perun-in-the-machine's `AGENTS.md` is migrated** — 6,024 B → 3,074 B
+  (−49 %).
+* **perunchat's `AGENTS.md` is migrated** — 3,446 B → 2,670 B (−23 %).
 * **All five migrations verified** — `perun context verify` reports
-  `lossless: ok (5 migrated project(s))`.
+  `lossless: ok (4 migrated project(s))`.
+* **Total ambient floor** (global + project AGENTS.md + instructions + MCP
+  schemas + skill frontmatter) is **~12.4 k tokens**, down from **~36.8 k
+  tokens** before the migration (−66 %).
 
 **Outstanding:**
 
@@ -548,9 +563,9 @@ modes has a test that proves the check fails when it should.
 
 | Metric | Baseline | Target | Achieved |
 |---|---|---|---|
-| Global `AGENTS.md` managed block | 6,100 B (~1,525 tok) | ≤ 1,500 B (~380 tok) | 1,832 B (≈3.3× smaller; target missed) |
-| Worst-case per-project `AGENTS.md` | 78,055 B (~19,514 tok) | ≤ 3,000 B (~750 tok) | 60,644 B (parental-control) |
-| Ambient instructions per session | up to ~20.9k tok | ≤ 1.2k tok | per project (see migrations) |
+| Global `AGENTS.md` managed block | 6,100 B (~1,525 tok) | ≤ 1,500 B (~380 tok) | 2,190 B (~545 tok; ≈2.8× smaller) |
+| Worst-case per-project `AGENTS.md` | 78,055 B (~19,514 tok) | ≤ 3,000 B (~750 tok) | 22,038 B (~5,509 tok, trading-bot) |
+| Total ambient floor per session | up to ~36.8k tok | ≤ 1.2k tok | ~12.4k tok (−66 %) |
 | MCP tool table copies in the repo | 3+ | 1 (generated) | 1 (generated `handbook.tools`) |
 | Credentials in any prompt | yes (paths/hosts) | none | mechanism shipped; nothing to migrate |
 
@@ -579,11 +594,10 @@ A migration that cannot show parity is reverted. The token saving is the
 2. **Do project `AGENTS.md` files stay in git?** Recommendation: yes — they
    are the behavioural contract and should be reviewable in PRs.
 3. **Should the key table live in the kernel, or should the kernel just say
-   "call `perun_context('list')`"?** Recommendation: keep a short key table
-   (nine rows ≈ 800 B). Discovery without a round trip is worth more than the
-   cost it adds.
-4. **Scope of Phase 4.** Migrate all five projects now, or land the
-   infrastructure and migrate opportunistically?
+   "call `perun_context('list')`"?** **Closed** — the nine-row key table is
+   shipped and generated by `handbook.render_key_table()`.
+4. **Scope of Phase 4.** **Closed** — all five projects are migrated and
+   verified.
 5. **Does `perun_context` replace `perun_memory_search`, or sit beside it?**
    Recommendation: sit beside it. `perun_memory_search` searches *facts and
    documents*; `perun_context` retrieves *authored reference docs*. Different

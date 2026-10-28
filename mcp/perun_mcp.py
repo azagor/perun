@@ -517,7 +517,8 @@ def perun_memory_search(query: str, project: str | None = None, k: int = 5,
 
 @mcp.tool
 def perun_memory_store(content: str, project: str | None = None,
-                       global_scope: bool = False, topic: str = "general") -> str:
+                       global_scope: bool = False, topic: str = "general",
+                       kind: str = "note", valid_to: str = "") -> str:
     """Store a durable fact in Perun's unified memory.
 
     Args:
@@ -525,17 +526,40 @@ def perun_memory_store(content: str, project: str | None = None,
         project: Project slug/path to scope the fact to.
         global_scope: Store as a global fact visible to every project.
         topic: Optional topic bucket (default "general").
+        kind: rule|decision|note|log (rule/decision are candidates for prefetch).
+        valid_to: Optional ISO-8601 expiry; after this the fact is invisible to search.
     """
     p = _resolve_project(project)
     scope = "global" if global_scope else ("project" if p else "global")
     pid = 0 if scope == "global" else (p["id"] if p else 0)
     res = memory.remember(content, project_id=pid, scope=scope, topic=topic,
-                          source="mcp")
+                          source="mcp", kind=kind, valid_to=valid_to)
     if not res.get("ok"):
         return f"[perun] Not stored: {res.get('reason')}"
     if res.get("duplicate"):
         return "[perun] Already remembered (duplicate)."
+    if res.get("merged"):
+        return f"[perun] Merged near-duplicate into id={res['id']} (score={res.get('score')})."
     return f"[perun] Stored ({scope} scope, id={res['id']})."
+
+
+@mcp.tool
+def perun_memory_forget(fact_id: int) -> str:
+    """Delete one fact by its id."""
+    res = memory.forget(fact_id)
+    if res.get("removed"):
+        return f"[perun] Forgot fact {fact_id}."
+    return f"[perun] No fact {fact_id} to remove."
+
+
+@mcp.tool
+def perun_memory_supersede(fact_id: int, content: str, topic: str = "general",
+                           kind: str = "", valid_to: str = "") -> str:
+    """Replace an existing fact with a new version, preserving its id."""
+    res = memory.supersede(fact_id, content, topic=topic, kind=kind, valid_to=valid_to)
+    if not res.get("ok"):
+        return f"[perun] Not superseded: {res.get('reason')}"
+    return f"[perun] Superseded fact {fact_id} (id preserved)."
 
 
 @mcp.tool
@@ -596,13 +620,18 @@ def perun_context(topic: str = "", project: str | None = None,
     know which document holds the answer, and you should not guess.
 
     Args:
-        topic: A context key ("handbook.build"), an anchor label, or — most
-            usefully — a description of what you are about to do.
+        topic: A context key ("handbook.build"), an anchor label
+            ("CODEMAP", "Technical documentation"), or — most usefully — a
+            description of what you are about to do.
         project: Project slug/path to scope to. Omit for the current project.
         k: Maximum number of documents to return (1-8).
-        mode: "auto" (exact key -> anchor label -> key substring -> semantic),
-            "exact" (exact key or anchor label only), or "list" (the inventory
-            of available keys).
+        mode: "auto" (exact key -> anchor label/doc -> key substring ->
+            semantic), "exact" (exact key or anchor label only), or "list"
+            (the inventory of available keys).
+
+    Anchor labels resolve through the project's ``perun.md`` manifest. If the
+    anchored file is indexed, the matching section is returned; otherwise a
+    small stub names the file and tells you how to fetch it.
     """
     k, error = _safe_int(k, "k", min_val=1, max_val=8)
     if error:

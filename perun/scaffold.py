@@ -200,6 +200,61 @@ and key identifiers.
 """
 
 
+_CODEMAP_OUTLINE_MAX_CHARS = 6_000
+
+
+def generate_codemap_outline(text: str, slug: str = "project") -> str:
+    """Build a compact navigation outline from a CODEMAP body.
+
+    The outline keeps every ``###`` heading plus its first non-empty line.
+    This gives an agent the map without paying for the full CODEMAP on every
+    session start.
+    """
+    text = text.replace("\r\n", "\n")
+    lines_out: list[str] = [f"# {slug} — CODEMAP outline", ""]
+
+    current_h2 = ""
+    h3_buffer: list[str] = []
+
+    def _flush_h3() -> None:
+        if not h3_buffer:
+            return
+        heading = h3_buffer[0]
+        body_lines = [l.strip() for l in h3_buffer[1:] if l.strip()]
+        first_line = body_lines[0] if body_lines else ""
+        lines_out.append(heading)
+        if first_line:
+            lines_out.append(f"  {first_line}")
+        lines_out.append("")
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("## "):
+            _flush_h3()
+            current_h2 = line[3:].strip()
+            lines_out.append(f"## {current_h2}")
+            lines_out.append("")
+            h3_buffer = []
+        elif line.startswith("### "):
+            _flush_h3()
+            h3_buffer = [line]
+        elif h3_buffer:
+            h3_buffer.append(line)
+    _flush_h3()
+
+    outline = "\n".join(lines_out).strip()
+    if len(outline) <= _CODEMAP_OUTLINE_MAX_CHARS:
+        return outline
+    # Truncate at the last complete entry that still fits.
+    cut = outline.rfind("\n### ", 0, _CODEMAP_OUTLINE_MAX_CHARS)
+    if cut > 0:
+        outline = outline[:cut].rstrip()
+    else:
+        outline = outline[:_CODEMAP_OUTLINE_MAX_CHARS].rstrip()
+    outline += "\n\n... [truncated]"
+    return outline
+
+
 _OPENCODE_JSON = {
     "$schema": "https://opencode.ai/config.json",
 }
@@ -573,16 +628,58 @@ def _parse_pyproject_toml(path: Path) -> list[tuple[str, str | None]]:
     """Return dependency names from pyproject.toml (PEP 621 + Poetry style)."""
     text = _read_text_file(path)
     deps: list[tuple[str, str | None]] = []
+    seen = set()
+
+    def _add(name: str, spec: Any = None) -> None:
+        n = str(name or "").strip()
+        if not n or n == "python":
+            return
+        n = n.split("[", 1)[0].strip()
+        if not n:
+            return
+        key = n.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        if spec is None:
+            deps.append((n, None))
+            return
+        s = str(spec).strip().strip('"').strip("'")
+        if s in ("[]", "["):
+            deps.append((n, None))
+            return
+        deps.append((n, s or None))
+
     # PEP 621 project.dependencies
     for name, spec in _parse_toml_section(text, "[project.dependencies]").items():
-        deps.append((name, str(spec) if spec else None))
+        _add(name, spec)
     for name, spec in _parse_toml_section(text, "[project.optional-dependencies]").items():
-        deps.append((name, str(spec) if spec else None))
+        _add(name, spec)
+    # PEP 621 dependency groups (PEP 735 style) - rough
     # Poetry
     for name, spec in _parse_toml_section(text, "[tool.poetry.dependencies").items():
-        if name == "python":
-            continue
-        deps.append((name, str(spec) if spec else None))
+        _add(name, spec)
+    # Also scan for inline arrays in a simple form
+    try:
+        import re
+        for m in re.finditer(r"dependencies\s*=\s*\[(.*?)\]", text, re.S | re.I):
+            block = m.group(1)
+            for pm in re.findall(r"['\"]([^'\"]+)['\"]", block):
+                pm2 = pm.strip()
+                if not pm2 or pm2.startswith("-"):
+                    continue
+                name_part = pm2.split(";", 1)[0].strip()
+                name_part = name_part.split("[", 1)[0].strip()
+                spec = None
+                for sep in ("==", ">=", "<=", "~=", "!=", ">", "<"):
+                    if sep in name_part:
+                        spec = name_part.split(sep, 1)[1].strip()
+                        name_part = name_part.split(sep, 1)[0].strip()
+                        break
+                if name_part and name_part.lower() != "python":
+                    _add(name_part, spec)
+    except Exception:
+        pass
     return deps
 
 

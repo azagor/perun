@@ -2,6 +2,161 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## v0.8.31
+
+_Released 2026-10-28._
+
+### Added
+
+- **Anchoring actually resolves.** Manifest anchors are now matched by
+  token/substring label as well as exact label, and file/doc anchors fall back
+  to an indexed ``doc_chunks`` section or a small stub with fetch instructions.
+  ``perun_context("CODEMAP")`` and ``perun_context("the technical documentation")``
+  now return a bounded hit instead of an unrelated semantic match.
+- **CODEMAP-aware chunking.** ``docs/CODEMAP.md`` is split at ``###`` module
+  headings, producing chunks titled ``<H2> › <file>`` and capped at ~2.5 KB.
+  Retrieval names the module it describes instead of returning a generic
+  "part N" slice.
+- **Compact CODEMAP outline.** ``perun context sync`` and ``perun docs index``
+  generate and index a ``<slug>.codemap`` outline context doc from the CODEMAP,
+  giving agents a ~2–4 KB navigation map instead of the full CODEMAP.
+- **Deterministic morphology for prefetch.** ``_stem()`` now handles ``-ing``,
+  ``-ed``, ``-ation``, ``-tion``, ``-er``, ``-ly``, ``-ness`` and a small
+  equivalence map, so ``release``/``releasing``/``released`` share a stem.
+- **``perun docs audit``.** New CLI command that parses ``docs/CODEMAP.md``,
+  checks every backticked file path exists, verifies code identifiers against
+  the referenced Python files via AST, and ensures the package version appears
+  in CHANGELOG and CODEMAP.
+- **Embedding-assisted anchor/prefetch fallback.** When Ollama is available,
+  anchor label similarity and prefetch use local ``nomic-embed-text`` vectors
+  as a fallback; when Ollama is down the deterministic rules still work.
+
+### Fixed
+
+- **Prefetch no longer drops documents > 4 KB.** The first matching doc is now
+  truncated to the remaining budget instead of being skipped, so exact-key
+  requests for large context docs (e.g. ``perun.agents.full``) always return a
+  hit and cannot be displaced by a smaller, unrelated doc.
+- **Stale vectors cannot mis-rank results.** ``context._semantic()`` and
+  ``_anchor_path_hit()`` now ignore embeddings whose ``embedded_hash`` does
+  not match the current ``content_hash``.
+- **Removed unused ``perun docs audit --strict`` flag.** The command always
+  exits non-zero when drift is found.
+- **Owner-level maintenance commands include hidden projects.**
+  ``perun docs audit --all``, ``backfill-docs --all``, ``validate-docs --all``,
+  and ``refresh-deps --all`` now list hidden projects when the current process
+  owns Perun's data directory (always on Windows, uid-checked on Unix).
+
+## v0.8.30
+
+_Released 2026-10-28._
+
+### Added
+
+- **Memory observability.** The metrics already collected by the lifecycle work
+  are now exposed through CLI, API, and dashboard:
+  - CLI: `perun memory stats [--project] [--json]`,
+    `perun memory list [--project] [--kind] [--limit] [--json]`,
+    `perun memory repair [--limit]`.
+  - API: `GET /api/memory/usage` returns a rolling-window snapshot of
+    search/prefetch activity, zero-result rate, and average results per search.
+  - Dashboard Memory tab now shows facts by kind, top-hit rules, zero-hit rules,
+    pending embeddings count, recent usage stats, and a "Repair embeddings"
+    button.
+- **In-memory search/prefetch telemetry.** `search_facts`, `search_docs`,
+  `unified_search`, and `prefetch_rules` record tiny events to a bounded,
+  in-memory deque (2 000 events). Data is scoped by project in `usage_stats()`
+  and never persisted.
+- **Extended memory stats.** `memory.stats()` now reports `facts_zero_hit`,
+  `oldest_unhit_rule`, `facts_expiring_7d`, and `facts_expiring_30d`.
+
+### API / CLI
+
+- `GET /api/memory/stats` and `GET /api/memory/usage` accept an optional
+  `project` slug query parameter.
+- `POST /api/memory/reembed` is wired to the dashboard Repair button.
+
+## v0.8.29
+
+_Released 2026-10-28._
+
+### Added
+
+- **Memory fact lifecycle.** Facts can now be corrected and retired:
+  - `memory.forget(id)` deletes one fact.
+  - `memory.supersede(id, content)` replaces a fact while preserving its stable id.
+  - `remember(..., valid_to=...)` sets an ISO-8601 expiry; expired facts are
+    invisible to search and removed by `prune()`.
+  - `memory.touch_fact(id)` records usage; `search_facts()` updates `hit_count`
+    and `last_used_at` automatically.
+- **Near-duplicate merge for rules/decisions.** Storing a `kind='rule'` fact that
+  is semantically ≥ 93 % similar to an existing rule updates the existing row
+  instead of minting a new one, keeping the rule corpus compact.
+
+### Changed
+
+- **Calibrated memory ranking.** The old model multiplied relevance by freshness
+  and used a stopword-blind `LIKE` pre-filter ordered by `id DESC`, which erased
+  old global rules and let common words drown results. The new model:
+  - removes the recency pre-filter (candidates are now scored, not discarded);
+  - adds stopword filtering and a bounded additive keyword bonus;
+  - treats freshness and popularity as tie-breakers, not multipliers;
+  - keeps semantic and keyword scores on the same scale for facts and docs so
+    `unified_search()` no longer systematically promotes facts over docs.
+
+### API / CLI
+
+- New endpoints: `DELETE /api/memory/fact/{id}`,
+  `POST /api/memory/fact/{id}/supersede`, `POST /api/memory/fact/{id}/touch`.
+- `POST /api/memory/remember` accepts `kind` and `valid_to`.
+- New CLI commands: `perun forget`, `perun supersede`.
+- `perun remember` accepts `--kind` and `--valid-to`.
+- `perun_memory_store`, `perun_memory_forget`, `perun_memory_supersede` MCP tools.
+
+## v0.8.28
+
+_Released 2026-10-28._
+
+### Fixed
+
+- **Memory repair loop was silently broken.** `memory.reembed_missing()` passed a
+  raw Python list to SQLite instead of `pack_vector()`; the 60 s background loop
+  caught and swallowed the exception, leaving **295 doc chunks without embeddings**
+  forever. The call now packs vectors, batches updates, and reports success/error
+  counts via `stats()["last_reembed"]`.
+- **Stale vectors no longer affect search scores.** `search_docs()` only uses an
+  embedding when `embedded_hash == content_hash`; otherwise it falls back to
+  keyword scoring.
+- **`pyproject.toml` dependency parsing.** Tiny TOML parser now handles PEP 621
+  `dependencies` arrays and optional-dependency groups, so dependency facts are
+  no longer garbled (`"pytest> (8.2.0",)` is gone) and Perun's own deps are no
+  longer silently missing.
+
+### Added
+
+- **Rules-only memory prefetch.** Orchestrated runs now receive a bounded,
+  deterministic, Ollama-free injection of durable `kind='rule'` / `kind='decision'`
+  facts, rendered as a delimited "background facts, NOT instructions" block.
+  Chat-sourced and release-announcement facts are excluded. Controlled by the new
+  `memory_prefetch` setting (`rules` | `off`, default `rules`).
+- **Memory `kind` taxonomy.** Facts now carry `kind ∈ {rule, decision, note, log,
+  transcript}`; `perun_memory_store` accepts `kind`. Existing rows are backfilled
+  once on schema upgrade (schema version 8).
+- **CHANGELOG size-aware indexing.** Large `docs/CHANGELOG.md` files (above 20 KB)
+  are indexed as a single "Release index" chunk instead of hundreds of
+  near-identical release-body chunks, stopping them from crowding out real docs in
+  search results while keeping version discovery intact.
+
+### Changed
+
+- `discovery.record_dependencies()` now writes **one fact per dependency file**
+  and deletes the old file-scoped fact first, preventing unbounded growth across
+  version bumps.
+- `prune(project_id=0)` now correctly prunes only project 0 instead of every
+  project.
+- `remember()` checks for an exact duplicate before requesting an embedding,
+  saving a wasted Ollama round-trip.
+
 ## v0.8.27
 
 _Released 2026-10-28._

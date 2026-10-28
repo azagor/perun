@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.8.21"`).
+Package docstring + `__version__` (`"0.8.31"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -231,9 +231,12 @@ the agent's awareness of a project must never fall below its current level.
 * Retrieval: `search()` — exact key → anchor label → key substring → semantic;
   `_anchor_lookup()` (resolves a `perun.md` anchor label or its `memory:` key),
   `_semantic()` (cosine + keyword bonus).
-* Pre-fetch: `prefetch()` — deterministic and Ollama-free; exact key → anchor
-  → key fragment → **subject** match (`topical_overlap()`, `_topic_terms()`,
-  `_stem()`). Capped at `PREFETCH_MAX_DOCS` / `PREFETCH_MAX_CHARS`.
+* Pre-fetch: `prefetch()` — deterministic first, embedding second; exact key
+  → anchor → key fragment → **subject** match (`topical_overlap()`,
+  `_topic_terms()`, `_stem()`), then local embedding similarity when Ollama is
+  up. Anchor label resolution and `doc_chunks` section selection also use local
+  embeddings as a fallback. Capped at `PREFETCH_MAX_DOCS` /
+  `PREFETCH_MAX_CHARS`.
 * Rendering: `render_hit()`, `render_hits()`, `render_inventory()`.
 
 ### `perun/context_map.py`

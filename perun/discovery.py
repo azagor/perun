@@ -163,22 +163,38 @@ def scan(roots: list[str], *, max_depth: int = 1) -> list[dict[str, Any]]:
 
 
 def record_dependencies(project_id: int, path: str) -> None:
-    """Parse dependency files and store each dependency as a project-scoped fact."""
+    """Parse dependency files and store dependencies as project-scoped facts."""
     try:
         deps = scaffold.parse_dependencies(path)
     except Exception:  # pragma: no cover - defensive
         return
+    try:
+        from . import db
+        with db.db() as conn:
+            conn.execute("DELETE FROM memory WHERE project_id=? AND scope='project' AND topic='dependencies' AND source='discovery'", (project_id,))
+    except Exception:
+        pass
     for source_file, items in deps.items():
+        names = []
         for name, version in items:
-            content = f"Dependency {name}" + (f" ({version})" if version else "")
-            content += f" from {source_file}"
-            try:
-                memory.remember(
-                    content, project_id=project_id, scope="project",
-                    topic="dependencies", source="discovery",
-                )
-            except Exception:  # pragma: no cover - memory is fail-open
-                pass
+            if not name:
+                continue
+            if version:
+                names.append(f"{name} ({version})")
+            else:
+                names.append(name)
+        if not names:
+            continue
+        content = f"Dependencies from {source_file}: {', '.join(names[:40])}"
+        if len(names) > 40:
+            content += f" (+{len(names)-40} more)"
+        try:
+            memory.remember(
+                content, project_id=project_id, scope="project",
+                topic="dependencies", source="discovery",
+            )
+        except Exception:  # pragma: no cover - memory is fail-open
+            pass
 
 
 _record_dependencies = record_dependencies

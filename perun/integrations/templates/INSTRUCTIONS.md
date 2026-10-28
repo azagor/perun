@@ -14,6 +14,10 @@ Perun's reference material lives in *context docs* with stable keys:
 
 {{KEY_TABLE}}
 
+Each project also exposes a compact ``<slug>.codemap`` outline. Call
+``perun_context("<slug>.codemap")`` for a module-level map, then use
+``perun_unified_search`` for details.
+
 Always true, never retrieved away:
 
 - Resolve cross-project paths with `perun.project_roots.resolve(name, …)` —

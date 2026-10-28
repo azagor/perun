@@ -151,7 +151,7 @@ def test_memory_prune_keeps_positive_count(client):
     client.post("/api/memory/remember", json={"content": "prunable fact"})
     r = client.post("/api/memory/prune", json={"keep": 50, "min_age_days": 0})
     assert r.status_code == 200
-    assert "removed" in r.json()
+    assert "removed_total" in r.json()
 
 
 def test_memory_stats(client):
@@ -172,6 +172,38 @@ def test_memory_reembed_rejects_invalid_limit(client):
     assert client.post("/api/memory/reembed", json={"limit": 0}).status_code == 400
     assert client.post("/api/memory/reembed", json={"limit": -1}).status_code == 400
     assert client.post("/api/memory/reembed", json={"limit": "abc"}).status_code == 400
+
+
+def test_memory_forget_and_supersede(client):
+    r = client.post("/api/memory/remember",
+                    json={"content": "api rule alpha", "kind": "rule"})
+    assert r.json()["ok"] is True
+    fact_id = r.json()["id"]
+
+    # Supersede keeps the id.
+    r = client.post(f"/api/memory/fact/{fact_id}/supersede",
+                    json={"content": "api rule beta", "kind": "rule"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    r = client.post("/api/memory/search", json={"query": "api rule beta", "k": 5})
+    assert any("beta" in x["content"] for x in r.json()["results"])
+
+    # Touch and forget.
+    assert client.post(f"/api/memory/fact/{fact_id}/touch").status_code == 200
+    assert client.delete(f"/api/memory/fact/{fact_id}").json()["removed"] is True
+    r = client.post("/api/memory/search", json={"query": "api rule beta", "k": 5})
+    assert not any("beta" in x["content"] for x in r.json()["results"])
+
+
+def test_memory_remember_with_valid_to(client):
+    from datetime import datetime, timezone, timedelta
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    r = client.post("/api/memory/remember",
+                    json={"content": "expired api rule", "kind": "rule", "valid_to": past})
+    assert r.json()["ok"] is True
+    r = client.post("/api/memory/search", json={"query": "expired api rule", "k": 5})
+    assert not any("expired api rule" in x["content"] for x in r.json()["results"])
 
 
 def test_reembed_thread_is_idle_under_pytest(monkeypatch):
@@ -204,6 +236,10 @@ def test_memory_recent_and_stats_filtered_by_project(client, tmp_path):
 
     stats = client.get(f"/api/memory/stats?project={slug}").json()
     assert stats["stats"]["facts_project"] >= 1
+
+    usage = client.get(f"/api/memory/usage?project={slug}").json()
+    assert "usage" in usage
+    assert "total_searches" in usage["usage"]
 
 
 def test_settings_get_patch(client):
