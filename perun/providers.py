@@ -8,6 +8,7 @@ source of truth for credentials and model availability.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,11 @@ import time
 from typing import Any
 
 from . import config, opencode_config
+
+
+def _creationflags() -> int:
+    """Hide console windows for background ``opencode`` subprocesses on Windows."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 # Cache provider list the same way /api/models does - ``opencode auth list`` is
 # fast but can still churn if the dashboard is reloaded repeatedly.
@@ -220,6 +226,7 @@ def _models_providers(timeout: float = 5.0) -> dict[str, Any]:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
     except Exception as exc:
         return {"ok": False, "providers": [], "count": 0, "error": str(exc)}
@@ -273,6 +280,7 @@ def _auth_providers(timeout: float = 5.0) -> dict[str, Any]:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
     except Exception as exc:
         return {"ok": False, "providers": [], "count": 0, "error": str(exc)}
@@ -349,6 +357,7 @@ def active_api_key_credentials(*, timeout: float = 10.0) -> list[dict[str, str]]
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
         if proc.returncode == 0:
             raw = json.loads(proc.stdout or "[]")
@@ -425,6 +434,7 @@ def _available_models(*, refresh: bool = False, timeout: float = 10.0) -> frozen
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
         if proc.returncode == 0:
             for line in (proc.stdout or "").splitlines():
@@ -663,6 +673,7 @@ def logout_provider(provider_id: str, timeout: float = 5.0) -> dict[str, Any]:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

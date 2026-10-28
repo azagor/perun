@@ -8,7 +8,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **No more blinking console windows on Windows.** Background calls to the
+  OpenCode CLI (`opencode models`, `opencode auth list`, `opencode auth export`,
+  `opencode auth logout`, `opencode reload`) and installer/search subprocesses
+  now set `CREATE_NO_WINDOW`, so the dashboard and bridge no longer flash a
+  visible `cmd.exe` window.
+
+
 
 ### Added
 

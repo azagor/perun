@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.8.31"`).
+Package docstring + `__version__` (`"0.8.32"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -49,7 +49,7 @@ Filesystem layout + persisted settings.
   shared_auto_approve auto_discover_on_start index_docs_on_discover terminal
   perunchat_api_key perunchat_api_endpoint perunchat_auto_reply perunchat_auto_join
   perunchat_chat_model perunchat_chat_agent perunchat_trusted`.
-  * `Settings.load()` (quarantines an unparseable `config.json` to
+  * `Settings.load()` (quarantines an unparseable Perun config file to
     `.corrupt-<stamp>` before falling back to defaults), `Settings.save()`
     (atomic temp+rename, `0600` before writing), `Settings.to_dict()`,
     `Settings.telegram()` (`PERUN_TELEGRAM_TOKEN` orchestrator-injected token
@@ -153,7 +153,7 @@ environment variables into the child ``opencode run`` process.
   Credentials are read fresh per call and never cached or persisted by Perun.
 * `resolve_run_model()` — pick a model string that works for headless runs:
   honors the requested provider if authenticated, resolves known aliases such as
-  ``opencode/kimi-k2.7-code`` → ``opencode-go/kimi-k2.7-code``, and falls back to
+  aliases like the Kimi model id to its OpenCode Go counterpart and falls back to
   active cloud providers before considering local providers.
 * `_available_models()` — cached wrapper around ``opencode models``.
 * `list_providers()` — ``GET /api/providers``; merges providers from
@@ -305,7 +305,7 @@ Perun's own reference material, as retrievable context docs.
 Find & register OpenCode projects under roots.
 * `SKIP_DIRS`, `OPENCODE_MARKERS`, `DOC_MARKERS`.
 * `capabilities()`, `classify()`, `detect()`, `_candidate_dirs()`, `scan()`,
-  `register()` (merges any `perun.md`/`perun.json` manifest, refreshes anchors,
+  `register()` (merges any `perun.md` manifest plus the JSON-formatted fallback,
   parses dependency files into memory facts, and records local project refs),
   `_record_dependencies()`, `_record_local_references()`,
   `discover_and_sync()`, `register_self()`. Registration also calls
@@ -318,7 +318,7 @@ cross-project paths (e.g. `.\my_apps\perun\AGENTS.md`, which resolves relative
 to the CWD and silently hits the wrong file).
 * `DEFAULTS` (built-ins: `perun`, `perun_chat`, `perun_in_the_machine` under
   `C:\my_apps\`), resolution order: `PERUN_PROJECT_<NAME>` env →
-  `<PERUN_HOME>/project-roots.json` → defaults.
+  the runtime project-roots file under PERUN_HOME → defaults.
 * `get_root(name)`, `resolve(name, *parts)` (raises on path escape),
   `list_roots()`, `add_root()`, `remove_root()`, `auto_register()`.
 * CLI: `python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]`.
@@ -341,8 +341,8 @@ Starter-project skeleton + directory creation + safe backfill + dependency parsi
   `enrich_manifest()` (fills missing docs/commands/anchors in a minimal
   `perun.md` while preserving existing values and shared-project fields),
   `detect_anchors()` (finds dependency/build/CI files),
-  `parse_dependencies()` (reads `package.json`, `requirements.txt`,
-  `pyproject.toml`, `Cargo.toml`, `go.mod`),
+  `parse_dependencies()` (reads dependency manifests such as Node package.json,
+  Python requirements.txt/pyproject.toml, Rust Cargo.toml, and Go go.mod),
   `update_manifest_anchors()` (appends newly-detected anchors without clobbering),
   `validate_manifest()` (stale doc/anchor checker),
   `generate_codemap_outline()` (compact `<slug>.codemap` navigation outline),
@@ -368,7 +368,7 @@ Safe wrapper over the `git` CLI (per-project repositories).
 
 ### `perun/manifest.py`
 Self-describing project manifest — `perun.md` (YAML front matter + Markdown
-body) with a `perun.json` fallback.
+body) with a JSON-formatted fallback manifest.
 * Constants: `MANIFEST_MD`, `MANIFEST_JSON`, `MANIFEST_NAMES`, `SCHEMA_VERSION`,
   `ANCHOR_KINDS` (`file`, `doc`, `url`, `command`, `symbol`, `secret`).
 * `ManifestError`, `find()`, `parse()`, `parse_json()`, `load()`, `normalize()`,
@@ -450,7 +450,7 @@ Discovery of OpenCode agent skills and tools available to a project.
 * `BUILTIN_TOOLS` — documented built-in OpenCode tools.
 * `_read_skill_manifest()`, `discover_skills()` — scan global
   ``~/.config/opencode/skills/`` and project-local ``.opencode/skills/`` for
-  ``SKILL.md`` files with YAML front matter.
+  skill manifest files following the SKILL.md naming convention with YAML front matter.
 * `_export_names()`, `discover_tools()` — scan ``~/.config/opencode/tools/`` and
   project-local ``.opencode/tools/`` for custom TypeScript/JavaScript tool
   definitions, merging them with the built-in tool set.
@@ -547,12 +547,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   requests and state digests back to the bound room so notices work even
   though the MCP server runs in a separate process.
 * No-loss reply delivery: every outbound reply frame is persisted in a
-  write-ahead outbox (`perunchat_outbox.json`) before sending and removed only
+  write-ahead outbox under PERUN_HOME before sending and removed only
   after success; `_flush_outbox()` resends queued frames after a reconnect with
   their original id + `sequence_number`, which is idempotent at the gateway.
   Empty replies are retried once, and a still-running run is awaited instead of
-  starting a duplicate. Replied-message ids are persisted
-  (`perunchat_replied.json`) so bridge restarts do not reply twice to replayed
+  starting a duplicate. Replied-message ids are persisted under PERUN_HOME so bridge restarts do not reply twice to replayed
   history.
 * Replay/echo dedup and per-room serialization: `_seen_message_ids` and
   `_recent_content` drop duplicate frames; `_room_queues` and `_room_workers`
@@ -588,8 +587,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   and `private:` prefixes; the dashboard proxies create/invite/remove calls to
   the gateway.
 * `_ensure_opencode_agent()` installs/updates the dedicated `perunchat` OpenCode
-  agent (`~/.config/opencode/agents/perunchat.md`) on bridge start, overwriting
-  it whenever the embedded content changes so prompt fixes reach production.
+  installed perunchat OpenCode agent file on bridge start, overwriting it
+  whenever the embedded content changes so prompt fixes reach production.
 * Chat model/agent precedence: `perunchat_chat_model`/`perunchat_chat_agent` →
   `orchestrator_model`/`orchestrator_agent` → defaults. The `settings` property
   reads from the orchestrator each time, so dashboard changes take effect without
@@ -793,13 +792,13 @@ the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|s
 Self-update machinery. `check()` queries the GitHub releases API and caches the
 answer; `install_mode()` decides whether this copy is a **git checkout**
 (`git pull --ff-only`), a **Windows installer** (download and run
-`PerunSetup.exe`), or unsupported. `apply()` prepares the update while the
+the Windows installer executable), or unsupported. `apply()` prepares the update while the
 server is live (download + verify, or `git fetch`), then hands over to a
 detached `perun update runner` process that waits for the server to exit,
 applies the update, restarts Perun and polls `/api/health` until the new
-version answers. State is persisted in `~/.perun/update-state.json` so the
+version answers. State is persisted in a runtime file under PERUN_HOME so the
 dashboard can stream progress across restarts. Installer downloads verify the
-release's `PerunSetup.exe.sha256` checksum when present, old downloads are
+release's published SHA-256 checksum when present, old downloads are
 cleaned up automatically, and server shutdown uses `should_exit` then SIGINT
 before a final force-exit fallback.
 * `_apply_installer()` runs the Inno Setup installer with
@@ -835,10 +834,11 @@ Idempotent, additive global install into `~/.config/opencode` (honours
   * `command_perun-projects.md`, `command_perun-ask.md`, `command_logwork.md`,
     `command_update-docs.md` — the global slash commands.
   * `handbook/` — the reference docs behind the handbook keys:
-    `tools.md` (generated at run time, **not** tracked on disk),
-    `search.md`, `memory.md`, `commands.md`,
-    `cross-project.md`, `sessions.md`, `onboarding.md`, `secrets.md`, and
-    `global.md` (**the complete previous global guide, verbatim**).
+    `handbook.tools` (generated at run time, **not** tracked on disk),
+    `handbook.search`, `handbook.memory`, `handbook.commands`,
+    `handbook.cross-project`, `handbook.sessions`, `handbook.onboarding`,
+    `handbook.secrets`, and `handbook.global` (**the complete previous global
+    guide, verbatim**).
 * `perun/instructions/` (package data, not templates) — `perunchat_chat.md`,
   the strict PerunChat bridge persona embedded into the installed `perunchat`
   agent by `perunchat_bridge._ensure_opencode_agent()`.

@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 
+def _creationflags() -> int:
+    """Hide console windows for background search subprocesses on Windows."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+
+
 MAX_RESULTS = 200
 MAX_LINE_LEN = 160
 # The Python fallback reads files whole/line-by-line; rg streams and needs no
@@ -301,6 +306,7 @@ def _run(argv: list[str], cwd: str | Path | None = None,
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
     except FileNotFoundError:
         return False, f"command not found: {argv[0]}", -1

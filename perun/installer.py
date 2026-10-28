@@ -38,6 +38,11 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+
+def _creationflags() -> int:
+    """Hide console windows for background install subprocesses on Windows."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 from typing import Any
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape as _xml_escape
@@ -100,6 +105,7 @@ def which_version(executable: str, *args: str) -> str | None:
             text=True,
             timeout=15,
             check=False,
+            creationflags=_creationflags(),
         )
         return _first_line(res.stdout or res.stderr) or None
     except Exception:
@@ -210,6 +216,7 @@ def pip_install(requirements: Path | None = None, timeout: int = 1800) -> dict[s
             timeout=timeout,
             cwd=str(config.REPO_ROOT),
             check=False,
+            creationflags=_creationflags(),
         )
     except Exception as exc:  # pragma: no cover - defensive
         return {"ok": False, "command": cmd, "summary": str(exc), "output_tail": ""}
@@ -332,6 +339,7 @@ def _run_schtasks(args: list[str], timeout: int = 60) -> subprocess.CompletedPro
         capture_output=True,
         timeout=timeout,
         check=False,
+        creationflags=_creationflags(),
     )
 
 

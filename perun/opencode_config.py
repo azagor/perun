@@ -18,6 +18,11 @@ from typing import Any
 from . import config
 
 
+def _creationflags() -> int:
+    """Hide console windows for background ``opencode`` subprocesses on Windows."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+
+
 # --------------------------------------------------------------------------- #
 # Paths
 # --------------------------------------------------------------------------- #
@@ -381,6 +386,7 @@ def reload_opencode(timeout: float = 10.0) -> dict[str, Any]:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=_creationflags(),
         )
         return {"ok": proc.returncode == 0, "stdout": proc.stdout, "stderr": proc.stderr}
     except Exception as exc:  # pragma: no cover - best effort
