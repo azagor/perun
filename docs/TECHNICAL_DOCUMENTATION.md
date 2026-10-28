@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.31 (see §15). Anchoring + CODEMAP token-efficiency: anchors resolve via exact/token/substring/path matching with doc-chunk/stub fallback, CODEMAP-aware chunking at `###` with `<H2> › <H3>` titles, compact `<slug>.codemap` outline docs, deterministic stemmer improvements, local-embedding fallback for anchors/prefetch, stale-vector guards, and `perun docs audit` for CODEMAP traceability; prefetch now truncates the first matching large doc instead of skipping it.
+**Latest release:** v0.8.32 (see §15). Per-project default plan and build model overrides, configurable from the dashboard Config tab or perun.md, mirrored into opencode.json under agent.<id>.model, with production-readiness hardening.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1609,6 +1609,10 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-28 — v0.8.32: Per-project default plan and build model overrides, configurable from the dashboard Config tab or perun.md, mirrored into opencode.json under agent.<id>.model, with production-readiness hardening.
+
+* (add release notes here or edit the changelog)
+
 
 ### 2026-10-28 — v0.8.31: anchoring + CODEMAP token-efficiency
 
