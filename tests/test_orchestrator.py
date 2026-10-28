@@ -405,6 +405,66 @@ def test_orchestrator_padded_project_model_is_trimmed(monkeypatch):
     assert run["model_explicit"] == 1
 
 
+def test_orchestrator_per_agent_model_used_when_agent_matches(monkeypatch):
+    """A project's agent_models map selects the model for the resolved agent."""
+    from perun import orchestrator, registry
+
+    project = registry.add_project("PlanBuild", r"C:\pb",
+                                   model="generic/default",
+                                   agent_models={"plan": "provider/plan-v",
+                                                 "build": "provider/build-v"})
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+
+    run_plan = o.start_run(project["slug"], "plan something", agent="plan")
+    assert run_plan["model"] == "provider/plan-v"
+    assert run_plan["agent"] == "plan"
+
+    run_build = o.start_run(project["slug"], "build it", agent="build")
+    assert run_build["model"] == "provider/build-v"
+    assert run_build["agent"] == "build"
+
+
+def test_orchestrator_explicit_model_wins_over_per_agent_default(monkeypatch):
+    """An explicit --model argument beats the per-agent default."""
+    from perun import orchestrator, registry
+
+    project = registry.add_project("Explicit", r"C:\explicit",
+                                   agent_models={"plan": "provider/plan-v"})
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run(project["slug"], "hi", agent="plan", model="provider/explicit")
+    assert run["model"] == "provider/explicit"
+
+
+def test_orchestrator_project_model_fallback_when_no_per_agent_match(monkeypatch):
+    """When no per-agent default exists, fall back to the generic project model."""
+    from perun import orchestrator, registry
+
+    project = registry.add_project("Fallback", r"C:\fallback",
+                                   model="provider/generic",
+                                   agent_models={"plan": "provider/plan-v"})
+    o = orchestrator.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run(project["slug"], "hi", agent="build")
+    assert run["model"] == "provider/generic"
+
+
+def test_orchestrator_control_plane_ignores_project_agent_models(monkeypatch):
+    """The control plane must never use a regular project's per-agent defaults."""
+    from perun import orchestrator, config, control, registry
+
+    proj = control.ensure()
+    registry.update_project(proj["slug"],
+                            agent_models={"plan": "provider/should-be-ignored"})
+    settings = config.Settings.load()
+    settings.orchestrator_model = "provider/orch"
+    o = orchestrator.Orchestrator(settings)
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("perun", "hi", agent="plan")
+    assert run["model"] == "provider/orch"
+
+
 def _capture_argv(monkeypatch, tmp_path, name, model=""):
     """Register a project and return a callable that runs it, exposing argv."""
     import sys

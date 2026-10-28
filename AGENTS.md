@@ -77,9 +77,9 @@ with `python -m perun project-roots --add <name> <path>`.
   directory scanning.
 * **Keep the layers separate.** `registry.py`/`db.py` = persistence;
   `memory.py` = facts + docs; `context.py` = keyed reference docs;
-  `secret_store.py` = encrypted named secrets; `orchestrator.py` =
-  process/streaming; `server.py` = HTTP only (no business logic); `web/` =
-  presentation only.
+  `docaudit.py` = CODEMAP traceability; `secret_store.py` = encrypted named
+  secrets; `orchestrator.py` = process/streaming; `server.py` = HTTP only (no
+  business logic); `web/` = presentation only.
 * **SQLite access is per-operation.** Always use the `db.db()` context manager;
   never hold a connection across a network call. WAL mode is required.
 * **Never block the event loop.** Synchronous FastAPI endpoints run in the
@@ -122,8 +122,16 @@ python tools/normalize_line_endings.py
 It rewrites tracked text files to LF while leaving Windows scripts (`.cmd`,
 `.ps1`, `.bat`, `.iss`) as CRLF.
 
-## Versioning
+## Versioning and releasing
 
 There is a single source of truth for history: `docs/CHANGELOG.md`. When you
 make a notable change, append an entry there and update the "Latest release"
 line in `docs/TECHNICAL_DOCUMENTATION.md`.
+
+The release pipeline is `tools/release.py`. It bumps `perun/__init__.py`,
+updates the changelog/technical docs, syncs internal project content to
+`../perun_internal` via `tools/sync-internal.py --reverse --force`, commits both
+repos, tags the public repo, and pushes `master` + the tag. Read that script
+before a release and prefer it over hand-crafted git commands. Run
+`python -m perun docs audit --all` to check CODEMAP traceability before
+tagging.

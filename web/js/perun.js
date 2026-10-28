@@ -2149,12 +2149,17 @@ function projectConfigForm(p) {
     const note = isControl
         ? '<p class="muted mt">This is the Perun orchestrator (control plane). It cannot be removed.</p>'
         : '';
+    const agentModels = (p.agent_models && typeof p.agent_models === 'object') ? p.agent_models : {};
     const card = el('div', { class: 'card' },
         `${isControl ? '<div class="card-head"><h4>Orchestrator</h4><span class="badge gold">control plane</span></div>' : ''}
          <label class="field"><span class="lab">Name</span><input type="text" id="pc-name" value="${esc(p.name)}"></label>
          <label class="field"><span class="lab">Description</span><input type="text" id="pc-desc" value="${esc(p.description || '')}"></label>
          <div class="form-row">
-            <label class="field"><span class="lab">Model override</span><span id="pc-model-host"></span></label>
+            <label class="field"><span class="lab">Plan model</span><span id="pc-plan-model-host"></span></label>
+            <label class="field"><span class="lab">Build model</span><span id="pc-build-model-host"></span></label>
+         </div>
+         <div class="form-row">
+            <label class="field"><span class="lab">Default model</span><span id="pc-model-host"></span></label>
             <label class="field"><span class="lab">Agent override</span><span id="pc-agent-host"></span></label>
          </div>
          ${note}
@@ -2162,15 +2167,25 @@ function projectConfigForm(p) {
             <button class="btn primary" id="pc-save">Save</button>
             ${delBtn}
          </div>`);
+    const mPlan = modelSelect({ placeholder: '(use default)', initial: agentModels.plan || '' });
+    card.querySelector('#pc-plan-model-host').appendChild(mPlan);
+    const mBuild = modelSelect({ placeholder: '(use default)', initial: agentModels.build || '' });
+    card.querySelector('#pc-build-model-host').appendChild(mBuild);
     const mModel = modelSelect({ placeholder: '(use default)', initial: p.model || '' });
     card.querySelector('#pc-model-host').appendChild(mModel);
     const mAgent = agentSelect({ placeholder: '(use default)', initial: p.agent || '' });
     card.querySelector('#pc-agent-host').appendChild(mAgent);
     if (!state.agents.length) loadAgents().then(() => mAgent.refresh?.()).catch(() => {});
     card.querySelector('#pc-save').addEventListener('click', async () => {
+        // Merge with existing agent_models so custom agent defaults set via
+        // manifest/MCP are preserved; empty strings clear plan/build defaults.
+        const agent_models = { ...agentModels };
+        agent_models.plan = mPlan.getValue();
+        agent_models.build = mBuild.getValue();
         const res = await api(`/api/projects/${p.slug}`, { method: 'PATCH', body: {
             name: $('#pc-name').value, description: $('#pc-desc').value,
-            model: mModel.getValue(), agent: mAgent.getValue() } });
+            model: mModel.getValue(), agent: mAgent.getValue(),
+            agent_models: agent_models } });
         const cfg = res && res.opencode_config;
         if (cfg && cfg.warning) {
             toast('Saved — ' + cfg.warning, 'err');

@@ -92,6 +92,25 @@ def _string_map(value: Any) -> dict[str, str]:
     return out
 
 
+def _agent_models_map(value: Any) -> dict[str, str]:
+    """Normalize ``agent_models``: a map of agent id → model id (strings only)."""
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in value.items():
+        if v is None:
+            continue
+        key = str(k).strip()
+        if not key:
+            continue
+        # Only string model ids are accepted; drop complex values.
+        if isinstance(v, str):
+            out[key] = v.strip()
+        elif isinstance(v, (int, float, bool)):
+            out[key] = str(v)
+    return out
+
+
 def _normalize_anchors(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
     out: list[dict[str, Any]] = []
@@ -193,7 +212,8 @@ def normalize(data: Any) -> tuple[dict[str, Any], list[str]]:
     """Return a validated manifest dict and a list of human-readable warnings."""
     if not isinstance(data, dict):
         return {"version": SCHEMA_VERSION, "tags": [], "docs": {}, "commands": {},
-                "links": {}, "anchors": [], "git": {}}, ["manifest must be a mapping"]
+                "links": {}, "agent_models": {}, "anchors": [],
+                "dependencies": [], "git": {}}, ["manifest must be a mapping"]
     warnings: list[str] = []
     out = dict(data)  # preserve unknown keys for forward compatibility
 
@@ -211,6 +231,7 @@ def normalize(data: Any) -> tuple[dict[str, Any], list[str]]:
     out["tags"] = _string_list(out.get("tags"))
     for key in _MAP_KEYS:
         out[key] = _string_map(out.get(key))
+    out["agent_models"] = _agent_models_map(out.get("agent_models"))
 
     anchors, aw = _normalize_anchors(out.get("anchors"))
     out["anchors"] = anchors
@@ -361,6 +382,9 @@ def to_project_fields(data: dict[str, Any]) -> dict[str, Any]:
         value = data.get(key)
         if value not in (None, ""):
             fields[key] = value
+    if data.get("agent_models"):
+        fields["agent_models"] = json.dumps(data["agent_models"], ensure_ascii=False,
+                                             separators=(',', ':'))
     if data.get("tags"):
         fields["tags"] = ",".join(data["tags"])
     git = data.get("git") or {}
@@ -378,6 +402,9 @@ def from_project(project: dict[str, Any]) -> dict[str, Any]:
         value = project.get(key)
         if value:
             data[key] = value
+    agent_models = project.get("agent_models")
+    if isinstance(agent_models, dict) and agent_models:
+        data["agent_models"] = agent_models
     tags = [t for t in (project.get("tags") or "").split(",") if t.strip()]
     if tags:
         data["tags"] = tags

@@ -2,6 +2,18 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
+## Unreleased
+
+### Added
+
+- **Per-project default `plan` and `build` models.** The project manifest and
+  dashboard Config tab now support an `agent_models` map (`plan`, `build`, and any
+  future agent id → model id). Perun resolves `agent_models[agent]` before the
+  generic `project.model` when starting a run, and mirrors the values into the
+  project's `opencode.json` under `agent.<id>.model` so the OpenCode TUI can honor
+  them. Control-plane runs ignore project per-agent defaults.
+
+
 ## v0.8.31
 
 _Released 2026-10-28._

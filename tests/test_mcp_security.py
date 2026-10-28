@@ -123,6 +123,29 @@ def test_update_project_writes_instruction_file(mcp_project):
     assert "Be terse." in target.read_text(encoding="utf-8")
 
 
+def test_update_project_agent_models_writes_opencode_config(mcp_project):
+    """``perun_update_project`` accepts a JSON agent_models string and mirrors it."""
+    import json
+
+    result = mcp_mod.perun_update_project(
+        mcp_project["slug"],
+        agent_models=json.dumps({"plan": "provider/plan-v", "build": "provider/build-v"}),
+    )
+    assert "agent_models" in result
+    assert "opencode.json updated" in result
+    cfg = json.loads((Path(mcp_project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["agent"]["plan"]["model"] == "provider/plan-v"
+    assert cfg["agent"]["build"]["model"] == "provider/build-v"
+
+
+def test_update_project_agent_models_rejects_bad_json(mcp_project):
+    """``perun_update_project`` reports invalid agent_models JSON instead of silently ignoring it."""
+    result = mcp_mod.perun_update_project(
+        mcp_project["slug"], agent_models="not-json",
+    )
+    assert "not valid JSON" in result
+
+
 def test_set_manifest_routes_instructions_to_file(mcp_project):
     """``perun_set_manifest`` seeds .perun/instructions/default.md, not the DB."""
     result = mcp_mod.perun_set_manifest(

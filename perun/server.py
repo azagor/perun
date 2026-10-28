@@ -1214,6 +1214,7 @@ def api_add_project(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             tags=_str_field(payload, "tags"),
             model=_str_field(payload, "model"),
             agent=_str_field(payload, "agent"),
+            agent_models=payload.get("agent_models"),
             color=_str_field(payload, "color"),
             instructions=_str_field(payload, "instructions"),
             git_init=bool(payload.get("git_init")),
@@ -1281,17 +1282,69 @@ def api_get_project(slug: str) -> dict[str, Any]:
     }
 
 
+def _normalize_agent_models(payload: dict[str, Any],
+                            current: dict[str, str] | None = None) -> tuple[dict[str, str] | None, str]:
+    """Validate and merge ``agent_models`` from an API payload.
+
+    Returns ``(None, "")`` when the key is absent (leave unchanged). ``null`` or
+    ``{}`` clears the whole map. Otherwise the payload is merged onto *current*:
+    non-empty values set the default for that agent, empty/null values remove it,
+    and omitted keys are preserved. A malformed value returns the current map (or
+    ``{}``) and a short warning message.
+    """
+    if "agent_models" not in payload:
+        return None, ""
+    value = payload["agent_models"]
+    if value is None:
+        return {}, ""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception as exc:
+            return current or {}, f"agent_models is not valid JSON: {exc}"
+    if not isinstance(value, dict):
+        return current or {}, "agent_models must be an object"
+    if not value:
+        return {}, ""
+
+    merged: dict[str, str] = dict(current) if current else {}
+    for k, v in value.items():
+        key = str(k).strip()
+        if not key:
+            continue
+        if v is None or (isinstance(v, str) and not v.strip()):
+            merged.pop(key, None)
+            continue
+        if isinstance(v, (str, int, float, bool)):
+            model = str(v).strip()
+            if model:
+                merged[key] = model
+    return merged, ""
+
+
 @app.patch("/api/projects/{slug}")
 def api_update_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     project = _project_or_404(slug)
-    model_agent_changed = "model" in payload or "agent" in payload
+    current_agent_models = project.get("agent_models")
+    if not isinstance(current_agent_models, dict):
+        current_agent_models = {}
+    agent_models, warning = _normalize_agent_models(payload, current_agent_models)
+    if agent_models is not None:
+        payload["agent_models"] = agent_models
+    model_agent_changed = (
+        "model" in payload or "agent" in payload or agent_models is not None
+    )
     project = registry.update_project(slug, **payload)
     opencode_config: dict[str, Any] = {"action": "skipped"}
     if model_agent_changed and project:
         # The TUI reads model/default_agent from the project's opencode.json,
         # so mirror the override there and report the result to the dashboard.
-        opencode_config = projects.sync_opencode_config(project)
-    return _ok(project=project, opencode_config=opencode_config)
+        opencode_config = projects.sync_opencode_config(
+            project, previous_agent_models=current_agent_models)
+    result: dict[str, Any] = {"project": project, "opencode_config": opencode_config}
+    if warning:
+        result["warning"] = warning
+    return _ok(**result)
 
 
 @app.get("/api/projects/{slug}/shared")

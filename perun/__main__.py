@@ -8,7 +8,7 @@ Usage::
     python -m perun bridge
     python -m perun discover [--roots a;b] [--index]
     python -m perun projects
-    python -m perun add <name> <path> [--model M] [--agent A]
+    python -m perun add <name> <path> [--model M] [--agent A] [--agent-models JSON]
     python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
     python -m perun context list|get|search|sync|map|index|verify|stats|dedupe [--project SLUG]
     python -m perun secret list|get|set|delete|password|status
@@ -359,19 +359,43 @@ def cmd_projects(args: argparse.Namespace) -> int:
 def cmd_add(args: argparse.Namespace) -> int:
     _ensure()
     path = os.path.abspath(args.path)
+    agent_models: dict[str, str] | None = None
+    if args.agent_models:
+        import json
+        try:
+            parsed = json.loads(args.agent_models)
+            if not isinstance(parsed, dict):
+                raise ValueError("agent_models must be a JSON object")
+            agent_models = parsed
+        except Exception as exc:
+            print(f"error: --agent-models is not a valid JSON object: {exc}")
+            return 1
     existing = registry.get_project_by_path(path)
     if existing:
         project = registry.update_project(
             existing["slug"], name=args.name,
             model=args.model or "", agent=args.agent or "",
+            agent_models=agent_models,
         )
         _print({"ok": True, "created": False, "project": project})
         return 0
     project = registry.add_project(args.name, path, model=args.model or "",
-                                   agent=args.agent or "")
+                                   agent=args.agent or "",
+                                   agent_models=agent_models)
+    if model_or_agent_or_agent_models(args.model, args.agent, agent_models):
+        try:
+            projects.sync_opencode_config(project)
+        except Exception:
+            pass
     registry.log_activity(project["id"], "discover", "Project registered via CLI")
     _print({"ok": True, "created": True, "project": project})
     return 0
+
+
+def model_or_agent_or_agent_models(model: str, agent: str,
+                                   agent_models: dict[str, str] | None) -> bool:
+    """Whether any model/agent override is set."""
+    return bool(model or agent or agent_models)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -1933,6 +1957,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path")
     p.add_argument("--model", default="")
     p.add_argument("--agent", default="")
+    p.add_argument("--agent-models", default="",
+                   help="JSON object of agent id → model id (e.g. '{\"plan\":\"p/m\",\"build\":\"p/b\"}')")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("status", help="show Perun status")

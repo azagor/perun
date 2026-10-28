@@ -26,6 +26,27 @@ def test_projects_table_has_no_instruction_columns():
     assert "instructions_path" not in cols
 
 
+def test_projects_table_has_agent_models_column():
+    """Per-agent default models are stored as a JSON map on the project row."""
+    with db.db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "agent_models" in cols
+
+
+def test_init_db_migrates_agent_models_column():
+    """An older DB without ``agent_models`` gets the column added."""
+    with db.db() as conn:
+        conn.execute("ALTER TABLE projects DROP COLUMN agent_models")
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "agent_models" not in cols
+
+    db.init_db()
+
+    with db.db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    assert "agent_models" in cols
+
+
 def test_init_db_drops_retired_instruction_columns():
     """An older DB that stored instruction text has those columns dropped."""
     with db.db() as conn:
@@ -134,17 +155,24 @@ def test_migrate_tolerates_drop_column_unsupported(monkeypatch):
 
 def test_add_get_list_update_delete_project():
     p = registry.add_project("Trading Bot", r"C:\apps\trading_bot",
-                             kind="opencode", description="bot")
+                             kind="opencode", description="bot",
+                             agent_models={"plan": "p/m1"})
     assert p["slug"] == "trading-bot"
     assert p["kind"] == "opencode"
-    assert p["favorite"] is False
+    assert p["agent_models"] == {"plan": "p/m1"}
     assert registry.get_project("trading-bot")["name"] == "Trading Bot"
     assert registry.get_project(p["id"])["slug"] == "trading-bot"
 
-    registry.update_project("trading-bot", favorite=1, description="updated")
+    registry.update_project("trading-bot", favorite=1, description="updated",
+                            agent_models={"plan": "p/m1", "build": "p/m2"})
     got = registry.get_project("trading-bot")
     assert got["favorite"] is True
     assert got["description"] == "updated"
+    assert got["agent_models"] == {"plan": "p/m1", "build": "p/m2"}
+
+    # Clearing the map works.
+    registry.update_project("trading-bot", agent_models={})
+    assert registry.get_project("trading-bot")["agent_models"] == {}
 
     assert [x["slug"] for x in registry.list_projects()] == ["trading-bot"]
     assert registry.delete_project("trading-bot") is True

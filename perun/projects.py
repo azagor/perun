@@ -24,14 +24,18 @@ class ProjectError(Exception):
     """A user-facing failure while creating or registering a project."""
 
 
-def sync_opencode_config(project: dict[str, Any]) -> dict[str, Any]:
-    """Mirror the project's ``model``/``agent`` override into its OpenCode config.
+def sync_opencode_config(project: dict[str, Any],
+                         previous_agent_models: dict[str, str] | None = None) -> dict[str, Any]:
+    """Mirror the project's ``model``/``agent``/``agent_models`` overrides into its OpenCode config.
 
     ``model`` and ``default_agent`` in ``<project>/opencode.json`` are what the
     OpenCode **TUI** reads, so a dashboard override only reaches TUI sessions
     when it is also written there (headless ``opencode run`` already gets the
-    override via CLI flags). Existing keys (``mcp``, ``instructions``, …) are
-    preserved; clearing an override removes the key.
+    override via CLI flags). Per-agent defaults are written under ``agent.<id>.model``
+    so the TUI can pick a model by agent; unknown keys are preserved.
+
+    Existing keys (``mcp``, ``instructions``, …) are preserved; clearing an
+    override removes the key Perun owns.
 
     Returns a status dict with ``action`` (``created`` / ``updated`` /
     ``unchanged`` / ``skipped`` / ``error``), optional ``path``, and optional
@@ -69,6 +73,51 @@ def sync_opencode_config(project: dict[str, Any]) -> dict[str, Any]:
         elif key in data:
             del data[key]
             changed = True
+
+    # Per-agent model defaults. We write them under ``agent.<id>.model`` so the
+    # TUI can honor them; if it does not support the key, it is ignored.
+    agent_models = project.get("agent_models") or {}
+    if not isinstance(agent_models, dict):
+        agent_models = {}
+    previous_models = previous_agent_models or {}
+    if not isinstance(previous_models, dict):
+        previous_models = {}
+    managed_ids = set(agent_models) | set(previous_models)
+    current_agent_block: dict[str, Any] = data.get("agent") or {}
+    if not isinstance(current_agent_block, dict):
+        current_agent_block = {}
+    # Build the desired agent block from the current one, updating/removing only
+    # agent ids Perun manages. User-added agent configuration (e.g.
+    # ``agent.general.model``) is preserved.
+    desired_agent_block = dict(current_agent_block)
+    for agent_id in managed_ids:
+        agent_model = (str(agent_models.get(agent_id, "")) or "").strip()
+        if not agent_id:
+            continue
+        if not agent_model:
+            # Previously managed, now removed.
+            agent_entry = desired_agent_block.get(agent_id)
+            if isinstance(agent_entry, dict) and "model" in agent_entry:
+                del agent_entry["model"]
+                changed = True
+                if not agent_entry:
+                    del desired_agent_block[agent_id]
+                    changed = True
+            continue
+        agent_entry = desired_agent_block.setdefault(agent_id, {})
+        if not isinstance(agent_entry, dict):
+            agent_entry = {}
+            desired_agent_block[agent_id] = agent_entry
+        if agent_entry.get("model") != agent_model:
+            agent_entry["model"] = agent_model
+            changed = True
+    if desired_agent_block:
+        if data.get("agent") != desired_agent_block:
+            data["agent"] = desired_agent_block
+            changed = True
+    elif "agent" in data:
+        del data["agent"]
+        changed = True
 
     # Register the shared-project filesystem guard and proposal-coordination
     # MCP servers for shared projects.
@@ -145,26 +194,34 @@ def sync_manifest(project: dict[str, Any], *, sync_chat: bool = True) -> dict[st
     if snap["found"]:
         declared = manifest.to_project_fields(snap["data"])
         instructions = declared.pop("instructions", "")
+        previous_agent_models = project.get("agent_models")
+        if not isinstance(previous_agent_models, dict):
+            previous_agent_models = {}
         if declared:
             registry.update_project(project["slug"], **declared)
+            # Refresh the project dict so the opencode.json mirror below uses the
+            # new model/agent/agent_models values.
+            project = registry.get_project(project["slug"]) or project
         orchestrator.write_project_instruction_file(
             project["path"], instructions, overwrite=False)
         registry.set_project_manifest(project["slug"], manifest.snapshot(snap),
                                       snap["path"])
         registry.sync_dependencies(project["slug"], snap["data"].get("dependencies"))
         cfg = shared_projects.load(project["path"])
-        if cfg.get("shared"):
-            # Keep the project's opencode.json in sync so shared-project MCP
-            # servers (perun-guard, perun-proposals) are present whenever the
-            # manifest declares sharing.
+        # Mirror declared model/agent/per-agent defaults into opencode.json so the
+        # TUI honors them too. For shared projects also ensure the guard/proposals MCP
+        # servers are present, even when the manifest carries no new overrides.
+        if ("model" in declared or "agent" in declared or "agent_models" in declared
+                or cfg.get("shared")):
             try:
-                sync_opencode_config(project)
+                sync_opencode_config(project, previous_agent_models=previous_agent_models)
             except Exception:  # pragma: no cover - best-effort config sync
                 pass
+        if cfg.get("shared"):
             if sync_chat:
                 try:
                     shared_project_sync.sync_project_chat(project, cfg)
-                except Exception:  # pragma: no cover - best-effort chat sync
+                except Exception:  # pragma: no cover - best-effort config sync
                     pass
     return snap
 
@@ -176,8 +233,8 @@ def _write_default_instructions(path: str, instructions: str) -> None:
 
 def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
                        description: str = "", tags: str = "", model: str = "",
-                       agent: str = "", color: str = "",
-                       instructions: str = "") -> tuple[dict[str, Any], bool]:
+                       agent: str = "", agent_models: dict[str, str] | None = None,
+                       color: str = "", instructions: str = "") -> tuple[dict[str, Any], bool]:
     """Insert a new project or update the existing one at *path*.
 
     Returns ``(project, created)``. Only non-empty fields overwrite an existing
@@ -188,34 +245,40 @@ def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
     path = os.path.expanduser((path or "").strip())
     existing = registry.get_project_by_path(path)
     if existing:
-        project = registry.update_project(
-            existing["slug"],
-            name=name or existing.get("name", ""),
-            kind=kind or existing.get("kind", "dir"),
-            description=description or existing.get("description", ""),
-            model=model or existing.get("model", ""),
-            agent=agent or existing.get("agent", ""),
-            tags=tags or existing.get("tags", ""),
-            color=color or existing.get("color", ""),
-        )
+        previous_agent_models = existing.get("agent_models")
+        if not isinstance(previous_agent_models, dict):
+            previous_agent_models = {}
+        update_fields: dict[str, Any] = {
+            "name": name or existing.get("name", ""),
+            "kind": kind or existing.get("kind", "dir"),
+            "description": description or existing.get("description", ""),
+            "model": model or existing.get("model", ""),
+            "agent": agent or existing.get("agent", ""),
+            "tags": tags or existing.get("tags", ""),
+            "color": color or existing.get("color", ""),
+        }
+        if agent_models is not None:
+            update_fields["agent_models"] = agent_models
+        project = registry.update_project(existing["slug"], **update_fields)
         # Write into the *project's* path, not the possibly-nested path the
         # caller passed (registering ``<project>/src`` must not drop
         # instructions into a subdirectory of the project).
         _write_default_instructions(existing["path"], instructions)
         project = project or existing
-        if model or agent:
-            sync_opencode_config(project)
+        if model or agent or agent_models is not None:
+            sync_opencode_config(project, previous_agent_models=previous_agent_models)
         return project, False
     try:
         project = registry.add_project(
             name, path, root=root, kind=kind or "dir", description=description,
-            tags=tags, model=model, agent=agent, color=color,
+            tags=tags, model=model, agent=agent, agent_models=agent_models,
+            color=color,
         )
     except ValueError as exc:
         # e.g. all slug candidates are taken — surface as a clean client error.
         raise ProjectError(str(exc)) from exc
     _write_default_instructions(path, instructions)
-    if model or agent:
+    if model or agent or agent_models:
         sync_opencode_config(project)
     return project, True
 
@@ -223,7 +286,8 @@ def register_or_update(name: str, path: str, *, root: str = "", kind: str = "",
 def create(*, method: str = "existing", name: str = "", path: str = "",
            clone_url: str = "", root: str = "", bootstrap: bool = True,
            description: str = "", kind: str = "", tags: str = "", model: str = "",
-           agent: str = "", color: str = "", instructions: str = "",
+           agent: str = "", agent_models: dict[str, str] | None = None,
+           color: str = "", instructions: str = "",
            git_init: bool = False, git_remote: str = "", git_branch: str = "",
            index_docs: bool = False) -> dict[str, Any]:
     """Create/register a project and return ``{project, created, git}``.
@@ -276,8 +340,16 @@ def create(*, method: str = "existing", name: str = "", path: str = "",
 
     project, created = register_or_update(
         name, path, root=root, kind=kind, description=description, tags=tags,
-        model=model, agent=agent, color=color, instructions=instructions,
+        model=model, agent=agent, agent_models=agent_models, color=color,
+        instructions=instructions,
     )
+    # Always mirror declared overrides into opencode.json, even when the path was
+    # already registered and register_or_update skipped the sync.
+    if created is False and (model or agent or agent_models):
+        previous = project.get("agent_models")
+        if not isinstance(previous, dict):
+            previous = {}
+        sync_opencode_config(project, previous_agent_models=previous)
 
     branch = (git_branch or "").strip()
     remote = (git_remote or "").strip()

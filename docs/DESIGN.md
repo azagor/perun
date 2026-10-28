@@ -164,8 +164,15 @@ audits, and the HITL signing secret / approver identity are configurable.
 
 ### Context and secrets
 An agent that needs reference material calls `perun_context("<task>")` instead
-of carrying it inline; orchestrated runs get the relevant docs pre-fetched. A
-credential is fetched by name from the encrypted store (`perun_secret`) at the
+of carrying it inline; orchestrated runs get the relevant docs pre-fetched.
+Resolution is deterministic first (exact key, anchor label, key fragment,
+subject match) and uses local embeddings only as a fallback when Ollama is up.
+Anchors resolve by label, stemmed tokens and path, and a file/doc anchor returns
+the best indexed section or a bounded stub. CODEMAP is chunked at `###` modules
+so retrieval names the module it describes, and a compact `<slug>.codemap`
+outline is indexed as a context doc.
+
+A credential is fetched by name from the encrypted store (`perun_secret`) at the
 moment of use, so it never sits in a prompt file. `perun.md` anchors can bind to
 a context key (`memory:`) or a secret (`kind: secret`), and
 `perun context verify` checks those bindings.

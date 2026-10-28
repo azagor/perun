@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS projects (
     tags          TEXT DEFAULT '',
     model         TEXT DEFAULT '',
     agent         TEXT DEFAULT '',
+    agent_models  TEXT DEFAULT '{}',
     favorite      INTEGER DEFAULT 0,
     enabled       INTEGER DEFAULT 1,
     hidden        INTEGER DEFAULT 0,
@@ -337,6 +338,8 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("git_branch", "TEXT DEFAULT ''"),
         ("git_provider", "TEXT DEFAULT ''"),
         ("hidden", "INTEGER DEFAULT 0"),
+        # Per-agent default models (v0.8.32).
+        ("agent_models", "TEXT DEFAULT '{}'"),
     ],
     "runs": [
         ("model_explicit", "INTEGER DEFAULT 0"),
@@ -430,7 +433,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def init_db() -> None:

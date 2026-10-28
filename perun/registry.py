@@ -62,6 +62,7 @@ def add_project(
     tags: str = "",
     model: str = "",
     agent: str = "",
+    agent_models: dict[str, str] | None = None,
     color: str = "",
 ) -> dict[str, Any]:
     if not (name or "").strip():
@@ -101,6 +102,7 @@ def add_project(
     # The counter is unbounded: 22 projects sharing one name must all succeed.
     slug = base_slug
     suffix = 1
+    agent_models_json = json.dumps(agent_models or {}, ensure_ascii=False, separators=(',', ':'))
     project: dict[str, Any] | None = None
     while suffix <= 10000:
         try:
@@ -109,11 +111,11 @@ def add_project(
                 if not existing:
                     conn.execute(
                         """INSERT INTO projects
-                           (slug,name,path,root,kind,description,tags,model,agent,color,
+                           (slug,name,path,root,kind,description,tags,model,agent,agent_models,color,
                             created_at,updated_at,last_seen_at)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (slug, name, path, root, kind, description, tags, model, agent,
-                         color, ts, ts, ts),
+                         agent_models_json, color, ts, ts, ts),
                     )
                     row = db.one(conn, "SELECT * FROM projects WHERE slug=?", (slug,))
                     project = project_dict(conn, row)
@@ -140,11 +142,19 @@ def add_project(
 def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
     allowed = {
         "name", "path", "root", "kind", "description", "tags", "model",
-        "agent", "favorite", "enabled", "hidden", "color",
+        "agent", "agent_models", "favorite", "enabled", "hidden", "color",
         "manifest", "manifest_path", "manifest_loaded_at",
         "git_remote", "git_branch", "git_provider",
     }
     sets = {k: v for k, v in fields.items() if k in allowed}
+    if "agent_models" in sets:
+        value = sets["agent_models"]
+        if isinstance(value, dict):
+            sets["agent_models"] = json.dumps(value, ensure_ascii=False,
+                                               separators=(',', ':'))
+        elif not isinstance(value, str):
+            sets["agent_models"] = json.dumps({} if value is None else value,
+                                               ensure_ascii=False)
     if not sets:
         return get_project(slug)
     sets["updated_at"] = now_iso()
@@ -253,6 +263,18 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
     d["favorite"] = bool(d.get("favorite"))
     d["enabled"] = bool(d.get("enabled"))
     d["hidden"] = bool(d.get("hidden"))
+    # Decode the per-agent model map; a bad/missing value degrades to {}.
+    raw_agent_models = d.pop("agent_models", "{}")
+    if isinstance(raw_agent_models, str):
+        try:
+            parsed = json.loads(raw_agent_models)
+            d["agent_models"] = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            d["agent_models"] = {}
+    elif isinstance(raw_agent_models, dict):
+        d["agent_models"] = raw_agent_models
+    else:
+        d["agent_models"] = {}
     # The control plane is the self-registered Perun repo; the dashboard uses
     # this flag to badge it and to protect it from deletion.
     d["is_control"] = config.is_control_path(d.get("path"))

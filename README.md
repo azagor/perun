@@ -49,6 +49,10 @@ them all — no matter which folder you happened to open.
   API-key and local LLM providers (OpenCode Console, OpenCode Go, Ollama,
   OpenAI, Anthropic, DeepSeek, etc.) directly from the UI. Credentials are
   written to your OpenCode config; Perun never stores them.
+* **Per-agent default models.** In the project Config tab set different default
+  models for the `plan` and `build` agents (and any future agent id). Perun
+  writes them to the project's `opencode.json` under `agent.<id>.model` and uses
+  them when it starts a run.
 * **Native PerunChat federation.** Connect your Perun agent to the global
   agent-to-agent chat network at `peruninthemachine.com`. The autonomous bridge
   answers room messages with context-aware replies (participant roster + recent
@@ -245,7 +249,7 @@ for details.
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{run_uid}/stream`, `/api/stream` | Server-Sent Events |
 | **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
-| **MCP server** | stdio, tool namespace `perun` | 28 tools, installed globally |
+| **MCP server** | stdio, tool namespace `perun` | 31 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL approval for actions |
 | **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), `perun-guard` MCP + post-run audit, configurable approver/HITL secret |
@@ -269,8 +273,9 @@ python -m perun remember <text> [--project SLUG] [--global] [--topic T]
 python -m perun recall <query> [--project SLUG] [--k N] [--all]
 python -m perun index <slug> | --all
 python -m perun run <slug> [prompt] [--model M] [--agent A] [--wait]
-python -m perun context <list|get|search|sync|map|index|verify|stats> [...]
+python -m perun context <list|get|search|sync|map|index|verify|stats|dedupe> [...]
 python -m perun secret <list|get|set|delete|password|status> [...]
+python -m perun docs audit [slug] [--all]
 python -m perun encrypt-config [--password P]
 python -m perun global-instructions [text] [--clear]
 python -m perun import-legacy-memory [--path P]
@@ -293,6 +298,7 @@ perun/                     the Python package
   memory.py                unified facts + doc-chunk store + search
   context.py               keyed retrievable context docs (bounded AGENTS.md)
   context_map.py           losslessness map for AGENTS.md migrations
+  docaudit.py              CODEMAP file/identifier/version traceability audit
   secret_store.py          encrypted named secrets (pulled on demand)
   handbook.py              Perun reference material as context docs
   embeddings.py            Ollama transport + vector math
@@ -316,7 +322,7 @@ setup.ps1                  Windows web installer (clone + bootstrap.ps1)
 setup.sh                   Unix web installer (clone + deps + global install)
 bootstrap.ps1              Windows cold-start installer (delegates to install --machine)
 Perun.cmd                  Windows one-click launcher
-tools/                     make_icon · normalize_line_endings · check_line_endings · migrate_global_facts
+tools/                     release · sync-internal · make_icon · normalize_line_endings · check_line_endings · migrate_global_facts
 docs/                      CODEMAP · TECHNICAL · CHANGELOG · DESIGN · AGENTS_OPTIMIZATION
 tests/                     pytest suite
 ```
@@ -367,9 +373,10 @@ across all of them without turning into a junk drawer.
   project under the configured roots; the Perun repo registers itself.
 * **Docs are indexed, not pasted.** Each project's `docs/CODEMAP.md`,
   `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CHANGELOG.md`, `README.md`, and
-  `AGENTS.md` are split at level-2 headings into `doc_chunks` tagged with
-  CODEMAP-style paths and identifiers, so a hit points you at the file, not just
-  the project.
+  `AGENTS.md` are split into `doc_chunks` tagged with CODEMAP-style paths and
+  identifiers. CODEMAP is split at `###` modules into `<H2> › <H3>` chunks, so a
+  hit points at the module, not just the project; a compact `<slug>.codemap`
+  outline is also indexed as a context doc.
 * **Awareness is injected where the work runs.** Agent runs start with `cwd` in
   the target project and receive that project's own `.perun/instructions/*.md`,
   so the session begins knowing the house rules — whether it was started from
@@ -422,9 +429,11 @@ demand** instead of being inlined.
   relevant material is pre-fetched **by task** on the orchestrated path, and
   `perun context verify` gates every migration.
 * **Retrieval is layered.** Exact key → anchor label (a `memory:`-bound anchor
-  in `perun.md`) → key substring → semantic. A manifest anchor can name the
-  context key it binds to, so an agent can ask for a document the way a human
-  would name it.
+  in `perun.md`) → key substring → semantic. Anchors also resolve by stemmed
+  token overlap and path; a file/doc anchor returns the best indexed
+  `doc_chunks` section or a small stub with fetch instructions. When Ollama is
+  up, anchor-label similarity and a post-deterministic pre-fetch fallback use
+  local embeddings; when it is down, the deterministic rules still work.
 * **The losslessness proof.** `perun context map` records, for every section of
   the original `AGENTS.md`, *where that content went* (`inline` / `context` /
   `secret` / `retained`). `perun context verify` then proves: nothing was
@@ -447,6 +456,7 @@ perun context sync                 # re-index the handbook + refresh the kernel
 perun context map --write          # draft .perun/context-map.json
 perun context verify               # the parity check
 perun context stats                # AGENTS.md sizes, token estimates, duplicates
+perun docs audit                   # CODEMAP files, identifiers, and version traceability
 ```
 
 ### Secrets on demand
@@ -472,8 +482,8 @@ verify` checks that it actually exists.
   **facts** written with `remember()` — scoped `global` (visible everywhere) or
   `project` — plus **doc chunks** from each project's own docs.
 * **Ranking that weighs both relevance and time.** Cosine similarity over Ollama
-  `nomic-embed-text` embeddings plus a keyword bonus, multiplied by freshness;
-  anything scoring **≤ 0.15** is dropped.
+  `nomic-embed-text` embeddings plus a keyword bonus, with a small freshness
+  tie-breaker; anything scoring **≤ 0.15** is dropped.
 * **Secrets never enter memory.** `memory.is_sensitive()` guards `remember()`,
   and every new storage path keeps that guard.
 * **Deduplicated at write time.** Facts are keyed by `content_hash` with

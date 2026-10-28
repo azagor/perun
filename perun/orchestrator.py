@@ -802,6 +802,13 @@ class Orchestrator:
         # ``model`` field could have been set to a cloud provider before the
         # owner configured the orchestrator model. Forcing it would make the
         # orchestrator chat run on the wrong provider.
+        # Resolve the agent first because per-agent model defaults depend on it.
+        agent = (agent or "").strip() or project.get("agent")
+        if not agent and control.is_control(project):
+            agent = self.settings.orchestrator_agent
+        if not agent and control.is_control(project):
+            agent = self.settings.default_agent
+
         requested_model = (model or "").strip()
         # Every source is stripped so a blank/whitespace override can never be
         # forwarded as an empty `--model` argument, and so a whitespace control-
@@ -811,24 +818,26 @@ class Orchestrator:
                      or (self.settings.orchestrator_model or "").strip()
                      or (self.settings.default_model or "").strip())
         else:
-            model = requested_model or (project.get("model") or "").strip()
+            # Per-agent default model wins over the generic project model.
+            agent_models = project.get("agent_models") or {}
+            if not isinstance(agent_models, dict):
+                agent_models = {}
+            agent_model = (agent_models.get(agent or "") or "").strip()
+            model = (requested_model
+                     or agent_model
+                     or (project.get("model") or "").strip())
         # The global default_model is intentionally NOT forced onto project runs;
         # it is only used for the control plane (orchestrator). This lets regular
         # projects fall back to OpenCode's own default model instead of being
         # overridden by a possibly incompatible Perun setting.
-        # Whatever we resolved — the caller's argument, the project's own
-        # override, or a control-plane setting — must be forwarded to
+        # Whatever we resolved — the caller's argument, a per-agent default, the
+        # project's own override, or a control-plane setting — must be forwarded to
         # `opencode run` as `--model`. Otherwise OpenCode silently falls back to
         # its own global default, so a project pinned to e.g.
         # `opencode/big-pickle` would instead run on whatever machine-wide
         # default OpenCode has (and fail on an unrelated, out-of-funds
         # provider). Only an empty resolution leaves the model to OpenCode.
         model_explicit = bool(model)
-        agent = (agent or "").strip() or project.get("agent")
-        if not agent and control.is_control(project):
-            agent = self.settings.orchestrator_agent
-        if not agent and control.is_control(project):
-            agent = self.settings.default_agent
 
         run = registry.create_run(
             run_uid, project["id"], prompt,

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.31 (see §15). Anchoring + CODEMAP token-efficiency: anchors resolve via token/substring matching with doc-chunk/stub fallback, CODEMAP-aware chunking at `###` with `<H2> › <H3>` titles, compact `<slug>.codemap` outline docs, deterministic stemmer improvements, and `perun docs audit` for CODEMAP traceability; prefetch now truncates the first matching large doc instead of skipping it.
+**Latest release:** v0.8.31 (see §15). Anchoring + CODEMAP token-efficiency: anchors resolve via exact/token/substring/path matching with doc-chunk/stub fallback, CODEMAP-aware chunking at `###` with `<H2> › <H3>` titles, compact `<slug>.codemap` outline docs, deterministic stemmer improvements, local-embedding fallback for anchors/prefetch, stale-vector guards, and `perun docs audit` for CODEMAP traceability; prefetch now truncates the first matching large doc instead of skipping it.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -124,7 +124,7 @@ can all write concurrently.
 
 | Table | Purpose | Notes |
 |---|---|---|
-| `projects` | registry | `slug` unique, `path` unique, `root`, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `color`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch`, `git_provider`, `last_seen_at` |
+| `projects` | registry | `slug` unique, `path` unique, `root`, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `agent_models` (JSON map of agent id → model id), `color`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch`, `git_provider`, `last_seen_at` |
 | `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `title`, `status`, `message_count`, `last_error` |
 | `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 whenever a model was resolved and is forwarded as `--model`), `agent`, `prompt`, `exit_code`, `output`, `error` |
 | `tasks` | reusable per-project tasks | `kind` (default `prompt`), `prompt`, `tools`/`skills` (JSON arrays), `enabled`, `sort_order`; re-runnable presets surfaced in the dashboard |
@@ -141,11 +141,11 @@ can all write concurrently.
 
 Column additions after the first release are applied idempotently by
 `db._ADDED_COLUMNS` (`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
-`runs.model_explicit`, `doc_chunks.embedded_hash`), so existing databases
-migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
+`runs.model_explicit`, `doc_chunks.embedded_hash`, `projects.agent_models`), so
+existing databases migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
 `projects.instructions_path`) are dropped idempotently by `db._REMOVED_COLUMNS` on next start, so
 fresh and upgraded schemas converge. Instruction text is never stored in the database.
-`db.SCHEMA_VERSION` (currently `2`) is written to `PRAGMA user_version` on every
+`db.SCHEMA_VERSION` (currently `10`) is written to `PRAGMA user_version` on every
 start, so future non-additive migrations can tell what already ran.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
@@ -165,13 +165,15 @@ Two stores, one search surface (`memory.unified_search`):
 2. **Doc chunks** — Markdown from a project's `DOC_CANDIDATES`
    (`docs/CODEMAP.md`, `docs/TECHNICAL_DOCUMENTATION.md`, `docs/CHANGELOG.md`,
    `docs/README.md`, `AGENTS.md`, `README.md`). `chunk_markdown()` splits at
-   level-2 headings; `index_text()` upserts changed sections only;
-   `extract_metadata()` tags each chunk with CODEMAP-style file paths and
-   identifiers so search results navigate straight into code.
+   level-2 headings, except CODEMAP: `_chunk_codemap()` splits at `###` modules
+   into `<H2> › <H3>` chunks capped at `CODEMAP_TARGET_CHUNK` (~2.5 KB), and
+   `_split_oversized()` repeats the heading in each part. `index_text()` upserts
+   changed sections only; `extract_metadata()` tags each chunk with CODEMAP-style
+   file paths and identifiers so search results navigate straight into code.
 
-**Ranking.** Cosine similarity over Ollama embeddings, plus keyword bonus, times
-freshness. Chunks also pick up a small keyword bonus. Results with score ≤ 0.15
-are dropped.
+**Ranking.** Cosine similarity over Ollama embeddings, plus keyword bonus, plus a
+small freshness tie-breaker. Chunks also pick up a small keyword bonus. Results
+with score ≤ 0.15 are dropped.
 
 **Degradation.** If Ollama is unreachable, `_embed()` returns `None`, rows store
 without an embedding, and search falls back to keyword + recency. `stats()`
@@ -207,8 +209,15 @@ shadows a global one of the same key.
 
 **Retrieval order** (`context.search()`): exact key → anchor label → key
 substring → semantic. An *anchor label* is resolved through the project's
-`perun.md`: an anchor with a `memory:` key binds a human label to a context
-key, so an agent can ask for a document the way a human would name it.
+`perun.md`: exact label, stemmed token overlap, substring and path are tried in
+order; a `memory:` key binds a human label to a context key; a file/doc anchor
+returns the best indexed `doc_chunks` section or a bounded stub with fetch
+instructions. When Ollama is available, anchor-label similarity is a fallback.
+
+**CODEMAP outline.** `scaffold.generate_codemap_outline()` produces a compact
+`<slug>.codemap` context doc (every `###` heading plus its first line, capped at
+6 KB). `perun context sync` and `perun docs index` index it so an agent can read
+the navigation map without paying for the full CODEMAP.
 
 **Embedding hygiene.** A body that trips `memory.is_sensitive()` is still
 **stored verbatim** (dropping it would break P1) but is **never embedded** —
@@ -419,6 +428,14 @@ tab.
 (`python -m perun validate-docs [slug] [--all]`). Reports `perun.md` docs and
 anchors that point to files which no longer exist.
 
+**Audit CODEMAP traceability**
+(`python -m perun docs audit [slug] [--all]`). `perun/docaudit.py` parses
+`docs/CODEMAP.md`, checks every backticked file path exists, verifies
+class/function/constant identifiers against the referenced Python files via AST,
+and ensures the package version appears in both `docs/CHANGELOG.md` and
+`docs/CODEMAP.md`. Owner-level `--all` includes hidden projects such as the
+Perun control project.
+
 **Refresh dependencies**
 (`python -m perun refresh-deps [slug] [--all]`). Re-parses dependency files and
 stores them as project-scoped facts; useful for projects that existed before
@@ -463,30 +480,38 @@ Manifest-declared instructions use `overwrite=False` (seed once), so a later das
 never clobbered; explicit user writes use `overwrite=True` (default). Instruction text is never
 stored in the database — there is no legacy column and no migration.
 
-Continuations of an existing session inherit the rules from history, so they are
-not re-injected. The raw user prompt is what gets stored on the run row.
-
 **Model/agent overrides are mirrored into the project's OpenCode config.**
-Saving a model or agent override on a project (dashboard config tab, wizard, or
-`perun_update_project` MCP tool) now writes the values into the project's own
-`opencode.json[c]` under the keys `model` and `default_agent`. This lets the
-OpenCode **TUI** honor the override, because the TUI reads project defaults from
-that file rather than command-line flags. Existing keys (`mcp`, `instructions`,
-…) are preserved; clearing an override removes the key. Writes are atomic
+Saving a model, agent, or per-agent default on a project (dashboard Config tab,
+wizard, or `perun_update_project` MCP tool) writes the values into the project's
+own `opencode.json[c]`. The generic override is stored under `model` and
+`default_agent`; per-agent defaults are stored under `agent.<id>.model` so the
+OpenCode **TUI** can honor a different default for the **plan** and **build**
+agents. Existing keys (`mcp`, `instructions`, user-added agent blocks, …) are
+preserved; clearing a value removes only the key Perun owns. Writes are atomic
 (temp file + `os.replace`) and commented `.jsonc` files are left untouched so
 user comments are not destroyed. `projects.sync_opencode_config()` returns an
 `{action, path, warning}` status that the dashboard surfaces in a toast.
 
-**Model/agent overrides are explicit only.** Perun resolves model/agent as
-`explicit call/project field → control-plane settings`, but the **global**
-`default_model` / `default_agent` are no longer forced onto ordinary project runs.
-That lets OpenCode use its own project defaults when the Model/Agent fields are
-left empty, avoiding surprising provider errors from a machine-wide default. The
-run row records whether a model was resolved (`model_explicit=1`) for the record,
-and `_execute` forwards `--model` to `opencode run` whenever a model was resolved
-— a project-level model is a deliberate choice and *is* forwarded, so the run
-never silently runs on OpenCode's own default instead of the configured one.
-Every source is stripped, so a blank/whitespace override is treated as unset.
+**Model/agent resolution is explicit and agent-aware.** Perun resolves the agent
+first, then the model:
+
+```text
+explicit --model
+→ agent_models[resolved agent]               # plan / build / custom
+→ project.model
+→ (control plane only) orchestrator_model → default_model
+→ OpenCode default
+```
+
+The **global** `default_model` / `default_agent` are used **only for the control
+plane**, not ordinary project runs. That lets OpenCode use its own project
+defaults when the Model/Agent fields are left empty, avoiding surprising
+provider errors from a machine-wide default. The run row records whether a model
+was resolved (`model_explicit=1`) for the record, and `_execute` forwards
+`--model` to `opencode run` whenever a model was resolved — a project-level or
+per-agent model is a deliberate choice and *is* forwarded, so the run never
+silently runs on OpenCode's own default instead of the configured one. Every
+source is stripped, so a blank/whitespace override is treated as unset.
 
 ### The control plane (always-available orchestrator)
 
@@ -535,6 +560,9 @@ kind: opencode
 description: Android crypto trading bot.
 tags: [python, kivy, trading]
 model: opencode/big-pickle
+agent_models:
+  plan: provider/plan-model
+  build: provider/build-model
 docs: { readme: README.md, changelog: docs/CHANGELOG.md }
 commands: { test: "python -m pytest tests/ -q" }
 links: { repository: "https://github.com/you/repo" }
@@ -553,6 +581,11 @@ Free-form notes rendered on the project page.
 * **Anchor kinds:** `file`, `doc`, `symbol`, `url`, `command`, `secret`. Each anchor needs
   a `label` and one locator (`path` / `url` / `command`). Shorthand: a string
   anchor becomes a `file` anchor; `kind` is inferred when omitted.
+* **Per-agent default models.** The optional `agent_models` map assigns a
+  default model to specific agents (`plan`, `build`, or any future agent id).
+  Perun resolves `agent_models[agent]` before the generic `model`, so a project
+  can run its planner on a cheap model and its builder on a powerful one.
+  Values are mirrored into `opencode.json` under `agent.<id>.model`.
 * **Memory-bound anchors.** An anchor may carry a **`memory:`** key naming a
   Context-layer doc. That binds a human label to a context key, so an agent can
   ask for the document by the name a human would use (`perun_context("Release
@@ -578,16 +611,21 @@ Free-form notes rendered on the project page.
 
 `Orchestrator.start_run(project, prompt, …)`:
 
-1. resolves model/agent: explicit call arg → project override → (when the target
-   `is_control`) `Settings.orchestrator_model` / `orchestrator_agent`. The global
-   `default_model` / `default_agent` are used **only for the control plane**, not
-   for ordinary projects, so an empty Model/Agent field lets OpenCode use its own
-   project defaults. The run records `model_explicit=1` whenever a model was
-   resolved (call arg, project override, or control-plane setting), and
-   `_execute` forwards it as `--model`.
+1. resolves the **agent** first, then the **model**:
+   * `agent`: explicit call arg → `project.agent` → (control plane only)
+     `Settings.orchestrator_agent` / `default_agent`.
+   * `model`: explicit call arg → `project.agent_models[agent]` (per-agent
+     default) → `project.model` → (control plane only)
+     `Settings.orchestrator_model` / `default_model`.
+   The global `default_model` / `default_agent` are used **only for the control
+   plane**, not for ordinary projects, so an empty Model/Agent field lets OpenCode
+   use its own project defaults. The run records `model_explicit=1` whenever a
+   model was resolved (call arg, per-agent default, project override, or
+   control-plane setting), and `_execute` forwards it as `--model`.
 2. writes a `runs` row (`status=queued`) and an activity entry,
 3. spawns a daemon thread running `_execute`, guarded by
    `threading.Semaphore(max_concurrent_runs)`.
+
 
 `_execute` runs (Windows-aware via `resolve_opencode`):
 
@@ -638,13 +676,15 @@ run status to `provider_error` rather than `failed`, and the `sessions` row stay
 **Task-driven context pre-fetch.** `compose_prompt()` (new sessions only)
 resolves the *request* into the Context-layer documents it needs and injects
 them in a `--- PERUN CONTEXT START/END ---` envelope, after the global/project
-instruction blocks. The gate is deterministic and Ollama-free (exact key →
-anchor label → key fragment → subject match), so a run never depends on an
-embedding service — and a wrong injection costs tokens *and* can mislead, so
-the default is to inject nothing rather than something plausible. Markers
-appearing in an injected instruction file are stripped, and Perun's own
-envelope is appended *after* that strip, so an instruction file cannot close
-the envelope early.
+instruction blocks. The gate is deterministic first (exact key →
+anchor label → key fragment → subject match); if Ollama is available and the
+deterministic gate finds nothing, it falls back to local embedding similarity
+over the context docs (score ≥ 0.6). A run therefore never *depends* on an
+embedding service, but can use one when it is up — and a wrong injection costs
+tokens *and* can mislead, so the default is to inject nothing rather than
+something plausible. Markers appearing in an injected instruction file are
+stripped, and Perun's own envelope is appended *after* that strip, so an
+instruction file cannot close the envelope early.
 
 ---
 
@@ -674,7 +714,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/projects` | list projects |
 | POST | `/api/projects` | wizard: register / create / clone `{method,path,…}`; also accepts `clone_url`, `root`, `bootstrap`, `description`, `kind`, `tags`, `color`, `instructions`, `sort_order` |
 | GET | `/api/projects/{slug}` | detail + sessions + runs + activity + memory + manifest body |
-| PATCH | `/api/projects/{slug}` | update fields; when `model`/`agent` change, also mirrors them into the project's `opencode.json[c]` and returns the result in `opencode_config` |
+| PATCH | `/api/projects/{slug}` | update fields; when `model`/`agent`/`agent_models` change, also mirrors them into the project's `opencode.json[c]` and returns the result in `opencode_config` |
 | DELETE | `/api/projects/{slug}` | unregister (refuses the control project) |
 | POST | `/api/projects/{slug}/index` | sync manifest, then index docs |
 | GET | `/api/projects/{slug}/sessions` | sessions |
@@ -1380,15 +1420,16 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
 `db.init_db()`s, calls `control.ensure()` at import, calls
 `handbook.ensure_indexed()` at import (so the reference material is retrievable
-from the first call), and exposes **twenty-eight** tools:
+from the first call), and exposes **thirty-one** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
-  into the project's `opencode.json[c]` and reports the result), `perun_delete_project`
-  (requires `confirm=True`; refuses the control plane), `perun_discover`.
+  and per-agent `agent_models` into the project's `opencode.json[c]` and reports
+  the result), `perun_delete_project` (requires `confirm=True`; refuses the
+  control plane), `perun_discover`.
 * **Memory & docs:** `perun_memory_search`, `perun_memory_store`,
-  `perunchat_room_memory` (search PerunChat room transcripts and durable room
-  facts), `perun_docs_index`.
+  `perun_memory_forget`, `perun_memory_supersede`, `perunchat_room_memory`
+  (search PerunChat room transcripts and durable room facts), `perun_docs_index`.
 * **Context & secrets:** `perun_context` (retrieve the Context layer — by
   exact key, by anchor label, or by describing the task; the key inventory is
   always visible), `perun_secret` (read/write a named value in the encrypted
@@ -1569,6 +1610,26 @@ setting.
 
 ## 15. Revision history
 
+### 2026-10-28 — v0.8.31: anchoring + CODEMAP token-efficiency
+
+* **Anchors resolve.** Manifest anchors are matched by exact label, stemmed
+  token overlap, substring and path, and file/doc anchors fall back to an
+  indexed `doc_chunks` section or a bounded stub. `perun_context("CODEMAP")`
+  and `perun_context("the technical documentation")` return a useful hit.
+* **CODEMAP-aware chunking.** `docs/CODEMAP.md` is split at `###` modules into
+  `<H2> › <H3>` chunks capped at ~2.5 KB; a compact `<slug>.codemap` outline is
+  indexed as a project context doc.
+* **`perun docs audit`.** New CLI command checks CODEMAP file paths, Python
+  identifiers via AST, and package-version traceability.
+* **Embedding-assisted fallback.** Anchor label similarity, `doc_chunks`
+  section selection, and task pre-fetch use local `nomic-embed-text` vectors
+  when the deterministic rules find nothing and Ollama is available.
+* **Stale-vector guard.** Context docs and doc chunks only use an embedding
+  when `embedded_hash == content_hash`.
+* **Owner-level maintenance.** `docs audit --all`, `backfill-docs --all`,
+  `validate-docs --all`, and `refresh-deps --all` include hidden projects when
+  the current process owns Perun's data directory.
+
 ### 2026-10-27 — v0.8.26: schema v7 migration hotfix
 
 * **Fixed migration ordering for existing databases.** `db.init_db()` now runs
@@ -1659,8 +1720,9 @@ script was added.*
   `perun context verify` gates every migration.
 * **Task-driven pre-fetch.** `orchestrator.compose_prompt()` injects the
   reference material a request actually needs, in a
-  `--- PERUN CONTEXT START/END ---` envelope. The gate is deterministic and
-  Ollama-free, so a run never depends on an embedding service.
+  `--- PERUN CONTEXT START/END ---` envelope. The gate is deterministic first,
+  with a local-embedding fallback when Ollama is available; a run never
+  *depends* on an embedding service.
 * **The global kernel.** The always-on global `AGENTS.md` block is generated
   from the handbook manifest: 1,832 B instead of ≈6.1 KB. The complete
   previous global guide is kept verbatim as `handbook.global`.

@@ -1,9 +1,10 @@
 # Perun — AGENTS.md context-budget optimisation
 
-> **Status:** phases 0–4, 6 and 7 **implemented** (2026-10-28); v0.8.27 shipped.
-> All five managed projects migrated and a production-readiness audit hardened
-> the implementation. Phase 5 — the eval-set half of the parity harness —
-> remains outstanding.
+> **Status:** phases 0–4, 6 and 7 **implemented** (2026-10-28); v0.8.31 shipped.
+> All five managed projects migrated, a production-readiness audit hardened the
+> implementation, and v0.8.31 completed anchor resolution, CODEMAP-aware
+> chunking, the compact CODEMAP outline, and local-embedding fallback. Phase 5 —
+> the eval-set half of the parity harness — remains outstanding.
 > **Problem owner:** every Perun-managed project.
 > **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
 > [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
@@ -328,11 +329,13 @@ is retained verbatim), P2 (the inventory is visible), and the kernel's
 key table and one call away from the complete original document.
 
 Pre-fetch is gated conservatively: at most **2 documents** and **4,000
-characters** are injected, and the gate is **deterministic and Ollama-free**
-(exact key → anchor label → key fragment → subject match, threshold 0.5). A
-wrong injection costs tokens *and* can mislead — worse than a missing lookup —
-so the default is to inject nothing rather than something plausible. A run must
-never depend on an embedding service being up.
+characters** are injected. The gate is **deterministic first** (exact key →
+anchor label → key fragment → subject match, threshold 0.5), with a
+local-embedding fallback (score ≥ 0.6) only when Ollama is available and the
+deterministic rules find nothing. A wrong injection costs tokens *and* can
+mislead — worse than a missing lookup — so the default is to inject nothing
+rather than something plausible. A run never *depends* on an embedding service
+being up.
 
 ### 2.6 Credentials leave the prompt entirely
 
@@ -452,6 +455,7 @@ AGENTS.md tool table can never disagree with the MCP schema.
 | **6 — Orchestrator pre-fetch** | `compose_prompt` injects the top context docs | low | Removes the round trip on the orchestrated path | **done** |
 | **7 — Secrets** | `perun/secret_store.py`; `perun_secret` tool; `kind: secret` anchors | medium | Removes credentials from every prompt | **done** (mechanism; no real credentials to migrate) |
 | **8 — Production-readiness audit** | Harden the token-efficiency implementation: graceful schema serialization, confined instructions[] resolution, live inline-size measurement, regression tests | low | Makes the work safe to ship | **done — v0.8.27** |
+| **9 — Anchoring + CODEMAP** | Resolve anchors by token/substring/path, CODEMAP-aware `###` chunking, compact `<slug>.codemap` outline, `perun docs audit`, local-embedding fallback, stale-vector guard | low | Retrieval names the module it describes and anchors resolve instead of missing | **done — v0.8.31** |
 
 ### 4.1 What is live right now
 
@@ -463,7 +467,8 @@ AGENTS.md tool table can never disagree with the MCP schema.
 * The **global kernel** is live in `~/.config/opencode/AGENTS.md`: the managed
   block is 1,832 B (was ≈6.1 KB), and the previous guide is retained verbatim
   as `handbook.global`.
-* `perun_context` and `perun_secret` MCP tools (25 tools in total).
+* `perun_context` and `perun_secret` MCP tools, plus the full current MCP
+  inventory (**31 tools**).
 * `perun context …` and `perun secret …` CLI groups.
 * `orchestrator.compose_prompt()` pre-fetch, injected as
   `--- PERUN CONTEXT START/END ---`.
@@ -490,6 +495,13 @@ AGENTS.md tool table can never disagree with the MCP schema.
 * `perun context verify` (v0.8.27) also checks that the global
   `perun/INSTRUCTIONS.md` file is the thin pointer, and flags repeated inline
   `###` subsections.
+* **Anchoring + CODEMAP completion (v0.8.31).** Anchors resolve by
+  exact/token/substring/path match and fall back to an indexed `doc_chunks`
+  section or a bounded stub; CODEMAP is chunked at `###` modules into
+  `<H2> › <H3>` chunks; a compact `<slug>.codemap` outline is indexed; and
+  local embeddings are a fallback for anchor labels, section selection and
+  pre-fetch. `perun docs audit` checks CODEMAP file/identifier/version
+  traceability.
 * **Perun's own `AGENTS.md` is migrated** — 9,435 B → 5,037 B (−47 %). The
   behavioural rules stay inline, verbatim; the project overview, the
   contributing checklists, the command list, the credential procedure and the
@@ -551,7 +563,7 @@ modes has a test that proves the check fails when it should.
 | **Extra round trip** costs more than the inline text | One pre-fetch call replaces N KB of always-on context; the orchestrated path pre-fetches for free |
 | **Stale context** | Content-hash re-index on change; `updated_at` in every response; `perun context verify` fails on drift |
 | **Two sources of truth** (kernel vs handbook vs manifest) | The kernel is *generated*; `verify` is a CI-able check |
-| **Ollama down** | The deterministic key path never touches Ollama; only the semantic path degrades, to keyword matching |
+| **Ollama down** | The deterministic key/anchor/subject path never touches Ollama; only the optional embedding fallback and semantic search degrade, to keyword matching |
 | **Two AGENTS.md philosophies** (inline rules vs retrieved reference) | Explicit split rule, applied by the Phase 4 classifier and documented in `perun.md` |
 | **Complexity added to Perun** | One module, one MCP tool, one CLI group, one table reuse — no new dependency, no new service |
 

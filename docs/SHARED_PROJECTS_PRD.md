@@ -1,5 +1,10 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
+> **Implementation status (v0.8.31):** implemented as described below. See
+> `docs/CODEMAP.md` (`shared_projects.py`, `action_proposals.py`,
+> `perunchat_bridge.py`) and `docs/TECHNICAL_DOCUMENTATION.md` for the
+> module-level and API-level detail.
+
 ## 1. Product Summary
 
 Shared Projects enable a Perun project to become a **collaboration workspace**: a

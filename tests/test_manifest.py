@@ -73,7 +73,8 @@ def test_malformed_yaml_degrades_gracefully():
 def test_missing_front_matter_is_all_body():
     data, body, warnings = manifest.parse("# Just markdown\n")
     assert data == {"version": 1, "tags": [], "docs": {}, "commands": {},
-                    "links": {}, "anchors": [], "dependencies": [], "git": {}}
+                    "links": {}, "agent_models": {}, "anchors": [],
+                    "dependencies": [], "git": {}}
     assert body.strip() == "# Just markdown"
 
 
@@ -150,6 +151,25 @@ def test_sync_manifest_routes_instructions_to_file(tmp_path):
     assert "user edit" in target.read_text(encoding="utf-8")
 
 
+def test_sync_manifest_mirrors_agent_models_to_opencode_config(tmp_path):
+    """A manifest's ``agent_models`` is synced to the registry and to opencode.json."""
+    from perun import projects, registry
+
+    manifest.save(str(tmp_path), {
+        "version": 1, "name": "SyncModels",
+        "agent_models": {"plan": "provider/plan-v", "build": "provider/build-v"},
+    }, "")
+    p = registry.add_project("SyncModels", str(tmp_path))
+    projects.sync_manifest(p)
+
+    updated = registry.get_project(p["slug"])
+    assert updated["agent_models"] == {"plan": "provider/plan-v",
+                                        "build": "provider/build-v"}
+    cfg = json.loads((tmp_path / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["agent"]["plan"]["model"] == "provider/plan-v"
+    assert cfg["agent"]["build"]["model"] == "provider/build-v"
+
+
 def test_from_project_suggests_anchors(tmp_path):
     (tmp_path / "README.md").write_text("# hi", encoding="utf-8")
     project = {"name": "P", "slug": "p", "path": str(tmp_path), "kind": "opencode",
@@ -200,3 +220,29 @@ def test_parse_json_body_key(tmp_path):
     assert snap["data"]["name"] == "J"
     assert "text" in snap["body"]
     assert "body" not in snap["data"]
+
+
+def test_agent_models_normalized_as_string_map():
+    data, warnings = manifest.normalize({
+        "agent_models": {
+            "plan": "provider/plan-model",
+            "build": "provider/build-model",
+            "ignored": {"nested": "object"},
+            "": "empty-key",
+        },
+    })
+    assert data["agent_models"] == {"plan": "provider/plan-model",
+                                    "build": "provider/build-model"}
+    assert not warnings
+
+
+def test_agent_models_round_trip_in_manifest(tmp_path):
+    data = {
+        "version": 1, "name": "AgentModels",
+        "agent_models": {"plan": "p/m1", "build": "p/m2"},
+    }
+    manifest.save(tmp_path, data, "# body")
+    snap = manifest.load(tmp_path)
+    assert snap["data"]["agent_models"] == {"plan": "p/m1", "build": "p/m2"}
+    fields = manifest.to_project_fields(snap["data"])
+    assert fields["agent_models"] == '{"plan":"p/m1","build":"p/m2"}'

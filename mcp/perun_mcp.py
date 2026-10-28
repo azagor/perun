@@ -49,6 +49,7 @@ import os
 # stdio JSON-RPC stream used by MCP clients. Suppress it before importing.
 os.environ.setdefault("FASTMCP_SHOW_SERVER_BANNER", "false")
 
+import json
 import sys
 from pathlib import Path
 
@@ -382,12 +383,17 @@ def perun_create_project(name: str = "", path: str = "", method: str = "existing
 @mcp.tool
 def perun_update_project(slug: str, name: str = "", description: str = "",
                          tags: str = "", model: str = "", agent: str = "",
-                         color: str = "", instructions: str = "") -> str:
+                         agent_models: str = "", color: str = "",
+                         instructions: str = "") -> str:
     """Update a project's registry metadata (empty fields are left unchanged).
 
     Args:
         slug: The project slug to update.
         name/description/tags/model/agent/color: New values (omit to keep).
+        agent_models: JSON string with a map of agent id → model id (e.g.
+            ``{\"plan\":\"provider/model\",\"build\":\"provider/other\"}``).
+            Pass ``{}`` to clear per-agent defaults; an empty string leaves them
+            unchanged.
         instructions: New custom instructions for the project's sessions, written
             to ``.perun/instructions/default.md``.
     """
@@ -396,19 +402,32 @@ def perun_update_project(slug: str, name: str = "", description: str = "",
     p = registry.get_project(slug)
     if not p:
         return f"[perun] No such project: {slug}"
-    fields: dict[str, str] = {}
+    fields: dict[str, Any] = {}
     for key, value in (("name", name), ("description", description),
                        ("tags", tags), ("model", model), ("agent", agent),
                        ("color", color)):
         if value:
             fields[key] = value
+    if agent_models:
+        try:
+            parsed = json.loads(agent_models)
+            if isinstance(parsed, dict):
+                fields["agent_models"] = parsed
+            else:
+                return f"[perun] agent_models must be a JSON object, got {type(parsed).__name__}"
+        except Exception as exc:
+            return f"[perun] agent_models is not valid JSON: {exc}"
+    previous_agent_models = p.get("agent_models")
+    if not isinstance(previous_agent_models, dict):
+        previous_agent_models = {}
     opencode_note = ""
     if fields:
         registry.update_project(slug, **fields)
-        if "model" in fields or "agent" in fields:
+        if "model" in fields or "agent" in fields or "agent_models" in fields:
             # Mirror into the project's opencode.json so the TUI honors it too.
             updated = registry.get_project(slug) or p
-            cfg_result = projects.sync_opencode_config(updated)
+            cfg_result = projects.sync_opencode_config(
+                updated, previous_agent_models=previous_agent_models)
             if cfg_result.get("warning"):
                 opencode_note = f" (opencode.json: {cfg_result['warning']})"
             elif cfg_result.get("action") in ("created", "updated"):

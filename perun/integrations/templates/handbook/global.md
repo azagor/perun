@@ -24,6 +24,11 @@ regardless of which folder this repository lives in:
 | `perun_discover` | Scan the discovery roots and register new projects. Requires `confirm=true` when an explicit `roots` list is given (scanning outside the configured roots). |
 | `perun_memory_search` | Semantic + keyword search across facts and indexed docs. |
 | `perun_memory_store` | Store a durable fact (global or project scope). |
+| `perun_memory_forget` | Delete one fact by id. |
+| `perun_memory_supersede` | Replace a fact's content while preserving its id. |
+| `perunchat_room_memory` | Search PerunChat room memory (transcripts + durable facts). |
+| `perun_context` | Retrieve context docs by key, anchor label, or task description. |
+| `perun_secret` | Read/write a named secret in the encrypted store. |
 | `perun_docs_index` | (Re)index a project's `docs/*` into the vector store. |
 | `perun_get_instructions` | Read a project's custom instructions. |
 | `perun_set_instructions` | Write a project's custom instructions (requires `confirm=true` — they are injected into every new session). |
@@ -35,6 +40,9 @@ regardless of which folder this repository lives in:
 | `perun_global_grep` | Fast regex content search across *all* registered projects (or a subset). |
 | `perun_global_ast_grep` | Structural code search across *all* registered projects (or a subset). |
 | `perun_unified_search` | Unified cross-project search: vector memory + global grep + ast-grep. |
+| `perun_file_exists` | Check whether one or more paths exist in the allowed roots. |
+| `perun_list_directory` | List entries in a directory in the allowed roots. |
+| `perun_read_file` | Read a text file with line numbers. |
 | `perun_start_session` | Start an agent run in a project; returns a run id. |
 | `perun_ask` | Run a prompt in a project and wait for the reply. |
 | `perun_run_status` | Status / output of a previously started run. |

@@ -851,6 +851,8 @@ def test_model_agent_save_skips_jsonc_with_comments(client, tmp_path):
     assert "// keep me" in (target / "opencode.jsonc").read_text(encoding="utf-8")
 
 
+
+
 def test_model_agent_save_reports_unparseable_config(client, tmp_path):
     """A broken opencode.json is reported, not overwritten."""
     target = tmp_path / "cfgbroken"
@@ -865,6 +867,84 @@ def test_model_agent_save_reports_unparseable_config(client, tmp_path):
     assert r.json()["opencode_config"]["action"] == "error"
     assert "warning" in r.json()["opencode_config"]
     assert (target / "opencode.json").read_text(encoding="utf-8") == "not json"
+
+
+def test_agent_models_save_writes_opencode_config(client, tmp_path):
+    """Per-agent default models are mirrored to the project's opencode.json."""
+    target = tmp_path / "agentmodels"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "AgentModels", "path": str(target),
+        "bootstrap": False,
+    })
+    slug = r.json()["project"]["slug"]
+
+    r = client.patch(f"/api/projects/{slug}", json={
+        "agent_models": {"plan": "provider/plan-v", "build": "provider/build-v"},
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["opencode_config"]["action"] == "created"
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["agent"]["plan"]["model"] == "provider/plan-v"
+    assert cfg["agent"]["build"]["model"] == "provider/build-v"
+
+    # Updating one model leaves the other intact.
+    r = client.patch(f"/api/projects/{slug}", json={
+        "agent_models": {"plan": "provider/plan-v2"},
+    })
+    assert r.status_code == 200, r.text
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["agent"]["plan"]["model"] == "provider/plan-v2"
+    assert cfg["agent"]["build"]["model"] == "provider/build-v"
+
+    # Clearing per-agent defaults removes the agent block.
+    r = client.patch(f"/api/projects/{slug}", json={"agent_models": {}})
+    assert r.status_code == 200, r.text
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert "agent" not in cfg
+
+
+def test_agent_models_save_preserves_unrelated_opencode_config(client, tmp_path):
+    """Only the managed ``agent.*.model`` keys are touched."""
+    target = tmp_path / "agentpreserve"
+    target.mkdir()
+    (target / "opencode.json").write_text(json.dumps({
+        "agent": {"general": {"model": "keep/general"}, "plan": {"foo": "bar"}},
+        "mcp": {"perun": {"type": "local"}},
+    }), encoding="utf-8")
+    r = client.post("/api/projects", json={
+        "method": "existing", "name": "AgentPreserve", "path": str(target),
+        "model": "keep/me",
+    })
+    slug = r.json()["project"]["slug"]
+
+    r = client.patch(f"/api/projects/{slug}", json={
+        "agent_models": {"plan": "provider/plan-v"},
+    })
+    assert r.status_code == 200, r.text
+    cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["model"] == "keep/me"
+    assert cfg["agent"]["general"]["model"] == "keep/general"
+    assert cfg["agent"]["plan"]["model"] == "provider/plan-v"
+    assert cfg["agent"]["plan"]["foo"] == "bar"
+    assert "perun" in cfg["mcp"]
+
+
+def test_agent_models_invalid_payload_returns_warning(client, tmp_path):
+    """A malformed ``agent_models`` value is rejected with a warning, leaving the map unchanged."""
+    target = tmp_path / "agentbad"
+    target.mkdir()
+    r = client.post("/api/projects", json={
+        "method": "existing", "name": "AgentBad", "path": str(target),
+        "agent_models": {"plan": "provider/plan-v"},
+    })
+    slug = r.json()["project"]["slug"]
+
+    r = client.patch(f"/api/projects/{slug}", json={"agent_models": "not-json"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "warning" in body
+    assert "not valid JSON" in body["warning"]
+    assert body["project"]["agent_models"] == {"plan": "provider/plan-v"}
 
 
 def test_settings_patch_coerces_and_validates(client):

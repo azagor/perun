@@ -87,7 +87,8 @@ search), `secret_store` (encrypted secret values).
 * `SCHEMA`, `SCHEMA_VERSION` (the `PRAGMA user_version` migration gate),
   `_ADDED_COLUMNS` (idempotent column additions: `projects.manifest`,
   `projects.manifest_path`, `projects.manifest_loaded_at`, `projects.git_*`,
-  `runs.model_explicit`, `doc_chunks.embedded_hash`), `_REMOVED_COLUMNS`
+  `runs.model_explicit`, `doc_chunks.embedded_hash`, `projects.agent_models`),
+  `_REMOVED_COLUMNS`
   (idempotent column drops:
   `projects.instructions`, `projects.instructions_path`), `connect()`, `db()`
   (context manager), `init_db()`, `rows()`, `one()`.
@@ -100,7 +101,8 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `config.is_control_path()`).
 * Projects: `add_project()` (loads `perun.md` after insert so **every**
   registration path — CLI `perun add`, wizard — gets manifest data, not just
-  discovery), `update_project()`, `touch_project()`,
+  discovery; stores `agent_models` as a JSON map), `update_project()`
+  (accepts `agent_models`), `touch_project()`,
   `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`,
   `set_project_manifest()`, `get_project_manifest()`,
   `load_manifest_from_disk()` (refresh snapshot + apply declared fields + sync
@@ -133,8 +135,9 @@ Shared project creation/registration, used by **both** the HTTP wizard
 * `ProjectError`, `name_from_repo()`, `sync_manifest()`, `register_or_update()`,
   `create()` (the `existing` / `new` / `clone` methods + optional git/index steps).
 * `OPENCODE_CONFIG_NAMES`, `sync_opencode_config()` — mirror a project's
-  `model` / `agent` override into its `opencode.json[c]` (`model` /
-  `default_agent` keys) so the OpenCode TUI honors the dashboard setting.
+  `model` / `agent` override and per-agent `agent_models` map into its
+  `opencode.json[c]` (`model`, `default_agent`, and `agent.<id>.model` keys) so
+  the OpenCode TUI honors the dashboard setting.
 
 ### `perun/providers.py`
 LLM provider discovery, status and configuration. Perun never stores credentials
@@ -205,14 +208,25 @@ Unified facts + document vector store + search.
 * `content_hash()`, `is_sensitive()`, `_freshness_weight()`, `_keywords()`,
   `_embed()`.
 * Facts: `remember()`, `search_facts()`, `search_room_facts()`, `_fact_rows()`,
-  `recent_facts()`, `prune()`. `room_id` lets PerunChat scope facts to a room.
-* Docs: `chunk_markdown()`, `_index_text_impl()`, `index_text()`,
-  `index_project_docs()`, `search_docs()`.
-* Unified / maintenance: `unified_search()`, `stats()`, `reembed_missing()`
-  (re-embeds facts/doc chunks whose vectors are missing or stale).
+  `recent_facts()`, `prune()`, `forget()`, `supersede()`, `touch_fact()`.
+  `room_id` lets PerunChat scope facts to a room; `_cosine_near_duplicate()`
+  merges near-duplicate rules/decisions.
+* Docs: `chunk_markdown()`, `_chunk_codemap()`, `_split_oversized()`,
+  `_index_text_impl()`, `index_text()`, `index_project_docs()`, `search_docs()`.
+  CODEMAP files are split at `###` modules into `<H2> › <H3>` chunks capped at
+  `CODEMAP_TARGET_CHUNK`; CHANGELOG files are reduced to a release index when
+  oversized.
+* Unified / maintenance: `unified_search()`, `stats()`, `usage_stats()`,
+  `reembed_missing()` (re-embeds facts/doc chunks whose vectors are missing or
+  stale).
+* Deterministic pre-fetch: `prefetch_rules()` (durable `rule`/`decision` facts,
+  Ollama-free).
 * Migration: `import_legacy_memory()`.
 * `DOC_CANDIDATES` (files indexed per project).
-* `MAX_CHUNK_CHARS`, `MAX_SEARCH_CANDIDATES` (safety/performance bounds).
+* `MAX_CHUNK_CHARS`, `CODEMAP_TARGET_CHUNK`, `MAX_SEARCH_CANDIDATES`,
+  `MAX_KEYWORD_CHARS`, `MAX_QUERY_WORDS` (safety/performance bounds).
+* In-memory telemetry: `_record_usage()`, `_usage_events`, `_usage_lock`
+  (bounded rolling window; never persisted).
 
 ### `perun/context.py`
 The **Context layer** — keyed, vector-backed reference docs that replace the
@@ -230,7 +244,15 @@ the agent's awareness of a project must never fall below its current level.
   global), `outline()`, `slice_section()`.
 * Retrieval: `search()` — exact key → anchor label → key substring → semantic;
   `_anchor_lookup()` (resolves a `perun.md` anchor label or its `memory:` key),
+  `_rank_anchors()` (exact/token/substring/path scoring), `_anchor_label_set()`
+  (manifest + synthetic doc anchors), `_resolve_anchor()`,
+  `_anchor_path_hit()` (indexed `doc_chunks` section or bounded stub),
   `_semantic()` (cosine + keyword bonus).
+* Manifest cache: `_load_manifest()` / `_manifest_cache_entry()` keyed by
+  project id and invalidated on manifest mtime/size; label embeddings are
+  cached alongside the parsed manifest.
+* Stale-vector guard: both `_semantic()` and `_anchor_path_hit()` only use an
+  embedding when `embedded_hash == content_hash`.
 * Pre-fetch: `prefetch()` — deterministic first, embedding second; exact key
   → anchor → key fragment → **subject** match (`topical_overlap()`,
   `_topic_terms()`, `_stem()`), then local embedding similarity when Ollama is
@@ -323,8 +345,19 @@ Starter-project skeleton + directory creation + safe backfill + dependency parsi
   `pyproject.toml`, `Cargo.toml`, `go.mod`),
   `update_manifest_anchors()` (appends newly-detected anchors without clobbering),
   `validate_manifest()` (stale doc/anchor checker),
+  `generate_codemap_outline()` (compact `<slug>.codemap` navigation outline),
   `find_local_project_references()` (cross-project refs via `file:` deps),
   `_manifest_md()`, `_agents_md()`, `_suggest_commands()`, `summary()`.
+
+### `perun/docaudit.py`
+Documentation-to-code traceability audit for `docs/CODEMAP.md`.
+* `audit_project()` — parses every `###` module block, checks that backticked
+  file paths resolve to real files, verifies class/function/constant identifiers
+  against the referenced Python files via AST, and checks the package version
+  appears in `docs/CHANGELOG.md` and `docs/CODEMAP.md`.
+* `_codemap_rows()`, `_module_symbols()`, `_looks_like_path()`, `_project_version()`,
+  `FILE_RE`, `IDENT_RE`, `VERSION_RE`.
+* CLI: `python -m perun docs audit [slug|--all]`.
 
 ### `perun/git.py`
 Safe wrapper over the `git` CLI (per-project repositories).
@@ -344,6 +377,8 @@ body) with a `perun.json` fallback.
 * `_normalize_anchors()` — an anchor may carry a **`memory:`** key (the
   context-doc key it binds to, so the agent can ask for it by label) and may be
   `kind: secret` (its `path` names a secret in the encrypted store).
+* `_agent_models_map()` — normalizes the per-agent default model map
+  (`agent_models: {plan: ..., build: ...}`).
 
 ### `perun/orchestrator.py`
 Start / stream / cancel headless `opencode run`.
@@ -365,7 +400,7 @@ Start / stream / cancel headless `opencode run`.
   single writer shared by the project API, MCP tools, discovery, and manifest sync
   (instruction text is never stored in the database); it refuses paths that escape the
   project root.
-* `_SlotLimiter` (mutable, `Condition`-based concurrency limiter; `set_max()`),
+* `_SlotLimiter` (mutable, `threading.Condition`-based concurrency limiter; `set_max()`),
   `_child_env(depth)` (strips raw secret env vars, sets `PERUN_DEPTH`, injects the
   resolved Telegram token as `PERUN_TELEGRAM_TOKEN`).
 * `Orchestrator`: `start_run()`, `run_and_wait()`, `wait_for_run()` (the
@@ -375,10 +410,11 @@ Start / stream / cancel headless `opencode run`.
   `_execute()` (with wall-clock watchdog thread and no-loss stdout
   parsing: `_harvest()` parses each line *before* honouring a cancel/timeout
   break, and a bounded `_drain()` thread harvests buffered final lines after the
-  process exits), `_emit_end()`, `_finalize()`, `stream()`. Model/agent
-  precedence: explicit arg → project override → (control only)
-  `orchestrator_model`/`orchestrator_agent` → (control only) the global
-  `default_model`/`default_agent`. The global default is never forced onto
+  process exits), `_emit_end()`, `_finalize()`, `stream()`. Agent precedence:
+  explicit arg → `project.agent` → (control only)
+  `orchestrator_agent`/`default_agent`. Model precedence: explicit arg →
+  `project.agent_models[agent]` → `project.model` → (control only)
+  `orchestrator_model`/`default_model`. The global default is never forced onto
   ordinary project runs — with no override they defer to OpenCode's own default
   model. Every source is stripped; `start_run` stores `model_explicit=bool(model)`
   and `_execute` forwards `--model` whenever a non-empty model was resolved
@@ -659,7 +695,8 @@ FastAPI app + SSE + static dashboard.
   slug), `_control_project()`, `_control_slug()`, `_ok()`, `_sse()`,
   `_max_activity_id()`, `_new_activity()`, `_str_field()` (wrong JSON types → 400),
   `_clamp()`, `_normalize_instruction_filename()`, `_project_instruction_path()`,
-  `_ps_quote()`/`_posix_quote()`/`_cmd_quote()`, `_terminal_command()`
+  `_normalize_agent_models()` (validate/merge per-agent `agent_models` from the
+  project Config tab), `_ps_quote()`/`_posix_quote()`/`_cmd_quote()`, `_terminal_command()`
   (server-side command construction), `_dashboard_index()` (injects
   `window.PERUN_TOKEN` into `index.html`), `_post_proposal_started()`,
   `_post_proposal_rejected()`, `_post_proposal_digest()` (best-effort lifecycle
@@ -718,16 +755,19 @@ root registry, see `project_roots.py`),
 `cmd_status` (also reports `bridge_task` via `installer.bridge_task_status()`),
 `cmd_remember`, `cmd_recall`, `cmd_index`, `cmd_run`, `cmd_import_legacy`,
 `cmd_encrypt_config`, `cmd_global_instructions` (list / set / `--clear` the
-global Markdown instruction files), `cmd_install`, `cmd_backfill_docs`, `cmd_validate_docs`, `cmd_refresh_deps`
+global Markdown instruction files), `cmd_install`, `cmd_backfill_docs`, `cmd_validate_docs`, `cmd_refresh_deps`, `cmd_docs_audit`
 (`--machine` / `--skip-deps` / `--skip-global` / `--skip-task` / `--task`
 delegate to `installer.machine_install()`; `backfill-docs [slug] [--all]`
 creates missing scaffold docs/manifest; `validate-docs [slug] [--all]` checks
 for stale docs/anchors; `refresh-deps [slug] [--all]` parses dependencies into
-memory facts),
+memory facts; `docs audit [slug] [--all]` checks CODEMAP file/identifier/version
+traceability),
 `cmd_context` (**`perun context list|get|search|sync|map|index|verify|stats|dedupe`** —
 the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|status`**),
 `cmd_update` (**`perun update check|status|apply|dismiss`** — check GitHub releases and self-update Perun from the CLI or dashboard), `cmd_mcp`, `build_parser()`, `main()`.
-* `_context_project_id()` (slug/path → project id; the cwd's project by
+* `_is_owner()` (best-effort owner check: always true on Windows, UID-checked on
+  Unix), `_resolve_project_targets()` (owner-level `--all` includes hidden
+  projects), `_context_project_id()` (slug/path → project id; the cwd's project by
   default), `_context_targets()`, `_context_sync_projects()` (indexes each
   project's `AGENTS.md` as `<slug>.agents.full` and its `.perun/context/*.md`
   as `<slug>.context.<name>` — the retained original is a **snapshot** and is
@@ -825,10 +865,12 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). 28 tools: `perun_list_projects`,
-`perun_project_info`, `perun_create_project`, `perun_update_project`,
+stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
+`perun_project_info`, `perun_create_project`, `perun_update_project`
+(also accepts `agent_models` as a JSON string),
 `perun_delete_project`, `perun_discover`, `perun_memory_search`,
-`perun_memory_store`, `perunchat_room_memory`, `perun_docs_index`,
+`perun_memory_store`, `perun_memory_forget`, `perun_memory_supersede`,
+`perunchat_room_memory`, `perun_docs_index`,
 `perun_get_instructions`, `perun_set_instructions`,
 `perun_list_instruction_files`, `perun_grep`, `perun_ast_grep`,
 `perun_global_grep`, `perun_global_ast_grep`, `perun_unified_search`,
@@ -872,6 +914,9 @@ stdio MCP server (`perun`). 28 tools: `perun_list_projects`,
   `openManifestLink()`, `wireManifestLinks()`, `projectInstructionsForm`,
   `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,
   `viewPerunChat`, `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`,
+  `projectConfigForm()` (project Config tab: name, description, Plan model,
+  Build model, Default model, Agent override; saves `agent_models` merged with
+  existing per-agent defaults),
   `promptForUnlockPassword()` (dashboard modal for encrypted Telegram tokens).
   The MCP Servers view (`mcpCard()`, `probeMcp()`, `renderMcpProbe()`) lists the
   configured MCP servers and live-probes them on demand.
@@ -958,12 +1003,14 @@ stdio MCP server (`perun`). 28 tools: `perun_list_projects`,
 
 * `test_db_registry.py` — schema, projects/sessions/runs/activity CRUD.
 * `test_discovery.py` — detection, classify, register, scan, manifest merge.
-* `test_memory.py` — remember/sensitive/dedupe, chunking, index, search,
-  unified_search, stats (Ollama-independent).
+* `test_memory.py` — remember/sensitive/dedupe, CODEMAP-aware chunking,
+  index, search, unified_search, prefetch_rules, usage stats, re-embedding,
+  prune/forget/supersede (Ollama-independent).
 * `test_context.py` — the Context layer: index/get/list/search (all four
-  retrieval layers), outline/slice/prefetch, re-embedding, scope isolation
-  (a project doc never leaks into another project's search), the sensitive-body
-  guard (stored verbatim, never embedded), and the renderers.
+  retrieval layers), anchor/stub resolution, outline/slice/prefetch, the
+  deterministic stemmer, scope isolation, the sensitive-body guard, the
+  stale-vector guard, embedding-assisted anchor/prefetch fallback, and the
+  renderers.
 * `test_context_map.py` — the losslessness proof: map building from an
   `AGENTS.md`, `inline`/`context`/`secret`/`retained` classification,
   `verify` (nothing deleted, nothing unaccounted for, every destination holds
@@ -1024,7 +1071,9 @@ stdio MCP server (`perun`). 28 tools: `perun_list_projects`,
 * `test_control.py` — control plane: `ensure()` / `is_control()` / `resolve()`,
   the delete guard, and "a run with no project targets the orchestrator".
 * `test_server_security.py` — the origin/host guard (`_origin_guard`) on `/api/*`.
-* `test_cli.py` — UTF-8 stdio hardening and non-ASCII recall output.
+* `test_cli.py` — UTF-8 stdio hardening, non-ASCII recall output, restart flag
+  replay, context stats/verify/dedupe, docs-audit drift detection, and the
+  owner check used to include hidden projects in `--all` maintenance commands.
 * `test_secrets.py` — password precedence (env → DPAPI file) and
   `persist_password()` (no-op off Windows).
 * `test_providers.py` — provider discovery: `opencode auth list` parsing,
