@@ -785,6 +785,59 @@ def test_auto_approve_does_nothing_when_disabled(tmp_path, monkeypatch):
     assert not started
 
 
+def test_policy_auto_approve_allows_sole_rw_requester(tmp_path, monkeypatch):
+    """A sole rw participant does not block the explicit policy route."""
+    project = _make_project(tmp_path)
+    _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    target = str(project["path"] / "file.txt")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    monkeypatch.setattr(
+        action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True
+    )
+    started = []
+    monkeypatch.setattr(
+        action_proposals,
+        "start_execution",
+        lambda proposal_id, **kw: started.append(proposal_id)
+        or action_proposals.get(proposal_id),
+    )
+
+    result = action_proposals.auto_approve_and_execute(project, proposal)
+
+    assert result is not None
+    assert started == [proposal["id"]]
+    approved = action_proposals.get(proposal["id"])
+    assert approved["approved_by"] == action_proposals.AUTO_APPROVER
+
+
+def test_policy_auto_approve_ignores_non_pending_proposal(tmp_path, monkeypatch):
+    """An already-approved proposal is not re-approved or executed."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "file.txt")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    approved = action_proposals.approve(proposal["id"], "owner")
+    monkeypatch.setattr(
+        action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True
+    )
+    started = []
+    monkeypatch.setattr(
+        action_proposals,
+        "start_execution",
+        lambda *a, **kw: started.append(True) or approved,
+    )
+
+    result = action_proposals.auto_approve_and_execute(project, approved)
+
+    assert result is None
+    assert not started
+    assert action_proposals.get(proposal["id"])["approved_by"] == "owner"
+
+
 def test_policy_auto_approve_uses_autonomous_policy_identity(tmp_path, monkeypatch):
     project = _make_project(tmp_path)
     _enable_shared(

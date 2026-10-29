@@ -2321,6 +2321,50 @@ def test_package_begin_rejects_db_row_owned_by_other_sender(settings, tmp_path):
     assert row["sender"] == "other"
 
 
+def test_package_begin_fails_closed_when_db_store_fails(settings, tmp_path):
+    """A DB write failure must not leave an in-memory-only transfer."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    def capture_send(sock, f, **kwargs):
+        sent.append(f)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})), \
+            patch.object(bridge, "_store_package_transfer", return_value=None):
+        bridge._handle_execution_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {
+                "op": "package_begin",
+                "proposal_id": proposal["id"],
+                "transfer_id": "trf_dbfail",
+                "sha256": package_handoff.sha256_hex(b"hello"),
+                "total_size": 5,
+                "total_chunks": 1,
+            },
+        }, None)
+
+    assert sent[-1]["payload"]["ok"] is False
+    assert "could not persist" in sent[-1]["payload"]["error"]
+    assert "trf_dbfail" not in bridge._package_transfers
+
+
 def test_package_begin_caps_concurrent_transfers(settings, tmp_path):
     """T3: the ninth in-flight upload is refused."""
     from perun import action_proposals
@@ -2484,6 +2528,7 @@ def test_upload_transfer_persists_to_db_and_reloads(settings, tmp_path):
     with db_module.db() as conn:
         row = db_module.one(conn, "SELECT * FROM package_transfers WHERE transfer_id=?", ("trf_persist",))
     assert row is not None
+    assert row["room_id"] == room
     assert json.loads(row["received"]) == {"0": "aGVsbG8="}
 
     # Simulate restart: a new bridge instance loads the slot.
@@ -2492,6 +2537,7 @@ def test_upload_transfer_persists_to_db_and_reloads(settings, tmp_path):
     assert loaded is not None
     assert loaded["received"] == {0: "aGVsbG8="}
     assert loaded["proposal_id"] == proposal["id"]
+    assert loaded["room_id"] == room
 
 
 def test_download_transfer_publishes_package_frames(settings, tmp_path):

@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS package_transfers (
     proposal_id       TEXT NOT NULL,
     sender            TEXT NOT NULL,
     direction         TEXT NOT NULL,
+    room_id           TEXT DEFAULT '',
     sha256            TEXT,
     total_size        INTEGER,
     total_chunks      INTEGER,
@@ -374,6 +375,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("claim_snapshot", "TEXT DEFAULT ''"),
         ("executed_by", "TEXT DEFAULT ''"),
     ],
+    # The room binding was not persisted before v0.8.40, so a transfer
+    # restored after a restart could not be continued (it looked like it
+    # belonged to another room).
+    "package_transfers": [
+        ("room_id", "TEXT DEFAULT ''"),
+    ],
 }
 
 # Columns retired after project instructions moved fully to files on disk
@@ -433,7 +440,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def init_db() -> None:

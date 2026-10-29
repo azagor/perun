@@ -41,6 +41,10 @@ _No unreleased changes yet._
   duplicate `transfer_id` instead of replacing an in-flight slot, caps
   concurrent uploads at 8, and refuses to overwrite a persisted row owned by a
   different sender. A bad transfer id no longer forces the victim to restart.
+- **Persisted transfers retain their room binding.** `package_transfers` now
+  stores `room_id`, so an upload can resume after a bridge restart instead of
+  being rejected as belonging to another room. Loading prunes stale rows to the
+  8-slot cap.
 - **Transfer test isolation.** `package_transfers` is cleared between tests.
 
 ### Documentation

@@ -1024,12 +1024,37 @@ class PerunChatBridge:
                     "proposal_id": row["proposal_id"],
                     "sender": row["sender"],
                     "direction": row["direction"],
+                    "room_id": (
+                        row["room_id"] if "room_id" in row.keys() else ""
+                    ),
                     "sha256": row["sha256"],
                     "total_size": row["total_size"],
                     "total_chunks": row["total_chunks"],
                     "received": {int(k): v for k, v in received.items()},
+                    "received_bytes": sum(
+                        (len(value) * 3) // 4
+                        for value in received.values()
+                    ),
+                    "max_chunk_bytes": 2 * 1024 * 1024,
                     "started_at": row["started_at"],
                 }
+            # A restart must not leave more open slots than a fresh process
+            # would allow. Keep the newest entries and drop the rest.
+            if len(transfers) > _MAX_PACKAGE_TRANSFERS:
+                ordered = sorted(
+                    transfers.items(),
+                    key=lambda item: item[1].get("started_at", 0.0),
+                    reverse=True,
+                )
+                keep = dict(ordered[:_MAX_PACKAGE_TRANSFERS])
+                drop_ids = [tid for tid in transfers if tid not in keep]
+                transfers = keep
+                if drop_ids:
+                    with db_module.db() as conn:
+                        conn.executemany(
+                            "DELETE FROM package_transfers WHERE transfer_id=?",
+                            [(tid,) for tid in drop_ids],
+                        )
             return transfers
         except Exception:
             logger.exception("Failed to load persisted package transfers")
@@ -1045,11 +1070,12 @@ class PerunChatBridge:
             with db_module.db() as conn:
                 cur = conn.execute(
                     """INSERT INTO package_transfers
-                       (transfer_id, proposal_id, sender, direction, sha256,
-                        total_size, total_chunks, received, started_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)
+                       (transfer_id, proposal_id, sender, direction, room_id,
+                        sha256, total_size, total_chunks, received, started_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(transfer_id) DO UPDATE SET
                          proposal_id=excluded.proposal_id,
+                         room_id=excluded.room_id,
                          sha256=excluded.sha256,
                          total_size=excluded.total_size,
                          total_chunks=excluded.total_chunks,
@@ -1061,6 +1087,7 @@ class PerunChatBridge:
                         transfer.get("proposal_id", ""),
                         transfer.get("sender", ""),
                         transfer.get("direction", "upload"),
+                        transfer.get("room_id", ""),
                         transfer.get("sha256", ""),
                         transfer.get("total_size", 0),
                         transfer.get("total_chunks", 0),

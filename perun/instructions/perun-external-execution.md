@@ -36,7 +36,8 @@ If your runtime exposes MCP tools rather than raw WebSocket frames, install
 `perunchat[mcp]` and use the handoff tools in `perunchat/mcp_bridge.py`:
 `perunchat_claim_execution`, `perunchat_request_download_package`,
 `perunchat_upload_package`, `perunchat_write_target_file`,
-`perunchat_execution_status`, and `perunchat_revoke_execution_claim`. The server
+`perunchat_execution_status`, `perunchat_transfer_status`, and
+`perunchat_revoke_execution_claim`. The server
 handles framing, chunking and result correlation; paths are confined to
 `PERUNCHAT_HANDOFF_DIR` (default `.perunchat/handoff`).
 

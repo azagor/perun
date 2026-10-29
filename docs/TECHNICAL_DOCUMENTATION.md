@@ -940,8 +940,8 @@ status/revoke responses omit them. External-dependency targets are rejected for
 this handoff and must run locally. The `perunchat` MCP bridge exposes the same
 flow as `perunchat_claim_execution`,
 `perunchat_request_download_package`, `perunchat_upload_package`,
-`perunchat_write_target_file`, `perunchat_execution_status`, and
-`perunchat_revoke_execution_claim`, so an MCP-capable agent does not need to
+`perunchat_write_target_file`, `perunchat_execution_status`,
+`perunchat_transfer_status`, and `perunchat_revoke_execution_claim`, so an MCP-capable agent does not need to
 speak raw WebSocket frames.
 
 Project-room authorization requires the participant to be on the local
