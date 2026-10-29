@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.38 (see §15). Harden external package transfers against transfer-id hijacking and unbounded slots; add MCP handoff tools to the PerunChat client.
+**Latest release:** v0.8.39 (see §15). Correlate package_begin results by transfer id and ignore unsolicited package chunks in the MCP handoff client.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1705,6 +1705,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-29 — v0.8.39: Correlate package_begin results by transfer id and ignore unsolicited package chunks in the MCP handoff client.
+
 ### 2026-10-29 — v0.8.38: Harden external package transfers against transfer-id hijacking and unbounded slots; add MCP handoff tools to the PerunChat client.
 
 ### 2026-10-29 — v0.8.37: Fix stale dashboard JS caching and make the public PerunChat view render in timestamp order.
