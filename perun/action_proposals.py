@@ -39,6 +39,9 @@ EXTERNAL_CLAIM_TTL_SECONDS = 3600
 # Approver identity recorded when a proposal is approved automatically by the
 # autonomous shared-project policy rather than by a human click.
 AUTO_APPROVER = "auto"
+# Executor identity recorded for a local (in-process) run. External handoffs
+# record the claiming agent id instead.
+LOCAL_EXECUTOR = "perun"
 
 
 def _same_actor(a: Any, b: Any) -> bool:
@@ -374,12 +377,19 @@ def claim_execution(
     *,
     owner: str | None = None,
     trusted: list[str] | None = None,
+    ttl: int | None = None,
 ) -> dict[str, Any]:
     """Reserve an approved proposal for an external rw agent to execute.
 
     The agent will receive a ZIP of the approved targets, edit it with their own
     model/tokens, and upload the result. Perun validates and applies the package
     without running an LLM itself.
+
+    ``ttl`` is the reservation lease in seconds. Callers pass the operator's
+    ``external_execution_claim_ttl`` setting; ``None`` falls back to
+    ``EXTERNAL_CLAIM_TTL_SECONDS``. Values are clamped to ``[1, APPROVED_TTL_SECONDS]``
+    so a bad config can neither lock a proposal for a second nor for longer than
+    the approved-proposal lifetime.
     """
     proposal = get(proposal_id)
     if not proposal:
@@ -405,7 +415,12 @@ def claim_execution(
     # Snapshot before the external agent touches anything; this is the audit baseline.
     snapshot = fs_audit.snapshot(project, targets=proposal["targets"])
     ts = _now()
-    claim_expires_at = int(time.time()) + EXTERNAL_CLAIM_TTL_SECONDS
+    try:
+        ttl_seconds = int(ttl) if ttl is not None else EXTERNAL_CLAIM_TTL_SECONDS
+    except (TypeError, ValueError):
+        ttl_seconds = EXTERNAL_CLAIM_TTL_SECONDS
+    ttl_seconds = max(1, min(ttl_seconds, APPROVED_TTL_SECONDS))
+    claim_expires_at = int(time.time()) + ttl_seconds
     with db.db() as conn:
         cur = conn.execute(
             """UPDATE action_proposals SET status=?, executor_id=?, executed_by=?,
@@ -790,9 +805,10 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
 
     with db.db() as conn:
         cur = conn.execute(
-            "UPDATE action_proposals SET status='executing', result='', updated_at=? "
+            "UPDATE action_proposals SET status='executing', result='', "
+            "execution_mode='perun', executed_by=?, updated_at=? "
             "WHERE id=? AND status='approved'",
-            (_now(), proposal_id),
+            (LOCAL_EXECUTOR, _now(), proposal_id),
         )
         if cur.rowcount != 1:
             raise ValueError("proposal is no longer approved")

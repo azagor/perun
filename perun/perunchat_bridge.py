@@ -1598,7 +1598,8 @@ class PerunChatBridge:
         try:
             if op == "claim_execution":
                 proposal = action_proposals.claim_execution(
-                    proposal_id, sender, owner=owner, trusted=trusted
+                    proposal_id, sender, owner=owner, trusted=trusted,
+                    ttl=getattr(self.settings, "external_execution_claim_ttl", None),
                 )
                 result = {
                     "op": op, "ok": True,

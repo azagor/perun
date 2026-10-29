@@ -1587,6 +1587,7 @@ def api_claim_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
             executor_id,
             owner=owner_id,
             trusted=_trusted_agents(),
+            ttl=getattr(SETTINGS, "external_execution_claim_ttl", None),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2795,7 +2796,10 @@ def api_search_unified(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 def _coerce_setting(key: str, value: Any) -> Any:
     """Validate and coerce a setting value to the expected type."""
-    int_fields = {"port", "max_concurrent_runs", "run_timeout", "embed_dim"}
+    int_fields = {
+        "port", "max_concurrent_runs", "run_timeout", "embed_dim",
+        "external_execution_claim_ttl",
+    }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
     }
@@ -2817,7 +2821,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400, detail=f"{key} must be an integer") from exc
         if key == "port" and not (1 <= v <= 65535):
             raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 65535")
-        if key in ("max_concurrent_runs", "run_timeout") and v < 1:
+        if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
         if key == "embed_dim" and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be positive")

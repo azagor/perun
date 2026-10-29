@@ -729,8 +729,13 @@ Autonomous PerunChat chat participant for the Orchestrator.
   prefixed `perun-guard_guard_*` tools and instructs the model not to use the
   `skill` tool or to give up after an “Unable to load skill …” error.
   External execution claims are room/sender-bound and target-scoped, and expire
-  after one hour (`EXTERNAL_CLAIM_TTL_SECONDS`); `claimed` proposals are returned
-  to `approved` by revoke or by the expiration sweep.
+  after one hour by default (`external_execution_claim_ttl`, clamped to
+  `[1 s, APPROVED_TTL_SECONDS]`); `claimed` proposals are returned
+  to `approved` by revoke or by the expiration sweep. `executed_by` records the
+  actor that attempted/applied the change (`perun` for local runs, the claimant
+  for external handoffs), is cleared on revoke/expiry, and must be read with
+  `status`; `create()` binds dashboard/API proposals to the project's
+  `project_chats.room_id` when the envelope carries none.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is

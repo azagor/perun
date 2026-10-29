@@ -36,6 +36,8 @@ def test_create_proposal(tmp_path):
     assert proposal["status"] == "pending"
     assert proposal["requester"] == "frambo"
     assert proposal["targets"] == [target]
+    # No bound chat row: the record stays empty rather than failing the write.
+    assert proposal["room_id"] == ""
 
 
 def test_create_proposal_binds_bound_room_when_envelope_omits_it(tmp_path):
@@ -54,6 +56,28 @@ def test_create_proposal_binds_bound_room_when_envelope_omits_it(tmp_path):
 
     assert proposal["room_id"] == room_id
     assert action_proposals.get(proposal["id"])["room_id"] == room_id
+
+
+def test_create_proposal_prefers_envelope_room_over_bound_room(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    registry.set_project_chat(
+        project["id"], "grp:perun:test-project:chat", "owner", "active", 1
+    )
+    target = str(project["path"] / "api.py")
+
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {
+            "intent": "add validation",
+            "targets": [target],
+            "action_type": "edit",
+            "room_id": "grp:perun:explicit:chat",
+        },
+    )
+
+    assert proposal["room_id"] == "grp:perun:explicit:chat"
 
 
 def test_self_approval_is_blocked_in_core(tmp_path):
@@ -333,6 +357,28 @@ def test_retry_creates_new_pending_from_terminal_proposal(tmp_path):
     assert new["details"].get("retry_of") == proposal["id"]
 
 
+def test_retry_binds_legacy_proposal_to_current_room(tmp_path):
+    """A retried record with an empty room_id inherits the bound chat room."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    room_id = "grp:perun:test-project:chat"
+    registry.set_project_chat(project["id"], room_id, "owner", "active", 1)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    # Simulate a record created before the room fallback existed.
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET room_id='' WHERE id=?", (proposal["id"],)
+        )
+    action_proposals._set_status(proposal["id"], "failed", "provider error")
+
+    new = action_proposals.retry(proposal["id"], owner="owner", trusted=["frambo"])
+
+    assert new["room_id"] == room_id
+
+
 def test_retry_refuses_non_terminal_proposal(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -428,6 +474,8 @@ def test_execute_approved_proposal(tmp_path):
 
     assert executed["status"] == "executed"
     assert executed["result"] == "done"
+    assert executed["execution_mode"] == "perun"
+    assert executed["executed_by"] == action_proposals.LOCAL_EXECUTOR
 
 
 def test_execute_marks_failed_when_no_target_changed(tmp_path):
@@ -926,6 +974,29 @@ def test_claim_execution_reserves_approved_proposal(tmp_path):
     assert claimed["claim_snapshot"]
 
 
+def test_claim_execution_honours_and_clamps_ttl(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    now = int(time.time())
+    short = action_proposals.claim_execution(proposal["id"], "frambo", ttl=1)
+    assert 0 <= short["claim_expires_at"] - now <= 2
+
+    action_proposals.revoke_execution_claim(proposal["id"], "owner", owner="owner")
+    huge = action_proposals.claim_execution(
+        proposal["id"], "frambo", ttl=action_proposals.APPROVED_TTL_SECONDS * 10
+    )
+    assert (
+        huge["claim_expires_at"]
+        <= int(time.time()) + action_proposals.APPROVED_TTL_SECONDS + 1
+    )
+
+
 def test_claim_execution_rejects_ro_participant(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(
@@ -1185,3 +1256,5 @@ def test_complete_external_execution_fails_on_no_target_changes(tmp_path):
     )
     assert result["status"] == "failed"
     assert "NO TARGET CHANGES" in result["result"]
+    # A failed completion still names the actor that attempted the handoff.
+    assert result["executed_by"] == "frambo"

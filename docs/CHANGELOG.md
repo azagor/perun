@@ -4,7 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **Local executions also record `executed_by`.** The in-process pipeline now
+  writes `executed_by='perun'` alongside `execution_mode='perun'` when it moves
+  an approved proposal to `executing`, so the field covers both execution modes.
+  `executed_by` names the actor that attempted or applied the change; pair it
+  with `status` to distinguish success from failure.
+- **Proposal room binding is tested both ways.** Added regression coverage for
+  an explicit envelope `room_id` overriding the bound project chat, a retried
+  legacy record with an empty room inheriting the current room, and executor
+  attribution surviving a failed external completion.
+- **`external_execution_claim_ttl` is now honoured and editable.** External
+  claims use the configured lease (clamped to 1 s–7 days) instead of the
+  hard-coded constant, and the value is exposed in **Settings → External claim
+  TTL (s)** / `PATCH /api/settings`.
 
 ## v0.8.45
 

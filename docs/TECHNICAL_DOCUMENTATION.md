@@ -898,8 +898,20 @@ choice. The approval notice says “awaiting external execution” for an
 `approved` proposal and “is now executing” only after a run starts. Reviews are
 capped at two concurrent runs, proposal content is treated as untrusted data,
 and a failed review posts a human-action notice. External claims are reserved for
-one hour (`EXTERNAL_CLAIM_TTL_SECONDS`) and then swept back to `approved`.
+one hour by default (the `external_execution_claim_ttl` setting, clamped to
+`[1, 7 days]` — the approved-proposal lifetime) and then swept back to
+`approved`. The claim TTL is set from **Settings → External claim TTL (s)** or
+`PATCH /api/settings`.
 Approved proposals that are never claimed or executed expire after seven days.
+
+`action_proposals.executed_by` records the actor that attempted or applied the
+change, not only a successful run: local executions write `perun`
+(`execution_mode='perun'`) and external handoffs write the claimant's agent id
+(`execution_mode='external'`). The field is written when the proposal enters
+`executing`/`claimed`, cleared when a claim is revoked or expires, and must be
+read together with `status` — a `failed` completion still names the actor that
+tried. Proposals created without a chat envelope (dashboard/API) inherit the
+project's bound `project_chats.room_id` so the audit record names the room.
 
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools

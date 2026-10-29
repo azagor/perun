@@ -5231,6 +5231,9 @@ async function viewSettings() {
             <label class="field"><span class="lab">Run timeout (s)</span><input type="number" id="s-timeout" value="${esc(s.run_timeout)}"></label>
          </div>
          <div class="form-row">
+            <label class="field"><span class="lab">External claim TTL (s) <span class="muted">(how long an rw participant holds a claimed proposal)</span></span><input type="number" id="s-claim-ttl" min="1" max="604800" value="${esc(s.external_execution_claim_ttl ?? 3600)}"></label>
+         </div>
+         <div class="form-row">
             <label class="field"><span class="lab">Ollama host</span><input type="text" id="s-ollama" value="${esc(s.ollama_host)}"></label>
             <label class="field"><span class="lab">Owner name <span class="muted">(shown on proposal approvals)</span></span><input type="text" id="s-owner" value="${esc(s.perun_owner_name || '')}" placeholder="owner"></label>
          </div>
@@ -5398,6 +5401,7 @@ async function viewSettings() {
             default_model: msDefault.getValue(), default_agent: sAgent.getValue(),
             terminal: $('#s-terminal').value || $('#s-terminal-custom').value.trim(),
             max_concurrent_runs: Number($('#s-max').value), run_timeout: Number($('#s-timeout').value),
+            external_execution_claim_ttl: Number($('#s-claim-ttl').value),
             ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value || $('#s-embed-custom').value.trim(),
             perun_owner_name: $('#s-owner').value.trim(),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
