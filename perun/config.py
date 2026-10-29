@@ -434,8 +434,23 @@ def perunchat_rest_base(endpoint: str) -> str:
         return ""
 
 
+def perunchat_actor_path(room_id: str) -> Path:
+    """Per-room file holding the current PerunChat actor for proposal tools.
+
+    Project-local MCP servers get a static environment, so the bridge cannot
+    pass the per-message sender through ``opencode.json``. It writes this file
+    before a run instead; ``proposals_mcp`` reads it when
+    ``PERUN_CHAT_SENDER`` is absent.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(str(room_id).encode("utf-8")).hexdigest()[:32]
+    return HOME / "perunchat_actors" / f"{digest}.json"
+
+
 def ensure_dirs() -> None:
-    for d in (HOME, LOGS_DIR, RUNS_DIR, INSTRUCTIONS_DIR):
+    for d in (HOME, LOGS_DIR, RUNS_DIR, INSTRUCTIONS_DIR,
+              HOME / "perunchat_actors"):
         d.mkdir(parents=True, exist_ok=True)
 
 

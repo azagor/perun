@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -139,6 +140,36 @@ def test_propose_owner_bypasses_trust_list(tool_runner, tmp_path, _settings):
     )
 
     assert result["requester"] == "peruntheoverseer"
+
+
+def test_sender_falls_back_to_room_actor_file(tmp_path, monkeypatch):
+    """A static MCP environment can still resolve the per-message sender."""
+    room = "grp:perun:test:chat"
+    actor = tmp_path / "actor.json"
+    actor.write_text(json.dumps({"sender": "peruntheoverseer"}), encoding="utf-8")
+    monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
+    monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
+    assert proposals_mcp_module._sender(room) == "peruntheoverseer"
+
+
+def test_approve_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, _settings):
+    _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
+    project, room = _make_project(tmp_path)
+    monkeypatch.setenv("PERUN_PROJECT_PATH", str(Path(project["path"]).resolve()))
+    monkeypatch.setenv("PERUN_CHAT_SENDER", "frambo")
+    monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
+    prop = propose(intent="add README", action_type="create", targets=["README.md"])
+
+    monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
+    actor = tmp_path / "actor.json"
+    actor.write_text(json.dumps({"sender": "peruntheoverseer"}), encoding="utf-8")
+    monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
+    monkeypatch.setattr(
+        action_proposals, "start_execution",
+        lambda _pid, **kw: action_proposals.get(_pid),
+    )
+    result = approve(proposal_id=prop["proposal_id"], decision="approve")
+    assert result["approved_by"] == "peruntheoverseer"
 
 
 def test_approve_peer_proposal_by_owner(tool_runner, tmp_path, _settings, monkeypatch):

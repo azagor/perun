@@ -22,6 +22,11 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **PerunChat `approve`/`reject` work with a static MCP environment.** The
+  bridge now writes the per-message sender to a per-room actor file under
+  `PERUN_HOME/perunchat_actors/`; `perun-proposals` falls back to it when
+  `PERUN_CHAT_SENDER` is absent, so the room owner can approve a peer's
+  proposal instead of failing with `PERUN_CHAT_SENDER is not set`.
 - **`perun-proposals` is bound to the project in the TUI.** The generated
   shared-project `opencode.json` sets `PERUN_PROJECT_PATH=.` for both
   `perun-guard` and `perun-proposals`, and the proposals MCP server falls back

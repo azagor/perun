@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import random
 import re
 import threading
@@ -70,6 +71,32 @@ def _setup_bridge_logging() -> None:
 
 
 _setup_bridge_logging()
+
+
+def _record_room_actor(room_id: str, sender: str) -> None:
+    """Persist the current room actor for MCP tools with a static environment.
+
+    ``opencode.json`` sets ``PERUN_HOME``/``PERUN_PROJECT_PATH`` once, so a
+    project-local ``perun-proposals`` server cannot see the per-message
+    ``PERUN_CHAT_SENDER``. The bridge writes this per-room file before each run
+    and ``proposals_mcp`` falls back to it.
+    """
+    if not room_id or not sender:
+        return
+    try:
+        path = config.perunchat_actor_path(room_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "room_id": room_id,
+            "sender": sender,
+            "updated_at": registry.now_iso(),
+        }), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        logger.warning("Could not record PerunChat actor for %s", room_id,
+                       exc_info=True)
+
 
 # Default public rooms the bridge joins when the user has not configured any.
 DEFAULT_PUBLIC_ROOMS = ["pub:global:general", "pub:global:tech", "pub:global:random"]
@@ -2035,6 +2062,9 @@ class PerunChatBridge:
             extra_env["PERUN_CHAT_SENDER"] = sender
             if room_id:
                 extra_env["PERUN_ROOM_ID"] = room_id
+                # The project-local MCP servers get a static environment; this
+                # file carries the per-message sender to perun-proposals.
+                _record_room_actor(room_id, sender)
 
         # The dedicated perunchat agent carries its own persona; Perun project
         # instructions must never be injected into chat runs.

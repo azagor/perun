@@ -62,11 +62,23 @@ def _project_path() -> Path:
     return p
 
 
-def _sender() -> str:
+def _sender(room_id: str = "") -> str:
     raw = os.environ.get("PERUN_CHAT_SENDER", "").strip()
-    if not raw:
-        raise ValueError("PERUN_CHAT_SENDER is not set")
-    return raw
+    if raw:
+        return raw
+    room = (room_id or _room_id()).strip()
+    if room:
+        try:
+            path = config.perunchat_actor_path(room)
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                sender = str(data.get("sender") or "").strip()
+                if sender:
+                    return sender
+        except Exception:
+            pass
+    raise ValueError(
+        "PERUN_CHAT_SENDER is not set and no room actor is available")
 
 
 def _room_id() -> str:
@@ -134,9 +146,11 @@ def propose(
 ) -> dict[str, Any]:
     """Create a pending action proposal for the current project and sender."""
     project_path = _project_path()
-    sender = _sender()
     project = _find_project(project_path)
     cfg = shared_projects.load(project["path"])
+    chat = registry.get_project_chat(int(project["id"])) or {}
+    room_id = _room_id() or str(chat.get("room_id") or "")
+    sender = _sender(room_id)
 
     _, error = _validate_participant(sender, project, cfg)
     if error:
@@ -147,7 +161,7 @@ def propose(
         "action_type": action_type,
         "targets": targets,
         "details": details or {},
-        "room_id": _room_id(),
+        "room_id": room_id,
         "manifest_rev": shared_projects.get_manifest_rev(cfg),
     }
     proposal = action_proposals.create(
@@ -173,19 +187,22 @@ def propose(
 def approve(proposal_id: str, decision: str, reason: str = "") -> dict[str, Any]:
     """Approve or reject a pending proposal."""
     project_path = _project_path()
-    sender = _sender()
     project = _find_project(project_path)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["project_id"] != project["id"]:
+        raise ValueError("proposal does not belong to this project")
+    chat = registry.get_project_chat(int(project["id"])) or {}
+    room_id = (str(proposal.get("room_id") or "") or _room_id()
+               or str(chat.get("room_id") or ""))
+    sender = _sender(room_id)
     cfg = shared_projects.load(project["path"])
 
     _, error = _validate_participant(sender, project, cfg)
     if error:
         raise ValueError(error)
 
-    proposal = action_proposals.get(proposal_id)
-    if not proposal:
-        raise ValueError("proposal not found")
-    if proposal["project_id"] != project["id"]:
-        raise ValueError("proposal does not belong to this project")
     if proposal["status"] != "pending":
         raise ValueError(f"proposal is {proposal['status']}")
 

@@ -1001,6 +1001,11 @@ def test_reply_injects_project_env_for_shared_project_chat(bridge_env, tmp_path)
     assert env.get("PERUN_PROJECT_PATH") == str(Path(project["path"]).resolve())
     assert env.get("PERUN_CHAT_SENDER") == "frambo"
     assert env.get("PERUN_ROOM_ID") == room
+    # A project-local MCP server gets a static environment, so the sender is
+    # also persisted to a per-room actor file.
+    actor = config.perunchat_actor_path(room)
+    assert actor.is_file()
+    assert json.loads(actor.read_text(encoding="utf-8"))["sender"] == "frambo"
     # No marker-based proposal should be created by the bridge itself.
     assert action_proposals.list_by_project(project["id"]) == []
 

@@ -555,11 +555,13 @@ Autonomous PerunChat chat participant for the Orchestrator.
   Rate-limited (15 replies/min). Shared-project chats run against the bound
   project's slug with `agent="perunchat"` and the configured chat model, and
   load the project's `opencode.json` so the agent can use the
-  `perun-guard` and `perun-proposals` MCP servers; unbound/public rooms use the
-  control plane. State-changing requests are sent through the `propose` tool,
-  not executed directly. A background activity-table poller posts review
-  requests and state digests back to the bound room so notices work even
-  though the MCP server runs in a separate process.
+  `perun-guard`/`perun-proposals` servers; `_record_room_actor()` persists the
+  per-message sender under PERUN_HOME so the statically-configured proposals
+  server can authorize `approve`/`reject`. Unbound/public rooms use the control
+  plane. State-changing requests are sent through the `propose` tool, not
+  executed directly. A background activity-table poller posts review requests
+  and state digests back to the bound room so notices work even though the MCP
+  server runs in a separate process.
 * No-loss reply delivery: every outbound reply frame is persisted in a
   write-ahead outbox under PERUN_HOME before sending and removed only
   after success; `_flush_outbox()` resends queued frames after a reconnect with
@@ -662,6 +664,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `PERUN_PROJECT_PATH` is absent (a project-local MCP server launched by the
   TUI), it falls back to the process cwd; the generated `opencode.json` also
   sets `PERUN_PROJECT_PATH=.` for both `perun-guard` and `perun-proposals`.
+  When `PERUN_CHAT_SENDER` is absent (static MCP environment), it reads the
+  per-room actor file written by the bridge (`config.perunchat_actor_path`).
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/

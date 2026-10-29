@@ -1222,7 +1222,10 @@ Both `perun-guard` and `perun-proposals` entries also set
 `PERUN_PROJECT_PATH=.`; the proposals server additionally falls back to its
 process cwd when the variable is absent, so a project-local MCP server launched
 from the TUI is bound to the project instead of failing with
-`PERUN_PROJECT_PATH is not set`. The dedicated `perunchat` agent denies the real
+`PERUN_PROJECT_PATH is not set`. Because the MCP environment is static, the
+bridge writes the per-message sender to a per-room actor file under
+`PERUN_HOME/perunchat_actors/`; `perun-proposals` reads it when
+`PERUN_CHAT_SENDER` is absent, so `approve`/`reject` work from the bridge. The dedicated `perunchat` agent denies the real
 V2 guard action names (`<server>_guard_write_file` / `<server>_guard_edit_file`)
 and allows `perun_perunchat_room_memory` for older room context, keeping chat
 sessions read-only apart from explicit proposals.
