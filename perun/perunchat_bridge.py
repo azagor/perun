@@ -1619,6 +1619,9 @@ class PerunChatBridge:
         result.setdefault("op", op)
         if proposal_id:
             result.setdefault("proposal_id", proposal_id)
+        request_transfer_id = str(payload.get("transfer_id") or "").strip()
+        if request_transfer_id:
+            result.setdefault("transfer_id", request_transfer_id)
 
         redact = getattr(self, "_redact_internal_info", None)
         if callable(redact):
