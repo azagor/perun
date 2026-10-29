@@ -1034,7 +1034,7 @@ def test_proposal_poller_posts_created_and_approved_notices(bridge_env, tmp_path
         p[0] == room and "Peer review requested" in p[1] for p in posted
     ), posted
     assert any(
-        p[0] == room and "perun-proposals approve tool" in p[1] for p in posted
+        p[0] == room and "perun-proposals_approve tool" in p[1] for p in posted
     )
 
     # Approve (without real execution) and poll again.

@@ -22,6 +22,11 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **PerunChat agent prompt uses the exact MCP tool names.** The `perunchat`
+  persona now names `perun-proposals_list_proposals`, `perun-proposals_approve`,
+  `perun-proposals_propose`, `perun-proposals_get_proposal`, and the
+  `perun-guard_*` read tools, instead of the unprefixed labels. This stops the
+  agent from claiming the tools are absent when they are actually connected.
 - **PerunChat `approve`/`reject` work with a static MCP environment.** The
   bridge now writes the per-message sender to a per-room actor file under
   `PERUN_HOME/perunchat_actors/`; `perun-proposals` falls back to it when
