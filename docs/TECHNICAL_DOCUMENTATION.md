@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.44 (see §15). Re-sort the PerunChat log DOM after every render and force a fresh dashboard asset URL.
+**Latest release:** v0.8.45 (see §15). Record the external executor and bound room on proposals; add the executor/room regression test.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1709,6 +1709,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-29 — v0.8.45: Record the external executor and bound room on proposals; add the executor/room regression test.
+
 ### 2026-10-29 — v0.8.44: Re-sort the PerunChat log DOM after every render and force a fresh dashboard asset URL.
 
 ### 2026-10-29 — v0.8.43: Document the lost package_begin retry rule and correct release-note placement.
