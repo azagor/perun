@@ -49,6 +49,11 @@ _No unreleased changes yet._
   stores `room_id`, so an upload can resume after a bridge restart instead of
   being rejected as belonging to another room. Loading prunes stale rows to the
   8-slot cap.
+- **Directed handoff preserves the claimant's agent-id casing.** Responses use
+  the exact authenticated id, and the gateway compares the managed-room owner
+  case-insensitively, so mixed-case ids are delivered and validated correctly.
+- **Restored upload progress uses exact base64 sizes.** A decoded-chunk length
+  avoids rejecting a final chunk because of base64 padding.
 - **Transfer test isolation.** `package_transfers` is cleared between tests.
 
 ### Documentation

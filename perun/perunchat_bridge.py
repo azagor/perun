@@ -58,6 +58,14 @@ if False:  # type: ignore
 logger = logging.getLogger(__name__)
 
 
+def _b64_len(value: str) -> int:
+    """Exact decoded length of a base64 chunk (fallback to an estimate)."""
+    try:
+        return len(base64.b64decode(value, validate=True))
+    except Exception:
+        return (len(value) * 3) // 4
+
+
 def _is_under(path: str | Path, parent: str | Path) -> bool:
     try:
         Path(path).resolve().relative_to(Path(parent).resolve())
@@ -1032,8 +1040,7 @@ class PerunChatBridge:
                     "total_chunks": row["total_chunks"],
                     "received": {int(k): v for k, v in received.items()},
                     "received_bytes": sum(
-                        (len(value) * 3) // 4
-                        for value in received.values()
+                        _b64_len(value) for value in received.values()
                     ),
                     "max_chunk_bytes": 2 * 1024 * 1024,
                     "started_at": row["started_at"],
@@ -1575,7 +1582,8 @@ class PerunChatBridge:
             logger.warning("PerunChat execution frame outside a managed project room: %s", room_id)
             return
         project, _cfg = binding
-        sender = str(frame.get("sender", {}).get("agent_id") or "").lower()
+        sender_id = str(frame.get("sender", {}).get("agent_id") or "").strip()
+        sender = sender_id.lower()
         if not sender:
             return
 
@@ -1602,7 +1610,7 @@ class PerunChatBridge:
                     f"[Proposal {proposal_id} claimed for external execution by {sender}]",
                 )
             elif op == "request_download_package":
-                result = self._start_download_transfer(project, payload, sender)
+                result = self._start_download_transfer(project, payload, sender, sender_id)
             elif op == "package_begin":
                 result = self._register_upload_transfer(
                     project, payload, sender, room_id=room_id)
@@ -1668,7 +1676,7 @@ class PerunChatBridge:
             room_id,
             result,
             _EXECUTION_RESULT_CONTENT_TYPE,
-            recipient_id=sender,
+            recipient_id=sender_id,
         )
 
     def _post_execution_notice(self, room_id: str, text: str) -> None:
@@ -1678,7 +1686,11 @@ class PerunChatBridge:
         self.post_to_room(room_id, text)
 
     def _start_download_transfer(
-        self, project: Dict[str, Any], payload: Dict[str, Any], sender: str
+        self,
+        project: Dict[str, Any],
+        payload: Dict[str, Any],
+        sender: str,
+        recipient_id: str = "",
     ) -> Dict[str, Any]:
         proposal_id = str(payload.get("proposal_id") or "").strip()
         proposal = action_proposals.get(proposal_id)
@@ -1742,7 +1754,7 @@ class PerunChatBridge:
                 "total_chunks": total_chunks,
             },
             _EXECUTION_CONTENT_TYPE,
-            recipient_id=sender,
+            recipient_id=recipient_id or sender,
         )
 
         for seq in range(total_chunks):
@@ -1756,7 +1768,7 @@ class PerunChatBridge:
                     "data": base64.b64encode(chunk).decode("ascii"),
                 },
                 _PACKAGE_CONTENT_TYPE,
-                recipient_id=sender,
+                recipient_id=recipient_id or sender,
             )
 
         return {"ok": True, "transfer_id": transfer_id, "direction": "download"}
@@ -1842,7 +1854,8 @@ class PerunChatBridge:
         if not binding:
             logger.warning("PerunChat package frame outside a managed project room: %s", room_id)
             return
-        sender = str(frame.get("sender", {}).get("agent_id") or "").lower()
+        sender_id = str(frame.get("sender", {}).get("agent_id") or "").strip()
+        sender = sender_id.lower()
         payload = self._execution_payload(frame)
         transfer_id = str(payload.get("transfer_id") or "").strip()
         if not transfer_id:
@@ -1857,7 +1870,7 @@ class PerunChatBridge:
                     room_id,
                     {"op": "package_rejected", "transfer_id": transfer_id, "error": "sender mismatch"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
             if transfer.get("room_id") not in ("", room_id):
@@ -1866,7 +1879,7 @@ class PerunChatBridge:
                     {"op": "package_rejected", "transfer_id": transfer_id,
                      "error": "transfer belongs to another room"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
 
@@ -1879,7 +1892,7 @@ class PerunChatBridge:
                     {"op": "package_rejected", "transfer_id": transfer_id,
                      "error": "seq must be an integer"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
             data_b64 = str(payload.get("data") or "")
@@ -1888,7 +1901,7 @@ class PerunChatBridge:
                     room_id,
                     {"op": "package_rejected", "transfer_id": transfer_id, "error": f"invalid seq {seq}"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
             existing = transfer["received"].get(seq)
@@ -1902,7 +1915,7 @@ class PerunChatBridge:
                             "error": f"mismatched chunk at seq {seq}",
                         },
                         _EXECUTION_CONTENT_TYPE,
-                        recipient_id=sender,
+                        recipient_id=sender_id,
                     )
                     return
                 # Duplicate chunk: already counted and persisted.
@@ -1915,7 +1928,7 @@ class PerunChatBridge:
                     {"op": "package_rejected", "transfer_id": transfer_id,
                      "error": f"chunk {seq} is not valid base64"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
             chunk_bytes = len(chunk_raw)
@@ -1926,7 +1939,7 @@ class PerunChatBridge:
                     {"op": "package_rejected", "transfer_id": transfer_id,
                      "error": f"chunk {seq} exceeds max chunk bytes {max_chunk}"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
             received_bytes = int(transfer.get("received_bytes") or 0)
@@ -1945,7 +1958,7 @@ class PerunChatBridge:
                     {"op": "package_rejected", "transfer_id": transfer_id,
                      "error": "chunks exceed the announced total_size"},
                     _EXECUTION_CONTENT_TYPE,
-                    recipient_id=sender,
+                    recipient_id=sender_id,
                 )
                 return
             transfer["received"][seq] = data_b64
