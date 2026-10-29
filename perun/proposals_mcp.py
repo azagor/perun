@@ -48,7 +48,10 @@ def _settings() -> Any:
 def _project_path() -> Path:
     raw = os.environ.get("PERUN_PROJECT_PATH", "").strip()
     if not raw:
-        raise ValueError("PERUN_PROJECT_PATH is not set")
+        # OpenCode launches project-local MCP servers with the project as cwd.
+        # Fall back to it so the server is usable from the TUI even when the
+        # generated opencode.json does not set PERUN_PROJECT_PATH explicitly.
+        raw = os.getcwd()
     p = Path(raw).resolve()
     if not p.is_dir():
         raise ValueError(f"project path does not exist: {p}")

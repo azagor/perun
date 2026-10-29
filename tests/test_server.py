@@ -664,13 +664,15 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
         "type": "local",
         "command": [sys.executable, "-m", "perun.guard_mcp"],
         "enabled": True,
-        "environment": {"PERUN_HOME": str(_config.HOME)},
+        "environment": {"PERUN_HOME": str(_config.HOME),
+                        "PERUN_PROJECT_PATH": "."},
     }
     expected_proposals = {
         "type": "local",
         "command": [sys.executable, "-m", "perun.proposals_mcp"],
         "enabled": True,
-        "environment": {"PERUN_HOME": str(_config.HOME)},
+        "environment": {"PERUN_HOME": str(_config.HOME),
+                        "PERUN_PROJECT_PATH": "."},
     }
 
     cfg_path = target / "opencode.json"

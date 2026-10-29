@@ -71,6 +71,16 @@ def tool_runner(tmp_path, monkeypatch, _settings):
     return run
 
 
+def test_list_proposals_falls_back_to_cwd_without_env(tmp_path, monkeypatch, _settings):
+    """A project-local MCP server launched by OpenCode may not set PERUN_PROJECT_PATH."""
+    project_path = tmp_path / "cwdproj"
+    project_path.mkdir()
+    registry.add_project("cwdproj", str(project_path))
+    monkeypatch.chdir(project_path)
+    monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
+    assert list_proposals() == []
+
+
 def test_propose_creates_pending_proposal(tool_runner, tmp_path, _settings):
     _settings.perunchat_trusted = ["frambo"]
     project, room = _make_project(tmp_path)

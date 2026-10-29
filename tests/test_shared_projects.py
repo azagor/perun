@@ -237,7 +237,8 @@ def _expected_guard_entry():
         "type": "local",
         "command": [sys.executable, "-m", "perun.guard_mcp"],
         "enabled": True,
-        "environment": {"PERUN_HOME": str(_config.HOME)},
+        "environment": {"PERUN_HOME": str(_config.HOME),
+                        "PERUN_PROJECT_PATH": "."},
     }
 
 
@@ -248,7 +249,8 @@ def _expected_proposals_entry():
         "type": "local",
         "command": [sys.executable, "-m", "perun.proposals_mcp"],
         "enabled": True,
-        "environment": {"PERUN_HOME": str(_config.HOME)},
+        "environment": {"PERUN_HOME": str(_config.HOME),
+                        "PERUN_PROJECT_PATH": "."},
     }
 
 

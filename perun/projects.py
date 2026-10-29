@@ -140,13 +140,13 @@ def sync_opencode_config(project: dict[str, Any],
         "type": "local",
         "command": [sys.executable, "-m", "perun.guard_mcp"],
         "enabled": True,
-        "environment": {"PERUN_HOME": _perun_home},
+        "environment": {"PERUN_HOME": _perun_home, "PERUN_PROJECT_PATH": "."},
     }
     proposals_entry = {
         "type": "local",
         "command": [sys.executable, "-m", "perun.proposals_mcp"],
         "enabled": True,
-        "environment": {"PERUN_HOME": _perun_home},
+        "environment": {"PERUN_HOME": _perun_home, "PERUN_PROJECT_PATH": "."},
     }
     if shared_cfg.get("shared"):
         if mcp_servers.get(guard_key) != guard_entry:

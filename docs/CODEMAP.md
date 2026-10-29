@@ -654,7 +654,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
   Exposes `propose`, `approve`, `list_proposals` and `get_proposal`; uses
   `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` / `PERUN_ROOM_ID` from the chat run
-  environment to validate rw/trust/owner rules server-side.
+  environment to validate rw/trust/owner rules server-side. When
+  `PERUN_PROJECT_PATH` is absent (a project-local MCP server launched by the
+  TUI), it falls back to the process cwd; the generated `opencode.json` also
+  sets `PERUN_PROJECT_PATH=.` for both `perun-guard` and `perun-proposals`.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/

@@ -6,6 +6,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **`perun-proposals` is bound to the project in the TUI.** The generated
+  shared-project `opencode.json` sets `PERUN_PROJECT_PATH=.` for both
+  `perun-guard` and `perun-proposals`, and the proposals MCP server falls back
+  to its process cwd when the variable is absent. `list_proposals` no longer
+  fails with `PERUN_PROJECT_PATH is not set` for a project-local MCP server
+  launched by OpenCode.
 - **Release script no longer corrupts the changelog.** `tools/release.py` now
   promotes the existing Unreleased entries into the new version section instead
   of leaving them under a fresh empty Unreleased heading. The technical-doc
