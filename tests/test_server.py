@@ -290,6 +290,33 @@ def test_proposal_approval_uses_configured_owner_name(client, tmp_path, monkeypa
     assert r.json()["proposal"]["approved_by"] == "ada lovelace"
 
 
+def test_dashboard_can_approve_own_proposal(client, tmp_path, monkeypatch):
+    """A human operator may approve a proposal they created themselves."""
+    from perun import action_proposals, registry, server
+
+    monkeypatch.setattr(server.SETTINGS, "perun_owner_name", "Ada Lovelace")
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ada-bot"])
+    target = tmp_path / "shared-self"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedSelf", "path": str(target),
+        "bootstrap": False, "shared": True,
+        "participants": [{"agent_id": "ada-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    project = registry.get_project(slug)
+    proposal = action_proposals.create(
+        project, "Ada Lovelace",
+        {"intent": "self-approved", "targets": [str(target / "main.py")],
+         "action_type": "edit"},
+        owner="Ada Lovelace",
+    )
+
+    r = client.post(f"/api/projects/{slug}/proposals/{proposal['id']}/approve")
+    assert r.status_code == 200, r.text
+    assert r.json()["proposal"]["approved_by"] == "ada lovelace"
+
+
 def test_proposal_api_rejects_read_only_requester(client, tmp_path, monkeypatch):
     from perun import server
 

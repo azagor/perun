@@ -687,8 +687,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   and non-blocking `start_execution`, startup `reconcile_interrupted`, post-run
   audit enforcement, State Digests for the project chat, and activity logging
   (`proposal_created`/`approved`/`rejected`/`executed`). `_same_actor()` enforces
-  the requester-cannot-self-approve rule inside `approve()`/`reject()` for every
-  caller; only `auto_approve_and_execute()` passes `allow_self=True`. Approved runs use the
+  the requester-cannot-self-approve rule for agent callers inside
+  `approve()`/`reject()`; the human dashboard routes and
+  `auto_approve_and_execute()` pass `allow_self=True`. Approved runs use the
   restricted `perun-shared` agent and a target-scoped guard allowlist; the
   proposal id is also the headless run id. `_build_execution_prompt()` names
   the prefixed `perun-guard_guard_*` tools and instructs the model not to use

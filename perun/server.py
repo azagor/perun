@@ -1490,7 +1490,9 @@ def api_approve_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     if not proposal or proposal["project_id"] != project["id"]:
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
-        result = action_proposals.approve(proposal_id, _approver_identity())
+        # A human operator is always allowed to approve their own proposal.
+        result = action_proposals.approve(
+            proposal_id, _approver_identity(), allow_self=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=result)
@@ -1507,7 +1509,7 @@ def api_reject_proposal(
     reason = str(payload.get("reason") or "").strip()
     try:
         result = action_proposals.reject(
-            proposal_id, _approver_identity(), reason=reason
+            proposal_id, _approver_identity(), reason=reason, allow_self=True
         )
         _post_proposal_rejected(project, result, reason=reason)
     except ValueError as exc:
@@ -1526,7 +1528,10 @@ def api_approve_and_execute_proposal(slug: str, proposal_id: str) -> dict[str, A
     if not proposal or proposal["project_id"] != project["id"]:
         raise HTTPException(status_code=404, detail="proposal not found")
     try:
-        action_proposals.approve(proposal_id, _approver_identity())
+        # A human operator is always allowed to approve and execute their own
+        # proposal; the self-approval rule targets agent callers.
+        action_proposals.approve(
+            proposal_id, _approver_identity(), allow_self=True)
         result = action_proposals.start_execution(
             proposal_id,
             orchestrator_instance=ORCH,

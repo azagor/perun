@@ -862,9 +862,10 @@ requester), `PERUN_CHAT_AGENT` (the bot's own approval identity) and
 identities they are serving. Tool calls are validated server-side against the
 same rw/trust/owner rules that used to be enforced for `[ACTION:…]` /
 `[APPROVAL:…]` markers. The self-approval rule lives in the core
-`action_proposals.approve()`/`reject()` functions, so the dashboard, MCP tool,
-and retries all enforce it; only the autonomous policy path passes
-`allow_self=True`. A background activity-table poller in the bridge posts review requests
+`action_proposals.approve()`/`reject()` functions and applies to agent callers
+(MCP tool, retries); the human dashboard operator is always allowed to approve,
+reject, and execute their own proposal, and the autonomous policy path also
+passes `allow_self=True`. A background activity-table poller in the bridge posts review requests
 and state digests to the bound room, so notices work even though the MCP server
 runs in a separate process. Projects with `policy_auto_approve` are approved and
 executed immediately inside the `propose` tool; projects with `auto_approve`
