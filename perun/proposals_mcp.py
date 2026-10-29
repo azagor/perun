@@ -233,6 +233,14 @@ def list_proposals(status: str | None = None) -> list[dict[str, Any]]:
     """List proposals for the current project."""
     project_path = _project_path()
     project = _find_project(project_path)
+    # Models sometimes serialize an omitted optional string as the literal
+    # "null"/"none"; treat those as "no filter" instead of querying for a
+    # status that can never exist.
+    normalized = str(status).strip().lower() if status is not None else ""
+    if normalized in ("", "null", "none", "any", "all"):
+        status = None
+    else:
+        status = normalized
     proposals = action_proposals.list_by_project(project["id"], status=status)
     return [
         {

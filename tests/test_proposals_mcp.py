@@ -142,6 +142,18 @@ def test_propose_owner_bypasses_trust_list(tool_runner, tmp_path, _settings):
     assert result["requester"] == "peruntheoverseer"
 
 
+def test_list_proposals_treats_null_string_as_no_filter(tool_runner, tmp_path, _settings):
+    """Models may pass the literal string 'null' for an omitted optional status."""
+    _settings.perunchat_trusted = ["frambo"]
+    project, room = _make_project(tmp_path)
+    prop = tool_runner(
+        "propose", project, "frambo",
+        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+    )
+    listed = tool_runner("list_proposals", project, "frambo", {"status": "null"})
+    assert [p["proposal_id"] for p in listed] == [prop["proposal_id"]]
+
+
 def test_sender_falls_back_to_room_actor_file(tmp_path, monkeypatch):
     """A static MCP environment can still resolve the per-message sender."""
     room = "grp:perun:test:chat"

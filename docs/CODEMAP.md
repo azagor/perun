@@ -547,7 +547,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * Module API: `attach()` and `get_bridge()` (the only supported way to obtain the
   bridge; used by `server.py`), `DEFAULT_PUBLIC_ROOMS`,
   `CHAT_SYSTEM_PROMPT`, `_load_chat_instructions()` (reads the embedded
-  `perun/instructions/perunchat_chat.md` persona).
+  `perun/instructions/perunchat_chat.md` persona, which names the prefixed
+  guard tools and requires a guard read-back to verify executed proposals).
 * `PerunChatBridge` — background thread: `status()`, `start()`, `stop()`,
   `restart()`; connects to the gateway via the configured API key,
   auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and
@@ -669,6 +670,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   sets `PERUN_PROJECT_PATH=.` for both `perun-guard` and `perun-proposals`.
   When `PERUN_CHAT_SENDER` is absent (static MCP environment), it reads the
   per-room actor file written by the bridge (`config.perunchat_actor_path`).
+  `list_proposals()` normalizes `null`/`none`/`any`/`all`/empty status values
+  to “no filter” because models sometimes serialize an omitted optional as the
+  literal string `"null"`.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/

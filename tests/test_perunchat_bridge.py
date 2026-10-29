@@ -762,6 +762,10 @@ def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
     for tool in ("shell", "edit", "write", "webfetch", "subagent"):
         assert _resolve_permission(perms, tool) == "deny"
 
+    # The prompt must name the exact read tools and require a read-back.
+    assert "perun-guard_guard_read_file" in _OPENCODE_AGENT_MD
+    assert "Verify executed proposals by reading the target" in _OPENCODE_AGENT_MD
+
 
 def test_chat_instructions_include_shared_project_guidance():
     from perun import config

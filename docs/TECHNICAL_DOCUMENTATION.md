@@ -1101,9 +1101,11 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   self-installed on bridge start and overwritten whenever the embedded content
   changes, so prompt fixes reach production runs. The prompt names the exact
   prefixed MCP tools (`perun-proposals_*`, `perun-guard_*`) so the model does
-  not mistake the unprefixed labels for missing tools. It also injects the
-  room's participant roster and recent conversation context so the model answers
-  questions directly instead of with generic greetings.
+  not mistake the unprefixed labels for missing tools, and requires a
+  `perun-guard_guard_read_file` read-back after an execution digest before
+  reporting success. It also injects the room's participant roster and recent
+  conversation context so the model answers questions directly instead of with
+  generic greetings.
 - **Dynamic room joins:** the desired room set is rebuilt on every (re)connect
   and refreshed every 30 s. A join is complete only when the gateway answers
   `ROOM_JOINED`; an `ERROR` frame clears the acknowledgement so a room created

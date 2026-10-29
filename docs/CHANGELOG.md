@@ -22,6 +22,14 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **`list_proposals` treats `"null"` as no filter.** Models sometimes pass the
+  literal string `"null"` for an omitted optional status, which hid every
+  proposal and made the bot report “no proposals at all”. The tool now
+  normalizes `null`/`none`/`any`/`all`/empty to no status filter.
+- **Chat participants verify execution by reading the target.** The
+  `perunchat` prompt now requires a `perun-guard_guard_read_file` (or
+  `list_directory` / `search_files`) read-back after an execution/state digest
+  and reporting the actual content; a digest alone is not proof.
 - **Shared-project execution uses the exact guard tool names.** The
   `perun-shared` agent now allows the prefixed `perun-guard_guard_*` tools,
   denies the built-in `skill` loader, and tells the model to retry the guard

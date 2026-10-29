@@ -480,7 +480,9 @@ def test_start_execution_is_non_blocking_and_single_shot(tmp_path):
     release.set()
     deadline = time.time() + 5
     current = action_proposals.get(proposal["id"])
-    while current["status"] == "executing" and time.time() < deadline:
+    # The status is persisted before the completion callback runs, so wait for
+    # both to avoid a race between the final status and the callback.
+    while (current["status"] == "executing" or not completed) and time.time() < deadline:
         time.sleep(0.05)
         current = action_proposals.get(proposal["id"])
 
