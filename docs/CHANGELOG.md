@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.46
+
+*Released 2026-10-30.*
+
 ### Fixed
 
 - **Local executions also record `executed_by`.** The in-process pipeline now

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.45 (see §15). Record the external executor and bound room on proposals; add the executor/room regression test.
+**Latest release:** v0.8.46 (see §15). Complete executor attribution for local runs, make the external claim TTL configurable in Settings, and add the missing proposal-record regression tests.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1721,6 +1721,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.46: Complete executor attribution for local runs, make the external claim TTL configurable in Settings, and add the missing proposal-record regression tests.
+
 ### 2026-10-29 — v0.8.45: Record the external executor and bound room on proposals; add the executor/room regression test.
 
 ### 2026-10-29 — v0.8.44: Re-sort the PerunChat log DOM after every render and force a fresh dashboard asset URL.
