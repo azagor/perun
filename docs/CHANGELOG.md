@@ -4,25 +4,41 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation
+
+- Document the lost-`package_begin` retry rule: use a fresh `transfer_id`;
+  the old slot expires after the 30-minute TTL and counts against the
+  8-transfer cap until then.
 
 ## v0.8.42
 
 *Released 2026-10-29.*
 
+### Fixed
+
+- **Directed handoff preserves the claimant's agent-id casing.** Responses use
+  the exact authenticated id, and the gateway compares the managed-room owner
+  case-insensitively, so mixed-case ids are delivered and validated correctly.
+- **Restored upload progress uses exact base64 sizes.** A decoded-chunk length
+  avoids rejecting a final chunk because of base64 padding.
+
 ## v0.8.41
 
 *Released 2026-10-29.*
 
+### Fixed
+
+- **Persisted transfers retain their room binding.** `package_transfers` now
+  stores `room_id`, so an upload can resume after a bridge restart instead of
+  being rejected as belonging to another room. Loading prunes stale rows to the
+  8-slot cap.
+
+### Tests
+
+- Covered policy auto-approve for a sole `rw` requester, a disabled policy, and
+  an already-approved proposal.
+
 ## v0.8.40
-
-*Released 2026-10-29.*
-
-## v0.8.39
-
-*Released 2026-10-29.*
-
-## v0.8.38
 
 *Released 2026-10-29.*
 
@@ -33,15 +49,30 @@ _No unreleased changes yet._
   them and they are never replayed from room history. The gateway rejects
   unaddressed package chunks, `package_ready` or result frames from non-owners,
   and package chunks addressed to anyone other than the room owner.
-- **MCP handoff tools for external claimants.** The sibling `perunchat` MCP
-  bridge now exposes `perunchat_claim_execution`,
-  `perunchat_request_download_package`, `perunchat_upload_package`,
-  `perunchat_write_target_file`, `perunchat_execution_status`, and
-  `perunchat_revoke_execution_claim`, so an MCP-capable remote agent can run the
-  claim/download/upload flow without hand-crafting WebSocket frames.
+
+## v0.8.39
+
+*Released 2026-10-29.*
+
+### Fixed
+
 - **Execution result correlation.** `application/perun-execution-result`
   payloads now always carry `op`, `proposal_id` and `transfer_id`, including
   error responses.
+
+## v0.8.38
+
+*Released 2026-10-29.*
+
+### Added
+
+- **MCP handoff tools for external claimants.** The sibling `perunchat` MCP
+  bridge now exposes `perunchat_claim_execution`,
+  `perunchat_request_download_package`, `perunchat_upload_package`,
+  `perunchat_write_target_file`, `perunchat_execution_status`,
+  `perunchat_transfer_status`, and `perunchat_revoke_execution_claim`, so an
+  MCP-capable remote agent can run the claim/download/upload flow without
+  hand-crafting WebSocket frames.
 
 ### Fixed
 
@@ -49,15 +80,6 @@ _No unreleased changes yet._
   duplicate `transfer_id` instead of replacing an in-flight slot, caps
   concurrent uploads at 8, and refuses to overwrite a persisted row owned by a
   different sender. A bad transfer id no longer forces the victim to restart.
-- **Persisted transfers retain their room binding.** `package_transfers` now
-  stores `room_id`, so an upload can resume after a bridge restart instead of
-  being rejected as belonging to another room. Loading prunes stale rows to the
-  8-slot cap.
-- **Directed handoff preserves the claimant's agent-id casing.** Responses use
-  the exact authenticated id, and the gateway compares the managed-room owner
-  case-insensitively, so mixed-case ids are delivered and validated correctly.
-- **Restored upload progress uses exact base64 sizes.** A decoded-chunk length
-  avoids rejecting a final chunk because of base64 padding.
 - **Transfer test isolation.** `package_transfers` is cleared between tests.
 
 ### Documentation
