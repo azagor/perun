@@ -1103,9 +1103,10 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   prefixed MCP tools (`perun-proposals_*`, `perun-guard_*`) so the model does
   not mistake the unprefixed labels for missing tools, and requires a
   `perun-guard_guard_read_file` read-back after an execution digest before
-  reporting success. It also injects the room's participant roster and recent
-  conversation context so the model answers questions directly instead of with
-  generic greetings.
+  reporting success. Its permissions deny the built-in `skill` loader so it
+  cannot confuse it with a guard/proposal tool. It also injects the room's
+  participant roster and recent conversation context so the model answers
+  questions directly instead of with generic greetings.
 - **Dynamic room joins:** the desired room set is rebuilt on every (re)connect
   and refreshed every 30 s. A join is complete only when the gateway answers
   `ROOM_JOINED`; an `ERROR` frame clears the acknowledgement so a room created
@@ -1233,7 +1234,9 @@ from the TUI is bound to the project instead of failing with
 `PERUN_PROJECT_PATH is not set`. Because the MCP environment is static, the
 bridge writes the per-message sender to a per-room actor file under
 `PERUN_HOME/perunchat_actors/`; `perun-proposals` reads it when
-`PERUN_CHAT_SENDER` is absent, so `approve`/`reject` work from the bridge. The dedicated `perunchat` agent denies the real
+`PERUN_CHAT_SENDER` is absent and ignores files older than one hour, so
+`approve`/`reject` work from the bridge without leaving a stale authorization
+path. The dedicated `perunchat` agent denies the real
 V2 guard action names (`<server>_guard_write_file` / `<server>_guard_edit_file`)
 and allows `perun_perunchat_room_memory` for older room context, keeping chat
 sessions read-only apart from explicit proposals.

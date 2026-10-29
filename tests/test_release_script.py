@@ -15,6 +15,33 @@ def _write_changelog(tmp_path, text: str):
     return path
 
 
+def test_bump_version_sources_updates_all_shipped_versions(tmp_path, monkeypatch):
+    """The release must keep __init__, pyproject, installer, and CODEMAP in sync."""
+    monkeypatch.setattr(release, "PUBLIC", tmp_path)
+    (tmp_path / "perun").mkdir()
+    (tmp_path / "perun" / "__init__.py").write_text(
+        '__version__ = "0.1.0"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "perun"\nversion = "0.1.0"\n', encoding="utf-8")
+    (tmp_path / "installer").mkdir()
+    (tmp_path / "installer" / "PerunSetup.iss").write_text(
+        '#define MyAppVersion "0.1.0"\n', encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "CODEMAP.md").write_text(
+        'Package docstring + `__version__` (`"0.1.0"`).\n', encoding="utf-8")
+
+    release.bump_version_sources("1.2.3")
+
+    assert '__version__ = "1.2.3"' in (
+        tmp_path / "perun" / "__init__.py").read_text(encoding="utf-8")
+    assert 'version = "1.2.3"' in (
+        tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert '#define MyAppVersion "1.2.3"' in (
+        tmp_path / "installer" / "PerunSetup.iss").read_text(encoding="utf-8")
+    assert '`"1.2.3"`' in (
+        tmp_path / "docs" / "CODEMAP.md").read_text(encoding="utf-8")
+
+
 def test_changelog_moves_unreleased_body_into_new_version(tmp_path, monkeypatch):
     """Unreleased entries must end up under the new version, not a new Unreleased."""
     monkeypatch.setattr(release, "PUBLIC", tmp_path)

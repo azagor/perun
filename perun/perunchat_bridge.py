@@ -284,6 +284,9 @@ permissions:
   - action: "*"
     resource: "*"
     effect: deny
+  - action: "skill"
+    resource: "*"
+    effect: deny
   - action: "perun-guard_*"
     resource: "*"
     effect: allow

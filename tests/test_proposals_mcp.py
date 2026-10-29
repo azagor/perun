@@ -164,6 +164,45 @@ def test_sender_falls_back_to_room_actor_file(tmp_path, monkeypatch):
     assert proposals_mcp_module._sender(room) == "peruntheoverseer"
 
 
+def test_sender_rejects_malformed_actor_file(tmp_path, monkeypatch):
+    actor = tmp_path / "actor.json"
+    actor.write_text("not json", encoding="utf-8")
+    monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
+    monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
+    with pytest.raises(ValueError, match="no fresh room actor"):
+        proposals_mcp_module._sender("grp:perun:test:chat")
+
+
+def test_sender_rejects_stale_actor_file(tmp_path, monkeypatch):
+    actor = tmp_path / "actor.json"
+    actor.write_text(json.dumps({
+        "sender": "peruntheoverseer",
+        "updated_at": "2020-01-01T00:00:00+00:00",
+    }), encoding="utf-8")
+    monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
+    monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
+    with pytest.raises(ValueError, match="no fresh room actor"):
+        proposals_mcp_module._sender("grp:perun:test:chat")
+
+
+def test_reject_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, _settings):
+    _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
+    project, room = _make_project(tmp_path)
+    monkeypatch.setenv("PERUN_PROJECT_PATH", str(Path(project["path"]).resolve()))
+    monkeypatch.setenv("PERUN_CHAT_SENDER", "frambo")
+    monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
+    prop = propose(intent="add README", action_type="create", targets=["README.md"])
+
+    monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
+    actor = tmp_path / "actor.json"
+    actor.write_text(json.dumps({"sender": "peruntheoverseer"}), encoding="utf-8")
+    monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
+    result = approve(proposal_id=prop["proposal_id"], decision="reject",
+                     reason="not needed")
+    assert result["status"] == "rejected"
+    assert result["approved_by"] == "peruntheoverseer"
+
+
 def test_approve_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, _settings):
     _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
     project, room = _make_project(tmp_path)

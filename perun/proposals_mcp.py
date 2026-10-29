@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -62,23 +63,45 @@ def _project_path() -> Path:
     return p
 
 
+ACTOR_TTL_SECONDS = 3600
+
+
+def _actor_sender(path: Path) -> str:
+    """Return a fresh sender from an actor file, or "" when unusable."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        sender = str(data.get("sender") or "").strip()
+        if not sender:
+            return ""
+        raw_ts = str(data.get("updated_at") or "").strip()
+        if raw_ts:
+            try:
+                stamp = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+            except ValueError:
+                return ""
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - stamp).total_seconds()
+            if abs(age) > ACTOR_TTL_SECONDS:
+                return ""
+        return sender
+    except Exception:
+        return ""
+
+
 def _sender(room_id: str = "") -> str:
     raw = os.environ.get("PERUN_CHAT_SENDER", "").strip()
     if raw:
         return raw
     room = (room_id or _room_id()).strip()
     if room:
-        try:
-            path = config.perunchat_actor_path(room)
-            if path.is_file():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                sender = str(data.get("sender") or "").strip()
-                if sender:
-                    return sender
-        except Exception:
-            pass
+        path = config.perunchat_actor_path(room)
+        if path.is_file():
+            sender = _actor_sender(path)
+            if sender:
+                return sender
     raise ValueError(
-        "PERUN_CHAT_SENDER is not set and no room actor is available")
+        "PERUN_CHAT_SENDER is not set and no fresh room actor is available")
 
 
 def _room_id() -> str:

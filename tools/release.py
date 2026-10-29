@@ -66,14 +66,42 @@ def write_file(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def bump_init_version(version: str) -> None:
-    path = PUBLIC / "perun" / "__init__.py"
+def _replace_or_fail(path: Path, pattern: str, replacement: str,
+                     label: str) -> None:
     text = read_file(path)
-    new_text = re.sub(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{version}"', text)
-    if new_text == text:
-        raise SystemExit(f"[ERR] Could not find __version__ in {path}")
+    new_text, count = re.subn(pattern, replacement, text, count=1)
+    if count == 0:
+        raise SystemExit(f"[ERR] Could not find {label} in {path}")
     write_file(path, new_text)
-    print(f"[OK] Bumped perun/__init__.py to {version}")
+
+
+def bump_version_sources(version: str) -> None:
+    """Keep every shipped version source in sync."""
+    _replace_or_fail(
+        PUBLIC / "perun" / "__init__.py",
+        r'__version__\s*=\s*"[^"]+"',
+        f'__version__ = "{version}"',
+        "__version__",
+    )
+    _replace_or_fail(
+        PUBLIC / "pyproject.toml",
+        r'(?m)^version\s*=\s*"[^"]+"',
+        f'version = "{version}"',
+        "project version",
+    )
+    _replace_or_fail(
+        PUBLIC / "installer" / "PerunSetup.iss",
+        r'#define\s+MyAppVersion\s+"[^"]+"',
+        f'#define MyAppVersion "{version}"',
+        "MyAppVersion",
+    )
+    _replace_or_fail(
+        PUBLIC / "docs" / "CODEMAP.md",
+        r'(`__version__`\s*\(`)"[^"]+"(`\))',
+        rf'\1"{version}"\2',
+        "CODEMAP __version__",
+    )
+    print(f"[OK] Bumped version sources to {version}")
 
 
 UNRELEASED_HEADER = "## Unreleased"
@@ -221,7 +249,7 @@ def main() -> int:
         return 0
 
     # 2. Bump version.
-    bump_init_version(version)
+    bump_version_sources(version)
 
     # 3. Update docs.
     changelog_unreleased_to_version(version)

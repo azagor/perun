@@ -733,7 +733,7 @@ def _resolve_permission(perms, action, resource="*"):
 
 def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
     """The perunchat OpenCode agent profile must be V2 with correct rule order."""
-    from perun.perunchat_bridge import _OPENCODE_AGENT_MD
+    from perun.perunchat_bridge import _DEFAULT_CHAT_PROMPT, _OPENCODE_AGENT_MD
     import yaml
 
     fm = yaml.safe_load(_OPENCODE_AGENT_MD.split("---")[1])
@@ -743,6 +743,8 @@ def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
     actions = [p["action"] for p in perms]
     # Broad deny first, guard allows next, specific write/edit denies last.
     assert actions[0] == "*"
+    assert "skill" in actions
+    assert fm["permissions"][actions.index("skill")]["effect"] == "deny"
 
     # OpenCode names MCP actions as ``<server>_<tool>``. The read-only guard
     # tools must resolve to allow, while write/edit must resolve to deny even
@@ -765,6 +767,7 @@ def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
     # The prompt must name the exact read tools and require a read-back.
     assert "perun-guard_guard_read_file" in _OPENCODE_AGENT_MD
     assert "Verify executed proposals by reading the target" in _OPENCODE_AGENT_MD
+    assert "Verify executed proposals by reading the target" in _DEFAULT_CHAT_PROMPT
 
 
 def test_chat_instructions_include_shared_project_guidance():

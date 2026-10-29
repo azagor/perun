@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.8.34"`).
+Package docstring + `__version__` (`"0.8.35"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -549,6 +549,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `CHAT_SYSTEM_PROMPT`, `_load_chat_instructions()` (reads the embedded
   `perun/instructions/perunchat_chat.md` persona, which names the prefixed
   guard tools and requires a guard read-back to verify executed proposals).
+  The installed `perunchat` agent allows the guard/proposal/memory tools and
+  denies the built-in `skill` loader.
 * `PerunChatBridge` — background thread: `status()`, `start()`, `stop()`,
   `restart()`; connects to the gateway via the configured API key,
   auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and
@@ -669,7 +671,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   TUI), it falls back to the process cwd; the generated `opencode.json` also
   sets `PERUN_PROJECT_PATH=.` for both `perun-guard` and `perun-proposals`.
   When `PERUN_CHAT_SENDER` is absent (static MCP environment), it reads the
-  per-room actor file written by the bridge (`config.perunchat_actor_path`).
+  per-room actor file written by the bridge (`config.perunchat_actor_path`);
+  files older than one hour are ignored (`ACTOR_TTL_SECONDS`).
   `list_proposals()` normalizes `null`/`none`/`any`/`all`/empty status values
   to “no filter” because models sometimes serialize an omitted optional as the
   literal string `"null"`.
@@ -1003,10 +1006,12 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
   the dashboard prompts for the password once it is running.
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
-* `tools/release.py` — release pipeline: validates both repos, bumps
-  `perun/__init__.py`, promotes `## Unreleased` entries into the new
-  `## vX.Y.Z` section, updates the technical-doc latest-release/revision lines,
-  syncs internal project content, then commits/tags/pushes public and internal.
+* `tools/release.py` — release pipeline: validates both repos, bumps every
+  shipped version source (`perun/__init__.py`, `pyproject.toml`,
+  `installer/PerunSetup.iss`, CODEMAP `__version__`), promotes `## Unreleased`
+  entries into the new `## vX.Y.Z` section, updates the technical-doc
+  latest-release/revision lines, syncs internal project content, then
+  commits/tags/pushes public and internal.
 * `tools/sync-internal.py` — mirrors internal-only project content
   (`perun.md`, `AGENTS.md`, `README.md`, `docs/`, `.perun/`, `.opencode/`) into
   the private `perun_internal` companion repo.

@@ -4,24 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
-
-## v0.8.35
-
-*Released 2026-10-29.*
-
-### Added
-
-- **Shared-config health check and per-project hint.** The dashboard
-  **Health check & fix** action now also re-syncs every shared project's
-  `opencode.json` so `perun-guard` / `perun-proposals` carry
-  `PERUN_PROJECT_PATH`. The Shared tab warns when a project's config is stale
-  and offers a per-project **Sync config** button. Both paths are
-  project-agnostic: the global action walks the registry and only touches
-  projects whose manifest says `shared: true`.
-
 ### Fixed
 
+- **PerunChat actor files expire after one hour.** `perun-proposals` ignores a
+  stale per-room actor file, so a later TUI session cannot approve a proposal
+  as the last chat sender.
+- **`perunchat` also denies the `skill` loader.** The chat agent can no longer
+  mistake the built-in `skill` tool for a guard/proposal tool and conclude the
+  real tools are missing.
+- **The release pipeline keeps every version source in sync.** `tools/release.py`
+  now bumps `perun/__init__.py`, `pyproject.toml`, `installer/PerunSetup.iss`,
+  and the CODEMAP `__version__` line together.
 - **`list_proposals` treats `"null"` as no filter.** Models sometimes pass the
   literal string `"null"` for an omitted optional status, which hid every
   proposal and made the bot report “no proposals at all”. The tool now
@@ -46,6 +39,23 @@ _No unreleased changes yet._
   `PERUN_HOME/perunchat_actors/`; `perun-proposals` falls back to it when
   `PERUN_CHAT_SENDER` is absent, so the room owner can approve a peer's
   proposal instead of failing with `PERUN_CHAT_SENDER is not set`.
+
+## v0.8.35
+
+*Released 2026-10-29.*
+
+### Added
+
+- **Shared-config health check and per-project hint.** The dashboard
+  **Health check & fix** action now also re-syncs every shared project's
+  `opencode.json` so `perun-guard` / `perun-proposals` carry
+  `PERUN_PROJECT_PATH`. The Shared tab warns when a project's config is stale
+  and offers a per-project **Sync config** button. Both paths are
+  project-agnostic: the global action walks the registry and only touches
+  projects whose manifest says `shared: true`.
+
+### Fixed
+
 - **`perun-proposals` is bound to the project in the TUI.** The generated
   shared-project `opencode.json` sets `PERUN_PROJECT_PATH=.` for both
   `perun-guard` and `perun-proposals`, and the proposals MCP server falls back
