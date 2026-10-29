@@ -25,6 +25,11 @@ _No unreleased changes yet._
   claims use the configured lease (clamped to 1 s–7 days) instead of the
   hard-coded constant, and the value is exposed in **Settings → External claim
   TTL (s)** / `PATCH /api/settings`.
+- **Stalled upload slots are reclaimed on idle, not total time.** Every
+  accepted package chunk refreshes the slot deadline, so a slow but progressing
+  upload is no longer swept mid-transfer. The idle TTL is configurable as
+  `external_execution_package_ttl` (**Settings → Package slot idle TTL (s)**,
+  30 min default, 60 s floor), and the sweep/restart loader both honour it.
 
 ## v0.8.45
 

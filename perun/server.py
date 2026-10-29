@@ -2798,7 +2798,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
     """Validate and coerce a setting value to the expected type."""
     int_fields = {
         "port", "max_concurrent_runs", "run_timeout", "embed_dim",
-        "external_execution_claim_ttl",
+        "external_execution_claim_ttl", "external_execution_package_ttl",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
@@ -2823,6 +2823,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 65535")
         if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
+        if key == "external_execution_package_ttl" and v < 60:
+            raise HTTPException(status_code=400, detail=f"{key} must be at least 60")
         if key == "embed_dim" and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be positive")
         return v

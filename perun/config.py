@@ -188,6 +188,9 @@ class Settings:
     # External execution handoff: a rw participant may claim an approved
     # proposal and upload a ZIP package of file changes over PerunChat.
     external_execution_claim_ttl: int = 3600
+    # A partial package upload slot is reclaimed after this much inactivity
+    # (accepted chunks refresh the deadline). The bridge enforces a 60 s floor.
+    external_execution_package_ttl: int = 30 * 60
     external_execution_max_package_bytes: int = 50 * 1024 * 1024
     external_execution_max_entry_bytes: int = 10 * 1024 * 1024
     external_execution_max_entries: int = 500

@@ -204,7 +204,10 @@ _MAX_RECENT_CONTENT = 200
 _SHARED_CONTEXT_MAX_CHARS = 2400
 
 # External execution handoff over PerunChat (see docs/external-execution-protocol.md).
+# Default idle lifetime of a partial upload slot; configurable via the
+# ``external_execution_package_ttl`` setting. Progress refreshes the deadline.
 _PACKAGE_TRANSFER_TTL_SECONDS = 30 * 60
+_PACKAGE_TRANSFER_TTL_FLOOR = 60
 _PACKAGE_SWEEP_INTERVAL_SECONDS = 60.0
 # Upper bound on chunk count; prevents a huge range()/set allocation at
 # finalize. A 50 MB package at 360 KiB/chunk is ~143 chunks.
@@ -1002,16 +1005,35 @@ class PerunChatBridge:
             self._replied_order = self._replied_order[-_REPLIED_TRIM_TO:]
         self._save_replied()
 
+    def _package_ttl_seconds(self) -> int:
+        """Idle lifetime of a partial package upload slot.
+
+        Accepted chunks refresh ``started_at``, so this is an inactivity
+        deadline, not a cap on total upload duration. The floor keeps a
+        mistyped setting from sweeping a slot between two chunks.
+        """
+        try:
+            value = int(
+                getattr(
+                    self.settings,
+                    "external_execution_package_ttl",
+                    _PACKAGE_TRANSFER_TTL_SECONDS,
+                )
+            )
+        except (TypeError, ValueError):
+            value = _PACKAGE_TRANSFER_TTL_SECONDS
+        return max(_PACKAGE_TRANSFER_TTL_FLOOR, value)
+
     def _load_package_transfers(self) -> Dict[str, Dict[str, Any]]:
         """Restore in-progress upload reassembly slots from SQLite.
 
-        Slots older than the transfer TTL are dropped on load (and deleted from
-        the DB) so a restart does not resurrect stale partial uploads.
+        Slots idle for longer than the transfer TTL are dropped on load (and
+        deleted from the DB) so a restart does not resurrect stale uploads.
         """
         try:
             from . import db as db_module
 
-            cutoff = time.time() - _PACKAGE_TRANSFER_TTL_SECONDS
+            cutoff = time.time() - self._package_ttl_seconds()
             with db_module.db() as conn:
                 conn.execute(
                     "DELETE FROM package_transfers WHERE started_at <= ?",
@@ -1964,6 +1986,11 @@ class PerunChatBridge:
                 return
             transfer["received"][seq] = data_b64
             transfer["received_bytes"] = received_bytes + chunk_bytes
+            # Progress refresh: the sweep and the restart loader key off
+            # ``started_at``, so an upload that keeps delivering chunks must not
+            # be reclaimed mid-transfer. Rejected chunks return above and do
+            # not extend the slot's life.
+            transfer["started_at"] = time.time()
             # Take a shallow copy for persistence so we can release the lock
             # before the SQLite write. The row-level DB write serializes anyway.
             transfer_copy = dict(transfer)
@@ -2053,8 +2080,8 @@ class PerunChatBridge:
         }
 
     def _sweep_package_transfers(self) -> None:
-        """Drop upload reassembly slots older than the TTL from memory and DB."""
-        cutoff = time.time() - _PACKAGE_TRANSFER_TTL_SECONDS
+        """Drop upload reassembly slots idle longer than the TTL."""
+        cutoff = time.time() - self._package_ttl_seconds()
         expired: list[str] = []
         with self._package_transfers_lock:
             for transfer_id, transfer in list(self._package_transfers.items()):

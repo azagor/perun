@@ -5232,6 +5232,7 @@ async function viewSettings() {
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">External claim TTL (s) <span class="muted">(how long an rw participant holds a claimed proposal)</span></span><input type="number" id="s-claim-ttl" min="1" max="604800" value="${esc(s.external_execution_claim_ttl ?? 3600)}"></label>
+            <label class="field"><span class="lab">Package slot idle TTL (s) <span class="muted">(reclaim a stalled upload slot)</span></span><input type="number" id="s-package-ttl" min="60" value="${esc(s.external_execution_package_ttl ?? 1800)}"></label>
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">Ollama host</span><input type="text" id="s-ollama" value="${esc(s.ollama_host)}"></label>
@@ -5402,6 +5403,7 @@ async function viewSettings() {
             terminal: $('#s-terminal').value || $('#s-terminal-custom').value.trim(),
             max_concurrent_runs: Number($('#s-max').value), run_timeout: Number($('#s-timeout').value),
             external_execution_claim_ttl: Number($('#s-claim-ttl').value),
+            external_execution_package_ttl: Number($('#s-package-ttl').value),
             ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value || $('#s-embed-custom').value.trim(),
             perun_owner_name: $('#s-owner').value.trim(),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,

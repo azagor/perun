@@ -633,7 +633,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   validate/apply the package. Uploads require `sha256`, are bound to the room and
   sender, are base64-validated, and enforce per-chunk/cumulative byte caps;
   `transfer_id` collisions are rejected and at most 8 uploads may be open at
-  once, so one claimant cannot replace or exhaust another's slot. Downloads are
+  once, so one claimant cannot replace or exhaust another's slot. Upload slots
+  are an idle lease: `external_execution_package_ttl` (default 30 min, 60 s
+  floor) is refreshed by every accepted chunk, and stale slots are dropped from
+  memory and SQLite. Downloads are
   restricted to the proposal targets, skip sensitive files, and enforce
   package/entry/entry-count caps. Handoff frames set `recipient_id`: results and
   downloads are delivered only to the claimant, upload chunks only to the room

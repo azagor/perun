@@ -3007,3 +3007,133 @@ def test_persisted_transfer_ttl_drops_stale_slots_on_load(settings, tmp_path):
     assert row is None
 
 
+def _begin_upload(bridge, project, room, proposal_id, transfer_id, *, total_size=5):
+    """Register an upload slot through the real execution-frame path."""
+    bridge._handle_execution_frame({
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "content_type": "application/perun-execution",
+        "payload": {
+            "op": "package_begin",
+            "proposal_id": proposal_id,
+            "transfer_id": transfer_id,
+            "sha256": package_handoff.sha256_hex(b"hello"),
+            "total_size": total_size,
+            "total_chunks": 1,
+        },
+    }, None)
+
+
+def _send_chunk(bridge, room, transfer_id, data=b"hello", seq=0):
+    bridge._handle_package_frame({
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "content_type": "application/perun-package",
+        "payload": {
+            "transfer_id": transfer_id,
+            "seq": seq,
+            "total_chunks": 1,
+            "data": base64.b64encode(data).decode("ascii"),
+        },
+    }, None)
+
+
+def test_accepted_chunk_refreshes_idle_deadline(settings, tmp_path):
+    """Progress must extend the slot's life; the sweep is an idle timeout."""
+    from perun import action_proposals, db as db_module
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+
+    with patch.object(bridge, "_send_frame", return_value=True), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})):
+        _begin_upload(bridge, project, room, proposal["id"], "trf_slow")
+        with bridge._package_transfers_lock:
+            bridge._package_transfers["trf_slow"]["started_at"] = time.time() - 31 * 60
+        _send_chunk(bridge, room, "trf_slow")
+
+    transfer = bridge._package_transfers["trf_slow"]
+    assert abs(transfer["started_at"] - time.time()) < 5
+    with db_module.db() as conn:
+        row = db_module.one(
+            conn, "SELECT started_at FROM package_transfers WHERE transfer_id=?",
+            ("trf_slow",),
+        )
+    assert abs(float(row["started_at"]) - time.time()) < 5
+
+    bridge._sweep_package_transfers()
+    assert "trf_slow" in bridge._package_transfers
+
+
+def test_rejected_chunk_does_not_extend_slot_life(settings, tmp_path):
+    """A chunk that overflows total_size must not refresh the deadline."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+
+    with patch.object(bridge, "_send_frame", return_value=True), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})):
+        _begin_upload(bridge, project, room, proposal["id"], "trf_big", total_size=5)
+        old = time.time() - 31 * 60
+        with bridge._package_transfers_lock:
+            bridge._package_transfers["trf_big"]["started_at"] = old
+        # 11 bytes does not fit into total_size=5, so the handler returns early.
+        _send_chunk(bridge, room, "trf_big", data=b"hello world")
+
+    assert bridge._package_transfers["trf_big"]["started_at"] == old
+    bridge._sweep_package_transfers()
+    assert "trf_big" not in bridge._package_transfers
+
+
+def test_package_ttl_is_configurable_with_a_floor(settings, tmp_path):
+    """The idle TTL comes from settings and never drops below 60 s."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    settings.external_execution_package_ttl = 120
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    assert bridge._package_ttl_seconds() == 120
+
+    with patch.object(bridge, "_send_frame", return_value=True), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})):
+        _begin_upload(bridge, project, room, proposal["id"], "trf_ttl")
+    with bridge._package_transfers_lock:
+        bridge._package_transfers["trf_ttl"]["started_at"] = time.time() - 150
+    bridge._sweep_package_transfers()
+    assert "trf_ttl" not in bridge._package_transfers
+
+    settings.external_execution_package_ttl = 5
+    assert bridge._package_ttl_seconds() == 60
+
+
