@@ -875,7 +875,10 @@ and calls `perun-proposals_approve` with `execute=false`, leaving the proposal
 `approved` for external claim or explicit local execution. The MCP `approve`
 tool defaults to `execute=false`; `execute=true` is the explicit local-run
 choice. The approval notice says “awaiting external execution” for an
-`approved` proposal and “is now executing” only after a run starts.
+`approved` proposal and “is now executing” only after a run starts. Reviews are
+capped at two concurrent runs, proposal content is treated as untrusted data,
+and a failed review posts a human-action notice. Approved proposals that are
+never claimed or executed expire after seven days.
 
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools
@@ -890,10 +893,14 @@ config (`.opencode`, `.perun`), the project manifest, and `opencode.json` are
 denied even inside the project root. The post-run audit repeats the target check
 and also detects modified/deleted parent-directory entries. This is cooperative
 enforcement backed by the audit, not an OS-level sandbox: review the audit output
-before treating a run as trusted. Approved local runs use the running OpenCode
-service rather than a private `--standalone` server, so the project's MCP servers
-are loaded; `_prepare_execution()` also fails early with “guard MCP not
-registered” if `perun-guard` is missing from the project config.
+before treating a run as trusted. When the guard server is started by the
+OpenCode service (`standalone=False`), it lacks the per-run `PERUN_ALLOWLIST`;
+it derives the active proposal's targets from the database instead, and refuses
+writes if more than one local execution is active. Approved local runs use the
+running OpenCode service rather than a private `--standalone` server, so the
+project's MCP servers are loaded; `_prepare_execution()` also fails early with
+“guard MCP not registered” if `perun-guard` is missing from the project config,
+and probes the server for `guard_write_file` before spending a model run.
 
 Project-room authorization requires the participant to be on the local
 PerunChat trust list *and* in the manifest; the room owner (`managed_by`) and

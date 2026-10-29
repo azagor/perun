@@ -53,6 +53,33 @@ def test_guard_write_file_blocks_outside(tmp_path, monkeypatch):
         guard_mcp.guard_write_file(str(outside_dir / "x.txt"), "content")
 
 
+def test_guard_scopes_writes_to_executing_proposal_targets(tmp_path, monkeypatch):
+    """With standalone=False the guard recovers targets from the DB."""
+    from perun import action_proposals, manifest, registry
+
+    project_path = tmp_path / "guard-exec"
+    project_path.mkdir()
+    project = registry.add_project("guard-exec", str(project_path))
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["participants"] = [{"agent_id": "frambo", "roles": ["rw"]}]
+    manifest.save(str(project_path), data, body="# p")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "x", "targets": ["allowed.txt"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "reviewer")
+    action_proposals._set_status(proposal["id"], "executing")
+
+    monkeypatch.chdir(project_path)
+    monkeypatch.setenv("PERUN_PROJECT_PATH", str(project_path))
+    guard_mcp.guard_write_file("allowed.txt", "ok")
+    assert (project_path / "allowed.txt").read_text(encoding="utf-8") == "ok"
+    with pytest.raises(ValueError, match="approved target paths"):
+        guard_mcp.guard_write_file("outside.txt", "no")
+    assert not (project_path / "outside.txt").exists()
+
+
 def test_guard_edit_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _set_allowlist_env(tmp_path)

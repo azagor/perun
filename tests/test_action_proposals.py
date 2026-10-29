@@ -528,6 +528,26 @@ def test_prepare_execution_fails_when_guard_mcp_missing(tmp_path, monkeypatch):
     assert action_proposals.get(proposal["id"])["status"] == "failed"
 
 
+def test_prepare_execution_fails_when_guard_probe_fails(tmp_path, monkeypatch):
+    from perun import mcp_servers
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "x", "targets": [target], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "reviewer")
+    monkeypatch.setattr(
+        mcp_servers, "probe",
+        lambda *a, **k: {"ok": False, "status": "error", "error": "boom"},
+    )
+    with pytest.raises(ValueError, match="guard MCP probe failed"):
+        action_proposals._prepare_execution(proposal["id"])
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
 def test_execution_marks_failed_when_audit_finds_a_violation(tmp_path, monkeypatch):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -899,6 +919,24 @@ def test_claim_expiry_sweep_returns_to_approved(tmp_path):
         )
     action_proposals.expire_stale()
     assert action_proposals.get(proposal["id"])["status"] == "approved"
+
+
+def test_approved_proposal_expires_after_ttl(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET updated_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", proposal["id"]),
+        )
+    expired = action_proposals.expire_stale()
+    assert proposal["id"] in expired
+    assert action_proposals.get(proposal["id"])["status"] == "expired"
 
 
 def test_concurrent_claim_race_leaves_only_one_winner(tmp_path, monkeypatch):

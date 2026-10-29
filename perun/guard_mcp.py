@@ -31,6 +31,36 @@ from perun import path_guard, shared_projects  # noqa: E402
 mcp = FastMCP("PerunGuard")
 
 
+def _active_targets(project_path: Path) -> tuple[list[Path], bool]:
+    """Return (targets, ambiguous) for the project's active local execution.
+
+    The project-local guard server is started by the OpenCode service, which
+    does not inherit the per-run ``PERUN_ALLOWLIST``. When that env is absent,
+    derive the target scope from the proposal currently in ``executing`` state.
+    More than one executing proposal is ambiguous; the caller fails closed.
+    """
+    try:
+        from perun import action_proposals, registry
+
+        project = registry.get_project_by_path(str(project_path))
+        if not project:
+            return [], False
+        executing = [
+            p for p in action_proposals.list_by_project(project["id"], status="executing")
+            if p.get("execution_mode") != "external"
+        ]
+        if not executing:
+            return [], False
+        if len(executing) > 1:
+            return [], True
+        return [
+            path_guard.resolve_target(project_path, str(target))
+            for target in executing[0].get("targets", [])
+        ], False
+    except Exception:
+        return [], False
+
+
 def _allowlist() -> tuple[Path, list[tuple[Path, str]], list[Path]]:
     """Return (project_root, [(path, access), ...], approved_targets)."""
     raw = os.environ.get("PERUN_ALLOWLIST", "").strip()
@@ -61,9 +91,15 @@ def _allowlist() -> tuple[Path, list[tuple[Path, str]], list[Path]]:
             project_path = "."
     cfg = shared_projects.load(project_path)
     if cfg.get("shared"):
-        return Path(project_path).resolve(), path_guard.allowlist(
+        root = Path(project_path).resolve()
+        targets, ambiguous = _active_targets(root)
+        if ambiguous:
+            # Two local executions in the same project: refuse writes rather
+            # than falling back to an unscoped root allowlist.
+            return root, [], []
+        return root, path_guard.allowlist(
             project_path, cfg.get("external_deps", [])
-        ), []
+        ), targets
     # Not a shared project: unrestricted pass-through.
     root = Path(project_path).resolve()
     return root, [(root, "rw")], []

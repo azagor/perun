@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +32,8 @@ STATUSES = {
     "pending", "approved", "rejected", "expired", "executing", "executed", "failed", "claimed"
 }
 DEFAULT_PENDING_TTL_SECONDS = 24 * 3600
+# Approved proposals waiting for a claim/manual execution must not linger forever.
+APPROVED_TTL_SECONDS = 7 * 24 * 3600
 # External-agent execution handoff: how long a claimed proposal stays reserved.
 EXTERNAL_CLAIM_TTL_SECONDS = 3600
 # Approver identity recorded when a proposal is approved automatically by the
@@ -649,6 +652,40 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
             f"Proposal {proposal_id} expired after {max_age_seconds} seconds",
             {"proposal_id": proposal_id},
         )
+
+    # Approved proposals waiting for claim/manual execution should not linger
+    # forever. Use updated_at, which is set when the proposal is approved.
+    approved_ids: list[str] = []
+    threshold = (
+        datetime.now(timezone.utc) - timedelta(seconds=APPROVED_TTL_SECONDS)
+    ).isoformat()
+    try:
+        with db.db() as conn:
+            rows = db.rows(
+                conn,
+                "SELECT id FROM action_proposals WHERE status='approved' AND updated_at<?",
+                (threshold,),
+            )
+            approved_ids = [r["id"] for r in rows]
+            if approved_ids:
+                placeholders = ",".join("?" * len(approved_ids))
+                conn.execute(
+                    f"UPDATE action_proposals SET status='expired', updated_at=? "
+                    f"WHERE id IN ({placeholders}) AND status='approved'",
+                    (_now(), *approved_ids),
+                )
+    except Exception as exc:  # pragma: no cover - schema drift
+        if "no such column" not in str(exc).lower():
+            raise
+        approved_ids = []
+    for proposal_id in approved_ids:
+        registry.log_activity(
+            None,
+            "proposal_expired",
+            f"Approved proposal {proposal_id} expired after {APPROVED_TTL_SECONDS} seconds",
+            {"proposal_id": proposal_id},
+        )
+
     # Return externally-claimed proposals to "approved" when their claim TTL
     # has passed. This is independent of the pending TTL.
     reclaimed_ids: list[str] = []
@@ -684,7 +721,7 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
             f"Claim on proposal {proposal_id} expired; returned to approved",
             {"proposal_id": proposal_id},
         )
-    return expired_ids + reclaimed_ids
+    return expired_ids + approved_ids + reclaimed_ids
 
 
 def _prepare_execution(proposal_id: str) -> dict[str, Any]:
@@ -788,6 +825,23 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         guard_entry = mcp_cfg.get("perun-guard")
         if not isinstance(guard_entry, dict) or not guard_entry.get("enabled", True):
             raise RuntimeError("guard MCP not registered in opencode.json")
+        from . import mcp_servers
+
+        try:
+            probe = mcp_servers.probe(
+                "perun-guard", scope="project", projects=[project],
+                project=project.get("slug", ""), timeout=5,
+            )
+        except LookupError as exc:
+            raise RuntimeError(f"guard MCP not registered: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"guard MCP probe failed: {exc}") from exc
+        if not probe.get("ok"):
+            raise RuntimeError(
+                "guard MCP probe failed: "
+                + str(probe.get("error") or probe.get("status") or "unknown"))
+        if "guard_write_file" not in set(probe.get("tools") or []):
+            raise RuntimeError("guard MCP did not expose guard_write_file")
         targets = [str(path_guard.resolve_target(project["path"], t)) for t in proposal["targets"]]
         prompt = _build_execution_prompt(proposal, project)
         allowlist_env = _build_allowlist_env(project, targets)
