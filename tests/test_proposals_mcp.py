@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,10 @@ _TOOL_MAP = {
     "list_proposals": list_proposals,
     "get_proposal": get_proposal,
 }
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @pytest.fixture
@@ -54,7 +59,8 @@ def _make_project(tmp_path, participants=None, shared=True):
 @pytest.fixture(autouse=True)
 def _env_isolation(monkeypatch):
     """Clear proposal-related env vars before each test."""
-    for key in ("PERUN_PROJECT_PATH", "PERUN_CHAT_SENDER", "PERUN_ROOM_ID"):
+    for key in ("PERUN_PROJECT_PATH", "PERUN_CHAT_SENDER",
+                "PERUN_CHAT_AGENT", "PERUN_ROOM_ID"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -64,6 +70,7 @@ def tool_runner(tmp_path, monkeypatch, _settings):
     def run(name: str, project, sender: str, args: dict):
         monkeypatch.setenv("PERUN_PROJECT_PATH", str(Path(project["path"]).resolve()))
         monkeypatch.setenv("PERUN_CHAT_SENDER", sender)
+        monkeypatch.setenv("PERUN_CHAT_AGENT", sender)
         monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
         fn = _TOOL_MAP.get(name)
         if fn is None:
@@ -158,7 +165,10 @@ def test_sender_falls_back_to_room_actor_file(tmp_path, monkeypatch):
     """A static MCP environment can still resolve the per-message sender."""
     room = "grp:perun:test:chat"
     actor = tmp_path / "actor.json"
-    actor.write_text(json.dumps({"sender": "peruntheoverseer"}), encoding="utf-8")
+    actor.write_text(json.dumps({
+        "sender": "peruntheoverseer",
+        "updated_at": _now_iso(),
+    }), encoding="utf-8")
     monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
     monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
     assert proposals_mcp_module._sender(room) == "peruntheoverseer"
@@ -170,6 +180,7 @@ def test_approver_uses_agent_identity_not_requester(tmp_path, monkeypatch):
     actor.write_text(json.dumps({
         "sender": "frambo",
         "agent": "peruntheoverseer",
+        "updated_at": _now_iso(),
     }), encoding="utf-8")
     monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
     monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
@@ -213,6 +224,7 @@ def test_reject_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, _
     actor.write_text(json.dumps({
         "sender": "frambo",
         "agent": "peruntheoverseer",
+        "updated_at": _now_iso(),
     }), encoding="utf-8")
     monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
     result = approve(proposal_id=prop["proposal_id"], decision="reject",
@@ -234,6 +246,7 @@ def test_approve_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, 
     actor.write_text(json.dumps({
         "sender": "frambo",
         "agent": "peruntheoverseer",
+        "updated_at": _now_iso(),
     }), encoding="utf-8")
     monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
     monkeypatch.setattr(
@@ -242,6 +255,49 @@ def test_approve_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, 
     )
     result = approve(proposal_id=prop["proposal_id"], decision="approve")
     assert result["approved_by"] == "peruntheoverseer"
+
+
+def test_approve_defaults_to_approve_only(
+        tool_runner, tmp_path, _settings, monkeypatch):
+    """A remote rw participant needs the proposal to stay approved to claim it."""
+    _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
+    project, room = _make_project(tmp_path)
+    prop = tool_runner(
+        "propose", project, "frambo",
+        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+    )
+    started = []
+    monkeypatch.setattr(
+        action_proposals, "start_execution",
+        lambda *a, **k: started.append(a) or action_proposals.get(prop["proposal_id"]),
+    )
+    result = tool_runner(
+        "approve", project, "peruntheoverseer",
+        {"proposal_id": prop["proposal_id"], "decision": "approve"},
+    )
+    assert result["status"] == "approved"
+    assert not started
+
+
+def test_approve_execute_true_starts_execution(
+        tool_runner, tmp_path, _settings, monkeypatch):
+    _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
+    project, room = _make_project(tmp_path)
+    prop = tool_runner(
+        "propose", project, "frambo",
+        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+    )
+    started = []
+    monkeypatch.setattr(
+        action_proposals, "start_execution",
+        lambda *a, **k: started.append(a) or action_proposals.get(prop["proposal_id"]),
+    )
+    result = tool_runner(
+        "approve", project, "peruntheoverseer",
+        {"proposal_id": prop["proposal_id"], "decision": "approve", "execute": True},
+    )
+    assert result["status"] == "approved"
+    assert started
 
 
 def test_approve_peer_proposal_by_owner(tool_runner, tmp_path, _settings, monkeypatch):

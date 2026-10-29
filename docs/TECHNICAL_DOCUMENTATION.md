@@ -868,8 +868,14 @@ reject, and execute their own proposal, and the autonomous policy path also
 passes `allow_self=True`. A background activity-table poller in the bridge posts review requests
 and state digests to the bound room, so notices work even though the MCP server
 runs in a separate process. Projects with `policy_auto_approve` are approved and
-executed immediately inside the `propose` tool; projects with `auto_approve`
-still require a peer `approve` call, and the poller prompts eligible reviewers.
+executed immediately inside the `propose` tool. Projects with `auto_approve`
+schedule an autonomous review when another agent creates a pending proposal:
+the bridge starts a review run that reads the targets through the guard tools
+and calls `perun-proposals_approve` with `execute=false`, leaving the proposal
+`approved` for external claim or explicit local execution. The MCP `approve`
+tool defaults to `execute=false`; `execute=true` is the explicit local-run
+choice. The approval notice says “awaiting external execution” for an
+`approved` proposal and “is now executing” only after a run starts.
 
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools
@@ -884,7 +890,10 @@ config (`.opencode`, `.perun`), the project manifest, and `opencode.json` are
 denied even inside the project root. The post-run audit repeats the target check
 and also detects modified/deleted parent-directory entries. This is cooperative
 enforcement backed by the audit, not an OS-level sandbox: review the audit output
-before treating a run as trusted.
+before treating a run as trusted. Approved local runs use the running OpenCode
+service rather than a private `--standalone` server, so the project's MCP servers
+are loaded; `_prepare_execution()` also fails early with “guard MCP not
+registered” if `perun-guard` is missing from the project config.
 
 Project-room authorization requires the participant to be on the local
 PerunChat trust list *and* in the manifest; the room owner (`managed_by`) and

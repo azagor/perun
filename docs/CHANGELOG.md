@@ -6,6 +6,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **Autonomous peer review and approve-only default.** When a shared project
+  enables `auto_approve`, the bridge now reviews proposals created by other
+  agents on its own: it reads the target paths through the guard tools and
+  approves them without starting execution, leaving them `approved` for a
+  remote rw participant to claim. The MCP `perun-proposals_approve` tool now
+  defaults to `execute=false`; pass `execute=true` only for explicit local
+  execution.
+- **Approval notices distinguish claimable from executing.** A proposal left
+  in `approved` posts “awaiting external execution”; only a run that actually
+  starts posts “is now executing”.
+- **Proposal execution loads the project MCP servers.** Approved local runs use
+  the running OpenCode service instead of a private `--standalone` server, and
+  `_prepare_execution` fails early with “guard MCP not registered” instead of
+  burning a run with only the `skill` tool.
 - **Self-approval is enforced for agent callers.** `action_proposals.approve()`
   / `reject()` reject an agent approver that normalizes to the proposal's
   requester (case/whitespace-insensitive), covering the MCP tool and retries.

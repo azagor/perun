@@ -276,8 +276,9 @@ def approve(proposal_id: str, approver: str, *,
             allow_self: bool = False) -> dict[str, Any]:
     """Approve a proposal and issue a signed HITL token.
 
-    ``allow_self`` is reserved for the autonomous-policy path, where Perun
-    itself is the approver rather than an independent reviewer.
+    ``allow_self`` is set by the human dashboard operator (who may approve
+    their own proposal) and by the autonomous-policy path (where Perun is the
+    approver). Agent callers leave it false and cannot self-approve.
     """
     proposal = get(proposal_id)
     if not proposal:
@@ -766,6 +767,27 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
                 "Guard MCP registration failed for %s: %s",
                 project["slug"], guard_config.get("warning"),
             )
+        # Fail before burning an agent run if the restricted executor would
+        # start without its guard server. The config write above is best-effort
+        # and a missing entry has been observed to leave the agent with only
+        # the built-in `skill` tool.
+        from .mcp_servers import read_opencode_config
+
+        project_root = Path(project["path"])
+        cfg_path = next(
+            (project_root / name for name in projects.OPENCODE_CONFIG_NAMES
+             if (project_root / name).is_file()),
+            None,
+        )
+        if cfg_path is None:
+            raise RuntimeError("guard MCP not registered: opencode.json missing")
+        cfg_data, cfg_error, _cfg_lossy = read_opencode_config(cfg_path)
+        if cfg_error:
+            raise RuntimeError(f"guard MCP config unreadable: {cfg_error}")
+        mcp_cfg = cfg_data.get("mcp") if isinstance(cfg_data.get("mcp"), dict) else {}
+        guard_entry = mcp_cfg.get("perun-guard")
+        if not isinstance(guard_entry, dict) or not guard_entry.get("enabled", True):
+            raise RuntimeError("guard MCP not registered in opencode.json")
         targets = [str(path_guard.resolve_target(project["path"], t)) for t in proposal["targets"]]
         prompt = _build_execution_prompt(proposal, project)
         allowlist_env = _build_allowlist_env(project, targets)
@@ -806,10 +828,11 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             # The proposal id is the run id: it makes the headless run
             # addressable (cancel, logs, SSE) with no extra mapping table.
             run_uid=run_uid,
-            # Run a private OpenCode server for this proposal so the active
-            # API-key credentials injected by the orchestrator are used instead
-            # of a background service that may lack authentication.
-            standalone=True,
+            # Use the running OpenCode service so the project's MCP servers
+            # (perun-guard/perun-proposals) are loaded from opencode.json. A
+            # private --standalone server has been observed to start without
+            # those servers, leaving the restricted executor with only `skill`.
+            standalone=False,
         )
         run = result.get("run") or {}
         run_uid = run.get("run_uid") or proposal_id

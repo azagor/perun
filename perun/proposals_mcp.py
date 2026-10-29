@@ -74,16 +74,17 @@ def _actor_value(path: Path, key: str) -> str:
         if not value:
             return ""
         raw_ts = str(data.get("updated_at") or "").strip()
-        if raw_ts:
-            try:
-                stamp = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
-            except ValueError:
-                return ""
-            if stamp.tzinfo is None:
-                stamp = stamp.replace(tzinfo=timezone.utc)
-            age = (datetime.now(timezone.utc) - stamp).total_seconds()
-            if abs(age) > ACTOR_TTL_SECONDS:
-                return ""
+        if not raw_ts:
+            return ""
+        try:
+            stamp = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+        if abs(age) > ACTOR_TTL_SECONDS:
+            return ""
         return value
     except Exception:
         return ""
@@ -121,7 +122,8 @@ def _approver(room_id: str = "") -> str:
             agent = _actor_value(path, "agent")
             if agent:
                 return agent
-    return _sender(room_id)
+    raise ValueError(
+        "PERUN_CHAT_AGENT is not set and no fresh room agent is available")
 
 
 def _room_id() -> str:
@@ -227,8 +229,14 @@ def propose(
 
 
 @mcp.tool()
-def approve(proposal_id: str, decision: str, reason: str = "") -> dict[str, Any]:
-    """Approve or reject a pending proposal."""
+def approve(proposal_id: str, decision: str, reason: str = "",
+            execute: bool = False) -> dict[str, Any]:
+    """Approve or reject a pending proposal.
+
+    Approval defaults to ``execute=False`` so the proposal stays in
+    ``approved`` state for external claim or explicit local execution. Pass
+    ``execute=True`` only when Perun itself should start the headless run.
+    """
     project_path = _project_path()
     project = _find_project(project_path)
     proposal = action_proposals.get(proposal_id)
@@ -252,7 +260,8 @@ def approve(proposal_id: str, decision: str, reason: str = "") -> dict[str, Any]
     decision = str(decision or "").strip().lower()
     if decision == "approve":
         action_proposals.approve(proposal_id, approver)
-        action_proposals.start_execution(proposal_id)
+        if execute:
+            action_proposals.start_execution(proposal_id)
     elif decision == "reject":
         action_proposals.reject(proposal_id, approver, reason=reason)
     else:

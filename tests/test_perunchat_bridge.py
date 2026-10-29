@@ -1054,9 +1054,58 @@ def test_proposal_poller_posts_created_and_approved_notices(bridge_env, tmp_path
     action_proposals.approve(proposal["id"], "peruntheoverseer")
     bridge._poll_proposal_activity()
 
-    assert any(
-        p[0] == room and "approved by peruntheoverseer" in p[1] for p in posted
-    ), posted
+    approved_notice = next(
+        (p[1] for p in posted if p[0] == room and "approved by peruntheoverseer" in p[1]),
+        "",
+    )
+    assert "awaiting external execution" in approved_notice
+    assert "is now executing" not in approved_notice
+
+
+def test_agent_review_scheduled_for_peer_proposal(bridge_env, tmp_path, monkeypatch):
+    """The bot reviews a peer's proposal when agent approval is enabled."""
+    from perun import action_proposals, manifest
+    import perun.perunchat_bridge as pb
+
+    bridge, _orchestrator = bridge_env
+    bridge._agent_id = "peruntheoverseer"
+    project, room = _make_shared_project(tmp_path)
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["auto_approve"] = True
+    data["participants"] = [{"agent_id": "frambo", "roles": ["rw"]}]
+    manifest.save(project["path"], data, body="# p")
+
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "write a file", "action_type": "create",
+         "targets": [str(Path(project["path"]) / "a.txt")]},
+        owner="peruntheoverseer", trusted=["frambo"],
+    )
+    prompt = bridge._build_agent_review_prompt(proposal, project)
+    assert proposal["id"] in prompt
+    assert "execute=false" in prompt
+
+    started = []
+    class FakeThread:
+        def __init__(self, **kw):
+            self.kw = kw
+        def start(self):
+            started.append(self.kw)
+    monkeypatch.setattr(pb.threading, "Thread", FakeThread)
+    bridge._maybe_schedule_agent_review(proposal, room)
+    assert started and started[0]["args"][0]["id"] == proposal["id"]
+
+    # A proposal created by the bot itself is not reviewed.
+    own = action_proposals.create(
+        project, "peruntheoverseer",
+        {"intent": "own", "action_type": "create",
+         "targets": [str(Path(project["path"]) / "b.txt")]},
+        owner="peruntheoverseer", trusted=["frambo"],
+    )
+    bridge._reviewing.clear()
+    bridge._maybe_schedule_agent_review(own, room)
+    assert len(started) == 1
 
 
 def test_proposal_poller_posts_completed_digest(bridge_env, tmp_path, monkeypatch):

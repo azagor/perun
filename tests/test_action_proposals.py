@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from perun import action_proposals, db, manifest, registry, shared_projects
+from perun import action_proposals, db, manifest, projects, registry, shared_projects
 
 
 def _make_project(tmp_path, name="test-project"):
@@ -506,6 +506,26 @@ def test_start_execution_is_non_blocking_and_single_shot(tmp_path):
 
     assert current["status"] == "executed"
     assert completed and completed[0]["id"] == proposal["id"]
+
+
+def test_prepare_execution_fails_when_guard_mcp_missing(tmp_path, monkeypatch):
+    """An approved run must not burn tokens without the guard server."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    (project["path"] / "opencode.json").write_text('{"mcp": {}}', encoding="utf-8")
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "x", "targets": [target], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "reviewer")
+    monkeypatch.setattr(
+        projects, "sync_opencode_config",
+        lambda _project: {"action": "error", "warning": "boom"},
+    )
+    with pytest.raises(ValueError, match="guard MCP not registered"):
+        action_proposals._prepare_execution(proposal["id"])
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
 
 
 def test_execution_marks_failed_when_audit_finds_a_violation(tmp_path, monkeypatch):

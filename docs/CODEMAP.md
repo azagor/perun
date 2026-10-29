@@ -565,7 +565,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   plane. State-changing requests are sent through the `propose` tool, not
   executed directly. A background activity-table poller posts review requests
   and state digests back to the bound room so notices work even though the MCP
-  server runs in a separate process.
+  server runs in a separate process. When `auto_approve` is on, the poller also
+  schedules `_agent_review_worker()` for proposals from other agents; it reads
+  the targets with the guard tools and approves with `execute=false`, leaving
+  the proposal claimable.
 * No-loss reply delivery: every outbound reply frame is persisted in a
   write-ahead outbox under PERUN_HOME before sending and removed only
   after success; `_flush_outbox()` resends queued frames after a reconnect with
@@ -677,7 +680,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   files older than one hour are ignored (`ACTOR_TTL_SECONDS`).
   `list_proposals()` normalizes `null`/`none`/`any`/`all`/empty status values
   to “no filter” because models sometimes serialize an omitted optional as the
-  literal string `"null"`.
+  literal string `"null"`. `approve()` defaults to `execute=false`, leaving a
+  proposal `approved` for external claim/manual execution; `execute=true` starts
+  the local headless run.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/
@@ -691,9 +696,12 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `approve()`/`reject()`; the human dashboard routes and
   `auto_approve_and_execute()` pass `allow_self=True`. Approved runs use the
   restricted `perun-shared` agent and a target-scoped guard allowlist; the
-  proposal id is also the headless run id. `_build_execution_prompt()` names
-  the prefixed `perun-guard_guard_*` tools and instructs the model not to use
-  the `skill` tool or to give up after an “Unable to load skill …” error.
+  proposal id is also the headless run id. `_prepare_execution()` fails early
+  with “guard MCP not registered” when the project config lacks `perun-guard`,
+  and runs use the running OpenCode service (`standalone=False`) so the
+  project's MCP servers are loaded. `_build_execution_prompt()` names the
+  prefixed `perun-guard_guard_*` tools and instructs the model not to use the
+  `skill` tool or to give up after an “Unable to load skill …” error.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is
