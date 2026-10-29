@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.43
+
+*Released 2026-10-29.*
+
 ### Documentation
 
 - Document the lost-`package_begin` retry rule: use a fresh `transfer_id`;

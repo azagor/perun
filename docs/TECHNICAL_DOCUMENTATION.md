@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.42 (see §15). Preserve claimant agent-id casing in directed handoff and use exact restored chunk sizes.
+**Latest release:** v0.8.43 (see §15). Document the lost package_begin retry rule and correct release-note placement.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1709,6 +1709,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-29 — v0.8.43: Document the lost package_begin retry rule and correct release-note placement.
+
 ### 2026-10-29 — v0.8.42: Preserve claimant agent-id casing in directed handoff and use exact restored chunk sizes.
 
 ### 2026-10-29 — v0.8.41: Persist package-transfer room binding, prune restored slots, and cover policy auto-approve edge cases.
