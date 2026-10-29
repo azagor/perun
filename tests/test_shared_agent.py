@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from perun import shared_agent
+from perun import action_proposals, registry, shared_agent
 
 
 def _frontmatter(md):
@@ -20,6 +20,8 @@ def test_shared_agent_uses_v2_permissions_array(tmp_path, monkeypatch):
     assert shared_agent.SHARED_AGENT_ID == "perun-shared"
     assert "mode: primary" in text
     assert "native shell" in text.lower() or "cannot use shell" in text.lower()
+    assert "perun-guard_guard_write_file" in text
+    assert "Do not call the `skill` tool" in text
 
     fm = _frontmatter(text)
     assert "permission" not in fm
@@ -27,6 +29,8 @@ def test_shared_agent_uses_v2_permissions_array(tmp_path, monkeypatch):
     # Broad deny must come before guard allows (last-match-wins in V2).
     actions = [p["action"] for p in fm["permissions"]]
     assert actions[0] == "*"
+    assert "skill" in actions
+    assert fm["permissions"][actions.index("skill")]["effect"] == "deny"
     assert "guard_*" in actions
     assert "perun_guard_*" in actions
     assert "perun-guard_*" in actions
@@ -55,3 +59,17 @@ def test_ensure_shared_agent_gracefully_fails_when_parent_dir_is_not_writable(
 
     assert result == target
     assert not target.is_file()
+
+
+def test_execution_prompt_uses_prefixed_guard_tools(tmp_path):
+    project_path = tmp_path / "prompt-project"
+    project_path.mkdir()
+    project = registry.add_project("PromptProject", str(project_path))
+    prompt = action_proposals._build_execution_prompt(
+        {"requester": "frambo", "intent": "write a file", "targets": ["a.txt"],
+         "details": {}},
+        project,
+    )
+    assert "perun-guard_guard_write_file" in prompt
+    assert "Do not call the `skill` tool" in prompt
+    assert "Unable to load skill" in prompt

@@ -22,6 +22,12 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **Shared-project execution uses the exact guard tool names.** The
+  `perun-shared` agent now allows the prefixed `perun-guard_guard_*` tools,
+  denies the built-in `skill` loader, and tells the model to retry the guard
+  tool if it accidentally calls `skill` and gets “Unable to load skill …”. The
+  execution prompt names the same tools. This unblocks the CANARY.md canary,
+  which now executes and writes the expected three lines.
 - **PerunChat agent prompt uses the exact MCP tool names.** The `perunchat`
   persona now names `perun-proposals_list_proposals`, `perun-proposals_approve`,
   `perun-proposals_propose`, `perun-proposals_get_proposal`, and the

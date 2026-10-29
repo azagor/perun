@@ -866,10 +866,14 @@ runs in a separate process. Projects with `policy_auto_approve` are approved and
 executed immediately inside the `propose` tool; projects with `auto_approve`
 still require a peer `approve` call, and the poller prompts eligible reviewers.
 
-The `perun-guard` MCP server is the sanctioned filesystem path (`guard_read_file`,
-`guard_write_file`, `guard_edit_file`, `guard_list_directory`,
-`guard_search_files`) and the `perun-shared` agent denies every other tool. Guard
-writes are target-scoped to the proposal's declared paths. Credentials (`.env`,
+The `perun-guard` MCP server is the sanctioned filesystem path. The
+`perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools
+(`perun-guard_guard_read_file`, `perun-guard_guard_write_file`,
+`perun-guard_guard_edit_file`, `perun-guard_guard_list_directory`,
+`perun-guard_guard_search_files`), denies every other tool including the
+built-in `skill` loader, and its prompt tells the model to retry the exact
+guard tool if a call accidentally hits `skill` and returns “Unable to load
+skill …”. Guard writes are target-scoped to the proposal's declared paths. Credentials (`.env`,
 key/certificate files, `.ssh`, `.aws`, `.gnupg`), VCS metadata (`.git`), host
 config (`.opencode`, `.perun`), the project manifest, and `opencode.json` are
 denied even inside the project root. The post-run audit repeats the target check

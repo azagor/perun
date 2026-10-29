@@ -643,8 +643,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   events; the room owner is this machine's gateway-assigned agent id, never a
   hard-coded chat id; retries pending deletions on startup.
 * `perun/shared_agent.py` — installs the generated `perun-shared` OpenCode agent
-  used for approved executions: deny-all permissions with only `perun-guard`
-  tools allowed.
+  used for approved executions: deny-all permissions with only the prefixed
+  `perun-guard_guard_*` tools allowed (`guard_*`/`perun_guard_*` aliases too)
+  and the built-in `skill` tool explicitly denied. Its prompt names the exact
+  prefixed guard tools and tells the model to retry the guard tool if a call
+  accidentally hits `skill` and returns “Unable to load skill …”.
 * `perun/hitl.py` — local HMAC-SHA256 HITL approval-token engine for action
   proposals (tokens bind proposal id, action hash, expiry, and nonce); signing
   secret configurable via `PERUN_HITL_SECRET` / `perun_hitl_secret`.
@@ -676,7 +679,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   audit enforcement, State Digests for the project chat, and activity logging
   (`proposal_created`/`approved`/`rejected`/`executed`). Approved runs use the
   restricted `perun-shared` agent and a target-scoped guard allowlist; the
-  proposal id is also the headless run id.
+  proposal id is also the headless run id. `_build_execution_prompt()` names
+  the prefixed `perun-guard_guard_*` tools and instructs the model not to use
+  the `skill` tool or to give up after an “Unable to load skill …” error.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is
