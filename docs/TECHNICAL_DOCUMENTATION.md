@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.35 (see §15). Shared-config health check, per-project stale hint, perun-proposals MCP binding and cwd hardening; release-script changelog fix and docs refresh.
+**Latest release:** v0.8.36 (see §15). Autonomous peer review with approve-only defaults; target-scoped guard enforcement; hardened external execution ZIP handoff with rollback, size/chunk caps, room binding, and secret-safe downloads.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1671,6 +1671,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-29 — v0.8.36: Autonomous peer review with approve-only defaults; target-scoped guard enforcement; hardened external execution ZIP handoff with rollback, size/chunk caps, room binding, and secret-safe downloads.
+
 ### 2026-10-29 — v0.8.35: Shared-config health check, per-project stale hint, perun-proposals MCP binding and cwd hardening; release-script changelog fix and docs refresh.
 
 ### 2026-10-29 — v0.8.34: Gateway/HITL hardening, portable MCP config, and PerunChat permission fixes
