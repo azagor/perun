@@ -38,6 +38,24 @@ def test_create_proposal(tmp_path):
     assert proposal["targets"] == [target]
 
 
+def test_self_approval_is_blocked_in_core(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "x", "targets": [target], "action_type": "edit"},
+    )
+
+    with pytest.raises(ValueError, match="cannot be approved by its requester"):
+        action_proposals.approve(proposal["id"], "  Frambo  ")
+    with pytest.raises(ValueError, match="cannot be rejected by its requester"):
+        action_proposals.reject(proposal["id"], "frambo")
+
+    approved = action_proposals.approve(proposal["id"], "szczepan")
+    assert approved["approved_by"] == "szczepan"
+
+
 def test_create_proposal_rejects_outside_allowlist(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -810,7 +828,7 @@ def test_claim_execution_rejects_ro_participant(tmp_path):
         {"intent": "x", "targets": [target], "action_type": "edit"},
         owner="owner",
     )
-    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.approve(proposal["id"], "reviewer")
     with pytest.raises(ValueError, match="read-only"):
         action_proposals.claim_execution(proposal["id"], "frambo")
 

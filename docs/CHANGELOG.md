@@ -6,6 +6,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **Self-approval is enforced in the core, not only the MCP tool.**
+  `action_proposals.approve()` / `reject()` now reject an approver that
+  normalizes to the proposal's requester (case/whitespace-insensitive), so the
+  dashboard, retries, and every other caller are covered. `allow_self=True` is
+  used only by the autonomous policy path.
+- **Chat approvals use the bot's own identity.** The bridge records both the
+  requester (`PERUN_CHAT_SENDER` / actor `sender`) and its own agent id
+  (`PERUN_CHAT_AGENT` / actor `agent`); `perun-proposals approve`/`reject` use
+  the agent id. The bot can approve a human's request without impersonating
+  that human.
 - **PerunChat actor files expire after one hour.** `perun-proposals` ignores a
   stale per-room actor file, so a later TUI session cannot approve a proposal
   as the last chat sender.

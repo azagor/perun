@@ -38,6 +38,11 @@ EXTERNAL_CLAIM_TTL_SECONDS = 3600
 AUTO_APPROVER = "auto"
 
 
+def _same_actor(a: Any, b: Any) -> bool:
+    """Compare two actor ids ignoring case and surrounding whitespace."""
+    return str(a or "").strip().lower() == str(b or "").strip().lower()
+
+
 def _pick_auto_approver(cfg: dict[str, Any], requester: str) -> str:
     """Return the identity recorded for an autonomous approval.
 
@@ -76,7 +81,7 @@ def auto_approve_and_execute(
         approver,
         project.get("slug", project["id"]),
     )
-    approve(proposal["id"], approver)
+    approve(proposal["id"], approver, allow_self=True)
     started = start_execution(
         proposal["id"],
         orchestrator_instance=orchestrator_instance,
@@ -267,13 +272,20 @@ def list_by_project(project_id: int, status: str | None = None) -> list[dict[str
     return [_row_to_dict(r) for r in rows]
 
 
-def approve(proposal_id: str, approver: str) -> dict[str, Any]:
-    """Approve a proposal and issue a signed HITL token."""
+def approve(proposal_id: str, approver: str, *,
+            allow_self: bool = False) -> dict[str, Any]:
+    """Approve a proposal and issue a signed HITL token.
+
+    ``allow_self`` is reserved for the autonomous-policy path, where Perun
+    itself is the approver rather than an independent reviewer.
+    """
     proposal = get(proposal_id)
     if not proposal:
         raise ValueError("proposal not found")
     if proposal["status"] != "pending":
         raise ValueError(f"proposal is {proposal['status']}")
+    if not allow_self and _same_actor(proposal.get("requester"), approver):
+        raise ValueError("a proposal cannot be approved by its requester")
 
     engine = hitl.default_engine()
     execution_details = {
@@ -313,12 +325,15 @@ def approve(proposal_id: str, approver: str) -> dict[str, Any]:
     return {**proposal, "approval_token": token}
 
 
-def reject(proposal_id: str, approver: str, reason: str = "") -> dict[str, Any]:
+def reject(proposal_id: str, approver: str, reason: str = "",
+           *, allow_self: bool = False) -> dict[str, Any]:
     proposal = get(proposal_id)
     if not proposal:
         raise ValueError("proposal not found")
     if proposal["status"] != "pending":
         raise ValueError(f"proposal is {proposal['status']}")
+    if not allow_self and _same_actor(proposal.get("requester"), approver):
+        raise ValueError("a proposal cannot be rejected by its requester")
     reason = str(reason or "").strip()[:1000]
     ts = _now()
     with db.db() as conn:

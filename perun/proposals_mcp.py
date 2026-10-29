@@ -66,12 +66,12 @@ def _project_path() -> Path:
 ACTOR_TTL_SECONDS = 3600
 
 
-def _actor_sender(path: Path) -> str:
-    """Return a fresh sender from an actor file, or "" when unusable."""
+def _actor_value(path: Path, key: str) -> str:
+    """Return a fresh value from an actor file, or "" when unusable."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        sender = str(data.get("sender") or "").strip()
-        if not sender:
+        value = str(data.get(key) or "").strip()
+        if not value:
             return ""
         raw_ts = str(data.get("updated_at") or "").strip()
         if raw_ts:
@@ -84,12 +84,13 @@ def _actor_sender(path: Path) -> str:
             age = (datetime.now(timezone.utc) - stamp).total_seconds()
             if abs(age) > ACTOR_TTL_SECONDS:
                 return ""
-        return sender
+        return value
     except Exception:
         return ""
 
 
 def _sender(room_id: str = "") -> str:
+    """Return the human/agent who requested the change."""
     raw = os.environ.get("PERUN_CHAT_SENDER", "").strip()
     if raw:
         return raw
@@ -97,11 +98,30 @@ def _sender(room_id: str = "") -> str:
     if room:
         path = config.perunchat_actor_path(room)
         if path.is_file():
-            sender = _actor_sender(path)
+            sender = _actor_value(path, "sender")
             if sender:
                 return sender
     raise ValueError(
         "PERUN_CHAT_SENDER is not set and no fresh room actor is available")
+
+
+def _approver(room_id: str = "") -> str:
+    """Return the agent identity that is actually calling approve/reject.
+
+    The bridge records both the incoming sender (the requester) and its own
+    agent id. The bot must approve as itself, not as the human who asked.
+    """
+    raw = os.environ.get("PERUN_CHAT_AGENT", "").strip()
+    if raw:
+        return raw
+    room = (room_id or _room_id()).strip()
+    if room:
+        path = config.perunchat_actor_path(room)
+        if path.is_file():
+            agent = _actor_value(path, "agent")
+            if agent:
+                return agent
+    return _sender(room_id)
 
 
 def _room_id() -> str:
@@ -219,26 +239,22 @@ def approve(proposal_id: str, decision: str, reason: str = "") -> dict[str, Any]
     chat = registry.get_project_chat(int(project["id"])) or {}
     room_id = (str(proposal.get("room_id") or "") or _room_id()
                or str(chat.get("room_id") or ""))
-    sender = _sender(room_id)
+    approver = _approver(room_id)
     cfg = shared_projects.load(project["path"])
 
-    _, error = _validate_participant(sender, project, cfg)
+    _, error = _validate_participant(approver, project, cfg)
     if error:
         raise ValueError(error)
 
     if proposal["status"] != "pending":
         raise ValueError(f"proposal is {proposal['status']}")
 
-    requester = str(proposal.get("requester") or "").strip().lower()
-    if sender.lower() == requester:
-        raise ValueError("a proposal cannot be approved by its requester")
-
     decision = str(decision or "").strip().lower()
     if decision == "approve":
-        action_proposals.approve(proposal_id, sender)
+        action_proposals.approve(proposal_id, approver)
         action_proposals.start_execution(proposal_id)
     elif decision == "reject":
-        action_proposals.reject(proposal_id, sender, reason=reason)
+        action_proposals.reject(proposal_id, approver, reason=reason)
     else:
         raise ValueError("decision must be 'approve' or 'reject'")
 

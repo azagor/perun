@@ -856,11 +856,15 @@ The chat agent performs read-only project inspection through the `perun-guard`
 MCP server (`guard_read_file`, `guard_list_directory`, `guard_search_files`).
 Actual proposal/approval coordination goes through the `perun-proposals` MCP
 server, which exposes `propose`, `approve`, `list_proposals` and `get_proposal`
-tools. The bridge injects `PERUN_PROJECT_PATH`, `PERUN_CHAT_SENDER` and
+tools. The bridge injects `PERUN_PROJECT_PATH`, `PERUN_CHAT_SENDER` (the
+requester), `PERUN_CHAT_AGENT` (the bot's own approval identity) and
 `PERUN_ROOM_ID` into each chat run so these servers know which project and
-sender they are serving. Tool calls are validated server-side against the same
-rw/trust/owner rules that used to be enforced for `[ACTION:…]` / `[APPROVAL:…]`
-markers. A background activity-table poller in the bridge posts review requests
+identities they are serving. Tool calls are validated server-side against the
+same rw/trust/owner rules that used to be enforced for `[ACTION:…]` /
+`[APPROVAL:…]` markers. The self-approval rule lives in the core
+`action_proposals.approve()`/`reject()` functions, so the dashboard, MCP tool,
+and retries all enforce it; only the autonomous policy path passes
+`allow_self=True`. A background activity-table poller in the bridge posts review requests
 and state digests to the bound room, so notices work even though the MCP server
 runs in a separate process. Projects with `policy_auto_approve` are approved and
 executed immediately inside the `propose` tool; projects with `auto_approve`
@@ -1232,11 +1236,12 @@ Both `perun-guard` and `perun-proposals` entries also set
 process cwd when the variable is absent, so a project-local MCP server launched
 from the TUI is bound to the project instead of failing with
 `PERUN_PROJECT_PATH is not set`. Because the MCP environment is static, the
-bridge writes the per-message sender to a per-room actor file under
-`PERUN_HOME/perunchat_actors/`; `perun-proposals` reads it when
-`PERUN_CHAT_SENDER` is absent and ignores files older than one hour, so
-`approve`/`reject` work from the bridge without leaving a stale authorization
-path. The dedicated `perunchat` agent denies the real
+bridge writes the per-message requester and the bot's own agent id to a per-room
+actor file under `PERUN_HOME/perunchat_actors/`; `perun-proposals` reads them
+when `PERUN_CHAT_SENDER` / `PERUN_CHAT_AGENT` are absent and ignores files older
+than one hour, so `approve`/`reject` work from the bridge without leaving a
+stale authorization path or impersonating the requester. The dedicated
+`perunchat` agent denies the real
 V2 guard action names (`<server>_guard_write_file` / `<server>_guard_edit_file`)
 and allows `perun_perunchat_room_memory` for older room context, keeping chat
 sessions read-only apart from explicit proposals.

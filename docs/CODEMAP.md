@@ -559,8 +559,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   project's slug with `agent="perunchat"` and the configured chat model, and
   load the project's `opencode.json` so the agent can use the
   `perun-guard`/`perun-proposals` servers; `_record_room_actor()` persists the
-  per-message sender under PERUN_HOME so the statically-configured proposals
-  server can authorize `approve`/`reject`. Unbound/public rooms use the control
+  per-message requester and the bot's own agent id under PERUN_HOME so the
+  statically-configured proposals server can authorize `approve`/`reject`.
+  Unbound/public rooms use the control
   plane. State-changing requests are sent through the `propose` tool, not
   executed directly. A background activity-table poller posts review requests
   and state digests back to the bound room so notices work even though the MCP
@@ -665,8 +666,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   directories, and falls back to pass-through when unset.
 * `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
   Exposes `propose`, `approve`, `list_proposals` and `get_proposal`; uses
-  `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` / `PERUN_ROOM_ID` from the chat run
-  environment to validate rw/trust/owner rules server-side. When
+  `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` (requester) /
+  `PERUN_CHAT_AGENT` (the bot's own approval identity) / `PERUN_ROOM_ID` from
+  the chat run environment to validate rw/trust/owner rules server-side. When
   `PERUN_PROJECT_PATH` is absent (a project-local MCP server launched by the
   TUI), it falls back to the process cwd; the generated `opencode.json` also
   sets `PERUN_PROJECT_PATH=.` for both `perun-guard` and `perun-proposals`.
@@ -684,7 +686,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   CAS approve/reject, atomic `approved → executing` claim, synchronous `execute`
   and non-blocking `start_execution`, startup `reconcile_interrupted`, post-run
   audit enforcement, State Digests for the project chat, and activity logging
-  (`proposal_created`/`approved`/`rejected`/`executed`). Approved runs use the
+  (`proposal_created`/`approved`/`rejected`/`executed`). `_same_actor()` enforces
+  the requester-cannot-self-approve rule inside `approve()`/`reject()` for every
+  caller; only `auto_approve_and_execute()` passes `allow_self=True`. Approved runs use the
   restricted `perun-shared` agent and a target-scoped guard allowlist; the
   proposal id is also the headless run id. `_build_execution_prompt()` names
   the prefixed `perun-guard_guard_*` tools and instructs the model not to use

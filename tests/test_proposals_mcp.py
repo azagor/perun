@@ -164,6 +164,21 @@ def test_sender_falls_back_to_room_actor_file(tmp_path, monkeypatch):
     assert proposals_mcp_module._sender(room) == "peruntheoverseer"
 
 
+def test_approver_uses_agent_identity_not_requester(tmp_path, monkeypatch):
+    """The bot approves as itself, not as the human who asked."""
+    actor = tmp_path / "actor.json"
+    actor.write_text(json.dumps({
+        "sender": "frambo",
+        "agent": "peruntheoverseer",
+    }), encoding="utf-8")
+    monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
+    monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
+    monkeypatch.delenv("PERUN_CHAT_AGENT", raising=False)
+    room = "grp:perun:test:chat"
+    assert proposals_mcp_module._sender(room) == "frambo"
+    assert proposals_mcp_module._approver(room) == "peruntheoverseer"
+
+
 def test_sender_rejects_malformed_actor_file(tmp_path, monkeypatch):
     actor = tmp_path / "actor.json"
     actor.write_text("not json", encoding="utf-8")
@@ -195,7 +210,10 @@ def test_reject_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, _
 
     monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
     actor = tmp_path / "actor.json"
-    actor.write_text(json.dumps({"sender": "peruntheoverseer"}), encoding="utf-8")
+    actor.write_text(json.dumps({
+        "sender": "frambo",
+        "agent": "peruntheoverseer",
+    }), encoding="utf-8")
     monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
     result = approve(proposal_id=prop["proposal_id"], decision="reject",
                      reason="not needed")
@@ -213,7 +231,10 @@ def test_approve_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, 
 
     monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
     actor = tmp_path / "actor.json"
-    actor.write_text(json.dumps({"sender": "peruntheoverseer"}), encoding="utf-8")
+    actor.write_text(json.dumps({
+        "sender": "frambo",
+        "agent": "peruntheoverseer",
+    }), encoding="utf-8")
     monkeypatch.setattr(config, "perunchat_actor_path", lambda _room: actor)
     monkeypatch.setattr(
         action_proposals, "start_execution",
