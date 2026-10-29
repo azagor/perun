@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.38
+
+*Released 2026-10-29.*
+
 ### Added
 
 - **MCP handoff tools for external claimants.** The sibling `perunchat` MCP
