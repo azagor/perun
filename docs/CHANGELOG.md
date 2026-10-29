@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **The PerunChat log repairs its own ordering.** After inserting a message the
+  dashboard re-sorts every timestamped line in the DOM, so restored history or
+  an older write path can no longer leave newer messages above older ones.
 
 ## v0.8.43
 

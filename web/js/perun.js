@@ -4566,6 +4566,25 @@ async function viewPerunChat() {
         return isNaN(d) ? Number.MAX_SAFE_INTEGER : d;
     }
 
+    function sortChatLog(box) {
+        if (!box) return;
+        const children = Array.from(box.children);
+        const timed = children.filter((child) => child.dataset && child.dataset.ts);
+        if (timed.length < 2) return;
+        const sorted = timed.slice().sort(
+            (a, b) => Number(a.dataset.ts) - Number(b.dataset.ts)
+        );
+        if (sorted.every((node, index) => node === timed[index])) return;
+        // Keep system/log lines after the timed messages.
+        const anchor = children.find(
+            (child) => !(child.dataset && child.dataset.ts)
+        ) || null;
+        for (const node of sorted) {
+            if (anchor && anchor.parentNode === box) box.insertBefore(node, anchor);
+            else box.appendChild(node);
+        }
+    }
+
     function chatHistoryKey(roomId) {
         return 'perunchat_chat_history:' + (roomId || 'none');
     }
@@ -4735,10 +4754,14 @@ async function viewPerunChat() {
         // remaining children shifted down by one.
         const line = el('div', {}, lineHtml);
         line._meta = { id: msg.id };
+        line.dataset.ts = String(msgTs);
         const domIndex = shifted ? Math.max(0, insertIndex - 1) : insertIndex;
         const beforeNode = box.children[domIndex] || null;
         if (beforeNode) box.insertBefore(line, beforeNode);
         else box.appendChild(line);
+        // Repair the whole log if an older client/restore left it out of
+        // order; this is cheap and guarantees ascending timestamps on screen.
+        sortChatLog(box);
         box.scrollTop = box.scrollHeight;
 
         // Attach listener to the reply button of the line we just inserted.
