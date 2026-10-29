@@ -6,6 +6,10 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.8.42
+
+*Released 2026-10-29.*
+
 ## v0.8.41
 
 *Released 2026-10-29.*
