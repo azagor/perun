@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.40 (see §15). Direct external-handoff frames with owner-only result routing and recipient enforcement.
+**Latest release:** v0.8.41 (see §15). Persist package-transfer room binding, prune restored slots, and cover policy auto-approve edge cases.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1709,6 +1709,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-29 — v0.8.41: Persist package-transfer room binding, prune restored slots, and cover policy auto-approve edge cases.
+
 ### 2026-10-29 — v0.8.40: Direct external-handoff frames with owner-only result routing and recipient enforcement.
 
 ### 2026-10-29 — v0.8.39: Correlate package_begin results by transfer id and ignore unsolicited package chunks in the MCP handoff client.
