@@ -191,5 +191,63 @@ def test_apply_package_writes_atomically(tmp_path):
     assert not list(root.glob("*.perun-tmp"))
 
 
+def test_apply_package_rolls_back_on_midway_failure(tmp_path, monkeypatch):
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    (root / "a.txt").write_text("old-a")
+    (root / "b.txt").write_text("old-b")
+
+    real_replace = package_handoff.os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("boom")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(package_handoff.os, "replace", flaky_replace)
+    with pytest.raises(OSError, match="boom"):
+        package_handoff.apply_package(
+            project, {"a.txt": b"new-a", "b.txt": b"new-b"})
+    assert (root / "a.txt").read_text() == "old-a"
+    assert (root / "b.txt").read_text() == "old-b"
+    assert not list(root.glob("*.perun-tmp"))
+
+
+def test_pack_rejects_external_dependency_targets(tmp_path):
+    project = _make_shared_project(tmp_path)
+    dep = tmp_path / "dep"
+    dep.mkdir()
+    (dep / "lib.py").write_text("x")
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["external_deps"] = [{"path": str(dep), "access": "rw"}]
+    manifest.save(project["path"], data, body="# p")
+    with pytest.raises(package_handoff.PackageError, match="external dependency"):
+        package_handoff.pack(project, [str(dep / "lib.py")])
+
+
+def test_validate_rejects_external_dependency_targets(tmp_path):
+    project = _make_shared_project(tmp_path)
+    dep = tmp_path / "dep"
+    dep.mkdir()
+    (dep / "lib.py").write_text("x")
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["participants"] = [{"agent_id": "frambo", "roles": ["rw"]}]
+    data["external_deps"] = [{"path": str(dep), "access": "rw"}]
+    manifest.save(project["path"], data, body="# p")
+    project = registry.get_project(project["slug"])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit dep", "targets": [str(dep / "lib.py")],
+         "action_type": "edit"},
+    )
+    errors = package_handoff.validate_package(
+        project, proposal, {"lib.py": b"new"})
+    assert any("external dependency" in e for e in errors)
+
+
 def test_sha256_helper():
     assert package_handoff.sha256_hex(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"

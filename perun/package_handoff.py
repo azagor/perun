@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import shutil
 import stat
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -66,6 +68,10 @@ def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for target in targets:
             target_path = path_guard.resolve_target(root, target)
+            if not _path_under(target_path, root):
+                raise PackageError(
+                    "external dependency targets are not supported in external "
+                    "handoff; use local execution")
             if target_path.is_file():
                 _add_file(zf, root, target_path)
             elif target_path.is_dir():
@@ -196,6 +202,15 @@ def validate_package(
     target_paths = [
         path_guard.resolve_target(root, t) for t in (proposal.get("targets") or [])
     ]
+    unsupported = [
+        t for t in (proposal.get("targets") or [])
+        if not _path_under(path_guard.resolve_target(root, t), Path(root).resolve())
+    ]
+    if unsupported:
+        return [
+            f"external dependency target not supported in external handoff: {t}"
+            for t in unsupported
+        ]
 
     errors: list[str] = []
     for relpath in files:
@@ -220,30 +235,74 @@ def apply_package(
     project: dict[str, Any],
     files: dict[str, bytes],
 ) -> list[str]:
-    """Write all files atomically and return the relative paths applied.
+    """Apply a validated package as a unit and return the relative paths applied.
 
-    Validation must be done before calling this function. Each file is written
-    to a sibling ``.perun-tmp`` file and renamed into place with ``os.replace``.
-    Parent directories are created as needed.
+    All files are staged and existing targets are backed up before any replace.
+    If a write fails, previously applied files are restored and newly created
+    files are removed, so a package failure does not leave a half-applied tree.
+    Validation must be done before calling this function.
     """
     root = Path(project["path"]).resolve()
+    staging = Path(tempfile.mkdtemp(prefix="perun-apply-"))
+    new_dir = staging / "_new"
+    backup_dir = staging / "_backup"
+    new_dir.mkdir()
+    backup_dir.mkdir()
     applied: list[str] = []
-    for relpath, data in files.items():
-        target = path_guard.resolve_target(root, relpath)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(target.suffix + ".perun-tmp")
-        try:
-            tmp.write_bytes(data)
-            os.replace(str(tmp), str(target))
-        except Exception:
-            # Best-effort cleanup of the temp file; the real error propagates.
+    backups: list[tuple[Path, Path | None]] = []
+    try:
+        for relpath, data in files.items():
+            target = _target_for_apply(root, relpath)
+            rel = target.relative_to(root)
+            staged = new_dir / rel
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(data)
+            if target.is_file():
+                backup = backup_dir / rel
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, backup)
+                backups.append((target, backup))
+            else:
+                backups.append((target, None))
+
+        for relpath in files:
+            target = _target_for_apply(root, relpath)
+            rel = target.relative_to(root)
+            staged = new_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(target.suffix + ".perun-tmp")
             try:
-                tmp.unlink(missing_ok=True)
+                shutil.copy2(staged, tmp)
+                os.replace(str(tmp), str(target))
+            except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
+            applied.append(relpath)
+    except Exception:
+        for target, backup in reversed(backups):
+            try:
+                if backup is not None:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
             except Exception:
                 pass
-            raise
-        applied.append(relpath)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return applied
+
+
+def _target_for_apply(root: Path, relpath: str) -> Path:
+    target = path_guard.resolve_target(root, relpath)
+    if not _path_under(target, root):
+        raise PackageError(
+            "external dependency targets are not supported in external handoff")
+    return target
 
 
 def _path_under(path: Path, parent: Path) -> bool:

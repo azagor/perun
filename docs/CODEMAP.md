@@ -453,10 +453,12 @@ its own model/tokens and Perun validates/applies it locally.
 * `validate_package()` — reject traversal (`..`), absolute paths, drive letters,
   symlinks, encrypted entries, duplicate entry names, sensitive paths, and
   entries outside the approved proposal targets.
-* `apply_package()` — write the validated entries to disk under the project root
-  with per-file temp + `os.replace`; the proposal lifecycle runs the audit.
+* `apply_package()` — stage the validated entries, back up existing targets, and
+  apply with per-file temp + `os.replace`; a mid-apply failure restores the
+  backups, so a package is not left half-applied.
 * The external download path is restricted to the proposal's approved targets;
-  a claimant cannot request arbitrary project paths.
+  a claimant cannot request arbitrary project paths. External-dependency
+  targets are rejected for external handoff (they require local execution).
 
 ### `perun/skills.py`
 Discovery of OpenCode agent skills and tools available to a project.

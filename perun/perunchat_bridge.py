@@ -1501,14 +1501,19 @@ class PerunChatBridge:
         return {}
 
     @staticmethod
-    def _execution_proposal_view(proposal: Dict[str, Any]) -> Dict[str, Any]:
+    def _execution_proposal_view(
+        proposal: Dict[str, Any], *, include_details: bool = False
+    ) -> Dict[str, Any]:
         """Proposal fields safe to publish to the room's execution clients.
 
         The HITL approval token and the claim snapshot are server-side state and
-        must not be broadcast over the chat room. The proposal details/targets
-        remain available to the claimant so it can build the package.
+        must not be broadcast over the chat room. The claimant receives
+        ``details`` once on claim so it can build the package; status/revoke
+        responses omit it.
         """
         hidden = {"approval_token", "approval_expiry", "claim_snapshot"}
+        if not include_details:
+            hidden.add("details")
         return {k: v for k, v in proposal.items() if k not in hidden}
 
     def _handle_execution_frame(self, frame: Dict[str, Any], ws: Any) -> None:
@@ -1537,7 +1542,8 @@ class PerunChatBridge:
                 )
                 result = {
                     "op": op, "ok": True,
-                    "proposal": self._execution_proposal_view(proposal),
+                    "proposal": self._execution_proposal_view(
+                        proposal, include_details=True),
                 }
                 self._post_execution_notice(
                     room_id,

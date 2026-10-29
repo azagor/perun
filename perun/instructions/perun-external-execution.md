@@ -74,7 +74,8 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 - Chunks must come from the same room and sender as `package_begin`; a chunk
   from another room or agent is rejected.
 - Execution result frames omit the server-side HITL approval token and claim
-  snapshot; proposal `details` and `targets` remain available to the claimant.
+  snapshot. `claim_execution` includes the proposal `details` and `targets` for
+  the claimant; `execution_status` / `revoke_execution_claim` omit `details`.
 
 ## Download flow
 
@@ -105,6 +106,8 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
   `opencode.json`, `perun.md`, …) are never packed for download and are rejected
   on upload, even when a directory target contains them.
 - Directory entries (`dir/`) are skipped; only regular files are applied.
+- The archive is project-root-relative. Targets under `external_deps` are not
+  supported by the external ZIP handoff; execute those locally.
 - Maximums (defaults): uncompressed total 50 MB, 500 entries, 10 MB per entry,
   10,000 chunks per transfer.
 

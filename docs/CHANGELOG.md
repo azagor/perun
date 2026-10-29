@@ -6,6 +6,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **Package application rolls back on failure.** `apply_package()` stages all
+  files and backs up existing targets before replacing anything; a mid-apply
+  failure restores the originals and removes newly created files instead of
+  leaving a half-applied tree.
+- **External-dependency targets are explicit.** The ZIP handoff is
+  project-root-relative; proposals targeting `external_deps` are rejected with a
+  clear “use local execution” error instead of a confusing pack failure.
+- **Status responses omit proposal details.** `claim_execution` includes the
+  proposal `details` once for the claimant; `execution_status` and
+  `revoke_execution_claim` return only status/target metadata.
 - **External execution downloads are target-scoped.** A claimant can no longer
   request arbitrary project paths; `request_download_package` paths must stay
   under the proposal's approved targets. `pack()` skips sensitive files and

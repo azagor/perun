@@ -2346,12 +2346,23 @@ def test_execution_status_does_not_leak_approval_token(settings, tmp_path):
             "room_id": room,
             "sender": {"agent_id": "frambo"},
             "content_type": "application/perun-execution",
+            "payload": {"op": "claim_execution", "proposal_id": proposal["id"]},
+        }, None)
+        claim_view = sent[-1]["payload"]["proposal"]
+        assert claim_view["details"] == {"content": "new"}
+        assert "approval_token" not in claim_view
+        assert "claim_snapshot" not in claim_view
+
+        bridge._handle_execution_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
             "payload": {"op": "execution_status", "proposal_id": proposal["id"]},
         }, None)
     view = sent[-1]["payload"]["proposal"]
     assert "approval_token" not in view
     assert "claim_snapshot" not in view
-    assert view["details"] == {"content": "new"}
+    assert "details" not in view
 
 
 def test_download_transfer_rejected_without_claim(settings, tmp_path):
