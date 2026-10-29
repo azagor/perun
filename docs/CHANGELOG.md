@@ -2,15 +2,35 @@
 
 All notable changes are recorded here. Single source of truth for release notes.
 
-## v0.8.32
+## Unreleased
 
-*Released 2026-10-28.*
+### Fixed
 
-## v0.8.33
+- **Release script no longer corrupts the changelog.** `tools/release.py` now
+  promotes the existing Unreleased entries into the new version section instead
+  of leaving them under a fresh empty Unreleased heading. The technical-doc
+  revision entry also drops the placeholder bullet.
+
+## v0.8.34
 
 *Released 2026-10-29.*
 
-## v0.8.34
+### Fixed
+
+- **PerunChat bridge runs bound project chats against the bound project.** The
+  reply loop now passes the shared-project slug to `run_and_wait` for managed
+  `grp:` rooms, with `agent="perunchat"` and the configured chat model, instead
+  of always falling back to the control-plane project. Unbound/public rooms
+  continue to use `control.ensure()`.
+
+- **Portable MCP config and correct chat permissions.** Shared-project
+  `opencode.json` now writes `PERUN_HOME=~/.perun` for the default home instead
+  of embedding the absolute user path, so committed project configs do not leak
+  the OS username. The `perunchat` agent denies `*guard_write_file` and
+  `*guard_edit_file` (the real V2 action names are `<server>_<tool>`) and allows
+  `perun_perunchat_room_memory` for older room context.
+
+## v0.8.33
 
 *Released 2026-10-29.*
 
@@ -21,17 +41,10 @@ All notable changes are recorded here. Single source of truth for release notes.
   `opencode auth logout`, `opencode reload`) and installer/search subprocesses
   now set `CREATE_NO_WINDOW`, so the dashboard and bridge no longer flash a
   visible `cmd.exe` window.
-- **PerunChat bridge runs bound project chats against the bound project.** The
-  reply loop now passes the shared-project slug to `run_and_wait` for managed
-  `grp:` rooms, with `agent="perunchat"` and the configured chat model, instead
-  of always falling back to the control-plane project. Unbound/public rooms
-  continue to use `control.ensure()`.
-- **Portable MCP config and correct chat permissions.** Shared-project
-  `opencode.json` now writes `PERUN_HOME=~/.perun` for the default home instead
-  of embedding the absolute user path, so committed project configs do not leak
-  the OS username. The `perunchat` agent denies `*guard_write_file` and
-  `*guard_edit_file` (the real V2 action names are `<server>_<tool>`) and allows
-  `perun_perunchat_room_memory` for older room context.
+
+## v0.8.32
+
+*Released 2026-10-28.*
 
 ### Added
 
@@ -41,10 +54,6 @@ All notable changes are recorded here. Single source of truth for release notes.
   generic `project.model` when starting a run, and mirrors the values into the
   project's `opencode.json` under `agent.<id>.model` so the OpenCode TUI can honor
   them. Control-plane runs ignore project per-agent defaults.
-
-## Unreleased
-
-_No unreleased changes yet._
 
 
 ## v0.8.31

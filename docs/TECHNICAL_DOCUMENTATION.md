@@ -1086,7 +1086,11 @@ live in the sibling `perun_chat` project; Perun is one chat client among others.
   chat (`project_chats`), and every private room Perun already belongs to
   (discovered over REST), then replies to incoming text messages through a
   **dedicated OpenCode agent** (`perunchat`, configured
-  via `perunchat_chat_agent`) that carries its own chat-participant system prompt
+  via `perunchat_chat_agent`) that carries its own chat-participant system prompt.
+  Bound project rooms (`grp:`) run against that project's slug with
+  `agent="perunchat"` and the configured chat model; unbound and public rooms
+  continue to use the control plane (`control.ensure()`), so a shared project's
+  chat never accidentally executes in the wrong project.
   and denies all tools. Runs use `skip_instructions=True` so neither the coding
   orchestrator persona nor project `AGENTS.md` instructions leak into chat
   replies. The agent file (`~/.config/opencode/agents/perunchat.md`) is
@@ -1210,6 +1214,14 @@ Policy auto-approve executes proposals immediately by the system, recording the
 `auto` policy identity. When both flags are enabled, policy auto-approve takes
 precedence. Humans always retain the ability to approve, execute, retry, or
 delete proposals manually.
+
+**Portable MCP config and chat permissions.** The shared-project
+`opencode.json` writes `PERUN_HOME=~/.perun` for the default home instead of an
+absolute user path, so a committed project config never leaks the OS username.
+The dedicated `perunchat` agent denies the real V2 guard action names
+(`<server>_guard_write_file` / `<server>_guard_edit_file`) and allows
+`perun_perunchat_room_memory` for older room context, keeping chat sessions
+read-only apart from explicit proposals.
 
 Lifecycle chat notifications keep project participants informed without
 requiring the dashboard: a plain-text "Proposal … is now executing" notice is
@@ -1611,15 +1623,34 @@ setting.
 ## 15. Revision history
 ### 2026-10-29 — v0.8.34: Gateway/HITL hardening, portable MCP config, and PerunChat permission fixes
 
-* (add release notes here or edit the changelog)
+* **Bound project chats route to the bound project.** The PerunChat bridge now
+  passes the shared-project slug to `run_and_wait` for managed `grp:` rooms,
+  with `agent="perunchat"` and the configured chat model. Unbound and public
+  rooms keep using the control plane.
+* **Portable shared-project MCP config.** `opencode.json` writes
+  `PERUN_HOME=~/.perun` for the default home instead of an absolute user path,
+  so committed configs do not expose the OS username.
+* **Correct `perunchat` permissions.** The agent denies the real V2 guard
+  action names (`<server>_guard_write_file` / `<server>_guard_edit_file`) and
+  allows `perun_perunchat_room_memory` for older room context.
 
-### 2026-10-29 — v0.8.33: Fix blinking console windows on Windows for background opencode, search, and install subprocesses; clean up CODEMAP audit false positives.
+### 2026-10-29 — v0.8.33: Fix blinking console windows on Windows for background opencode, search, and install subprocesses.
 
-* (add release notes here or edit the changelog)
+* **No more console flashes.** Background `opencode models` / `auth` /
+  `reload`, ripgrep/ast-grep, `pip`, `git`, and `schtasks` calls now set
+  `CREATE_NO_WINDOW` on Windows via local `_creationflags()` helpers.
+* **CODEMAP audit cleanup.** Runtime/user-home file references were rephrased so
+  the audit only flags genuinely external filenames.
 
-### 2026-10-28 — v0.8.32: Per-project default plan and build model overrides, configurable from the dashboard Config tab or perun.md, mirrored into opencode.json under agent.<id>.model, with production-readiness hardening.
+### 2026-10-28 — v0.8.32: Per-project default plan and build model overrides.
 
-* (add release notes here or edit the changelog)
+* **`agent_models` map.** Projects (and `perun.md`) can declare a default model
+  per agent id (`plan`, `build`, custom). Resolution is agent-first, then
+  explicit `--model` → `agent_models[agent]` → `project.model` → control-plane
+  settings. Values are mirrored into `opencode.json` under `agent.<id>.model`.
+* **Dashboard + API + MCP + CLI.** The Config tab exposes Plan/Build/Default
+  model fields; `PATCH /api/projects/{slug}` merges/clears the map;
+  `perun_update_project` and `perun add --agent-models` accept JSON.
 
 
 ### 2026-10-28 — v0.8.31: anchoring + CODEMAP token-efficiency

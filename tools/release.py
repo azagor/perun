@@ -76,20 +76,46 @@ def bump_init_version(version: str) -> None:
     print(f"[OK] Bumped perun/__init__.py to {version}")
 
 
+UNRELEASED_HEADER = "## Unreleased"
+UNRELEASED_PLACEHOLDER = "_No unreleased changes yet._"
+
+
 def changelog_unreleased_to_version(version: str) -> None:
+    """Promote the current ``## Unreleased`` body into a new version section.
+
+    The previous implementation replaced only the header, which left the
+    unreleased entries below a *new* empty ``## Unreleased`` section and buried
+    the actual release notes. This version moves the body into the new version
+    section and starts a fresh, empty Unreleased section above it.
+    """
     path = PUBLIC / "docs" / "CHANGELOG.md"
     text = read_file(path)
     if f"## v{version}" in text:
         print(f"[WARN] Changelog already has ## v{version}; skipping")
         return
-    if "## Unreleased" not in text:
+    header_start = text.find(UNRELEASED_HEADER)
+    if header_start == -1:
         raise SystemExit("[ERR] docs/CHANGELOG.md has no ## Unreleased section")
+
+    body_start = header_start + len(UNRELEASED_HEADER)
+    next_match = re.search(r"^## ", text[body_start:], re.MULTILINE)
+    if next_match is None:
+        body_end = len(text)
+        suffix = ""
+    else:
+        body_end = body_start + next_match.start()
+        suffix = text[body_end:]
+
+    body = text[body_start:body_end].strip()
+    if body == UNRELEASED_PLACEHOLDER:
+        body = ""
     date = datetime.date.today().strftime("%Y-%m-%d")
-    new_text = text.replace(
-        "## Unreleased",
-        f"## v{version}\n\n*Released {date}.*\n\n## Unreleased\n\n_No unreleased changes yet._",
-        1,
-    )
+    new_text = text[:header_start]
+    new_text += f"{UNRELEASED_HEADER}\n\n{UNRELEASED_PLACEHOLDER}\n\n"
+    new_text += f"## v{version}\n\n*Released {date}.*\n\n"
+    if body:
+        new_text += body + "\n\n"
+    new_text += suffix.lstrip("\n")
     write_file(path, new_text)
     print(f"[OK] Created docs/CHANGELOG.md section for v{version}")
 
@@ -121,7 +147,7 @@ def add_techdoc_revision_entry(version: str, summary: str) -> None:
     if section not in text:
         raise SystemExit("[ERR] docs/TECHNICAL_DOCUMENTATION.md missing '## 15. Revision history'")
     date = datetime.date.today().strftime("%Y-%m-%d")
-    entry = f"\n### {date} — v{version}: {summary}\n\n* (add release notes here or edit the changelog)\n"
+    entry = f"\n### {date} — v{version}: {summary}\n"
     new_text = text.replace(section, section + entry, 1)
     write_file(path, new_text)
     print(f"[OK] Added revision entry for v{version}")

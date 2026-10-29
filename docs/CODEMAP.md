@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.8.32"`).
+Package docstring + `__version__` (`"0.8.34"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -137,7 +137,8 @@ Shared project creation/registration, used by **both** the HTTP wizard
 * `OPENCODE_CONFIG_NAMES`, `sync_opencode_config()` — mirror a project's
   `model` / `agent` override and per-agent `agent_models` map into its
   `opencode.json[c]` (`model`, `default_agent`, and `agent.<id>.model` keys) so
-  the OpenCode TUI honors the dashboard setting.
+  the OpenCode TUI honors the dashboard setting. Shared-project MCP entries use
+  a portable `PERUN_HOME=~/.perun` instead of the absolute user path.
 
 ### `perun/providers.py`
 LLM provider discovery, status and configuration. Perun never stores credentials
@@ -153,8 +154,8 @@ environment variables into the child ``opencode run`` process.
   Credentials are read fresh per call and never cached or persisted by Perun.
 * `resolve_run_model()` — pick a model string that works for headless runs:
   honors the requested provider if authenticated, resolves known aliases such as
-  aliases like the Kimi model id to its OpenCode Go counterpart and falls back to
-  active cloud providers before considering local providers.
+  the Kimi model id to its OpenCode Go counterpart, and falls back to active
+  cloud providers before considering local providers.
 * `_available_models()` — cached wrapper around ``opencode models``.
 * `list_providers()` — ``GET /api/providers``; merges providers from
   ``opencode auth list --format json`` with providers configured in ``opencode.json[c]``,
@@ -167,6 +168,9 @@ environment variables into the child ``opencode run`` process.
   when connecting local Ollama.
 * `disconnect_provider()` — ``POST /api/providers/{id}/disconnect``; removes the config
   entry (even if ``opencode auth list`` fails) and clears any saved auth credential.
+* `_creationflags()` — returns `CREATE_NO_WINDOW` on Windows so background
+  ``opencode models`` / ``auth list`` / ``auth export`` / ``auth logout`` calls
+  never flash a console window.
 
 ### `perun/embeddings.py`
 Ollama transport + vector math (project-agnostic).
@@ -193,6 +197,8 @@ servers.
   rejection helpers.
 * `_gitignored()`, `_read_gitignore()`, `_glob_match_simple()` — `.gitignore`
   support for the Python fallback.
+* `_creationflags()` — `CREATE_NO_WINDOW` on Windows so ripgrep/ast-grep
+  subprocesses launched in the background do not flash console windows.
 
 ### `perun/search.py`
 State-of-the-art unified search orchestrator. Fuses vector memory, global
@@ -465,6 +471,8 @@ Safe read/write helpers for the user-level OpenCode config (``opencode.json[c]``
 * ``providers_section()`` / ``set_providers_section()`` handle both legacy ``provider`` and V2 ``providers`` keys.
 * ``configured_providers()``, ``configure_provider()``, ``remove_provider()`` edit provider entries without touching unrelated config keys.
 * ``reload_opencode()`` asks the OpenCode service to reload its config after a change.
+* ``_creationflags()`` — `CREATE_NO_WINDOW` on Windows so the background
+  ``opencode reload`` call does not flash a console window.
 
 ### `perun/mcp_servers.py`
 Discover the MCP servers OpenCode is configured to load, and live-probe them on
@@ -540,9 +548,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `restart()`; connects to the gateway via the configured API key,
   auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and
   answers through `Orchestrator.run_and_wait()` with the chat system prompt.
-  Rate-limited (15 replies/min). Shared-project chats load the project's
-  `opencode.json` so the agent can use the `perun-guard` and `perun-proposals`
-  MCP servers; state-changing requests are sent through the `propose` tool,
+  Rate-limited (15 replies/min). Shared-project chats run against the bound
+  project's slug with `agent="perunchat"` and the configured chat model, and
+  load the project's `opencode.json` so the agent can use the
+  `perun-guard` and `perun-proposals` MCP servers; unbound/public rooms use the
+  control plane. State-changing requests are sent through the `propose` tool,
   not executed directly. A background activity-table poller posts review
   requests and state digests back to the bound room so notices work even
   though the MCP server runs in a separate process.
@@ -859,6 +869,8 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
   task's own process).
 * Orchestration: `machine_install()` (removes any existing task by default),
   `uninstall_machine()`.
+* `_creationflags()` — `CREATE_NO_WINDOW` on Windows for `which_version`,
+  `pip_install`, and `schtasks` calls so install/repair never flashes a console.
 
 ---
 
