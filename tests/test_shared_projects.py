@@ -230,15 +230,47 @@ def test_sync_filters_untrusted_participants_from_room_acl(tmp_path, monkeypatch
     assert calls[1][2] == ["frambo"]
 
 
+def _expected_guard_entry():
+    from perun import config as _config
+
+    return {
+        "type": "local",
+        "command": [sys.executable, "-m", "perun.guard_mcp"],
+        "enabled": True,
+        "environment": {"PERUN_HOME": str(_config.HOME)},
+    }
+
+
+def _expected_proposals_entry():
+    from perun import config as _config
+
+    return {
+        "type": "local",
+        "command": [sys.executable, "-m", "perun.proposals_mcp"],
+        "enabled": True,
+        "environment": {"PERUN_HOME": str(_config.HOME)},
+    }
+
+
 def test_sync_opencode_config_adds_guard_mcp_for_shared_project(tmp_path):
     project = _make_project(tmp_path, "shared-guard")
     _enable_shared(project)
     projects.sync_opencode_config(project)
     cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
     assert "perun-guard" in cfg.get("mcp", {})
-    assert cfg["mcp"]["perun-guard"] == {
-        "command": sys.executable, "args": ["-m", "perun.guard_mcp"]
-    }
+    assert cfg["mcp"]["perun-guard"] == _expected_guard_entry()
+    assert cfg["mcp"]["perun-proposals"] == _expected_proposals_entry()
+
+
+def test_sync_opencode_config_uses_portable_default_home(tmp_path, monkeypatch):
+    """The default PERUN_HOME must not embed the user's absolute home path."""
+    project = _make_project(tmp_path, "portable-home")
+    _enable_shared(project)
+    monkeypatch.setattr(projects.config, "HOME", (Path.home() / ".perun").resolve())
+    projects.sync_opencode_config(project)
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["mcp"]["perun-guard"]["environment"]["PERUN_HOME"] == "~/.perun"
+    assert cfg["mcp"]["perun-proposals"]["environment"]["PERUN_HOME"] == "~/.perun"
 
 
 def test_sync_manifest_adds_guard_mcp_for_shared_project(tmp_path):
@@ -260,6 +292,93 @@ def test_sync_opencode_config_removes_guard_mcp_for_non_shared_project(tmp_path)
     projects.sync_opencode_config(project)
     cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
     assert "perun-guard" not in cfg.get("mcp", {})
+
+
+def test_sync_rewrites_old_shape_mcp_entries(tmp_path):
+    """Old Desktop-style {command, args} entries become local command arrays."""
+    project = _make_project(tmp_path, "old-shape")
+    _enable_shared(project)
+    (Path(project["path"]) / "opencode.json").write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    "perun-guard": {"command": sys.executable, "args": ["-m", "perun.guard_mcp"]},
+                    "perun-proposals": {"command": sys.executable, "args": ["-m", "perun.proposals_mcp"]},
+                    "user-tool": {"type": "local", "command": ["x"], "enabled": True},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    projects.sync_opencode_config(project)
+    mcp = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))["mcp"]
+    assert mcp["perun-guard"] == _expected_guard_entry()
+    assert mcp["perun-proposals"] == _expected_proposals_entry()
+    assert mcp["user-tool"]["command"] == ["x"]
+
+
+def test_sync_unshare_removes_entries_keeps_user_mcp(tmp_path):
+    project = _make_project(tmp_path, "unshare")
+    _enable_shared(project)
+    projects.sync_opencode_config(project)
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    cfg["mcp"]["user-tool"] = {"type": "local", "command": ["x"], "enabled": True}
+    (Path(project["path"]) / "opencode.json").write_text(json.dumps(cfg), encoding="utf-8")
+    data = manifest.from_project(project)
+    data["shared"] = False
+    manifest.save(project["path"], data, body="# unshare")
+    projects.sync_opencode_config(project)
+    mcp = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8")).get("mcp", {})
+    assert set(mcp) == {"user-tool"}
+
+
+def test_sync_is_idempotent_for_shared_project(tmp_path):
+    project = _make_project(tmp_path, "idem")
+    _enable_shared(project)
+    assert projects.sync_opencode_config(project)["action"] != "unchanged"
+    first = (Path(project["path"]) / "opencode.json").read_text(encoding="utf-8")
+    assert projects.sync_opencode_config(project)["action"] == "unchanged"
+    assert (Path(project["path"]) / "opencode.json").read_text(encoding="utf-8") == first
+
+
+def test_sync_non_shared_never_writes_empty_mcp(tmp_path):
+    """A non-shared project whose mcp block only contained Perun entries ends up
+    with no mcp key at all after those entries are removed."""
+    project = _make_project(tmp_path, "no-stray")
+    (Path(project["path"]) / "opencode.json").write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    "perun-guard": {"command": "x"},
+                    "perun-proposals": {"command": "x"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    projects.sync_opencode_config(project)
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    assert "mcp" not in cfg
+
+
+def test_sync_non_shared_with_user_mcp_keeps_user_mcp(tmp_path):
+    """A non-shared project keeps user MCP entries while only Perun entries are removed."""
+    project = _make_project(tmp_path, "no-stray-user-mcp")
+    (Path(project["path"]) / "opencode.json").write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    "perun-guard": {"command": "x"},
+                    "user-tool": {"type": "local", "command": ["x"], "enabled": True},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    projects.sync_opencode_config(project)
+    mcp = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8")).get("mcp", {})
+    assert "perun-guard" not in mcp
+    assert "user-tool" in mcp
 
 
 def test_retry_pending_room_deletions(tmp_path, monkeypatch):

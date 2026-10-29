@@ -593,6 +593,48 @@ def test_reply_explicit_agent_overrides_default(settings):
     assert call.kwargs.get("agent") == "my-custom-agent"
 
 
+def test_bound_project_room_runs_with_bound_project_slug(settings, tmp_path):
+    """A bound project chat must execute against the bound project, not control."""
+    project, room = _make_shared_project(tmp_path)
+    settings.perunchat_chat_model = "opencode/chat"
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_bound",
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "content_type": "text/plain",
+        "payload": "hi",
+    }
+    bridge._reply(frame, None)
+    call = mock_orchestrator.run_and_wait.call_args
+    assert call.args[0] == project["slug"]
+    assert call.kwargs.get("agent") == "perunchat"
+
+
+@patch("perun.perunchat_bridge.control")
+def test_unbound_room_falls_back_to_control_project(mock_control, settings):
+    """Public/unbound rooms still run against the control plane project."""
+    settings.perunchat_chat_model = "opencode/chat"
+    mock_control.ensure.return_value = {"slug": "control-plane"}
+    mock_orchestrator = MagicMock(settings=settings)
+    mock_orchestrator.run_and_wait.return_value = {"reply": "ok"}
+    bridge = PerunChatBridge(mock_orchestrator)
+    bridge._agent_id = "perun-local"
+    frame = {
+        "id": "msg_unbound",
+        "room_id": "pub:global:test",
+        "sender": {"agent_id": "other-agent"},
+        "content_type": "text/plain",
+        "payload": "hi",
+    }
+    bridge._reply(frame, None)
+    call = mock_orchestrator.run_and_wait.call_args
+    assert call.args[0] == "control-plane"
+
+
 def test_public_reply_redacts_internal_details(settings):
     """Public replies must not leak local paths or internal references."""
     bridge = PerunChatBridge(MagicMock(settings=settings))
@@ -674,6 +716,51 @@ def test_chat_system_prompt_loads_from_file():
         ):
             body = _load_chat_instructions()
     assert body == "Strict chat prompt from file."
+
+
+def _resolve_permission(perms, action, resource="*"):
+    """Return the last matching rule's effect for an action (OpenCode V2)."""
+    import fnmatch
+
+    effect = "ask"
+    for rule in perms:
+        if fnmatch.fnmatchcase(action, rule["action"]) and fnmatch.fnmatchcase(
+            resource, rule["resource"]
+        ):
+            effect = rule["effect"]
+    return effect
+
+
+def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
+    """The perunchat OpenCode agent profile must be V2 with correct rule order."""
+    from perun.perunchat_bridge import _OPENCODE_AGENT_MD
+    import yaml
+
+    fm = yaml.safe_load(_OPENCODE_AGENT_MD.split("---")[1])
+    assert "permission" not in fm
+    assert isinstance(fm.get("permissions"), list)
+    perms = fm["permissions"]
+    actions = [p["action"] for p in perms]
+    # Broad deny first, guard allows next, specific write/edit denies last.
+    assert actions[0] == "*"
+
+    # OpenCode names MCP actions as ``<server>_<tool>``. The read-only guard
+    # tools must resolve to allow, while write/edit must resolve to deny even
+    # when the server prefix is present.
+    for server in ("perun-guard", "perun_guard", "guard"):
+        assert _resolve_permission(perms, f"{server}_guard_read_file") == "allow"
+        assert _resolve_permission(perms, f"{server}_guard_list_directory") == "allow"
+        assert _resolve_permission(perms, f"{server}_guard_write_file") == "deny"
+        assert _resolve_permission(perms, f"{server}_guard_edit_file") == "deny"
+
+    # Proposal and room-memory tools must stay allowed.
+    assert _resolve_permission(perms, "perun-proposals_propose") == "allow"
+    assert _resolve_permission(perms, "perun-proposals_approve") == "allow"
+    assert _resolve_permission(perms, "perun_perunchat_room_memory") == "allow"
+
+    # Native tools must stay denied.
+    for tool in ("shell", "edit", "write", "webfetch", "subagent"):
+        assert _resolve_permission(perms, tool) == "deny"
 
 
 def test_chat_instructions_include_shared_project_guidance():

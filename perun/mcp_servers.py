@@ -176,12 +176,13 @@ def _server_entries(data: dict[str, Any]) -> dict[str, Any]:
     return mcp if isinstance(mcp, dict) else {}
 
 
-def _resolve_command(command: Any) -> tuple[list[str], str | None]:
+def _resolve_command(command: Any, args: Any = None) -> tuple[list[str], str | None]:
     """Normalize a local server ``command`` and resolve its executable on PATH.
 
     Returns ``(argv, resolved_exe)``; ``resolved_exe`` is ``None`` when the first
-    token is not found. Command values may be a list (OpenCode's canonical form)
-    or a shell-ish string, which we split on whitespace.
+    token is not found. Command values may be a list (OpenCode's canonical form),
+    a shell-ish string (split on whitespace), or a single string with a separate
+    ``args`` list (legacy Claude Desktop style).
     """
     if isinstance(command, str):
         argv = command.split()
@@ -189,6 +190,11 @@ def _resolve_command(command: Any) -> tuple[list[str], str | None]:
         argv = [str(c) for c in command]
     else:
         argv = []
+    if args:
+        if isinstance(args, str):
+            argv.extend(args.split())
+        elif isinstance(args, list):
+            argv.extend(str(c) for c in args)
     if not argv:
         return [], None
     first = argv[0]
@@ -236,7 +242,7 @@ def _normalize(name: str, raw: Any, *, scope: str, source: Path,
         entry["command"] = []
         entry["resolved"] = None
     else:
-        argv, resolved = _resolve_command(raw.get("command"))
+        argv, resolved = _resolve_command(raw.get("command"), raw.get("args"))
         entry["transport"] = "local"
         entry["command"] = argv
         entry["resolved"] = resolved

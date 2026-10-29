@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from . import git, manifest, memory, orchestrator, registry, scaffold, shared_project_sync, shared_projects
+from . import config, git, manifest, memory, orchestrator, registry, scaffold, shared_project_sync, shared_projects
 
 # Config file names OpenCode looks for in a project, in precedence order.
 OPENCODE_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
@@ -126,9 +126,28 @@ def sync_opencode_config(project: dict[str, Any],
         mcp_servers = {}
     shared_cfg = shared_projects.load(project["path"])
     guard_key = "perun-guard"
-    guard_entry = {"command": sys.executable, "args": ["-m", "perun.guard_mcp"]}
     proposals_key = "perun-proposals"
-    proposals_entry = {"command": sys.executable, "args": ["-m", "perun.proposals_mcp"]}
+    # Project ``opencode.json`` files are often committed. Never embed the
+    # user's absolute home path for the default home; ``~/.perun`` expands in the
+    # MCP child process and keeps the config portable. A custom PERUN_HOME is
+    # still written verbatim because it cannot be derived from ``~``.
+    _default_home = (Path.home() / ".perun").resolve()
+    if Path(config.HOME).resolve() == _default_home:
+        _perun_home = "~/.perun"
+    else:
+        _perun_home = str(config.HOME)
+    guard_entry = {
+        "type": "local",
+        "command": [sys.executable, "-m", "perun.guard_mcp"],
+        "enabled": True,
+        "environment": {"PERUN_HOME": _perun_home},
+    }
+    proposals_entry = {
+        "type": "local",
+        "command": [sys.executable, "-m", "perun.proposals_mcp"],
+        "enabled": True,
+        "environment": {"PERUN_HOME": _perun_home},
+    }
     if shared_cfg.get("shared"):
         if mcp_servers.get(guard_key) != guard_entry:
             mcp_servers[guard_key] = guard_entry
@@ -139,17 +158,23 @@ def sync_opencode_config(project: dict[str, Any],
             data["mcp"] = mcp_servers
             changed = True
     else:
-        if guard_key in mcp_servers:
-            del mcp_servers[guard_key]
-            changed = True
-        if proposals_key in mcp_servers:
-            del mcp_servers[proposals_key]
-            changed = True
-        if changed:
+        mcp_changed = False
+        for key in (guard_key, proposals_key):
+            if key in mcp_servers:
+                del mcp_servers[key]
+                mcp_changed = True
+        if mcp_changed:
             data["mcp"] = mcp_servers
+            changed = True
 
     if not changed:
         return {"action": "unchanged", "path": str(target)} if target.is_file() else {"action": "unchanged"}
+
+    # Drop empty top-level containers that would otherwise be written only
+    # because a different key changed. An empty mcp block is not useful.
+    for key in ("mcp",):
+        if key in data and not data[key]:
+            del data[key]
 
     existed_before = target.is_file()
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"

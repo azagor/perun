@@ -249,25 +249,20 @@ _OPENCODE_AGENT_MD = """---
 description: PerunChat room participant - conversational replies and shared-project tools
 mode: primary
 permissions:
-  - action: "guard_read_file"
+  # Deny everything by default, then explicitly allow only the MCP tools this
+  # chat persona may use. Broad guard_* allow must come before the fine-grained
+  # guard_write_file / guard_edit_file denies, because OpenCode's last-match rule
+  # would otherwise deny the read-only guard tools too.
+  - action: "*"
+    resource: "*"
+    effect: deny
+  - action: "perun-guard_*"
     resource: "*"
     effect: allow
-  - action: "guard_list_directory"
+  - action: "perun_guard_*"
     resource: "*"
     effect: allow
-  - action: "guard_search_files"
-    resource: "*"
-    effect: allow
-  - action: "propose"
-    resource: "*"
-    effect: allow
-  - action: "approve"
-    resource: "*"
-    effect: allow
-  - action: "list_proposals"
-    resource: "*"
-    effect: allow
-  - action: "get_proposal"
+  - action: "guard_*"
     resource: "*"
     effect: allow
   - action: "perun-proposals_*"
@@ -279,22 +274,31 @@ permissions:
   - action: "PerunProposals_*"
     resource: "*"
     effect: allow
-  - action: "guard_*"
+  - action: "perun-memory_*"
     resource: "*"
     effect: allow
-  - action: "perun-guard_*"
+  - action: "perun_memory_*"
     resource: "*"
     effect: allow
-  - action: "perun_guard_*"
+  # ``perunchat_room_memory`` is a tool on the ``perun`` MCP server, so its V2
+  # action is ``perun_perunchat_room_memory``. The prompt instructs the chat
+  # persona to use it for older room context.
+  - action: "perun_perunchat_room_memory"
     resource: "*"
     effect: allow
-  - action: "guard_write_file"
+  - action: "perun-perunchat_room_memory"
+    resource: "*"
+    effect: allow
+  # Keep guard writes/edit denied *after* the broad guard allow so the broad
+  # rule matches read-only guard tools and these two specific denies only match
+  # writes. OpenCode names MCP actions as ``<server>_<tool>`` (for example
+  # ``perun-guard_guard_write_file``), so a bare ``guard_write_file`` rule would
+  # not match. The leading wildcard covers both hyphen and underscore server
+  # spellings. OpenCode uses last-match-wins.
+  - action: "*guard_write_file"
     resource: "*"
     effect: deny
-  - action: "guard_edit_file"
-    resource: "*"
-    effect: deny
-  - action: "*"
+  - action: "*guard_edit_file"
     resource: "*"
     effect: deny
 ---
@@ -360,29 +364,39 @@ def ensure_perunchat_agent() -> Dict[str, Any]:
             if base_res in seen:
                 continue
             seen.add(base_res)
-            for name in ("agents", "agent"):
-                agents_dir = base / name
-                try:
-                    agents_dir.mkdir(parents=True, exist_ok=True)
-                except Exception as exc:
-                    results["errors"].append(f"mkdir {agents_dir}: {exc}")
-                    continue
-                agent_file = agents_dir / f"{_OPENCODE_AGENT_NAME}.md"
-                try:
-                    existed = agent_file.exists()
-                    current = agent_file.read_text(encoding="utf-8").strip() if existed else ""
-                    if not existed or current != _OPENCODE_AGENT_MD.strip():
-                        tmp = agent_file.with_suffix(".tmp")
-                        tmp.write_text(_OPENCODE_AGENT_MD, encoding="utf-8")
-                        tmp.replace(agent_file)
-                        if existed:
-                            results["updated"].append(str(agent_file))
-                        else:
-                            results["created"].append(str(agent_file))
-                        logger.info("PerunChat bridge updated OpenCode agent %s", agent_file)
-                except Exception as exc:
-                    results["errors"].append(f"write {agent_file}: {exc}")
-                    continue
+            # Install only into the modern OpenCode ``agents/`` directory. The legacy
+            # ``agent/`` mirror duplicated every permission rule and is no longer
+            # needed. Clean up the stale file to avoid duplicated rules.
+            agents_dir = base / "agents"
+            legacy_agent_file = base / "agent" / f"{_OPENCODE_AGENT_NAME}.md"
+            try:
+                agents_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                results["errors"].append(f"mkdir {agents_dir}: {exc}")
+                continue
+            try:
+                if legacy_agent_file.is_file():
+                    legacy_agent_file.unlink()
+                    logger.info("Removed legacy perunchat agent file at %s", legacy_agent_file)
+            except Exception as exc:
+                results["errors"].append(f"remove legacy {legacy_agent_file}: {exc}")
+                continue
+            agent_file = agents_dir / f"{_OPENCODE_AGENT_NAME}.md"
+            try:
+                existed = agent_file.exists()
+                current = agent_file.read_text(encoding="utf-8").strip() if existed else ""
+                if not existed or current != _OPENCODE_AGENT_MD.strip():
+                    tmp = agent_file.with_suffix(".tmp")
+                    tmp.write_text(_OPENCODE_AGENT_MD, encoding="utf-8")
+                    tmp.replace(agent_file)
+                    if existed:
+                        results["updated"].append(str(agent_file))
+                    else:
+                        results["created"].append(str(agent_file))
+                    logger.info("PerunChat bridge updated OpenCode agent %s", agent_file)
+            except Exception as exc:
+                results["errors"].append(f"write {agent_file}: {exc}")
+                continue
     except PermissionError as exc:
         logger.warning(
             "PerunChat bridge could not install agent file (permission denied): %s", exc
@@ -759,6 +773,7 @@ class PerunChatBridge:
                     return None
                 project = registry.project_dict(conn, proj_row)
         except Exception:
+            logger.exception("Failed to resolve project binding for room %s", room_id)
             return None
         cfg = shared_projects.load(project["path"])
         if not cfg.get("shared"):
@@ -2059,7 +2074,13 @@ class PerunChatBridge:
 
         try:
             logger.debug("PerunChat prompt for %s:\n%s", msg_id, prompt)
-            project = control.ensure()
+            # For a bound project room, run against that project so the
+            # perun-guard and perun-proposals MCP servers are available. Fall back
+            # to the control plane project only for unbound rooms.
+            if binding:
+                project, _cfg = binding
+            else:
+                project = control.ensure()
             reply = ""
             run_uid = ""
             run_status = ""

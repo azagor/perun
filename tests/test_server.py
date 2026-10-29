@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -648,7 +649,7 @@ def test_delete_proposal_removes_it(client, tmp_path, monkeypatch):
 
 def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     """Enabling/disabling shared mode mirrors the perun-guard MCP entry in opencode.json."""
-    from perun import server
+    from perun import config as _config, server
 
     monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ada-bot"])
     target = tmp_path / "shared-guard"
@@ -659,11 +660,24 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     assert r.status_code == 200, r.text
     slug = r.json()["project"]["slug"]
 
+    expected_guard = {
+        "type": "local",
+        "command": [sys.executable, "-m", "perun.guard_mcp"],
+        "enabled": True,
+        "environment": {"PERUN_HOME": str(_config.HOME)},
+    }
+    expected_proposals = {
+        "type": "local",
+        "command": [sys.executable, "-m", "perun.proposals_mcp"],
+        "enabled": True,
+        "environment": {"PERUN_HOME": str(_config.HOME)},
+    }
+
     cfg_path = target / "opencode.json"
     assert cfg_path.exists()
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert "perun-guard" in cfg.get("mcp", {})
-    assert cfg["mcp"]["perun-guard"]["args"] == ["-m", "perun.guard_mcp"]
+    assert cfg["mcp"]["perun-guard"] == expected_guard
 
     # Remove the guard entry manually to simulate a stale opencode.json, then
     # call the manual sync endpoint; it should restore the shared MCP servers.
@@ -676,6 +690,8 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert "perun-guard" in cfg.get("mcp", {})
     assert "perun-proposals" in cfg.get("mcp", {})
+    assert cfg["mcp"]["perun-guard"] == expected_guard
+    assert cfg["mcp"]["perun-proposals"] == expected_proposals
 
     # Disabling shared mode removes the guard entry.
     r = client.put(f"/api/projects/{slug}/shared", json={
@@ -798,7 +814,8 @@ def test_model_agent_save_writes_opencode_config(client, tmp_path):
     assert cfg["model"] == "anthropic/claude-sonnet-4-5"
     assert cfg["default_agent"] == "plan"
 
-    # An unrelated PATCH must not touch the config file.
+    # An unrelated PATCH must not touch the config file. An empty mcp block
+    # is not a Perun-managed key, so it stays as the user wrote it.
     (target / "opencode.json").write_text(
         json.dumps({"model": "keep/me", "mcp": {}}), encoding="utf-8")
     r = client.patch(f"/api/projects/{slug}", json={"description": "hi"})
@@ -813,7 +830,9 @@ def test_model_agent_save_writes_opencode_config(client, tmp_path):
     assert r.json()["opencode_config"]["action"] == "updated"
     cfg = json.loads((target / "opencode.json").read_text(encoding="utf-8"))
     assert "model" not in cfg and "default_agent" not in cfg
-    assert cfg["mcp"] == {}
+    # A stray empty mcp block was written earlier; it is now removed by the
+    # empty-container cleanup in sync_opencode_config.
+    assert "mcp" not in cfg
 
 
 def test_model_agent_save_preserves_existing_opencode_jsonc(client, tmp_path):

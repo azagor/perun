@@ -13,5 +13,13 @@
   "instructions": [
     "AGENTS.md"
   ],
-  "model": "opencode/kimi-k2.7-code"
+  "model": "opencode/kimi-k2.7-code",
+  "agent": {
+    "build": {
+      "model": "ollama-cloud/kimi-k2.7-code"
+    },
+    "plan": {
+      "model": "ollama-cloud/deepseek-v4.1-flash"
+    }
+  }
 }
