@@ -983,6 +983,13 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
   the dashboard prompts for the password once it is running.
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
+* `tools/release.py` — release pipeline: validates both repos, bumps
+  `perun/__init__.py`, promotes `## Unreleased` entries into the new
+  `## vX.Y.Z` section, updates the technical-doc latest-release/revision lines,
+  syncs internal project content, then commits/tags/pushes public and internal.
+* `tools/sync-internal.py` — mirrors internal-only project content
+  (`perun.md`, `AGENTS.md`, `README.md`, `docs/`, `.perun/`, `.opencode/`) into
+  the private `perun_internal` companion repo.
 * `tools/make_icon.py` — regenerates `web/assets/perun.ico` / `perun.png`.
 * `tools/normalize_line_endings.py` — rewrites tracked text files to LF (leaves
   `.cmd`/`.ps1`/`.bat`/`.iss` CRLF); run before tricky edits (see AGENTS.md).
@@ -1013,6 +1020,9 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
 
 ## Tests `tests/`
 
+* `test_release_script.py` — release-pipeline changelog promotion: populated and
+  empty `## Unreleased` sections, and idempotence when the target version
+  already exists.
 * `test_db_registry.py` — schema, projects/sessions/runs/activity CRUD.
 * `test_discovery.py` — detection, classify, register, scan, manifest merge.
 * `test_memory.py` — remember/sensitive/dedupe, CODEMAP-aware chunking,
