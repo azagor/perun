@@ -180,6 +180,15 @@ def create(
     if not isinstance(details, dict):
         raise ValueError("proposal details must be an object")
     room_id = str(envelope.get("room_id") or "").strip()[:300]
+    if not room_id:
+        # Proposals created from the dashboard/API arrive without a chat
+        # envelope. Fall back to the project's managed chat room so the audit
+        # record always names the room the request came from.
+        try:
+            chat = registry.get_project_chat(pid) or {}
+        except Exception:  # pragma: no cover - schema drift
+            chat = {}
+        room_id = str(chat.get("room_id") or "").strip()[:300]
     try:
         manifest_rev = int(envelope.get("manifest_rev") or cfg.get("manifest_rev", 1))
     except (TypeError, ValueError):
@@ -399,11 +408,13 @@ def claim_execution(
     claim_expires_at = int(time.time()) + EXTERNAL_CLAIM_TTL_SECONDS
     with db.db() as conn:
         cur = conn.execute(
-            """UPDATE action_proposals SET status=?, executor_id=?, execution_mode=?,
-               claimed_at=?, claim_expires_at=?, claim_snapshot=?, updated_at=?
+            """UPDATE action_proposals SET status=?, executor_id=?, executed_by=?,
+               execution_mode=?, claimed_at=?, claim_expires_at=?, claim_snapshot=?,
+               updated_at=?
                WHERE id=? AND status='approved'""",
             (
                 "claimed",
+                requester_id,
                 requester_id,
                 "external",
                 ts,
@@ -541,7 +552,7 @@ def complete_external_execution(
                 f"the approved targets were created, modified or deleted: {shown}]"
             ).strip()
 
-    _set_status(proposal_id, status, output[:4000])
+    _set_status(proposal_id, status, output[:4000], executed_by=requester_id)
     proposal = get(proposal_id)
     if proposal:
         registry.log_activity(
@@ -585,11 +596,13 @@ def revoke_execution_claim(
     ts = _now()
     with db.db() as conn:
         cur = conn.execute(
-            """UPDATE action_proposals SET status=?, executor_id=?, execution_mode=?,
-               claimed_at=?, claim_expires_at=?, claim_snapshot=?, updated_at=?
+            """UPDATE action_proposals SET status=?, executor_id=?, executed_by=?,
+               execution_mode=?, claimed_at=?, claim_expires_at=?, claim_snapshot=?,
+               updated_at=?
                WHERE id=? AND status='claimed'""",
             (
                 "approved",
+                "",
                 "",
                 "perun",
                 "",
@@ -702,8 +715,9 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
                 placeholders = ",".join("?" * len(reclaimed_ids))
                 conn.execute(
                     f"UPDATE action_proposals SET status='approved', executor_id='', "
-                    f"execution_mode='perun', claimed_at='', claim_expires_at=0, "
-                    f"claim_snapshot='', updated_at=? WHERE id IN ({placeholders}) AND status='claimed'",
+                    f"executed_by='', execution_mode='perun', claimed_at='', "
+                    f"claim_expires_at=0, claim_snapshot='', updated_at=? "
+                    f"WHERE id IN ({placeholders}) AND status='claimed'",
                     (_now(), *reclaimed_ids),
                 )
     except Exception as exc:
@@ -1105,14 +1119,22 @@ def _path_under(path: Path, parent: Path) -> bool:
         return False
 
 
-def _set_status(proposal_id: str, status: str, result: str = "") -> None:
+def _set_status(proposal_id: str, status: str, result: str = "",
+                *, executed_by: str | None = None) -> None:
     if status not in STATUSES:
         raise ValueError(f"invalid status: {status}")
     with db.db() as conn:
-        conn.execute(
-            "UPDATE action_proposals SET status=?, result=?, updated_at=? WHERE id=?",
-            (status, result, _now(), proposal_id),
-        )
+        if executed_by is None:
+            conn.execute(
+                "UPDATE action_proposals SET status=?, result=?, updated_at=? WHERE id=?",
+                (status, result, _now(), proposal_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE action_proposals SET status=?, result=?, executed_by=?, "
+                "updated_at=? WHERE id=?",
+                (status, result, executed_by, _now(), proposal_id),
+            )
 
 
 def _build_execution_prompt(proposal: dict[str, Any], project: dict[str, Any]) -> str:

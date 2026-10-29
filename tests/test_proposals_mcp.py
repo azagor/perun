@@ -389,6 +389,8 @@ def test_list_and_get_proposals(tool_runner, tmp_path, _settings):
         "get_proposal", project, "frambo", {"proposal_id": prop["proposal_id"]}
     )
     assert fetched["proposal_id"] == prop["proposal_id"]
+    assert fetched["room_id"] == room
+    assert fetched["executed_by"] == ""
 
 
 def test_propose_auto_approves_when_policy_auto_approve(tool_runner, tmp_path, _settings, monkeypatch):

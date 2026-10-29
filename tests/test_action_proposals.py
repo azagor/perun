@@ -38,6 +38,24 @@ def test_create_proposal(tmp_path):
     assert proposal["targets"] == [target]
 
 
+def test_create_proposal_binds_bound_room_when_envelope_omits_it(tmp_path):
+    """Dashboard/API proposals must still record the project chat room."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    room_id = "grp:perun:test-project:chat"
+    registry.set_project_chat(project["id"], room_id, "owner", "active", 1)
+    target = str(project["path"] / "api.py")
+
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "add validation", "targets": [target], "action_type": "edit"},
+    )
+
+    assert proposal["room_id"] == room_id
+    assert action_proposals.get(proposal["id"])["room_id"] == room_id
+
+
 def test_self_approval_is_blocked_in_core(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -953,6 +971,7 @@ def test_revoke_execution_claim_returns_to_approved(tmp_path):
     )
     assert revoked["status"] == "approved"
     assert revoked["executor_id"] == ""
+    assert revoked["executed_by"] == ""
     assert revoked["execution_mode"] == "perun"
 
 
@@ -971,7 +990,9 @@ def test_claim_expiry_sweep_returns_to_approved(tmp_path):
             (int(time.time()) - 1, proposal["id"]),
         )
     action_proposals.expire_stale()
-    assert action_proposals.get(proposal["id"])["status"] == "approved"
+    restored = action_proposals.get(proposal["id"])
+    assert restored["status"] == "approved"
+    assert restored["executed_by"] == ""
 
 
 def test_approved_proposal_expires_after_ttl(tmp_path):
@@ -1081,6 +1102,43 @@ def test_complete_external_execution_marks_executed(tmp_path):
     )
     assert result["status"] == "executed"
     assert (root / "api.py").read_text() == "new"
+
+
+def test_external_execution_records_executor_and_room(tmp_path):
+    """The executed record must name the executor and the bound room.
+
+    Regression for a canary that finished ``executed`` with empty
+    ``executed_by`` and ``room_id`` columns, which made the audit trail
+    useless for the external-handoff path.
+    """
+    import io, zipfile
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    room_id = "grp:perun:test-project:chat"
+    registry.set_project_chat(project["id"], room_id, "owner", "active", 1)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    claimed = action_proposals.claim_execution(proposal["id"], "Frambo")
+    assert claimed["executor_id"] == "frambo"
+    assert claimed["executed_by"] == "frambo"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("api.py", "new")
+    result = action_proposals.complete_external_execution(
+        proposal["id"], "frambo", buf.getvalue()
+    )
+
+    assert result["status"] == "executed"
+    assert result["room_id"] == room_id
+    assert result["executor_id"] == "frambo"
+    assert result["executed_by"] == "frambo"
 
 
 def test_complete_external_execution_keeps_claimed_on_validation_failure(tmp_path):

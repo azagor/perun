@@ -4,7 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **Executed proposals now record who ran them and where they came from.**
+  `executed_by` is written when an approved proposal is claimed for external
+  execution and again when the uploaded package is applied, using the same
+  actor id as `executor_id`. Claim revocation and claim expiry clear both
+  fields so a reverted claim cannot look executed.
+- **Dashboard/API proposals inherit the bound project-chat room.** A proposal
+  created without a chat envelope now falls back to the project's managed
+  `project_chats.room_id`, so `room_id` is no longer empty on records that did
+  not come through the PerunChat MCP server.
+- `perun-proposals.get_proposal` (and therefore `execution_status`) now returns
+  `room_id`, `executor_id`, `executed_by` and `execution_mode` alongside the
+  existing status fields.
 
 ## v0.8.44
 
