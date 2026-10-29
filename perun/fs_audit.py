@@ -99,8 +99,14 @@ def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
         return tuple(value) if isinstance(value, (list, tuple)) else value
 
     after = snapshot(project)
-    before_files = before.get("files", {})
-    after_files = after.get("files", {})
+    before_files = {
+        p: key for p, key in (before.get("files", {}) or {}).items()
+        if not path_guard.is_sensitive_path(p)
+    }
+    after_files = {
+        p: key for p, key in (after.get("files", {}) or {}).items()
+        if not path_guard.is_sensitive_path(p)
+    }
 
     created = [p for p in after_files if p not in before_files]
     deleted = [p for p in before_files if p not in after_files]

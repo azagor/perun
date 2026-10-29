@@ -446,7 +446,8 @@ runs an LLM on this path; the remote rw participant generates the package with
 its own model/tokens and Perun validates/applies it locally.
 * `pack()` — build a ZIP from a list of target paths relative to the project root;
   skips sensitive files/directories (`.env`, `.git`, `.perun`, keys, OpenCode
-  config, …) even when a requested directory contains them.
+  config, …) even when a requested directory contains them, and enforces the
+  configured package/entry/entry-count caps before building the archive.
 * `unpack()` — decode base64 chunks, reassemble the archive, and validate against
   caps (uncompressed total 50 MB, 500 entries, 10 MB/entry) and anti-abuse rules;
   directory entries are skipped.
@@ -628,8 +629,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * External execution handoff (remote rw participants only): the bridge receives
   `application/perun-execution` control frames and `application/perun-package`
   ZIP chunks, persists upload slots to SQLite, and calls `package_handoff` to
-  validate/apply the package. The local host agent should use the normal
-  shared-project pipeline instead.
+  validate/apply the package. Uploads require `sha256`, are bound to the room and
+  sender, and enforce per-chunk/cumulative byte caps; downloads are restricted to
+  the proposal targets. The local host agent should use the normal shared-project
+  pipeline instead.
 * Shared-project chat flow: `_shared_project_context()` injects a trust-filtered
   project brief (no local paths or Git remotes) into managed `grp:` rooms;
   `_extract_action_proposal()` parses `[ACTION: …]` markers from replies and

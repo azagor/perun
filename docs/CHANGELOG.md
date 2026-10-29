@@ -6,6 +6,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **Download packages are size-capped.** `pack()` enforces the configured
+  package/entry/entry-count caps before building the archive, so a claimant
+  cannot turn a large directory target into an unbounded download.
+- **Upload transfers are byte-capped.** `package_begin` requires `sha256`;
+  chunks are base64-validated on receipt, per-chunk and cumulative bytes are
+  capped against the announced total, and duplicate chunks are not double-counted.
+- **Audit diffs ignore sensitive paths.** `fs_audit.diff()` filters sensitive
+  paths from both snapshots so pre-upgrade snapshots cannot produce false
+  “deleted” violations.
 - **Package application rolls back on failure.** `apply_package()` stages all
   files and backs up existing targets before replacing anything; a mid-apply
   failure restores the originals and removes newly created files instead of

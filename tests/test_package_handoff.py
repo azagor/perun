@@ -60,6 +60,21 @@ def test_unpack_skips_directory_entries(tmp_path):
     assert files["dir/file.txt"] == b"ok"
 
 
+def test_pack_enforces_size_cap(tmp_path, monkeypatch):
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    (root / "big.txt").write_text("0123456789")
+
+    class SmallCaps:
+        external_execution_max_package_bytes = 5
+        external_execution_max_entry_bytes = 100
+        external_execution_max_entries = 10
+
+    monkeypatch.setattr(package_handoff, "_settings", lambda: SmallCaps())
+    with pytest.raises(package_handoff.PackageError, match="exceeds max"):
+        package_handoff.pack(project, ["big.txt"])
+
+
 def test_unpack_rejects_traversal(tmp_path):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

@@ -1728,16 +1728,24 @@ class PerunChatBridge:
         transfer_id = str(payload.get("transfer_id") or "").strip()
         if not transfer_id:
             return {"ok": False, "error": "transfer_id is required"}
+        digest = str(payload.get("sha256") or "").strip().lower()
+        if not digest:
+            return {"ok": False, "error": "sha256 is required"}
+        configured_chunk = getattr(
+            settings, "external_execution_chunk_bytes", 360 * 1024) or 360 * 1024
+        max_chunk_bytes = max(1024 * 1024, int(configured_chunk) * 2)
 
         transfer = {
             "proposal_id": proposal_id,
             "sender": sender,
             "room_id": room_id,
             "direction": "upload",
-            "sha256": str(payload.get("sha256") or ""),
+            "sha256": digest,
             "total_size": total_size,
             "total_chunks": total_chunks,
             "received": {},
+            "received_bytes": 0,
+            "max_chunk_bytes": max_chunk_bytes,
             "started_at": time.time(),
         }
         with self._package_transfers_lock:
@@ -1797,18 +1805,60 @@ class PerunChatBridge:
                 )
                 return
             existing = transfer["received"].get(seq)
-            if existing is not None and existing != data_b64:
+            if existing is not None:
+                if existing != data_b64:
+                    self.post_to_room(
+                        room_id,
+                        {
+                            "op": "package_rejected",
+                            "transfer_id": transfer_id,
+                            "error": f"mismatched chunk at seq {seq}",
+                        },
+                        _EXECUTION_CONTENT_TYPE,
+                    )
+                    return
+                # Duplicate chunk: already counted and persisted.
+                return
+            try:
+                chunk_raw = base64.b64decode(data_b64, validate=True)
+            except Exception:
                 self.post_to_room(
                     room_id,
-                    {
-                        "op": "package_rejected",
-                        "transfer_id": transfer_id,
-                        "error": f"mismatched chunk at seq {seq}",
-                    },
+                    {"op": "package_rejected", "transfer_id": transfer_id,
+                     "error": f"chunk {seq} is not valid base64"},
+                    _EXECUTION_CONTENT_TYPE,
+                )
+                return
+            chunk_bytes = len(chunk_raw)
+            max_chunk = int(transfer.get("max_chunk_bytes") or 2 * 1024 * 1024)
+            if chunk_bytes > max_chunk:
+                self.post_to_room(
+                    room_id,
+                    {"op": "package_rejected", "transfer_id": transfer_id,
+                     "error": f"chunk {seq} exceeds max chunk bytes {max_chunk}"},
+                    _EXECUTION_CONTENT_TYPE,
+                )
+                return
+            received_bytes = int(transfer.get("received_bytes") or 0)
+            if not received_bytes and transfer["received"]:
+                try:
+                    received_bytes = sum(
+                        len(base64.b64decode(value, validate=True))
+                        for value in transfer["received"].values()
+                    )
+                except Exception:
+                    received_bytes = 0
+            total_size = int(transfer.get("total_size") or 0)
+            if total_size and received_bytes + chunk_bytes > total_size:
+                self.post_to_room(
+                    room_id,
+                    {"op": "package_rejected", "transfer_id": transfer_id,
+                     "error": "chunks exceed the announced total_size"},
                     _EXECUTION_CONTENT_TYPE,
                 )
                 return
             transfer["received"][seq] = data_b64
+            transfer["received_bytes"] = received_bytes + chunk_bytes
             # Take a shallow copy for persistence so we can release the lock
             # before the SQLite write. The row-level DB write serializes anyway.
             transfer_copy = dict(transfer)
@@ -1850,7 +1900,8 @@ class PerunChatBridge:
                 }
             try:
                 raw = b"".join(
-                    base64.b64decode(received[seq]) for seq in range(total_chunks)
+                    base64.b64decode(received[seq], validate=True)
+                    for seq in range(total_chunks)
                 )
             except Exception as exc:
                 return {"ok": False, "error": f"base64 decode failed: {exc}"}

@@ -905,7 +905,9 @@ External handoff: a remote rw claimant requests a ZIP of the proposal's approved
 targets (arbitrary paths are rejected and sensitive files are excluded), uploads
 chunked replacement files bound to the same room/sender, and Perun unpacks,
 validates against the target/allowlist/sensitive rules, stages and applies the
-files with backup/rollback, and runs the audit. Execution result frames omit the
+files with backup/rollback, and runs the audit. Downloads enforce the configured
+package/entry/entry-count caps. Uploads require a SHA-256, are base64-validated,
+and enforce per-chunk/cumulative byte caps. Execution result frames omit the
 HITL approval token and claim snapshot; `claim_execution` includes proposal
 details for the claimant, while status/revoke responses omit them.
 External-dependency targets are rejected for this handoff and must run locally.

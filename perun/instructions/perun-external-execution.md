@@ -49,7 +49,7 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 |---|---|---|
 | `claim_execution` | `{"proposal_id": "prop_..."}` | Reserve the proposal. Status becomes `claimed`. |
 | `request_download_package` | `{"proposal_id": "prop_...", "paths": ["api.py"]}` (paths optional) | Ask Perun to publish the current target snapshot as a download. `paths` must stay under the proposal's approved targets. |
-| `package_begin` | `{"proposal_id": "prop_...", "transfer_id": "trf_...", "sha256": "...", "total_size": N, "total_chunks": K}` | Announce an upload. |
+| `package_begin` | `{"proposal_id": "prop_...", "transfer_id": "trf_...", "sha256": "...", "total_size": N, "total_chunks": K}` | Announce an upload. `sha256` is required; per-chunk and cumulative bytes are capped against `total_size`. |
 | `package_end` | `{"transfer_id": "trf_..."}` | Last chunk sent; ask Perun to verify and apply. |
 | `revoke_execution_claim` | `{"proposal_id": "prop_..."}` | Return a `claimed` proposal to `approved`. |
 | `execution_status` | `{"proposal_id": "prop_..."}` | Query proposal status. |
@@ -109,7 +109,9 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 - The archive is project-root-relative. Targets under `external_deps` are not
   supported by the external ZIP handoff; execute those locally.
 - Maximums (defaults): uncompressed total 50 MB, 500 entries, 10 MB per entry,
-  10,000 chunks per transfer.
+  10,000 chunks per transfer; downloads enforce the same package/entry caps.
+- Each chunk is base64-validated, capped per chunk, and the running total may
+  not exceed the announced `total_size`; duplicate chunks are ignored.
 
 ## Interrupted transfers
 

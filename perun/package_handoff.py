@@ -64,30 +64,65 @@ def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
     if errors:
         raise PackageError("; ".join(errors))
 
+    # Collect first so size/entry caps can be enforced before building a
+    # potentially huge in-memory archive. Overlapping targets are deduplicated.
+    selected: list[Path] = []
+    seen: set[Path] = set()
+    for target in targets:
+        target_path = path_guard.resolve_target(root, target)
+        if not _path_under(target_path, root):
+            raise PackageError(
+                "external dependency targets are not supported in external "
+                "handoff; use local execution")
+        candidates: list[Path] = []
+        if target_path.is_file():
+            candidates = [target_path]
+        elif target_path.is_dir():
+            for dirpath, dirnames, filenames in os.walk(target_path):
+                dirnames[:] = [
+                    d for d in dirnames
+                    if not path_guard.is_sensitive_path(Path(dirpath) / d)
+                ]
+                candidates.extend(Path(dirpath) / name for name in filenames)
+        # Non-existent targets are silently omitted; the agent will see the
+        # absence and can create the file in the uploaded package.
+        for p in candidates:
+            if p.is_symlink() or path_guard.is_sensitive_path(p):
+                continue
+            resolved = p.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            selected.append(p)
+
+    settings = _settings()
+    max_package = (settings.external_execution_max_package_bytes
+                   or DEFAULT_MAX_PACKAGE_BYTES)
+    max_entry = (settings.external_execution_max_entry_bytes
+                 or DEFAULT_MAX_ENTRY_BYTES)
+    max_count = (settings.external_execution_max_entries
+                 or DEFAULT_MAX_ENTRIES)
+    if len(selected) > max_count:
+        raise PackageError(
+            f"package contains {len(selected)} files; max is {max_count}")
+    total = 0
+    for p in selected:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        if size > max_entry:
+            raise PackageError(
+                f"{p.name} size {size} exceeds max entry bytes {max_entry}")
+        total += size
+        if total > max_package:
+            raise PackageError(
+                f"package uncompressed size {total} exceeds max {max_package}")
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for target in targets:
-            target_path = path_guard.resolve_target(root, target)
-            if not _path_under(target_path, root):
-                raise PackageError(
-                    "external dependency targets are not supported in external "
-                    "handoff; use local execution")
-            if target_path.is_file():
-                _add_file(zf, root, target_path)
-            elif target_path.is_dir():
-                for dirpath, dirnames, filenames in os.walk(target_path):
-                    dirnames[:] = [
-                        d for d in dirnames
-                        if not path_guard.is_sensitive_path(Path(dirpath) / d)
-                    ]
-                    for name in filenames:
-                        p = Path(dirpath) / name
-                        if p.is_symlink():
-                            continue
-                        _add_file(zf, root, p)
-            # Non-existent targets are silently omitted; the agent will see the
-            # absence and can create the file in the uploaded package.
-
+        for p in selected:
+            _add_file(zf, root, p)
     return buf.getvalue()
 
 
