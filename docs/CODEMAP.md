@@ -351,8 +351,9 @@ Starter-project skeleton + directory creation + safe backfill + dependency parsi
   `enrich_manifest()` (fills missing docs/commands/anchors in a minimal
   `perun.md` while preserving existing values and shared-project fields),
   `detect_anchors()` (finds dependency/build/CI files),
-  `parse_dependencies()` (reads dependency manifests such as Node package.json,
-  Python requirements.txt/pyproject.toml, Rust Cargo.toml, and Go go.mod),
+  `parse_dependencies()` (reads dependency manifests such as Node package
+  manifests, Python requirement/pyproject files, Rust manifests, and Go
+  modules),
   `update_manifest_anchors()` (appends newly-detected anchors without clobbering),
   `validate_manifest()` (stale doc/anchor checker),
   `generate_codemap_outline()` (compact `<slug>.codemap` navigation outline),
@@ -431,8 +432,8 @@ Start / stream / cancel headless `opencode run`.
   (only an empty resolution defers to OpenCode).
 * For shared-project proposals, `_execute()` calls `providers.resolve_run_model()`
   to route models to an authenticated gateway, injects active API-key env vars,
-  and adds `--standalone` so the headless run does not depend on the interactive
-  background service.
+  and runs through the existing OpenCode service (`standalone=False`) so the
+  project's MCP servers (notably `perun-guard` and `perun-proposals`) load.
 * Constants: `MAX_STORED_OUTPUT`, `HISTORY_LIMIT`, `SUB_QUEUE_LIMIT`,
   `HISTORY_TTL_SECONDS`, `STREAM_POLL_SECONDS`, `MAX_AGENT_DEPTH`,
   `MAX_INSTRUCTION_BYTES`, `MAX_TOTAL_INSTRUCTION_BYTES`, `DEFAULT_SESSION_PROMPT`,
@@ -468,7 +469,7 @@ Discovery of OpenCode agent skills and tools available to a project.
 * `BUILTIN_TOOLS` — documented built-in OpenCode tools.
 * `_read_skill_manifest()`, `discover_skills()` — scan global
   ``~/.config/opencode/skills/`` and project-local ``.opencode/skills/`` for
-  skill manifest files following the SKILL.md naming convention with YAML front matter.
+  skill manifest files following the standard skill naming convention with YAML front matter.
 * `_export_names()`, `discover_tools()` — scan ``~/.config/opencode/tools/`` and
   project-local ``.opencode/tools/`` for custom TypeScript/JavaScript tool
   definitions, merging them with the built-in tool set.
@@ -630,21 +631,25 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `application/perun-execution` control frames and `application/perun-package`
   ZIP chunks, persists upload slots to SQLite, and calls `package_handoff` to
   validate/apply the package. Uploads require `sha256`, are bound to the room and
-  sender, and enforce per-chunk/cumulative byte caps; downloads are restricted to
-  the proposal targets. The local host agent should use the normal shared-project
-  pipeline instead.
+  sender, are base64-validated, and enforce per-chunk/cumulative byte caps;
+  `transfer_id` collisions are rejected and at most 8 uploads may be open at
+  once, so one claimant cannot replace or exhaust another's slot. Downloads are
+  restricted to the proposal targets, skip sensitive files, and enforce
+  package/entry/entry-count caps. `apply_package()` stages files and rolls back
+  on a mid-apply failure. The local host agent should use the normal
+  shared-project pipeline instead.
 * Shared-project chat flow: `_shared_project_context()` injects a trust-filtered
-  project brief (no local paths or Git remotes) into managed `grp:` rooms;
-  `_extract_action_proposal()` parses `[ACTION: …]` markers from replies and
-  `_create_action_proposal()` stages a HITL-gated proposal only for currently
-  trusted `rw` participants or the local room owner. When **agent approval**
-  (`shared.auto_approve`) is enabled, `_post_peer_review_request()` asks peer
-  `rw` agents to approve/reject with `[APPROVAL: …]` markers; the bridge's
-  `_handle_approval_decision()` validates the sender, calls
-  `action_proposals.approve()` or `reject()`, and starts execution on approval.
-  When **policy auto-approve** (`shared.policy_auto_approve`) is enabled,
-  proposals are approved and executed immediately by the system. Direct-address
-  detection uses this machine's resolved agent id, not a hard-coded chat id.
+  project brief (no local paths or Git remotes) into managed `grp:` rooms.
+  Proposals and peer decisions are created through the `perun-proposals` MCP
+  tools (`propose`, `approve`, `list_proposals`, `get_proposal`), not text
+  markers. When **agent approval** (`shared.auto_approve`) is enabled, the
+  bridge posts a peer-review notice and schedules an autonomous review run
+  (concurrency capped at two) that reads the targets through the guard tools and
+  calls `perun-proposals_approve` with `execute=false`; the proposal stays
+  `approved` for an external claim or explicit local execution. When **policy
+  auto-approve** (`shared.policy_auto_approve`) is enabled, proposals are
+  approved and executed immediately by the system. Direct-address detection uses
+  this machine's resolved agent id, not a hard-coded chat id.
 * `PERUNCHAT_API_KEY`/`PERUNCHAT_API_ENDPOINT` are in `orchestrator._SECRET_ENV` so
   spawned agent subprocesses never inherit them.
 
@@ -704,8 +709,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   deleted parent-directory entries to the activity table.
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
   CAS approve/reject, atomic `approved → executing` claim, synchronous `execute`
-  and non-blocking `start_execution`, startup `reconcile_interrupted`, post-run
-  audit enforcement, State Digests for the project chat, and activity logging
+  and non-blocking `start_execution`, `claim_execution`/`revoke_execution_claim`
+  for the external rw handoff, startup `reconcile_interrupted`, post-run audit
+  enforcement, State Digests for the project chat, and activity logging
   (`proposal_created`/`approved`/`rejected`/`executed`). `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
   `approve()`/`reject()`; the human dashboard routes and
@@ -719,6 +725,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   loaded. `_build_execution_prompt()` names the
   prefixed `perun-guard_guard_*` tools and instructs the model not to use the
   `skill` tool or to give up after an “Unable to load skill …” error.
+  External execution claims are room/sender-bound and target-scoped, and expire
+  after one hour (`EXTERNAL_CLAIM_TTL_SECONDS`); `claimed` proposals are returned
+  to `approved` by revoke or by the expiration sweep.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is
@@ -734,9 +743,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `delete()` — removes a non-executing proposal and logs the action to project
   activity.
 * REST endpoints in `perun/server.py` manage proposals (list, create, approve,
-  reject, `approve-and-execute` returning `202`, execute, retry, delete), post
-  lifecycle notices (started/rejected/completed/failed) to the bound project
-  chat, and apply shared-project manifest fields from the wizard;
+  reject, `approve-and-execute` returning `202`, `execute`, `claim`,
+  `revoke-claim`, retry, delete), post lifecycle notices
+  (started/rejected/completed/failed) to the bound project chat, and apply
+  shared-project manifest fields from the wizard; `execute` starts an
+  already-approved proposal (the atomic claim happens inside `start_execution`).
   `perun/projects.py` keeps `opencode.json` in sync to register/remove the
   `perun-guard` MCP server.
 * Tables: `project_chats`, `action_proposals`, and `pending_room_deletions` in

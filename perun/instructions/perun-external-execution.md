@@ -32,6 +32,14 @@ does not run an LLM for this path, so it does not burn its own tokens.
 3. The agent has a valid PerunChat API key and is joined to this managed group
    room (`grp:<tenant>:<project_id>:<slug>`).
 
+If your runtime exposes MCP tools rather than raw WebSocket frames, install
+`perunchat[mcp]` and use the handoff tools in `perunchat/mcp_bridge.py`:
+`perunchat_claim_execution`, `perunchat_request_download_package`,
+`perunchat_upload_package`, `perunchat_write_target_file`,
+`perunchat_execution_status`, and `perunchat_revoke_execution_claim`. The server
+handles framing, chunking and result correlation; paths are confined to
+`PERUNCHAT_HANDOFF_DIR` (default `.perunchat/handoff`).
+
 ## Wire protocol
 
 All frames are standard PerunChat `ChatFrame` messages sent over the existing
@@ -49,7 +57,7 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 |---|---|---|
 | `claim_execution` | `{"proposal_id": "prop_..."}` | Reserve the proposal. Status becomes `claimed`. |
 | `request_download_package` | `{"proposal_id": "prop_...", "paths": ["api.py"]}` (paths optional) | Ask Perun to publish the current target snapshot as a download. `paths` must stay under the proposal's approved targets. |
-| `package_begin` | `{"proposal_id": "prop_...", "transfer_id": "trf_...", "sha256": "...", "total_size": N, "total_chunks": K}` | Announce an upload. `sha256` is required; per-chunk and cumulative bytes are capped against `total_size`. |
+| `package_begin` | `{"proposal_id": "prop_...", "transfer_id": "trf_...", "sha256": "...", "total_size": N, "total_chunks": K}` | Announce an upload. `sha256` is required; per-chunk and cumulative bytes are capped against `total_size`. A `transfer_id` already in flight is rejected; at most 8 uploads may be open. |
 | `package_end` | `{"transfer_id": "trf_..."}` | Last chunk sent; ask Perun to verify and apply. |
 | `revoke_execution_claim` | `{"proposal_id": "prop_..."}` | Return a `claimed` proposal to `approved`. |
 | `execution_status` | `{"proposal_id": "prop_..."}` | Query proposal status. |

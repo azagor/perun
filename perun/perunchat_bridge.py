@@ -201,6 +201,9 @@ _PACKAGE_SWEEP_INTERVAL_SECONDS = 60.0
 # Upper bound on chunk count; prevents a huge range()/set allocation at
 # finalize. A 50 MB package at 360 KiB/chunk is ~143 chunks.
 _MAX_PACKAGE_CHUNKS = 10000
+# A single bridge process should not hold an unbounded number of partial
+# uploads: each slot can buffer up to the package size cap in memory.
+_MAX_PACKAGE_TRANSFERS = 8
 _PACKAGE_CONTENT_TYPE = "application/perun-package"
 _EXECUTION_CONTENT_TYPE = "application/perun-execution"
 _EXECUTION_RESULT_CONTENT_TYPE = "application/perun-execution-result"
@@ -1032,16 +1035,27 @@ class PerunChatBridge:
             logger.exception("Failed to load persisted package transfers")
             return {}
 
-    def _store_package_transfer(self, transfer_id: str, transfer: Dict[str, Any]) -> None:
+    def _store_package_transfer(
+        self, transfer_id: str, transfer: Dict[str, Any]
+    ) -> bool | None:
+        """Persist a transfer. True=stored, False=sender conflict, None=DB error."""
         try:
             from . import db as db_module
 
             with db_module.db() as conn:
-                conn.execute(
-                    """INSERT OR REPLACE INTO package_transfers
+                cur = conn.execute(
+                    """INSERT INTO package_transfers
                        (transfer_id, proposal_id, sender, direction, sha256,
                         total_size, total_chunks, received, started_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(transfer_id) DO UPDATE SET
+                         proposal_id=excluded.proposal_id,
+                         sha256=excluded.sha256,
+                         total_size=excluded.total_size,
+                         total_chunks=excluded.total_chunks,
+                         received=excluded.received,
+                         started_at=excluded.started_at
+                       WHERE package_transfers.sender = excluded.sender""",
                     (
                         transfer_id,
                         transfer.get("proposal_id", ""),
@@ -1054,8 +1068,10 @@ class PerunChatBridge:
                         transfer.get("started_at", time.time()),
                     ),
                 )
+                return cur.rowcount > 0
         except Exception:
             logger.exception("Failed to persist package transfer %s", transfer_id)
+            return None
 
     def _delete_package_transfer(self, transfer_id: str) -> None:
         try:
@@ -1597,6 +1613,13 @@ class PerunChatBridge:
             logger.warning("PerunChat execution op %s failed: %s", op, exc)
             result = {"op": op, "ok": False, "error": str(exc)}
 
+        # Correlate every result with its request. Some legacy ops returned a
+        # payload without ``op``/``proposal_id``; the MCP handoff client waits
+        # on that correlation, so make it explicit on the wire.
+        result.setdefault("op", op)
+        if proposal_id:
+            result.setdefault("proposal_id", proposal_id)
+
         redact = getattr(self, "_redact_internal_info", None)
         if callable(redact):
             for key in ("error",):
@@ -1749,8 +1772,22 @@ class PerunChatBridge:
             "started_at": time.time(),
         }
         with self._package_transfers_lock:
+            if transfer_id in self._package_transfers:
+                return {"ok": False, "error": "transfer_id already in use"}
+            if len(self._package_transfers) >= _MAX_PACKAGE_TRANSFERS:
+                return {"ok": False, "error": "too many concurrent transfers"}
             self._package_transfers[transfer_id] = transfer
-        self._store_package_transfer(transfer_id, transfer)
+        stored = self._store_package_transfer(transfer_id, transfer)
+        if stored is not True:
+            with self._package_transfers_lock:
+                if self._package_transfers.get(transfer_id) is transfer:
+                    del self._package_transfers[transfer_id]
+            if stored is False:
+                return {"ok": False, "error": "transfer_id already in use"}
+            return {
+                "ok": False,
+                "error": "could not persist transfer; retry with a new transfer_id",
+            }
         return {"ok": True, "transfer_id": transfer_id}
 
     def _handle_package_frame(self, frame: Dict[str, Any], _ws: Any) -> None:

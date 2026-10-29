@@ -1,9 +1,9 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
-> **Implementation status (v0.8.31):** implemented as described below. See
+> **Implementation status (v0.8.37):** implemented as described below. See
 > `docs/CODEMAP.md` (`shared_projects.py`, `action_proposals.py`,
-> `perunchat_bridge.py`) and `docs/TECHNICAL_DOCUMENTATION.md` for the
-> module-level and API-level detail.
+> `perunchat_bridge.py`, `proposals_mcp.py`) and
+> `docs/TECHNICAL_DOCUMENTATION.md` for the module-level and API-level detail.
 
 ## 1. Product Summary
 
@@ -131,26 +131,34 @@ external) are readable/writable.
 - **FR-17** Project Agent retains tool access but every filesystem-touching call
   passes through the Path Guard (allowlist validation); out-of-scope targets are
   refused with a reason returned to chat.
-- **FR-18** All chat→project mutations go through HITL approval (owner
-  approves/rejects in the Perun dashboard or the chat itself via the proposal
-  engine). Read-only queries may be auto-approved if within allowlist.
+- **FR-18** All chat→project mutations go through an explicit approval checkpoint
+  (the human owner in the Perun dashboard, or a trusted `rw` peer / autonomous
+  reviewer through the proposals MCP tool when Agent approval is enabled).
+  Read-only queries may be approved automatically if within the allowlist.
 - **FR-19** Project→chat feedback: after each project run, a State Digest (files
   changed, outcome, manifest_rev) is posted to the dedicated room.
 
-### 3.5 Agent Approval in Chat (v0.8.4)
+### 3.5 Agent Approval in Chat (v0.8.4, autonomous review v0.8.36)
 
 - **FR-20** Peer-agent review: the Shared tab exposes an **Agent approval in
   chat** toggle (manifest flag `shared.auto_approve`). When enabled, a chat-agent
   proposal is held in `pending` and a review request is posted to the dedicated
-  project chat. Any other `rw` participant on the trust list may approve or
-  reject the proposal with an explicit `[APPROVAL: ...]` marker. The requester
-  cannot approve their own proposal.
-- **FR-21** Explicit peer decisions are recorded: when a peer approves or
-  rejects, their agent id is written to the audit trail (`approved_by`), and
-  approval immediately starts execution.
+  project chat. Proposals and decisions use the `perun-proposals` MCP tools
+  (`propose`, `approve`, `list_proposals`, `get_proposal`), not free-text
+  markers. The bridge also schedules its own autonomous review run — at most two
+  concurrent reviews — which inspects the targets through the read-only guard
+  tools and treats the proposal body as untrusted data. The requester cannot
+  approve their own proposal.
+- **FR-21** Explicit peer decisions are recorded: when a peer or the autonomous
+  reviewer approves or rejects, the actor id is written to the audit trail
+  (`approved_by`). Approval is **approve-only by default**: the MCP `approve`
+  tool leaves the proposal `approved` (`execute=false`) so a remote rw
+  participant can claim it or the owner can start it locally. Passing
+  `execute=true` explicitly starts the local headless run.
 - **FR-22** Human override is always available: the dashboard continues to show
   Approve / Run / Retry / Delete controls, and humans can execute proposals even
-  when agent approval is enabled.
+  when agent approval is enabled. The human operator may also approve their own
+  proposal.
 
 ### 3.6 Policy Auto-Approve (v0.8.4)
 
@@ -163,7 +171,7 @@ external) are readable/writable.
   generic `auto` policy identity as the approver, never a passive manifest peer.
 - **FR-22a** Human override remains available for policy auto-approve as well.
 
-### 3.6 Lifecycle Chat Notifications (v0.8.3)
+### 3.7 Lifecycle Chat Notifications (v0.8.3)
 
 - **FR-23** Execution start notice: when a proposal enters `executing` state, a
   plain-text "Proposal … is now executing" notice is posted to the dedicated
@@ -178,7 +186,7 @@ external) are readable/writable.
 - **FR-27** Redaction: all chat notices pass through the same DLP redaction used
   for digests (`_redact_internal_info`) before leaving the process.
 
-### 3.7 Dashboard UX (v0.8.3)
+### 3.8 Dashboard UX (v0.8.3)
 
 - **FR-28** Active/completed split: the Shared tab proposal list separates active
   proposals (`pending`, `approved`, `executing`) from completed proposals
@@ -189,7 +197,7 @@ external) are readable/writable.
   the headless run immediately. Confirmation dialogs remain for destructive or
   irreversible actions (`Approve only`, `Reject`, `Cancel`, `Delete`).
 
-### 3.8 Non-Functional Requirements
+### 3.9 Non-Functional Requirements
 
 - **NFR-1 Security:** least privilege; manifest injected to chat passes the same
   `memory.is_sensitive()` guard as memory storage; no secrets, keys, or absolute
@@ -482,7 +490,8 @@ so I can re-verify or remove them.
   the project root) to the activity feed.
 - Gateway-side complement: room membership gates *who may speak/propose*; key
   scopes on Perun's own key limit *where Perun may act on the gateway*.
-- Write = always HITL (existing proposal engine); read = auto-approved if in
+- Write = always an approval checkpoint (owner, or a trusted `rw` peer /
+  autonomous reviewer when Agent approval is enabled); read = auto-approved if in
   allowlist.
 
 ---
@@ -518,12 +527,14 @@ Validation (in order):
 
 Fail → refusal reason posted to chat, no proposal created.
 
-### 6.2 Human gate
+### 6.2 Approval gate
 
-Envelope → existing `PERUN_ACTION_PROPOSAL` HITL token → owner approves/rejects
-(dashboard or chat). This is the "without losing intent" guarantee: the envelope
-carries the *semantic intent*, not just the chat prose, so the Project Agent
-receives a structured task spec, not a re-parsed message.
+Envelope → local HMAC-SHA256 HITL token → the owner approves/rejects in the
+dashboard, or a trusted `rw` peer / the bounded autonomous reviewer approves
+through the proposals MCP tool when Agent approval is enabled. This is the
+"without losing intent" guarantee: the envelope carries the *semantic intent*,
+not just the chat prose, so the Project Agent receives a structured task spec,
+not a re-parsed message.
 
 ### 6.3 Execution (Project Agent)
 
@@ -600,8 +611,8 @@ contract.
 | 18 | Policy auto-approve fails after proposal created | `start_execution()` raises | Proposal remains `approved`; failure notice posted to chat; owner can run manually. | Best-effort notification; manual retry from dashboard. |
 | 19 | Notification redaction fails | `_redact_internal_info()` exception | Notice is dropped rather than posted unredacted. | Logged; no sensitive leak. |
 | 20 | Peer approval race | Two peers approve simultaneously | CAS update ensures only one succeeds; the other gets a "no longer pending" acknowledgement. | Idempotent; no duplicate execution. |
-| 21 | Requester tries to self-approve | `[APPROVAL: ...]` from original requester | Marker is ignored with a warning reply. | Prevents self-approval. |
-| 22 | Untrusted or read-only agent approves | Sender lacks `rw` role or trust | Marker is ignored with a warning reply. | Enforces ACL. |
+| 21 | Requester tries to self-approve | `perun-proposals_approve` from the original requester | Tool call rejected by the core self-approval rule; the human dashboard may still approve its own proposal (`allow_self=True`). | Prevents self-approval. |
+| 22 | Untrusted or read-only agent approves | Sender lacks `rw` role or trust | The `perun-proposals_approve` tool rejects the call server-side; no state changes. | Enforces ACL. |
 | 20 | Clock skew / stale catch-up messages | Existing reconnect catch-up logic | Gap acknowledged rather than mis-replied. | Existing behavior retained. |
 
 ---
@@ -612,7 +623,9 @@ contract.
    per-user tenant? (Room id determinism depends on this.)
 2. **Chat-side write approvals:** may participants with an explicit `approver`
    role approve envelopes in-chat, or is HITL strictly dashboard/owner-only for
-   v1? (Recommendation: owner-only for v1.)
+   v1? **Resolved:** any trusted `rw` participant can approve/reject through the
+   `perun-proposals` MCP tool; there is no separate `approver` role, and the
+   autonomous reviewer uses the same path.
 3. **Delete policy:** archive-with-30-day-soft-delete vs immediate destroy —
    which is default?
 4. **Auto-approved reads:** are read-only queries (e.g., "show me api.py:120-140")

@@ -88,6 +88,7 @@ screen maps to one of them.
 | `#/telegram` | Bridge control | "Can I reach this from my phone?" |
 | `#/perunchat` | Native agent chat | "Talk to other agents on the PerunChat network." |
 | `#/providers` | LLM providers | "Which models can my agents use?" |
+| `#/updates` | Self-update | "Is there a newer Perun, and is it safe to apply?" |
 | `#/settings` | Configuration | "How is Perun wired up?" |
 
 The sidebar is the map; the topbar is context (`title`, cross-project search,
@@ -159,8 +160,14 @@ approval for state-changing requests.
 with trusted participants (`rw`/`ro`). Chat-originated action proposals go
 through local HMAC-SHA256 HITL approval. One click approves and starts the
 Project Agent headless in the background (no TUI, no interactive prompt); the
-run uses the policy-enforcing `perun-guard` filesystem MCP server with post-run
-audits, and the HITL signing secret / approver identity are configurable.
+run uses the running OpenCode service (`standalone=False`), the policy-enforcing
+`perun-guard` filesystem MCP server, and post-run audits. When **Agent approval**
+is enabled, a peer `rw` participant or the bridge's bounded autonomous reviewer
+can approve the proposal with `execute=false`, leaving it `approved` for a
+remote claim or an explicit local run; the HITL signing secret / approver
+identity are configurable. A remote rw claimant can download a target-scoped
+ZIP of the approved paths and upload an edited package, which Perun validates,
+applies with rollback on failure, and audits.
 
 ### Context and secrets
 An agent that needs reference material calls `perun_context("<task>")` instead
@@ -221,9 +228,10 @@ the dashboard runs. It never starts a second poller.
 * Multi-user / auth — it binds to `127.0.0.1` only (a loopback token still gates
   state-changing API calls).
 * Scheduling / cron-style auto-runs.
-* A graph of inter-project dependencies (local references are recorded as
-  memory facts, but nothing models the graph).
+* **Running** deploy commands — the manifest-driven dependency graph and
+  `deploy-plan` checklist are modelled, but Perun never executes a deploy
+  command itself.
 * Cloud sync of the registry or memory.
 
-Still out of scope as of v0.7.21; the data model already leaves room
+Still out of scope as of v0.8.37; the data model already leaves room
 (`projects.enabled`, `runs` history, `activity` meta, `tasks`).

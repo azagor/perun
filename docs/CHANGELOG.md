@@ -4,7 +4,32 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Added
+
+- **MCP handoff tools for external claimants.** The sibling `perunchat` MCP
+  bridge now exposes `perunchat_claim_execution`,
+  `perunchat_request_download_package`, `perunchat_upload_package`,
+  `perunchat_write_target_file`, `perunchat_execution_status`, and
+  `perunchat_revoke_execution_claim`, so an MCP-capable remote agent can run the
+  claim/download/upload flow without hand-crafting WebSocket frames.
+- **Execution result correlation.** `application/perun-execution-result`
+  payloads now always carry `op` and `proposal_id`, including error responses.
+
+### Fixed
+
+- **Package transfers cannot be hijacked or reset.** `package_begin` rejects a
+  duplicate `transfer_id` instead of replacing an in-flight slot, caps
+  concurrent uploads at 8, and refuses to overwrite a persisted row owned by a
+  different sender. A bad transfer id no longer forces the victim to restart.
+- **Transfer test isolation.** `package_transfers` is cleared between tests.
+
+### Documentation
+
+- Refreshed the CODEMAP, technical reference, design notes, README, Shared
+  Projects PRD, and project context docs against the v0.8.37 codebase:
+  MCP-based proposal/approval flow, bounded autonomous peer review,
+  approve-only defaults, external ZIP handoff caps/rollback, manifest
+  dependency graph and `deploy-plan`, and dashboard asset cache-busting.
 
 ## v0.8.37
 

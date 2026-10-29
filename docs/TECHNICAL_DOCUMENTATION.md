@@ -135,8 +135,9 @@ can all write concurrently.
 | `secret_store` | encrypted secrets | `name` unique per scope, `value` holds an `enc:<base64>` Fernet blob (never plaintext), `hint` (metadata only) |
 | `settings` | key/value scratch | |
 | `bridge_links` | Telegram routing | `chat_id` unique → `project_id` + `session_pk`, `updated_at` |
+| `project_dependencies` | Manifest dependency graph | `project_id` + `depends_on_project_id`/`depends_on_slug`, relationship, deploy command/doc, auto-deploy flag, reason; indexes on both project columns |
 | `project_chats` | Shared Projects | Project → `grp:` room mapping, lifecycle state, `manifest_rev`, last sync |
-| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, status (`pending`/`approved`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens |
+| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, status (`pending`/`approved`/`claimed`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens, executor/claim fields (`executor_id`, `claimed_at`, `claim_expires_at`, `claim_snapshot`) |
 | `pending_room_deletions` | Shared Projects | Retry queue for room teardown when gateway offline |
 
 Column additions after the first release are applied idempotently by
@@ -439,7 +440,19 @@ Perun control project.
 **Refresh dependencies**
 (`python -m perun refresh-deps [slug] [--all]`). Re-parses dependency files and
 stores them as project-scoped facts; useful for projects that existed before
-dependency tracking was added. A server-backed **folder browser** powers the path pickers:
+dependency tracking was added.
+
+**Dependency graph and deploy plan**
+(`registry.sync_dependencies()` / `analyze_impact()` / `get_deploy_plan()`).
+Manifest `dependencies:` entries are normalized into `project_dependencies` on
+every manifest refresh, including unresolved slugs (`depends_on_project_id =
+NULL`, reported as `missing`). `analyze_impact(slug)` walks upstream dependents
+with cycle detection; `get_deploy_plan(slug)` orders the checklist deepest-first,
+includes the changed project when it declares a deploy command, and hides
+`auto_deploy` items unless `include_auto=True`. Perun generates the checklist
+but never executes `deploy_command` itself.
+
+A server-backed **folder browser** powers the path pickers:
 `GET /api/fs/list?path=&show_hidden=` returns `roots`, `home`, `parent`, `dirs`,
 `files`; `POST /api/fs/mkdir {path}` creates a directory.
 
@@ -743,6 +756,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/projects/{slug}/manifest/refresh` | re-read disk, merge to registry |
 | POST | `/api/projects/{slug}/manifest/export` | generate manifest from registry (409 if exists) |
 | PUT | `/api/projects/{slug}/manifest` | write manifest `{content}` or `{data,body}` |
+| GET | `/api/projects/{slug}/dependencies` | direct dependencies with target project info |
+| GET | `/api/projects/{slug}/dependents` | direct dependents |
+| GET | `/api/projects/{slug}/impact?changed=a,b` | transitive impact analysis, cycle-aware |
+| GET | `/api/projects/{slug}/deploy-plan?changed=a,b&include_auto=1` | ordered deploy checklist from the dependency graph |
 | GET | `/api/projects/{slug}/git` | git status `info()` |
 | GET | `/api/projects/{slug}/git/log` | recent commits |
 | POST | `/api/projects/{slug}/git/init` | initialise repository |
@@ -795,8 +812,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal |
-| POST | `/api/projects/{slug}/proposals/{proposal_id}/execute` | Claim an approved proposal and start its headless run in the background (`202`) |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/execute` | Start an already-approved proposal's headless run in the background (`202`); the atomic `approved → executing` claim happens inside `start_execution` |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve-and-execute` | Approve and start the headless run in one owner action (`202`) |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/claim` | Reserve an approved proposal for external execution by this machine's bound room agent; returns the target `details` once for the claimant |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/revoke-claim` | Return a claimed proposal to `approved` (claim holder or room owner only) |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/retry` | Clone a terminal proposal into a fresh pending proposal (`failed`/`rejected`/`expired`/`executed`) |
 | DELETE | `/api/projects/{slug}/proposals/{proposal_id}` | Delete a proposal; `executing` proposals are rejected |
 | GET | `/api/projects/{slug}/shared` | Shared-project config, local chat binding, and a live `project_chat` description (room id, state, `managed_by`, manifest rev, expected vs. live members — gateway errors are reported in `project_chat.error`, never as a 5xx) |
@@ -817,10 +836,11 @@ short-lived HMAC token bound to the proposal; `execute` (or the one-click
 - the run is `opencode run --format json --auto` in the project directory with
   `stdin=DEVNULL`, `CREATE_NO_WINDOW` on Windows, the project's model override,
   and the generated deny-all `perun-shared` agent; `--auto` removes permission
-  prompts, so no human keystrokes are needed. Shared-project runs also use
-  `--standalone` and active API-key credentials are exported from
-  `opencode auth export` and injected as environment variables, so cloud models
-  work without relying on the interactive background service;
+  prompts, so no human keystrokes are needed. Shared-project runs use the
+  running OpenCode service (`standalone=False`) and active API-key credentials
+  are exported from `opencode auth export` and injected as environment
+  variables, so the project's MCP servers load and cloud models work without a
+  private background server;
 - the proposal id *is* the run id (`run_uid`), which makes the run addressable
   for cancellation (`POST /api/runs/{proposal_id}/cancel`), logs, and SSE;
 - the HTTP handler returns `202` immediately; the agent runs in a daemon thread
@@ -877,8 +897,9 @@ tool defaults to `execute=false`; `execute=true` is the explicit local-run
 choice. The approval notice says “awaiting external execution” for an
 `approved` proposal and “is now executing” only after a run starts. Reviews are
 capped at two concurrent runs, proposal content is treated as untrusted data,
-and a failed review posts a human-action notice. Approved proposals that are
-never claimed or executed expire after seven days.
+and a failed review posts a human-action notice. External claims are reserved for
+one hour (`EXTERNAL_CLAIM_TTL_SECONDS`) and then swept back to `approved`.
+Approved proposals that are never claimed or executed expire after seven days.
 
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools
@@ -907,10 +928,17 @@ chunked replacement files bound to the same room/sender, and Perun unpacks,
 validates against the target/allowlist/sensitive rules, stages and applies the
 files with backup/rollback, and runs the audit. Downloads enforce the configured
 package/entry/entry-count caps. Uploads require a SHA-256, are base64-validated,
-and enforce per-chunk/cumulative byte caps. Execution result frames omit the
-HITL approval token and claim snapshot; `claim_execution` includes proposal
-details for the claimant, while status/revoke responses omit them.
+enforce per-chunk/cumulative byte caps, reject a `transfer_id` that is already in
+flight, and cap concurrent uploads at 8. Execution result frames carry `op` and
+`proposal_id` so the MCP client can correlate replies. Execution result frames
+omit the HITL approval token and claim snapshot; `claim_execution` includes
+proposal details for the claimant, while status/revoke responses omit them.
 External-dependency targets are rejected for this handoff and must run locally.
+The `perunchat` MCP bridge exposes the same flow as `perunchat_claim_execution`,
+`perunchat_request_download_package`, `perunchat_upload_package`,
+`perunchat_write_target_file`, `perunchat_execution_status`, and
+`perunchat_revoke_execution_claim`, so an MCP-capable agent does not need to
+speak raw WebSocket frames.
 
 Project-room authorization requires the participant to be on the local
 PerunChat trust list *and* in the manifest; the room owner (`managed_by`) and
@@ -1251,12 +1279,15 @@ the creation wizard so both always offer the same trust-list chips plus inline
 "trust and add" for a brand-new agent. The tab exposes two separate toggles:
 **Agent approval in chat** (`shared.auto_approve`) and **Policy auto-approve**
 (`shared.policy_auto_approve`). Agent approval holds chat-agent proposals in
-`pending` and posts a review request to the project chat; another `rw`
-participant must reply with an `[APPROVAL: ...]` marker to approve or reject.
-Policy auto-approve executes proposals immediately by the system, recording the
-`auto` policy identity. When both flags are enabled, policy auto-approve takes
-precedence. Humans always retain the ability to approve, execute, retry, or
-delete proposals manually.
+`pending` and posts a review request to the project chat; the bridge schedules a
+bounded autonomous review (at most two concurrent runs) that reads the targets
+through the guard tools and calls `perun-proposals_approve` with
+`execute=false`, leaving the proposal `approved` for an external claim or an
+explicit local run. Another `rw` participant can also approve or reject through
+the same proposals MCP tool. Policy auto-approve executes proposals immediately
+by the system, recording the `auto` policy identity. When both flags are enabled,
+policy auto-approve takes precedence. Humans always retain the ability to
+approve, execute, retry, or delete proposals manually.
 
 **Portable MCP config and chat permissions.** The shared-project
 `opencode.json` writes `PERUN_HOME=~/.perun` for the default home instead of an
