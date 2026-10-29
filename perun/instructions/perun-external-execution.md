@@ -140,6 +140,9 @@ true/false, ...}`.
 - If the transfer slot is gone (for example the bridge restarted), start a new
   `package_begin` with a fresh `transfer_id` and upload the whole archive again.
   The proposal remains `claimed`, so a retry is always allowed.
+- If the response to `package_begin` is lost, use a new `transfer_id`; the old
+  slot expires after the 30-minute TTL and counts against the 8-transfer cap
+  until then.
 - For downloads, simply re-send `request_download_package`; Perun will publish a
   fresh `package_ready` and retransmit all chunks.
 
