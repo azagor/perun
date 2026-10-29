@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **The dashboard can no longer serve a stale chat script.** `GET /` rewrites
+  the `?v=` asset query strings to the running Perun version and the static
+  mount sends `Cache-Control: no-cache` for JS/CSS/HTML (validated by ETag).
+  Browsers that had cached `perun.js?v=0.7.47` kept rendering PerunChat in
+  arrival order long after the timestamp-sorting fix shipped.
+- **The public live chat renders messages chronologically.** Timestamped frames
+  are inserted at their sorted position instead of appended, restored
+  localStorage history is sorted before rendering (and no longer swallowed by
+  its own dedup check), and a reply always appears after its parent.
 
 ## v0.8.36
 

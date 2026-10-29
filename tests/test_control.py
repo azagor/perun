@@ -160,3 +160,28 @@ def test_run_without_project_targets_control(control_repo, monkeypatch):  # noqa
         r = client.post("/api/runs", json={"prompt": "hello"})
         assert r.status_code == 200
     assert captured["ref"] == "perun"
+
+
+def test_dashboard_shell_versions_assets_and_disables_heuristic_cache(control_repo):  # noqa: ARG001
+    """A release must invalidate the browser's cached dashboard script.
+
+    The chat-ordering fix shipped in 0.8.10 was invisible to clients whose
+    browser had cached ``perun.js?v=0.7.47`` under heuristic freshness.  The
+    shell now rewrites the query string to the running version and asks the
+    browser to revalidate JS/CSS/HTML.
+    """
+    from fastapi.testclient import TestClient
+
+    from perun import __version__, server
+
+    server.SETTINGS.auto_discover_on_start = False
+    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+        page = client.get("/")
+        assert page.status_code == 200
+        assert f"perun.js?v={__version__}" in page.text
+        assert "perun.js?v=0.7.47" not in page.text
+        assert page.headers.get("cache-control") == "no-cache"
+
+        script = client.get("/js/perun.js")
+        assert script.status_code == 200
+        assert script.headers.get("cache-control") == "no-cache"

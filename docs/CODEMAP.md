@@ -760,7 +760,9 @@ FastAPI app + SSE + static dashboard.
   `_normalize_agent_models()` (validate/merge per-agent `agent_models` from the
   project Config tab), `_ps_quote()`/`_posix_quote()`/`_cmd_quote()`, `_terminal_command()`
   (server-side command construction), `_dashboard_index()` (injects
-  `window.PERUN_TOKEN` into `index.html`), `_post_proposal_started()`,
+  `window.PERUN_TOKEN` into `index.html` and rewrites `?v=` asset queries to the
+  running version), `_DashboardStaticFiles` (revalidation headers for
+  JS/CSS/HTML), `_post_proposal_started()`,
   `_post_proposal_rejected()`, `_post_proposal_digest()` (best-effort lifecycle
   notices to the bound project chat, redacted before leaving the process).
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the

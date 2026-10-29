@@ -1016,7 +1016,10 @@ stable without touching disk). Comparison uses `hmac.compare_digest`. Read-only
 `GET`/SSE flows stay token-free, so the live dashboard keeps working. The
 dashboard itself receives the token injected into `index.html` as
 `window.PERUN_TOKEN` (`GET /`), and the frontend attaches it automatically; CLI
-clients read the file.
+clients read the file. The same handler rewrites every `?v=` asset query string
+to the running Perun version, and the static mount sends `Cache-Control:
+no-cache` for JS/CSS/HTML, so a release always invalidates a cached dashboard
+script while still allowing an ETag `304` on revalidation.
 
 On top of that, an `_origin_guard` middleware rejects any `/api/*` request whose
 `Host` header does not address this machine (loopback, or the configured bind

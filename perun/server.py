@@ -3498,6 +3498,23 @@ def api_shutdown() -> dict[str, Any]:
 # Static dashboard (mounted last so /api/* always wins)
 # --------------------------------------------------------------------------- #
 if config.WEB_DIR.is_dir():
+    class _DashboardStaticFiles(StaticFiles):
+        """Serve dashboard assets with revalidation.
+
+        Without ``Cache-Control`` browsers apply heuristic freshness to
+        ``perun.js`` and can keep an old build for days (the chat ordering fix
+        shipped in 0.8.10 was invisible to clients still running a 0.7.x
+        cached script).  ``no-cache`` still allows a 304 via ETag, so it costs
+        one conditional request, not a re-download.
+        """
+
+        async def get_response(self, path: str, scope):  # type: ignore[override]
+            response = await super().get_response(path, scope)
+            suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+            if response.status_code == 200 and suffix in {"js", "css", "html"}:
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
     @app.get("/", include_in_schema=False)
     def _dashboard_index() -> HTMLResponse:
         """Serve the SPA shell with the local API token injected.
@@ -3505,8 +3522,13 @@ if config.WEB_DIR.is_dir():
         A state-changing API call needs ``X-Perun-Token`` (see the middleware);
         the dashboard is same-origin as the server, so handing it the token here
         is equivalent to Jupyter embedding its token in the page it serves.
+
+        Asset query strings are rewritten to the running version so a release
+        always invalidates the browser cache even though ``index.html`` itself
+        is static on disk.
         """
         page = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
+        page = re.sub(r'\?v=[^"\']+', f"?v={__version__}", page)
         snippet = (
             "<script>window.PERUN_TOKEN = "
             f"{json.dumps(config.api_token())};</script>"
@@ -3515,9 +3537,9 @@ if config.WEB_DIR.is_dir():
             page = page.replace("</head>", f"    {snippet}\n</head>", 1)
         else:  # pragma: no cover - defensive
             page = snippet + page
-        return HTMLResponse(page)
+        return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
-    app.mount("/", StaticFiles(directory=str(config.WEB_DIR), html=True),
+    app.mount("/", _DashboardStaticFiles(directory=str(config.WEB_DIR), html=True),
               name="web")
 else:  # pragma: no cover
     @app.get("/")
