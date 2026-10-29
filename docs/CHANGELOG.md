@@ -6,6 +6,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+- **External execution downloads are target-scoped.** A claimant can no longer
+  request arbitrary project paths; `request_download_package` paths must stay
+  under the proposal's approved targets. `pack()` skips sensitive files and
+  directories (`.env`, `.git`, `.perun`, keys, OpenCode config, …) even when a
+  requested directory contains them.
+- **External package uploads are hardened.** Chunks must come from the same
+  room and sender as `package_begin`, the chunk count is capped, non-integer
+  `seq`/`total_chunks` values are rejected, and ZIP directory entries are
+  skipped instead of being applied as empty files.
+- **Execution result frames do not leak server state.** The HITL approval token
+  and claim snapshot are stripped from `claim`/`revoke`/`status` responses; the
+  proposal details and targets remain available to the claimant.
 - **Guard target scope survives `standalone=False`.** When `PERUN_ALLOWLIST`
   is absent (the background service starts the project MCP server), the guard
   derives the active local proposal's targets from the database and enforces

@@ -901,6 +901,12 @@ running OpenCode service rather than a private `--standalone` server, so the
 project's MCP servers are loaded; `_prepare_execution()` also fails early with
 “guard MCP not registered” if `perun-guard` is missing from the project config,
 and probes the server for `guard_write_file` before spending a model run.
+External handoff: a remote rw claimant requests a ZIP of the proposal's approved
+targets (arbitrary paths are rejected and sensitive files are excluded), uploads
+chunked replacement files bound to the same room/sender, and Perun unpacks,
+validates against the target/allowlist/sensitive rules, applies the files, and
+runs the audit. Execution result frames omit the HITL approval token and claim
+snapshot.
 
 Project-room authorization requires the participant to be on the local
 PerunChat trust list *and* in the manifest; the room owner (`managed_by`) and

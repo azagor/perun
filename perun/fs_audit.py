@@ -37,7 +37,7 @@ def snapshot(
     entries = path_guard.from_project(project)
     files: dict[str, tuple[int, float, int]] = {}
     for root, _access in entries:
-        if not root.exists():
+        if not root.exists() or path_guard.is_sensitive_path(root):
             continue
         if root.is_file():
             key = _stat_key(root)
@@ -45,9 +45,15 @@ def snapshot(
                 files[str(root)] = key
         elif root.is_dir():
             for dirpath, dirnames, filenames in os.walk(root):
-                dirnames[:] = [d for d in dirnames if d.lower() not in _WALK_SKIP_DIRS]
+                dirnames[:] = [
+                    d for d in dirnames
+                    if d.lower() not in _WALK_SKIP_DIRS
+                    and not path_guard.is_sensitive_path(Path(dirpath) / d)
+                ]
                 for name in filenames:
                     p = Path(dirpath) / name
+                    if path_guard.is_sensitive_path(p):
+                        continue
                     key = _stat_key(p)
                     if key != (0, 0.0, 0):
                         files[str(p)] = key

@@ -52,6 +52,8 @@ def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
     external_deps = cfg.get("external_deps", [])
 
     targets = paths if paths is not None else ["."]
+    if isinstance(targets, str):
+        targets = [targets]
     errors: list[str] = []
     for target in targets:
         ok, reason = path_guard.check(root, target, external_deps, require_write=False)
@@ -67,7 +69,11 @@ def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
             if target_path.is_file():
                 _add_file(zf, root, target_path)
             elif target_path.is_dir():
-                for dirpath, _dirnames, filenames in os.walk(target_path):
+                for dirpath, dirnames, filenames in os.walk(target_path):
+                    dirnames[:] = [
+                        d for d in dirnames
+                        if not path_guard.is_sensitive_path(Path(dirpath) / d)
+                    ]
                     for name in filenames:
                         p = Path(dirpath) / name
                         if p.is_symlink():
@@ -80,6 +86,8 @@ def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
 
 
 def _add_file(zf: zipfile.ZipFile, root: Path, path: Path) -> None:
+    if path.is_symlink() or path_guard.is_sensitive_path(path):
+        return
     try:
         rel = path.resolve().relative_to(root)
     except ValueError:
@@ -149,6 +157,10 @@ def unpack(
                 parts = name.replace("\\", "/").split("/")
                 if any(part == ".." for part in parts):
                     raise PackageError(f"entry escapes archive root: {name}")
+                if info.is_dir():
+                    # The protocol transfers files only; a directory entry
+                    # would otherwise be applied as an empty regular file.
+                    continue
 
                 # Size guards before extraction (zip-bomb protection).
                 uncompressed = info.file_size

@@ -46,13 +46,24 @@ try:
 except Exception:  # pragma: no cover
     _HAS_HTTPX = False
 
-from . import action_proposals, config, control, db, memory, registry, shared_project_sync, shared_projects
+from . import (
+    action_proposals, config, control, db, memory, path_guard, registry,
+    shared_project_sync, shared_projects,
+)
 
 if False:  # type: ignore
     # Circular-import-safe type hint for the orchestrator.
     from .orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
+
+
+def _is_under(path: str | Path, parent: str | Path) -> bool:
+    try:
+        Path(path).resolve().relative_to(Path(parent).resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _setup_bridge_logging() -> None:
@@ -187,6 +198,9 @@ _SHARED_CONTEXT_MAX_CHARS = 2400
 # External execution handoff over PerunChat (see docs/external-execution-protocol.md).
 _PACKAGE_TRANSFER_TTL_SECONDS = 30 * 60
 _PACKAGE_SWEEP_INTERVAL_SECONDS = 60.0
+# Upper bound on chunk count; prevents a huge range()/set allocation at
+# finalize. A 50 MB package at 360 KiB/chunk is ~143 chunks.
+_MAX_PACKAGE_CHUNKS = 10000
 _PACKAGE_CONTENT_TYPE = "application/perun-package"
 _EXECUTION_CONTENT_TYPE = "application/perun-execution"
 _EXECUTION_RESULT_CONTENT_TYPE = "application/perun-execution-result"
@@ -1486,6 +1500,17 @@ class PerunChatBridge:
                 return {"_parse_error": str(exc)}
         return {}
 
+    @staticmethod
+    def _execution_proposal_view(proposal: Dict[str, Any]) -> Dict[str, Any]:
+        """Proposal fields safe to publish to the room's execution clients.
+
+        The HITL approval token and the claim snapshot are server-side state and
+        must not be broadcast over the chat room. The proposal details/targets
+        remain available to the claimant so it can build the package.
+        """
+        hidden = {"approval_token", "approval_expiry", "claim_snapshot"}
+        return {k: v for k, v in proposal.items() if k not in hidden}
+
     def _handle_execution_frame(self, frame: Dict[str, Any], ws: Any) -> None:
         room_id = frame.get("room_id")
         binding = self._project_binding(room_id) if room_id else None
@@ -1510,7 +1535,10 @@ class PerunChatBridge:
                 proposal = action_proposals.claim_execution(
                     proposal_id, sender, owner=owner, trusted=trusted
                 )
-                result = {"op": op, "ok": True, "proposal": proposal}
+                result = {
+                    "op": op, "ok": True,
+                    "proposal": self._execution_proposal_view(proposal),
+                }
                 self._post_execution_notice(
                     room_id,
                     f"[Proposal {proposal_id} claimed for external execution by {sender}]",
@@ -1518,20 +1546,28 @@ class PerunChatBridge:
             elif op == "request_download_package":
                 result = self._start_download_transfer(project, payload, sender)
             elif op == "package_begin":
-                result = self._register_upload_transfer(project, payload, sender)
+                result = self._register_upload_transfer(
+                    project, payload, sender, room_id=room_id)
             elif op == "package_end":
-                result = self._finalize_upload_transfer(project, payload, sender, owner=owner)
+                result = self._finalize_upload_transfer(
+                    project, payload, sender, owner=owner, room_id=room_id)
             elif op == "revoke_execution_claim":
                 proposal = action_proposals.revoke_execution_claim(
                     proposal_id, sender, owner=owner
                 )
-                result = {"op": op, "ok": True, "proposal": proposal}
+                result = {
+                    "op": op, "ok": True,
+                    "proposal": self._execution_proposal_view(proposal),
+                }
             elif op == "execution_status":
                 proposal = action_proposals.get(proposal_id)
                 if not proposal:
                     result = {"op": op, "ok": False, "error": "proposal not found"}
                 else:
-                    result = {"op": op, "ok": True, "proposal": proposal}
+                    result = {
+                        "op": op, "ok": True,
+                        "proposal": self._execution_proposal_view(proposal),
+                    }
             elif op == "transfer_status":
                 transfer_id = str(payload.get("transfer_id") or "").strip()
                 with self._package_transfers_lock:
@@ -1585,9 +1621,30 @@ class PerunChatBridge:
         if not shared_projects.can_write(cfg, sender) and sender != owner:
             return {"ok": False, "error": "read-only participants cannot download packages"}
 
-        paths = payload.get("paths") or proposal.get("targets")
+        targets = [str(t) for t in (proposal.get("targets") or [])]
+        requested = payload.get("paths")
+        if requested is not None:
+            if not isinstance(requested, list) or not all(
+                    isinstance(p, str) for p in requested):
+                return {"ok": False, "error": "paths must be a list of strings"}
+            resolved_targets = [
+                path_guard.resolve_target(project["path"], t) for t in targets
+            ]
+            for requested_path in requested:
+                resolved = path_guard.resolve_target(project["path"], requested_path)
+                if not any(
+                    resolved == target or _is_under(resolved, target)
+                    for target in resolved_targets
+                ):
+                    return {
+                        "ok": False,
+                        "error": f"{requested_path} is not under an approved proposal target",
+                    }
+            paths = requested
+        else:
+            paths = targets
         if not paths:
-            return {"ok": False, "error": "no paths specified for download"}
+            return {"ok": False, "error": "no approved targets to package"}
         try:
             archive = package_handoff.pack(project, paths)
         except Exception as exc:
@@ -1630,7 +1687,8 @@ class PerunChatBridge:
         return {"ok": True, "transfer_id": transfer_id, "direction": "download"}
 
     def _register_upload_transfer(
-        self, project: Dict[str, Any], payload: Dict[str, Any], sender: str
+        self, project: Dict[str, Any], payload: Dict[str, Any], sender: str,
+        *, room_id: str = "",
     ) -> Dict[str, Any]:
         proposal_id = str(payload.get("proposal_id") or "").strip()
         proposal = action_proposals.get(proposal_id)
@@ -1645,11 +1703,20 @@ class PerunChatBridge:
         max_package = getattr(
             settings, "external_execution_max_package_bytes", 50 * 1024 * 1024
         ) or 50 * 1024 * 1024
-        total_size = int(payload.get("total_size") or 0)
+        try:
+            total_size = int(payload.get("total_size") or 0)
+            total_chunks = int(payload.get("total_chunks") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "total_size/total_chunks must be integers"}
         if total_size <= 0 or total_size > max_package:
             return {
                 "ok": False,
                 "error": f"total_size must be between 1 and {max_package}",
+            }
+        if total_chunks <= 0 or total_chunks > _MAX_PACKAGE_CHUNKS:
+            return {
+                "ok": False,
+                "error": f"total_chunks must be between 1 and {_MAX_PACKAGE_CHUNKS}",
             }
 
         transfer_id = str(payload.get("transfer_id") or "").strip()
@@ -1659,10 +1726,11 @@ class PerunChatBridge:
         transfer = {
             "proposal_id": proposal_id,
             "sender": sender,
+            "room_id": room_id,
             "direction": "upload",
             "sha256": str(payload.get("sha256") or ""),
             "total_size": total_size,
-            "total_chunks": int(payload.get("total_chunks") or 0),
+            "total_chunks": total_chunks,
             "received": {},
             "started_at": time.time(),
         }
@@ -1694,10 +1762,27 @@ class PerunChatBridge:
                     _EXECUTION_CONTENT_TYPE,
                 )
                 return
+            if transfer.get("room_id") not in ("", room_id):
+                self.post_to_room(
+                    room_id,
+                    {"op": "package_rejected", "transfer_id": transfer_id,
+                     "error": "transfer belongs to another room"},
+                    _EXECUTION_CONTENT_TYPE,
+                )
+                return
 
-            seq = int(payload.get("seq") or 0)
+            try:
+                seq = int(payload.get("seq") or 0)
+                total_chunks = int(transfer.get("total_chunks") or 0)
+            except (TypeError, ValueError):
+                self.post_to_room(
+                    room_id,
+                    {"op": "package_rejected", "transfer_id": transfer_id,
+                     "error": "seq must be an integer"},
+                    _EXECUTION_CONTENT_TYPE,
+                )
+                return
             data_b64 = str(payload.get("data") or "")
-            total_chunks = int(transfer.get("total_chunks") or 0)
             if seq < 0 or (total_chunks and seq >= total_chunks):
                 self.post_to_room(
                     room_id,
@@ -1732,6 +1817,7 @@ class PerunChatBridge:
         sender: str,
         *,
         owner: str = "",
+        room_id: str = "",
     ) -> Dict[str, Any]:
         transfer_id = str(payload.get("transfer_id") or "").strip()
         if not transfer_id:
@@ -1743,8 +1829,13 @@ class PerunChatBridge:
                 return {"ok": False, "error": "transfer not found"}
             if str(transfer.get("sender") or "").lower() != sender:
                 return {"ok": False, "error": "sender mismatch"}
+            if transfer.get("room_id") not in ("", room_id):
+                return {"ok": False, "error": "transfer belongs to another room"}
 
-            total_chunks = int(transfer.get("total_chunks") or 0)
+            try:
+                total_chunks = int(transfer.get("total_chunks") or 0)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid total_chunks"}
             received = transfer["received"]
             if len(received) != total_chunks or set(received.keys()) != set(range(total_chunks)):
                 return {

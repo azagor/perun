@@ -36,6 +36,30 @@ def test_pack_project_root_roundtrip(tmp_path):
     assert files["src/a.py"].decode() == "print('a')"
 
 
+def test_pack_skips_sensitive_files(tmp_path):
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    (root / "api.py").write_text("ok")
+    (root / ".env").write_text("SECRET=1")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("secret")
+    archive = package_handoff.pack(project, ["."])
+    files = package_handoff.unpack(archive)
+    assert "api.py" in files
+    assert ".env" not in files
+    assert ".git/config" not in files
+
+
+def test_unpack_skips_directory_entries(tmp_path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("dir/", "")
+        zf.writestr("dir/file.txt", "ok")
+    files = package_handoff.unpack(buf.getvalue())
+    assert "dir/" not in files
+    assert files["dir/file.txt"] == b"ok"
+
+
 def test_unpack_rejects_traversal(tmp_path):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

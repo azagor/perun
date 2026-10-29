@@ -48,7 +48,7 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 | Op | Payload | Meaning |
 |---|---|---|
 | `claim_execution` | `{"proposal_id": "prop_..."}` | Reserve the proposal. Status becomes `claimed`. |
-| `request_download_package` | `{"proposal_id": "prop_...", "paths": ["api.py"]}` (paths optional) | Ask Perun to publish the current target snapshot as a download. |
+| `request_download_package` | `{"proposal_id": "prop_...", "paths": ["api.py"]}` (paths optional) | Ask Perun to publish the current target snapshot as a download. `paths` must stay under the proposal's approved targets. |
 | `package_begin` | `{"proposal_id": "prop_...", "transfer_id": "trf_...", "sha256": "...", "total_size": N, "total_chunks": K}` | Announce an upload. |
 | `package_end` | `{"transfer_id": "trf_..."}` | Last chunk sent; ask Perun to verify and apply. |
 | `revoke_execution_claim` | `{"proposal_id": "prop_..."}` | Return a `claimed` proposal to `approved`. |
@@ -71,6 +71,10 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 - Raw bytes are the ZIP archive split at chunk boundaries (default raw chunk
   size 360 KiB).
 - `sha256` is the SHA-256 of the **full ZIP archive**, lower-case hex.
+- Chunks must come from the same room and sender as `package_begin`; a chunk
+  from another room or agent is rejected.
+- Execution result frames omit the server-side HITL approval token and claim
+  snapshot; proposal `details` and `targets` remain available to the claimant.
 
 ## Download flow
 
@@ -97,7 +101,12 @@ content type with `{"op": "<echoed>", "ok": true/false, ...}`.
 - Only files under the approved proposal targets may be written.
 - Never include: `..`, absolute paths, drive letters, symlinks, encrypted
   entries, or entries outside the approved targets.
-- Maximums (defaults): uncompressed total 50 MB, 500 entries, 10 MB per entry.
+- Sensitive paths (`.env`, `.git`, `.perun`, `.ssh`, `.aws`, `.gnupg`, keys,
+  `opencode.json`, `perun.md`, …) are never packed for download and are rejected
+  on upload, even when a directory target contains them.
+- Directory entries (`dir/`) are skipped; only regular files are applied.
+- Maximums (defaults): uncompressed total 50 MB, 500 entries, 10 MB per entry,
+  10,000 chunks per transfer.
 
 ## Interrupted transfers
 

@@ -444,14 +444,19 @@ Start / stream / cancel headless `opencode run`.
 Safe ZIP work-package handling for the external execution handoff. Perun never
 runs an LLM on this path; the remote rw participant generates the package with
 its own model/tokens and Perun validates/applies it locally.
-* `pack()` — build a ZIP from a list of target paths relative to the project root.
+* `pack()` — build a ZIP from a list of target paths relative to the project root;
+  skips sensitive files/directories (`.env`, `.git`, `.perun`, keys, OpenCode
+  config, …) even when a requested directory contains them.
 * `unpack()` — decode base64 chunks, reassemble the archive, and validate against
-  caps (uncompressed total 50 MB, 500 entries, 10 MB/entry) and anti-abuse rules.
-* `validate()` — reject traversal (`..`), absolute paths, drive letters,
-  symlinks, encrypted entries, duplicate entry names, and entries outside the
-  approved proposal targets.
-* `apply()` — write the validated entries to disk under the project root and run
-  a post-apply filesystem audit.
+  caps (uncompressed total 50 MB, 500 entries, 10 MB/entry) and anti-abuse rules;
+  directory entries are skipped.
+* `validate_package()` — reject traversal (`..`), absolute paths, drive letters,
+  symlinks, encrypted entries, duplicate entry names, sensitive paths, and
+  entries outside the approved proposal targets.
+* `apply_package()` — write the validated entries to disk under the project root
+  with per-file temp + `os.replace`; the proposal lifecycle runs the audit.
+* The external download path is restricted to the proposal's approved targets;
+  a claimant cannot request arbitrary project paths.
 
 ### `perun/skills.py`
 Discovery of OpenCode agent skills and tools available to a project.
