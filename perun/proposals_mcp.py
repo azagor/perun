@@ -51,7 +51,11 @@ def _project_path() -> Path:
         # OpenCode launches project-local MCP servers with the project as cwd.
         # Fall back to it so the server is usable from the TUI even when the
         # generated opencode.json does not set PERUN_PROJECT_PATH explicitly.
-        raw = os.getcwd()
+        # A deleted cwd raises OSError; match guard_mcp and degrade to ".".
+        try:
+            raw = os.getcwd()
+        except OSError:
+            raw = "."
     p = Path(raw).resolve()
     if not p.is_dir():
         raise ValueError(f"project path does not exist: {p}")

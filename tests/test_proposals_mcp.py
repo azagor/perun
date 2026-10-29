@@ -81,6 +81,22 @@ def test_list_proposals_falls_back_to_cwd_without_env(tmp_path, monkeypatch, _se
     assert list_proposals() == []
 
 
+def test_project_path_degrades_when_cwd_is_gone(monkeypatch):
+    """A deleted cwd must not crash the proposals server."""
+    monkeypatch.delenv("PERUN_PROJECT_PATH", raising=False)
+    real_getcwd = os.getcwd
+    calls = {"n": 0}
+
+    def _missing_cwd_once():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("cwd deleted")
+        return real_getcwd()
+
+    monkeypatch.setattr(proposals_mcp_module.os, "getcwd", _missing_cwd_once)
+    assert proposals_mcp_module._project_path() == Path(real_getcwd()).resolve()
+
+
 def test_propose_creates_pending_proposal(tool_runner, tmp_path, _settings):
     _settings.perunchat_trusted = ["frambo"]
     project, room = _make_project(tmp_path)
