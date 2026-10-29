@@ -635,7 +635,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `transfer_id` collisions are rejected and at most 8 uploads may be open at
   once, so one claimant cannot replace or exhaust another's slot. Downloads are
   restricted to the proposal targets, skip sensitive files, and enforce
-  package/entry/entry-count caps. `apply_package()` stages files and rolls back
+  package/entry/entry-count caps. Handoff frames set `recipient_id`: results and
+  downloads are delivered only to the claimant, upload chunks only to the room
+  owner, and the gateway rejects unaddressed package chunks or result frames
+  from non-owners. `apply_package()` stages files and rolls back
   on a mid-apply failure. The local host agent should use the normal
   shared-project pipeline instead.
 * Shared-project chat flow: `_shared_project_context()` injects a trust-filtered

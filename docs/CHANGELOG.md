@@ -16,6 +16,11 @@ _No unreleased changes yet._
 
 ### Added
 
+- **Directed external-handoff delivery.** Execution results, download packages
+  and upload chunks now use `recipient_id`, so only the intended agent receives
+  them and they are never replayed from room history. The gateway rejects
+  unaddressed package chunks, `package_ready` or result frames from non-owners,
+  and package chunks addressed to anyone other than the room owner.
 - **MCP handoff tools for external claimants.** The sibling `perunchat` MCP
   bridge now exposes `perunchat_claim_execution`,
   `perunchat_request_download_package`, `perunchat_upload_package`,
@@ -23,7 +28,8 @@ _No unreleased changes yet._
   `perunchat_revoke_execution_claim`, so an MCP-capable remote agent can run the
   claim/download/upload flow without hand-crafting WebSocket frames.
 - **Execution result correlation.** `application/perun-execution-result`
-  payloads now always carry `op` and `proposal_id`, including error responses.
+  payloads now always carry `op`, `proposal_id` and `transfer_id`, including
+  error responses.
 
 ### Fixed
 

@@ -929,12 +929,16 @@ validates against the target/allowlist/sensitive rules, stages and applies the
 files with backup/rollback, and runs the audit. Downloads enforce the configured
 package/entry/entry-count caps. Uploads require a SHA-256, are base64-validated,
 enforce per-chunk/cumulative byte caps, reject a `transfer_id` that is already in
-flight, and cap concurrent uploads at 8. Execution result frames carry `op` and
-`proposal_id` so the MCP client can correlate replies. Execution result frames
-omit the HITL approval token and claim snapshot; `claim_execution` includes
-proposal details for the claimant, while status/revoke responses omit them.
-External-dependency targets are rejected for this handoff and must run locally.
-The `perunchat` MCP bridge exposes the same flow as `perunchat_claim_execution`,
+flight, and cap concurrent uploads at 8. Execution results carry `op`,
+`proposal_id` and `transfer_id` so the MCP client can correlate replies.
+Handoff frames are directed with `recipient_id`: results and downloads go to the
+claimant, upload chunks go to the room owner, and the gateway rejects
+unaddressed package chunks or result/`package_ready` frames from non-owners.
+Execution result frames omit the HITL approval token and claim snapshot;
+`claim_execution` includes proposal details for the claimant, while
+status/revoke responses omit them. External-dependency targets are rejected for
+this handoff and must run locally. The `perunchat` MCP bridge exposes the same
+flow as `perunchat_claim_execution`,
 `perunchat_request_download_package`, `perunchat_upload_package`,
 `perunchat_write_target_file`, `perunchat_execution_status`, and
 `perunchat_revoke_execution_claim`, so an MCP-capable agent does not need to

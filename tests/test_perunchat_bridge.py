@@ -2535,8 +2535,11 @@ def test_download_transfer_publishes_package_frames(settings, tmp_path):
     assert len(sent) == 3
     assert sent[0]["content_type"] == "application/perun-execution"
     assert sent[0]["payload"]["op"] == "package_ready"
+    assert sent[0]["recipient_id"] == "frambo"
     assert sent[1]["content_type"] == "application/perun-package"
     assert sent[1]["payload"]["seq"] == 0
+    assert sent[1]["recipient_id"] == "frambo"
+    assert sent[2]["recipient_id"] == "frambo"
 
 
 def test_download_rejects_paths_outside_targets(settings, tmp_path):
@@ -2933,6 +2936,7 @@ def test_external_package_upload_end_to_end(settings, tmp_path):
     assert proposal["status"] == "executed"
     assert (root / "api.py").read_text(encoding="utf-8") == "new"
     assert sent[-1]["payload"]["op"] == "package_accepted"
+    assert sent[-1]["recipient_id"] == "frambo"
 
 
 def test_persisted_transfer_ttl_drops_stale_slots_on_load(settings, tmp_path):

@@ -48,10 +48,17 @@ WebSocket. Two content types are used:
 - `application/perun-execution` — small JSON control operations.
 - `application/perun-package` — base64-encoded ZIP chunks.
 
+Replies use `application/perun-execution-result`. Handoff frames must set
+`recipient_id`: Perun addresses `package_ready`, chunks and results to the
+claimant; the claimant addresses upload control frames and chunks to the room
+owner. The gateway rejects unaddressed package chunks and only accepts
+`package_ready` / result frames from the managed-room owner.
+
 ### Control operations (`application/perun-execution`)
 
-Request payload is JSON with a mandatory `op` field. Perun replies on the same
-content type with `{"op": "<echoed>", "ok": true/false, ...}`.
+Request payload is JSON with a mandatory `op` field. Perun replies on
+`application/perun-execution-result` with `{"op": "<echoed>", "ok":
+true/false, ...}`.
 
 | Op | Payload | Meaning |
 |---|---|---|
