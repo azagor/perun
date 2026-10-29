@@ -695,7 +695,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/health` | version, uptime, project count, active runs, `control` slug |
-| GET/POST | `/api/health/check` | check and optionally fix missing agent files (`perunchat`, `perun-shared`) across OpenCode config dirs; returns `{ok, fixes, issues}` |
+| GET/POST | `/api/health/check` | check and optionally fix missing agent files (`perunchat`, `perun-shared`) across OpenCode config dirs, and re-sync every shared project's `opencode.json` so `perun-guard`/`perun-proposals` carry `PERUN_PROJECT_PATH`; returns `{ok, fixes, issues}` |
 | GET | `/api/update/check` | latest GitHub release vs running version; `update_available`, `release`, install `mode`; cached 30 min |
 | GET | `/api/update/status` | persisted update job (`state`, `progress`, `log`, `from_version`, `to_version`) plus live `current` version |
 | POST | `/api/update/apply` | start the update; requires `{}` and the API token; refuses if no update, unsupported install mode, or dirty git checkout |

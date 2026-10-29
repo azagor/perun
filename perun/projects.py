@@ -196,6 +196,66 @@ def sync_opencode_config(project: dict[str, Any],
     return {"action": "updated" if existed_before else "created", "path": str(target)}
 
 
+def shared_mcp_config_status(project: dict[str, Any]) -> dict[str, Any]:
+    """Report whether a shared project's ``opencode.json`` has the required MCP entries.
+
+    The dashboard surfaces this as a "stale config" hint: a shared project whose
+    config was written by an older Perun build lacks ``PERUN_PROJECT_PATH`` and
+    its ``perun-proposals`` server cannot resolve the project from the TUI.
+    """
+    path = Path((project.get("path") or "").strip())
+    if not path.is_dir():
+        return {"stale": False, "path": "", "warning": "", "missing": []}
+    cfg = shared_projects.load(str(path))
+    if not cfg.get("shared"):
+        return {"stale": False, "path": "", "warning": "", "missing": []}
+
+    target = next((path / name for name in OPENCODE_CONFIG_NAMES
+                   if (path / name).is_file()), path / "opencode.json")
+    if not target.is_file():
+        return {
+            "stale": True,
+            "path": str(target),
+            "warning": "opencode.json is missing; perun-guard and perun-proposals are not registered",
+            "missing": ["opencode.json"],
+        }
+
+    from .mcp_servers import read_opencode_config
+
+    data, error, _lossy = read_opencode_config(target)
+    if error:
+        return {
+            "stale": True,
+            "path": str(target),
+            "warning": f"could not read {target.name}: {error}",
+            "missing": [target.name],
+        }
+
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+    missing: list[str] = []
+    for key in ("perun-guard", "perun-proposals"):
+        entry = mcp.get(key)
+        if not isinstance(entry, dict):
+            missing.append(key)
+            continue
+        env = entry.get("environment")
+        if not isinstance(env, dict):
+            env = entry.get("env")
+        if not isinstance(env, dict) or not str(env.get("PERUN_PROJECT_PATH") or "").strip():
+            missing.append(f"{key}.PERUN_PROJECT_PATH")
+
+    if not missing:
+        return {"stale": False, "path": str(target), "warning": "", "missing": []}
+    return {
+        "stale": True,
+        "path": str(target),
+        "warning": "stale shared MCP config (missing " + ", ".join(missing) + ") — click Sync now",
+        "missing": missing,
+    }
+
+
 def name_from_repo(url: str) -> str:
     """Derive a project name from a repository URL."""
     tail = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]

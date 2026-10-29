@@ -4,6 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- **Shared-config health check and per-project hint.** The dashboard
+  **Health check & fix** action now also re-syncs every shared project's
+  `opencode.json` so `perun-guard` / `perun-proposals` carry
+  `PERUN_PROJECT_PATH`. The Shared tab warns when a project's config is stale
+  and offers a per-project **Sync config** button. Both paths are
+  project-agnostic: the global action walks the registry and only touches
+  projects whose manifest says `shared: true`.
+
 ### Fixed
 
 - **`perun-proposals` is bound to the project in the TUI.** The generated

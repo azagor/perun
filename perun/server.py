@@ -657,6 +657,33 @@ def health_check(fix: bool = True) -> dict[str, Any]:
     except Exception as exc:
         report["issues"].append(f"shared_agent_error:{exc}")
 
+    # Check/fix shared-project MCP configs (PERUN_PROJECT_PATH et al.). This is
+    # what the per-project "stale config" hint repairs; doing it here lets a
+    # single dashboard action repair every shared project after an upgrade.
+    try:
+        for project in registry.list_projects(include_hidden=True):
+            cfg = shared_projects.load(project["path"])
+            if not cfg.get("shared"):
+                continue
+            status = projects.shared_mcp_config_status(project)
+            if fix:
+                cfg_result = projects.sync_opencode_config(project)
+                refreshed = projects.shared_mcp_config_status(project)
+                report["fixes"].append({
+                    "name": "shared_mcp_config",
+                    "project": project["slug"],
+                    "result": cfg_result,
+                    "stale_after": bool(refreshed.get("stale")),
+                })
+                if refreshed.get("stale"):
+                    report["issues"].append(
+                        f"shared_mcp_config_stale:{project['slug']}")
+            elif status.get("stale"):
+                report["issues"].append(
+                    f"shared_mcp_config_stale:{project['slug']}")
+    except Exception as exc:
+        report["issues"].append(f"shared_mcp_config_error:{exc}")
+
     if report["issues"]:
         report["ok"] = False
     return report
@@ -1354,7 +1381,9 @@ def api_get_shared_project(slug: str) -> dict[str, Any]:
     cfg = shared_projects.load(project["path"])
     chat = registry.get_project_chat(project["id"])
     project_chat = shared_project_sync.describe_project_chat(project, cfg)
-    return _ok(shared=cfg, chat=chat, project_chat=project_chat)
+    shared_config = projects.shared_mcp_config_status(project)
+    return _ok(shared=cfg, chat=chat, project_chat=project_chat,
+               shared_config=shared_config)
 
 
 @app.post("/api/projects/{slug}/shared/sync")
@@ -1378,7 +1407,9 @@ def api_sync_shared_project_chat(slug: str) -> dict[str, Any]:
         pass
     chat = registry.get_project_chat(project["id"])
     project_chat = shared_project_sync.describe_project_chat(project, cfg)
-    return _ok(result=result, chat=chat, project_chat=project_chat)
+    shared_config = projects.shared_mcp_config_status(project)
+    return _ok(result=result, chat=chat, project_chat=project_chat,
+               shared_config=shared_config)
 
 
 @app.put("/api/projects/{slug}/shared")
@@ -1410,8 +1441,10 @@ def api_update_shared_project(slug: str, payload: dict[str, Any] = Body(...)) ->
         chat_sync = {"ok": False, "error": str(exc)}
     chat = registry.get_project_chat(project["id"])
     project_chat = shared_project_sync.describe_project_chat(project, cfg)
+    shared_config = projects.shared_mcp_config_status(project)
     return _ok(shared=cfg, project=project, chat=chat,
-               chat_sync=chat_sync, project_chat=project_chat)
+               chat_sync=chat_sync, project_chat=project_chat,
+               shared_config=shared_config)
 
 
 @app.get("/api/projects/{slug}/proposals")

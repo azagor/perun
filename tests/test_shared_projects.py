@@ -286,6 +286,37 @@ def test_sync_manifest_adds_guard_mcp_for_shared_project(tmp_path):
     assert "perun-proposals" in cfg.get("mcp", {})
 
 
+def test_shared_mcp_config_status_flags_stale_entries(tmp_path):
+    project = _make_project(tmp_path, "stale-mcp")
+    _enable_shared(project)
+    projects.sync_opencode_config(project)
+    status = projects.shared_mcp_config_status(registry.get_project(project["slug"]))
+    assert status["stale"] is False
+
+    cfg_path = Path(project["path"]) / "opencode.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    del cfg["mcp"]["perun-proposals"]["environment"]["PERUN_PROJECT_PATH"]
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    status = projects.shared_mcp_config_status(registry.get_project(project["slug"]))
+    assert status["stale"] is True
+    assert any("perun-proposals.PERUN_PROJECT_PATH" in m for m in status["missing"])
+
+
+def test_shared_mcp_config_status_missing_file(tmp_path):
+    project = _make_project(tmp_path, "missing-mcp")
+    _enable_shared(project)
+    status = projects.shared_mcp_config_status(registry.get_project(project["slug"]))
+    assert status["stale"] is True
+    assert "opencode.json" in status["warning"]
+
+
+def test_shared_mcp_config_status_non_shared_is_clean(tmp_path):
+    project = _make_project(tmp_path, "plain-mcp")
+    status = projects.shared_mcp_config_status(registry.get_project(project["slug"]))
+    assert status["stale"] is False
+
+
 def test_sync_opencode_config_removes_guard_mcp_for_non_shared_project(tmp_path):
     project = _make_project(tmp_path, "plain-guard")
     (Path(project["path"]) / "opencode.json").write_text(

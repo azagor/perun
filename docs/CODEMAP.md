@@ -138,7 +138,11 @@ Shared project creation/registration, used by **both** the HTTP wizard
   `model` / `agent` override and per-agent `agent_models` map into its
   `opencode.json[c]` (`model`, `default_agent`, and `agent.<id>.model` keys) so
   the OpenCode TUI honors the dashboard setting. Shared-project MCP entries use
-  a portable `PERUN_HOME=~/.perun` instead of the absolute user path.
+  a portable `PERUN_HOME=~/.perun` instead of the absolute user path and set
+  `PERUN_PROJECT_PATH=.`.
+* `shared_mcp_config_status()` — read-only check used by the Shared tab and
+  health check: reports whether a shared project's `opencode.json` has
+  `perun-guard` / `perun-proposals` with `PERUN_PROJECT_PATH`.
 
 ### `perun/providers.py`
 LLM provider discovery, status and configuration. Perun never stores credentials

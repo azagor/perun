@@ -1752,11 +1752,13 @@ async function sharedProjectCard(detail) {
     let cfg = {};
     let chat = null;
     let projectChat = null;
+    let configStatus = null;
     try {
         const res = await api(`/api/projects/${p.slug}/shared`);
         cfg = res.shared || {};
         chat = res.chat || null;
         projectChat = res.project_chat || null;
+        configStatus = res.shared_config || null;
     } catch (e) {
         card.appendChild(el('div', { class: 'card-head' }, '<h4>Shared project</h4>'));
         card.appendChild(el('div', { class: 'empty' }, `Could not load shared settings: ${e.message}`));
@@ -1785,6 +1787,7 @@ async function sharedProjectCard(detail) {
         <div class="card-head"><h4>Shared project</h4>
             <span class="shared-status ${initialStatus.cls}" id="sp-status">${esc(initialStatus.text)}</span></div>
         <label class="opt"><input type="checkbox" id="sp-enabled" ${enabled ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
+        <div id="sp-config"></div>
         <div id="sp-chat" class="shared-section sp-chat-panel"></div>
         <div id="sp-form" class="mt ${enabled ? '' : 'hidden'}">
             <div class="shared-section">
@@ -1808,6 +1811,40 @@ async function sharedProjectCard(detail) {
         </div>`;
 
     const statusBadge = card.querySelector('#sp-status');
+    const configHost = card.querySelector('#sp-config');
+
+    const syncShared = async (btn, note) => {
+        if (btn) btn.disabled = true;
+        if (note) note.textContent = 'Syncing…';
+        try {
+            const res = await api(`/api/projects/${p.slug}/shared/sync`, { method: 'POST' });
+            renderChat(res.project_chat);
+            renderConfigWarning(res.shared_config);
+            const ok = !!(res.result && res.result.ok);
+            toast(ok ? 'Project chat synchronized'
+                : `Sync failed: ${(res.result && res.result.error) || 'unknown error'}`,
+                ok ? 'ok' : 'err');
+        } catch (e) {
+            if (note) note.textContent = e.message;
+            toast(e.message, 'err');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
+
+    const renderConfigWarning = (status) => {
+        if (!configHost) return;
+        if (!status || !status.stale) {
+            configHost.innerHTML = '';
+            return;
+        }
+        configHost.innerHTML = `
+            <p class="warn-text" style="font-size:.78rem">${esc(status.warning || 'Shared MCP config is stale.')}</p>
+            <button class="btn sm ghost" id="sp-config-sync" type="button">↻ Sync config</button>`;
+        const btn = configHost.querySelector('#sp-config-sync');
+        if (btn) btn.addEventListener('click', () => syncShared(btn, null));
+    };
+
     const renderChat = (info) => {
         projectChat = info || null;
         const st = statusOf(info);
@@ -1858,25 +1895,11 @@ async function sharedProjectCard(detail) {
                 <span class="muted" id="sp-sync-note" style="font-size:.76rem"></span>
             </div>`;
         const syncBtn = host.querySelector('#sp-sync');
-        if (syncBtn) syncBtn.addEventListener('click', async () => {
-            const note = host.querySelector('#sp-sync-note');
-            syncBtn.disabled = true;
-            if (note) note.textContent = 'Syncing…';
-            try {
-                const res = await api(`/api/projects/${p.slug}/shared/sync`, { method: 'POST' });
-                renderChat(res.project_chat);
-                const ok = !!(res.result && res.result.ok);
-                toast(ok ? 'Project chat synchronized'
-                    : `Sync failed: ${(res.result && res.result.error) || 'unknown error'}`,
-                    ok ? 'ok' : 'err');
-            } catch (e) {
-                if (note) note.textContent = e.message;
-                syncBtn.disabled = false;
-                toast(e.message, 'err');
-            }
-        });
+        if (syncBtn) syncBtn.addEventListener('click', () =>
+            syncShared(syncBtn, host.querySelector('#sp-sync-note')));
     };
     renderChat(projectChat);
+    renderConfigWarning(configStatus);
 
     const trusted = await loadTrustedAgents();
     const editor = participantEditor({
@@ -1937,6 +1960,7 @@ async function sharedProjectCard(detail) {
                 },
             });
             if (res.project_chat) renderChat(res.project_chat);
+            renderConfigWarning(res.shared_config);
             const sync = res.chat_sync || {};
             if (sync.ok === false) {
                 toast(`Saved, but the chat sync failed: ${sync.error || 'unknown error'}`, 'err');

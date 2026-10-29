@@ -704,6 +704,61 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     assert "perun-guard" not in cfg.get("mcp", {})
 
 
+def test_shared_config_status_hint(client, tmp_path, monkeypatch):
+    """The Shared tab gets a stale-config hint when PERUN_PROJECT_PATH is missing."""
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ada-bot"])
+    target = tmp_path / "shared-status"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedStatus", "path": str(target),
+        "bootstrap": False, "shared": True,
+        "participants": [{"agent_id": "ada-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.get(f"/api/projects/{slug}/shared")
+    assert r.status_code == 200, r.text
+    assert r.json()["shared_config"]["stale"] is False
+
+    cfg_path = target / "opencode.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["mcp"]["perun-proposals"]["environment"].pop("PERUN_PROJECT_PATH", None)
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    r = client.get(f"/api/projects/{slug}/shared")
+    assert r.status_code == 200, r.text
+    status = r.json()["shared_config"]
+    assert status["stale"] is True
+    assert "perun-proposals.PERUN_PROJECT_PATH" in status["missing"]
+
+
+def test_health_check_repairs_stale_shared_config(client, tmp_path, monkeypatch):
+    """The dashboard Health check & fix action repairs shared MCP configs."""
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["ada-bot"])
+    target = tmp_path / "health-shared"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "HealthShared", "path": str(target),
+        "bootstrap": False, "shared": True,
+        "participants": [{"agent_id": "ada-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    cfg_path = target / "opencode.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["mcp"]["perun-proposals"]["environment"].pop("PERUN_PROJECT_PATH", None)
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    r = client.post("/api/health/check")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert any(f.get("name") == "shared_mcp_config"
+               and f.get("project") == slug for f in body["fixes"])
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg["mcp"]["perun-proposals"]["environment"]["PERUN_PROJECT_PATH"] == "."
+
+
 def test_global_instruction_file_apis(client, tmp_path, monkeypatch):
     from perun import config, orchestrator
 
