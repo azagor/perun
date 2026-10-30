@@ -476,15 +476,23 @@ def claim_execution(
         if requester_id not in allowed:
             raise ValueError(f"participant {executor_id} is not on the PerunChat trust list")
 
+    # The local execution path verifies the HITL token before running; an
+    # external claim must do the same, or a proposal whose approval token is
+    # missing or corrupt can still be handed to an outside agent.
+    token_raw = proposal.get("approval_token")
+    token = _from_json(token_raw) if isinstance(token_raw, str) else token_raw
+    if not isinstance(token, dict) or not token.get("token"):
+        raise ValueError("proposal has no valid approval token; re-approve it")
+
     # Snapshot before the external agent touches anything; this is the audit baseline.
     snapshot = fs_audit.snapshot(project, targets=proposal["targets"])
-    ts = _now()
     try:
         ttl_seconds = int(ttl) if ttl is not None else EXTERNAL_CLAIM_TTL_SECONDS
     except (TypeError, ValueError):
         ttl_seconds = EXTERNAL_CLAIM_TTL_SECONDS
     ttl_seconds = max(1, min(ttl_seconds, APPROVED_TTL_SECONDS))
     claim_expires_at = int(time.time()) + ttl_seconds
+    ts = _now()
     with db.db() as conn:
         cur = conn.execute(
             """UPDATE action_proposals SET status=?, executor_id=?, executed_by=?,

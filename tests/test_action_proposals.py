@@ -1361,3 +1361,24 @@ def test_new_proposal_has_no_execution_mode(tmp_path):
     action_proposals.approve(proposal["id"], "owner")
     claimed = action_proposals.claim_execution(proposal["id"], "frambo")
     assert claimed["execution_mode"] == "external"
+
+
+def test_claim_requires_a_valid_approval_token(tmp_path):
+    """The local path verifies the HITL token; an external claim must too."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET approval_token='' WHERE id=?", (proposal["id"],)
+        )
+
+    with pytest.raises(ValueError, match="valid approval token"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+    # The proposal is untouched and can be re-approved.
+    assert action_proposals.get(proposal["id"])["status"] == "approved"

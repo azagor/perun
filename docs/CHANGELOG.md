@@ -37,6 +37,11 @@ _No unreleased changes yet._
 - **A failed prompt-file write no longer leaks the prompt.** The temp file holds
   raw chat history and was previously left for the 24 h sweep if the write
   raised.
+- **External claims verify the approval token.** `claim_execution` now refuses a
+  proposal whose HITL token is missing or corrupt, matching what the local
+  execution path already enforced.
+- **Legacy `execution_mode` rows are reset** for proposals that never executed, so
+  the label no longer claims a pipeline that did not run.
 
 ### Documentation
 
