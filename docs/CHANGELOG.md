@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.60
+
+*Released 2026-10-30.*
+
 ### Added
 
 - **Routing shadow mode.** `routing_shadow` (dashboard: *routing: log only*)

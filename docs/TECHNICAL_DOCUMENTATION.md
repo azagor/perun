@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.59 (see §15). Scope routing keywords to the leading window and ignore negated commands.
+**Latest release:** v0.8.60 (see §15). Add routing shadow mode for a log-only trial week.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1802,6 +1802,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.60: Add routing shadow mode for a log-only trial week.
+
 ### 2026-10-30 — v0.8.59: Scope routing keywords to the leading window and ignore negated commands.
 
 ### 2026-10-30 — v0.8.58: Wire deterministic natural-language routing into the Telegram and PerunChat bridges (opt-in).
