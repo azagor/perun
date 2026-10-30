@@ -527,6 +527,30 @@ Lifecycle tracking for externally-launched TUI/terminal sessions.
 * `TRACKER` — module-level singleton used by `/api/run-in-terminal`,
   `/api/runs/{uid}/cancel`, and `/api/runs/{uid}/kill`.
 
+### `perun/routing.py`
+Deterministic message router (rules tier, no model, no I/O). Turns one message
+into a `RouteDecision(action, project, confidence, matched_by, candidates,
+reason)`.
+* `normalize()` — NFKC + casefold + alphanumeric words, so `trading-bot`,
+  `trading_bot` and `trading bot` are identical.
+* `resolve_project()` — exact slug, exact display-name phrase, unique
+  non-generic tag (0.95), single-word stem with Polish palatalisation
+  (`perunie`, `perunchacie`, `tradingu`, 0.8), and multi-word slug with an
+  inflected tail (`trading-bota`, 0.9). Longest span wins; two projects at the
+  same confidence/span return `candidates` instead of a guess.
+  Tags are ignored unless unique and non-generic (live tags include `docs`,
+  `tests`, `opencode`, and `perunchat` itself is tagged `perun`).
+* `detect_action()` — explicit PL/EN keyword sets (`stop`, `remember`, `recall`,
+  `status`, `run`), imperative beats a trailing `?`, then question words/`?`
+  give `ask`, otherwise `unknown` (caller keeps its existing LLM path).
+  `stop loss`/`stop limit` are domain terms, not commands.
+* `is_addressed()` — `@mention`, `@perun`, slash command, or a direct message.
+* `route()` — applies the policy: ambiguity ⇒ `clarify`; a mutating action
+  without a project mention stays on the bound project (today's behaviour);
+  `unknown` is returned untouched.
+* Offline inspection: `python -m perun.routing "<message>"` prints the decision
+  as JSON against the live registry.
+
 ### `perun/telegram.py`
 Shared Telegram ⇄ Perun bridge.
 * Formatting: `format_html()`, `chunk()`, `_esc()`.
@@ -1183,8 +1207,12 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
 * `test_skills.py` — OpenCode skill/tool discovery (`perun/skills.py`).
 * `test_telegram_lock.py` — mutex namespacing, side-effect-free `is_held()`, and
   the second-acquire-is-refused guarantee (the bridge can never multiply).
-* `test_telegram_routing.py` — `_current_project` routing (single-project
+* `test_telegram_routing.py` - `_current_project` routing (single-project
   auto-select, control-plane fallback, `/orchestrator`).
+* `test_routing.py` - the deterministic router (`perun/routing.py`): slug/name/
+  tag resolution, Polish inflection and palatalisation, prefix collisions
+  (`perun` vs `perunchat` vs `perun-in-the-machine`), ambiguity, action
+  keywords, `stop loss` as a domain term, addressed detection, normalisation.
 * `test_perunchat_bridge.py` — the autonomous PerunChat participant: start/stop
   lifecycle, room auto-join, reply dedupe, the write-ahead outbox and its
   reconnect flush, empty-reply retry, typing/reply sequence-number monotonicity,

@@ -4,6 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- **`perun/routing.py` — deterministic message router.** Resolves a project from
+  a free-text message (exact slug/name, unique tags, Polish inflection and
+  palatalisation, hyphenated slugs with an inflected tail) and classifies the
+  requested action (`run`/`ask`/`status`/`remember`/`recall`/`stop`). Ambiguous
+  mentions return `clarify` with candidates instead of guessing, and messages
+  with no recognisable action return `unknown` so the existing LLM path is
+  unchanged. Includes `is_addressed()` for room messages and
+  `python -m perun.routing "<message>"` for offline inspection. Not wired into
+  the Telegram bridge or the PerunChat bridge yet — that is the next step.
+
 ### Documentation
 
 - Refreshed `CODEMAP.md`, `TECHNICAL_DOCUMENTATION.md`, `DESIGN.md`,
