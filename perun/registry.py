@@ -1155,6 +1155,47 @@ def list_activity(project_id: int | None = None, limit: int = 100) -> list[dict[
         return out
 
 
+def get_activity(activity_id: int) -> dict[str, Any] | None:
+    """One activity row with ``meta`` parsed, or ``None``."""
+    with db.db() as conn:
+        row = db.one(conn, "SELECT * FROM activity WHERE id=?", (int(activity_id),))
+    if not row:
+        return None
+    entry = dict(row)
+    try:
+        entry["meta"] = json.loads(entry.get("meta") or "{}")
+    except Exception:
+        entry["meta"] = {}
+    return entry
+
+
+def routing_decisions(hours: int = 24, limit: int = 50) -> list[dict[str, Any]]:
+    """Recent ``routing_decision`` rows, newest first (dashboard panel).
+
+    ``ts`` is stored as an ISO-8601 string, so a lexicographic ``>=`` on the
+    cutoff is exact for the same format.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT * FROM activity WHERE kind='routing_decision' AND ts>=? "
+            "ORDER BY id DESC LIMIT ?",
+            (cutoff, max(1, min(int(limit), 500))),
+        )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        entry = dict(row)
+        try:
+            entry["meta"] = json.loads(entry.get("meta") or "{}")
+        except Exception:
+            entry["meta"] = {}
+        out.append(entry)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Telegram bridge links
 # --------------------------------------------------------------------------- #

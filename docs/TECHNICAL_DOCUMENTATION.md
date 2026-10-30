@@ -810,6 +810,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST/GET | `/api/perunchat/rooms/private` | create or list private rooms (bilateral or multi-party) |
 | GET/POST/DELETE | `/api/perunchat/rooms/{room_id}/members[/{agent_id}]` | list, invite, or remove participants of a private room |
 | GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project; `approval_token`, `approval_snapshot` and `claim_snapshot` are stripped (the token is returned by the approval call) |
+| GET | `/api/routing/decisions` | Recent `routing_decision` rows for the dashboard panel: `total`, `by_action`, `unknown_share`, `shadow` count, and per-decision action/project/confidence/`matched_by`/candidates (never the message text) |
+| POST | `/api/routing/decisions/{id}/misroute` | Record that a routing decision was wrong (`routing_misroute` activity row, used for threshold tuning) |
 | POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal (only while `pending`) |

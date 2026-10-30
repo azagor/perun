@@ -5207,6 +5207,57 @@ async function viewProviders(refresh = false) {
 }
 
 /* ========================================================= SETTINGS ===== */
+async function loadRoutingPanel() {
+    const host = $('#routing-panel');
+    if (!host) return;
+    host.innerHTML = '<div class="meta">loading routing decisions…</div>';
+    let res;
+    try {
+        res = await api('/api/routing/decisions?hours=24&limit=25');
+    } catch (e) {
+        host.innerHTML = `<div class="meta">routing stats unavailable: ${esc(e.message)}</div>`;
+        return;
+    }
+    const mode = $('#routing-mode');
+    if (mode) {
+        mode.textContent = res.total ? (res.shadow ? 'shadow' : 'live') : 'off / no traffic';
+        mode.className = 'badge ' + (res.shadow ? 'amber' : res.total ? 'green' : '');
+    }
+    const parts = Object.entries(res.by_action || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${esc(k)} ${v}`)
+        .join(' · ');
+    const head = `<div class="row wrap" style="gap:10px;align-items:center;margin:2px 0 8px">
+        <strong>${res.total || 0}</strong> decision(s) in ${res.window_hours}h
+        ${res.total ? `<span class="meta">unknown ${Math.round((res.unknown_share || 0) * 100)}%</span>` : ''}
+        <span class="meta">${parts}</span>
+        <button class="btn sm ghost" id="routing-refresh" title="Refresh">⟳</button>
+      </div>`;
+    const rows = (res.decisions || []).map((d) => {
+        const cls = d.action === 'unknown' ? 'muted' : d.action === 'clarify' ? 'amber' : 'blue';
+        const conf = d.confidence == null ? '' : `${Math.round(d.confidence * 100)}%`;
+        const detail = [d.matched_by || '', conf, d.source || '', timeAgo(d.ts)]
+            .filter(Boolean).join(' · ');
+        return `<div class="list-row">
+            <span class="badge ${cls}">${esc(d.action || '?')}</span>
+            <span class="intent"><div class="msg truncate">${esc(d.project || '—')}</div>
+            <div class="meta">${esc(detail)}</div></span>
+            <span class="row" style="gap:6px"><button class="btn sm ghost danger" data-misroute="${d.id}" title="This decision was wrong">✗</button></span>
+          </div>`;
+    }).join('');
+    host.innerHTML = head + (rows || '<div class="meta">No routing decisions yet. Send a Telegram message and it will appear here (shadow mode logs only).</div>');
+    $('#routing-refresh')?.addEventListener('click', () => loadRoutingPanel());
+    host.querySelectorAll('[data-misroute]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            try {
+                await api(`/api/routing/decisions/${btn.dataset.misroute}/misroute`, { method: 'POST', body: {} });
+                toast('Reported — thanks', 'ok');
+                loadRoutingPanel();
+            } catch (e) { toast(e.message, 'err'); }
+        });
+    });
+}
+
 async function viewSettings() {
     $('#topbar-title').textContent = 'Settings';
     await Promise.all([loadSettings(), loadTerminals()]);
@@ -5262,6 +5313,12 @@ async function viewSettings() {
             <button class="btn ghost" id="s-indexall">▤ Index all docs</button>
          </div>`);
     v.appendChild(card);
+
+    const routingPanel = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Routing decisions</h4><span class="badge" id="routing-mode">—</span></div>
+         <div id="routing-panel"><div class="meta">loading…</div></div>`);
+    v.appendChild(routingPanel);
+    loadRoutingPanel();
 
     await loadModels();
     await loadAgents();

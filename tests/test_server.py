@@ -2189,3 +2189,56 @@ def test_legacy_cancellations_get_the_cancelled_status(client, tmp_path, monkeyp
     migrated = action_proposals.get(proposal["id"])
     assert migrated["status"] == "cancelled"
     assert migrated["result"] == "superseded"
+
+
+def test_routing_decisions_endpoint_summarises_and_never_leaks_text(client, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("RouteStats", str(tmp_path / "routestats"), kind="dir")
+    first = registry.log_activity(
+        project["id"], "routing_decision", "shadow: status -> perun",
+        {"action": "status", "project": "perun", "confidence": 1.0,
+         "matched_by": "slug", "shadow": True, "source": "telegram"},
+    )
+    registry.log_activity(
+        project["id"], "routing_decision", "shadow: unknown",
+        {"action": "unknown", "project": None, "confidence": 0.0,
+         "matched_by": "none", "shadow": True, "source": "telegram"},
+    )
+
+    r = client.get("/api/routing/decisions?hours=24&limit=10")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 2
+    assert body["shadow"] == 2
+    assert body["by_action"] == {"status": 1, "unknown": 1}
+    assert body["unknown_share"] == 0.5
+    row = next(d for d in body["decisions"] if d["id"] == first["id"])
+    assert row["action"] == "status" and row["project"] == "perun"
+    # The decision payload never carries the message text.
+    assert "message" not in row
+
+
+def test_routing_misroute_report_appends_an_activity_row(client, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("RouteMiss", str(tmp_path / "routemiss"), kind="dir")
+    decision = registry.log_activity(
+        project["id"], "routing_decision", "shadow: run -> perun",
+        {"action": "run", "project": "perun", "confidence": 0.8,
+         "matched_by": "stem", "shadow": True, "source": "telegram"},
+    )
+
+    r = client.post(f"/api/routing/decisions/{decision['id']}/misroute", json={"note": "wrong project"})
+    assert r.status_code == 200, r.text
+    assert r.json()["reported"] == decision["id"]
+
+    rows = [row for row in registry.list_activity(limit=20) if row["kind"] == "routing_misroute"]
+    assert rows
+    assert rows[0]["meta"]["decision_id"] == decision["id"]
+    assert rows[0]["meta"]["note"] == "wrong project"
+
+
+def test_routing_misroute_rejects_an_unknown_id(client):
+    r = client.post("/api/routing/decisions/999999/misroute", json={})
+    assert r.status_code == 404

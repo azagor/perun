@@ -2578,6 +2578,72 @@ def api_get_settings() -> dict[str, Any]:
     return _ok(settings=data)
 
 
+@app.get("/api/routing/decisions")
+def api_routing_decisions(hours: int = 24, limit: int = 50) -> dict[str, Any]:
+    """Recent routing decisions plus a 24 h summary for the dashboard panel."""
+    rows = registry.routing_decisions(hours=hours, limit=limit)
+    by_action: dict[str, int] = {}
+    shadow = 0
+    decisions: list[dict[str, Any]] = []
+    for row in rows:
+        meta = row.get("meta") or {}
+        action = str(meta.get("action") or "unknown")
+        by_action[action] = by_action.get(action, 0) + 1
+        if meta.get("shadow"):
+            shadow += 1
+        decisions.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "project_id": row.get("project_id") or None,
+                "action": action,
+                "project": meta.get("project"),
+                "confidence": meta.get("confidence"),
+                "matched_by": meta.get("matched_by"),
+                "candidates": meta.get("candidates") or [],
+                "shadow": bool(meta.get("shadow")),
+                "source": meta.get("source") or "",
+            }
+        )
+    total = len(rows)
+    return _ok(
+        window_hours=max(1, int(hours)),
+        total=total,
+        by_action=by_action,
+        unknown_share=round(by_action.get("unknown", 0) / total, 3) if total else 0.0,
+        shadow=shadow,
+        decisions=decisions,
+    )
+
+
+@app.post("/api/routing/decisions/{decision_id}/misroute")
+def api_routing_misroute(
+    decision_id: int, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """Record that a routing decision was wrong (feeds threshold tuning)."""
+    row = registry.get_activity(decision_id)
+    if not row or row.get("kind") != "routing_decision":
+        raise HTTPException(status_code=404, detail="routing decision not found")
+    meta = row.get("meta") or {}
+    note = str(payload.get("note") or "").strip()[:500]
+    registry.log_activity(
+        row.get("project_id") or None,
+        "routing_misroute",
+        f"misroute reported for routing decision {decision_id}",
+        {
+            "decision_id": decision_id,
+            "action": meta.get("action"),
+            "project": meta.get("project"),
+            "matched_by": meta.get("matched_by"),
+            "confidence": meta.get("confidence"),
+            "shadow": bool(meta.get("shadow")),
+            "source": meta.get("source") or "",
+            "note": note,
+        },
+    )
+    return _ok(reported=decision_id)
+
+
 @app.get("/api/instructions")
 def api_list_instructions() -> dict[str, Any]:
     """List global instruction Markdown files with parsed metadata."""

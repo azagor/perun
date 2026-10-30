@@ -119,7 +119,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   behind the dashboard storm layer).
 * Tasks: `create_task()`, `update_task()`, `get_task()`, `list_tasks()`,
   `delete_task()` (reusable project tasks queued into the TUI prompt chain).
-* Activity: `log_activity()`, `list_activity()`.
+* Activity: `log_activity()`, `list_activity()`, `get_activity()` (one row with
+  `meta` parsed), `routing_decisions(hours, limit)` (the `routing_decision`
+  window used by the dashboard panel).
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 
 ### `perun/control.py`
@@ -866,7 +868,9 @@ FastAPI app + SSE + static dashboard.
   `/api/projects/{slug}/tasks…`, shared-project proposals
   (`/api/projects/{slug}/proposals…` incl. `claim`/`revoke-claim` for external
   execution handoff and `cancel` for withdrawing an approved-but-unclaimed
-  proposal; the list endpoint omits approval tokens/snapshots), `DELETE /api/sessions/{pk}`; `DELETE` refuses
+  proposal; the list endpoint omits approval tokens/snapshots), routing
+  (`/api/routing/decisions` summary + panel rows, `POST
+  /api/routing/decisions/{id}/misroute`), `DELETE /api/sessions/{pk}`; `DELETE` refuses
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,

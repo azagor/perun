@@ -12,6 +12,11 @@ _No unreleased changes yet._
 
 ### Added
 
+- **Routing decisions panel.** Settings now shows the last 24 h of routing
+  decisions (`GET /api/routing/decisions`): total, per-action counts, unknown
+  share, shadow/live badge, and each decision's action, project, confidence and
+  `matched_by` — never the message text. A ✗ button reports a wrong decision
+  (`POST /api/routing/decisions/{id}/misroute`) for threshold tuning.
 - **Routing shadow mode.** `routing_shadow` (dashboard: *routing: log only*)
   records every decision as a `routing_decision` activity row — message prefix
   `shadow:`, `shadow: true` in the metadata — and then takes the previous path,
