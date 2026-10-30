@@ -854,6 +854,12 @@ class PerunTelegramBridge:
             attention_watcher.poll_once()
         except Exception:  # pragma: no cover - watcher failures must not stop sending
             LOG.debug("attention watcher tick failed", exc_info=True)
+        try:
+            from . import attention as _attention
+            if _attention.drain_outbox():
+                LOG.info("attention: posted queued operator answers")
+        except Exception:  # pragma: no cover - delivery retries on the next tick
+            LOG.debug("attention outbox drain failed", exc_info=True)
         return self._attention_deliver(registry.undelivered_attention(), settings)
 
     def _attention_loop(self) -> None:

@@ -611,7 +611,7 @@ dispatched by that target, never by inference from "the current project".
   permissions), `set_delivery()` (⚡ promote queue→steer in place), `undo()`
   (↩ cancel an undelivered inbox item and reopen), `wait()` (blocking wait used by
   `perun_ask_operator`; the heartbeat is what prevents double delivery),
-  `expire_stale()`.
+  `expire_stale()`, `drain_outbox()` (posts room replies queued while the socket was down, on reconnect and on every notifier tick; a rejected post is retried, not lost).
 * Adapters: `permission` → `reply_permission`; `form` → `reply_form` (a JSON
   object, or plain text for a single string field); `session` → `prompt` with
   ``msg_att_<id>``; `room`/`handoff` → `post_to_room(..., in_reply_to=…)` or the

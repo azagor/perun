@@ -1353,6 +1353,14 @@ class PerunChatBridge:
                 # process) goes out first, before new replies are generated,
                 # so sequence numbers stay monotonic in the room.
                 self._flush_outbox(ws)
+                # Operator answers that could not be posted while the socket was
+                # down (attention_outbox) go out now that it is back.
+                try:
+                    from . import attention
+
+                    attention.drain_outbox()
+                except Exception:  # pragma: no cover - never block the connection
+                    logger.debug("could not drain queued operator answers", exc_info=True)
                 # Retry any project-chat deletions that failed while offline.
                 try:
                     shared_project_sync.retry_pending_room_deletions()

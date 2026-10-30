@@ -340,3 +340,53 @@ def test_request_rejects_buttons_for_a_text_only_target(project):
 
     assert result["ok"] is False
     assert "text reply" in result["error"]
+
+
+def test_drain_outbox_posts_queued_answers_once_the_bridge_is_back(project, monkeypatch):
+    from perun import perunchat_bridge
+
+    item = attention.request(project, "room", "grp:perun:inbox-proj:chat", "mention",
+                             "perun, look at this", ref={"frame_id": "msg_parent"})
+    monkeypatch.setattr(perunchat_bridge, "get_bridge", lambda: None)
+    assert attention.answer(item["id"], "on it", by="telegram:1")["delivery"]["mode"] == "queued"
+    assert len(registry.attention_outbox_pending()) == 1
+
+    posted: list[tuple] = []
+
+    class Bridge:
+        def is_connected(self):
+            return True
+
+        def post_to_room(self, room_id, text, **kw):
+            posted.append((room_id, text, kw.get("in_reply_to")))
+            return True
+
+    monkeypatch.setattr(perunchat_bridge, "get_bridge", lambda: Bridge())
+
+    assert attention.drain_outbox() == 1
+    assert posted == [("grp:perun:inbox-proj:chat",
+                       "operator (via Telegram): on it", "msg_parent")]
+    assert registry.attention_outbox_pending() == []
+
+
+def test_drain_outbox_keeps_a_rejected_reply_for_a_retry(project, monkeypatch):
+    from perun import perunchat_bridge
+
+    item = attention.request(project, "room", "grp:perun:inbox-proj:chat", "mention",
+                             "perun, look at this")
+    monkeypatch.setattr(perunchat_bridge, "get_bridge", lambda: None)
+    attention.answer(item["id"], "on it", by="telegram:1")
+
+    class Bridge:
+        def is_connected(self):
+            return True
+
+        def post_to_room(self, room_id, text, **kw):
+            return False
+
+    monkeypatch.setattr(perunchat_bridge, "get_bridge", lambda: Bridge())
+
+    assert attention.drain_outbox() == 0
+    pending = registry.attention_outbox_pending()
+    assert len(pending) == 1
+    assert pending[0]["attempts"] == 1

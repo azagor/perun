@@ -644,9 +644,50 @@ def expire_stale() -> int:
     return registry.expire_attention()
 
 
+def drain_outbox(limit: int = 20) -> int:
+    """Post operator answers queued while the PerunChat socket was down.
+
+    Called on every bridge (re)connect and from the notifier tick, so a reply
+    typed during an outage is delivered as soon as the room is reachable. A
+    failure increments ``attempts`` (and is logged) instead of losing the reply;
+    after ten attempts the row is left for the dashboard to show.
+    """
+    from . import perunchat_bridge  # local import: the bridge imports this module
+
+    bridge = perunchat_bridge.get_bridge()
+    if bridge is None or not bridge.is_connected():
+        return 0
+    sent = 0
+    for row in registry.attention_outbox_pending(limit=limit):
+        if int(row.get("attempts") or 0) >= 10:
+            continue
+        payload = row.get("payload") or {}
+        room_id = str(row.get("target_id") or "")
+        try:
+            posted = bridge.post_to_room(
+                room_id,
+                str(payload.get("text") or ""),
+                in_reply_to=str(payload.get("in_reply_to") or "") or None,
+            )
+        except Exception as exc:  # pragma: no cover - depends on the socket
+            registry.attention_outbox_failed(row["id"], str(exc))
+            continue
+        if posted:
+            registry.attention_outbox_done(row["id"])
+            registry.log_activity(
+                None, "attention_delivered",
+                f"queued operator answer {row['id']} posted in {room_id}",
+                {"outbox_id": row["id"], "attention_id": row.get("attention_id")},
+            )
+            sent += 1
+        else:
+            registry.attention_outbox_failed(row["id"], "bridge rejected the message")
+    return sent
+
+
 __all__ = [
     "DeliveryError", "PERMISSION_OPTIONS", "PROPOSAL_OPTIONS",
-    "answer", "choose", "confirmation", "eligible", "expire_stale",
+    "answer", "choose", "confirmation", "drain_outbox", "eligible", "expire_stale",
     "followup_keyboard", "keyboard", "project_for_location", "recipients",
     "render", "request", "set_delivery", "undo", "wait",
 ]

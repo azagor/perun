@@ -1253,7 +1253,7 @@ location-scoped (`?location[directory]=…`); session routes are not.
 | `permission` | resolves that request, unblocking the session | `POST …/permission/{rid}/reply` (`once`/`always`/`reject`) |
 | `form` | answers that form (JSON, or plain text for a single string field) | `POST …/form/{fid}/reply` |
 | `session` | a user message in **that** session (a blocked `perun_ask_operator` gets it as its tool result) | `POST …/prompt` (`delivery` queue/steer, id `msg_att_<id>`) |
-| `room` / `handoff` | threaded message in that PerunChat room | `post_to_room(..., in_reply_to=…)`, or the outbox when the socket is down |
+| `room` / `handoff` | threaded message in that PerunChat room | `post_to_room(..., in_reply_to=…)`, or the outbox when the socket is down (`drain_outbox()` flushes it on reconnect and on every notifier tick) |
 | `proposal` | approve/reject, then a room notice | `action_proposals.approve/reject` as `telegram:<chat>` |
 
 **Producers.** `perun/attention_watcher.py` (inside the Telegram-bridge process,
