@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **`/api/perunchat/ws-ticket` is loopback-only**, matching the legacy key
+  endpoint. A remote caller can no longer mint a ticket for the stored key even
+  with the Perun API token.
 
 ## v0.8.50
 

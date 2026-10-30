@@ -3245,8 +3245,13 @@ def api_perunchat_status() -> dict[str, Any]:
 
 
 @app.post("/api/perunchat/ws-ticket")
-def api_perunchat_ws_ticket() -> dict[str, Any]:
+def api_perunchat_ws_ticket(request: Request) -> dict[str, Any]:
     """Issue a short-lived WebSocket ticket for the browser dashboard."""
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in _LOOPBACK_NAMES:
+        raise HTTPException(
+            status_code=403, detail="ticket only available to loopback clients"
+        )
     data = _perunchat_proxy("POST", "/api/v1/ws-ticket", body={})
     return _ok(ticket=data.get("ticket"), expires_in=data.get("expires_in", 30))
 
