@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.49
+
+*Released 2026-10-30.*
+
 ### Fixed
 
 - **External apply locks the claim before writing.** `complete_external_execution`
