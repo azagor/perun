@@ -2401,3 +2401,115 @@ def test_startup_prunes_old_routing_rows_only(client, tmp_path):
     kinds = [row["kind"] for row in registry.list_activity(limit=50)]
     assert "routing_decision" not in kinds
     assert "run" in kinds
+
+
+# --------------------------------------------------------------------------- #
+# Operator inbox API
+# --------------------------------------------------------------------------- #
+class _FakeOpencode:
+    def __init__(self):
+        self.calls = []
+
+    def reply_permission(self, session_id, request_id, decision, message=""):
+        self.calls.append(("permission", session_id, request_id, decision))
+
+    def prompt(self, session_id, text, *, delivery="queue", message_id="", resume=True):
+        self.calls.append(("prompt", session_id, text, delivery, message_id))
+        return {"id": "inbox_api", "delivery": delivery}
+
+    def set_inbox_delivery(self, session_id, inbox_id, delivery):
+        self.calls.append(("steer", inbox_id, delivery))
+
+    def cancel_inbox(self, session_id, inbox_id):
+        self.calls.append(("cancel", inbox_id))
+
+    def reply_form(self, session_id, form_id, answer):
+        self.calls.append(("form", form_id, answer))
+
+
+@pytest.fixture()
+def inbox_api(monkeypatch):
+    from perun import opencode_api
+
+    fake = _FakeOpencode()
+    opencode_api.set_default_api(fake)  # type: ignore[arg-type]
+    yield fake
+    opencode_api.set_default_api(None)
+
+
+def _inbox_project(tmp_path):
+    from perun import registry
+
+    (tmp_path / "inbox-api").mkdir(exist_ok=True)
+    return registry.add_project("inbox-api", str(tmp_path / "inbox-api"), kind="dir")
+
+
+def test_attention_list_and_reply_roundtrip(client, tmp_path, inbox_api):
+    from perun import attention, registry
+
+    project = _inbox_project(tmp_path)
+    item = attention.request(project, "session", "ses_api", "ask", "Proceed?")
+
+    body = client.get("/api/attention?state=open").json()
+    assert [i["id"] for i in body["items"]] == [item["id"]]
+
+    reply = client.post(f"/api/attention/{item['id']}/reply", json={"text": "go ahead"})
+    assert reply.status_code == 200, reply.text
+    assert inbox_api.calls[-1][0] == "prompt"
+    assert registry.get_attention(item["id"])["state"] == "answered"
+
+    again = client.post(f"/api/attention/{item['id']}/reply", json={"text": "twice"})
+    assert again.status_code == 409
+
+
+def test_attention_choose_permission(client, tmp_path, inbox_api):
+    from perun import attention
+
+    project = _inbox_project(tmp_path)
+    item = attention.request(
+        project, "permission", "per_api", "permission", "read .env",
+        options=attention.PERMISSION_OPTIONS,
+        ref={"request_id": "per_api", "session_id": "ses_api", "action": "read"},
+    )
+
+    r = client.post(f"/api/attention/{item['id']}/choose", json={"option": "once"})
+
+    assert r.status_code == 200, r.text
+    assert inbox_api.calls == [("permission", "ses_api", "per_api", "once")]
+
+
+def test_attention_delivery_and_cancel(client, tmp_path, inbox_api):
+    from perun import attention, registry
+
+    project = _inbox_project(tmp_path)
+    item = attention.request(project, "session", "ses_api", "ask", "Proceed?")
+    client.post(f"/api/attention/{item['id']}/reply", json={"text": "yes"})
+
+    steer = client.post(f"/api/attention/{item['id']}/delivery",
+                        json={"delivery": "steer"})
+    assert steer.status_code == 200, steer.text
+    assert inbox_api.calls[-1] == ("steer", "inbox_api", "steer")
+
+    cancel = client.delete(f"/api/attention/{item['id']}")
+    assert cancel.status_code == 200, cancel.text
+    assert registry.get_attention(item["id"])["state"] == "cancelled"
+
+
+def test_attention_settings_are_validated(client):
+    ok = client.patch("/api/settings", json={
+        "attention_enabled": True, "attention_poll_seconds": 10,
+        "attention_ttl_minutes": 90, "attention_projects": ["inbox-api"],
+        "attention_default_delivery": "steer",
+    })
+    assert ok.status_code == 200, ok.text
+
+    bad_poll = client.patch("/api/settings", json={"attention_poll_seconds": 1})
+    assert bad_poll.status_code == 400
+
+    bad_mode = client.patch("/api/settings",
+                            json={"attention_default_delivery": "teleport"})
+    assert bad_mode.status_code == 400
+
+    # Leave the machine-wide settings as the tests found them.
+    client.patch("/api/settings", json={
+        "attention_enabled": False, "attention_default_delivery": "queue"})

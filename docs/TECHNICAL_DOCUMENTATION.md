@@ -1229,6 +1229,88 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 
 ---
 
+## 9.1 Operator inbox ("needs you")
+
+Perun can reach the operator wherever work is waiting — a TUI session, a
+dashboard run, a project room, a proposal, an external handoff — and the reply
+lands back in **that exact context**. The design rule is that a notification is
+not a message but a **typed target**: every row stores `target_kind` +
+`target_id`, and the reply is dispatched by an adapter for that target. Nothing
+is routed by inference from "the current project" or "the newest session".
+
+OpenCode v2 provides the channel (verified against 2.2.0): the background
+service owns permissions, pending forms and every session, so a reply from any
+client resolves the request a TUI is blocked on, and
+`POST /api/session/{id}/prompt` with `delivery: "queue"` admits a message that is
+delivered when the current turn ends (`PATCH /inbox/{id}` flips it to `steer`,
+"steering wakes session execution"). `perun/opencode_api.py` is the only client:
+HTTP Basic `opencode:<password>` from `~/.config/opencode/service.json`, held in
+memory only, with one CLI-based URL discovery. Pending permission/form lists are
+location-scoped (`?location[directory]=…`); session routes are not.
+
+| Target | Reply lands as | Adapter |
+|---|---|---|
+| `permission` | resolves that request, unblocking the session | `POST …/permission/{rid}/reply` (`once`/`always`/`reject`) |
+| `form` | answers that form (JSON, or plain text for a single string field) | `POST …/form/{fid}/reply` |
+| `session` | a user message in **that** session (a blocked `perun_ask_operator` gets it as its tool result) | `POST …/prompt` (`delivery` queue/steer, id `msg_att_<id>`) |
+| `room` / `handoff` | threaded message in that PerunChat room | `post_to_room(..., in_reply_to=…)`, or the outbox when the socket is down |
+| `proposal` | approve/reject, then a room notice | `action_proposals.approve/reject` as `telegram:<chat>` |
+
+**Producers.** `perun/attention_watcher.py` (inside the Telegram-bridge process,
+so the existing bot-token `PidLock` makes it a singleton) polls
+`GET /api/session/active`, then permissions/forms per active location, plus a
+five-minute `/api/debug/location` sweep, and creates one item per request id.
+`_reconcile()` closes an item whose request vanished (answered in the TUI).
+Agents can ask explicitly with the MCP tool `perun_ask_operator`; it reads its
+OpenCode session id from `CallToolRequest.params._meta["ai.opencode/sessionID"]`
+(FastMCP exposes it as `ctx.request_context.meta`) and returns the answer as the
+tool result, so nothing has to be injected while the session waits.
+`action_proposals.create()` raises an item for every proposal,
+`_start_download_transfer()` raises one when a package is missing an approved
+target, and a room message that names an operator alias raises a `room` item.
+
+**Delivery.** The notifier runs in the process that owns the Telegram poller and
+sends every notice to **every statically paired chat** (`telegram_allowed_chats`
+/ `TELEGRAM_CHAT_ID`) regardless of which project that chat last selected, minus
+per-chat mutes (`/mute`). Runtime-paired chats never receive notices. Each card
+stores its `message_id` in `attention_deliveries`, which is what makes a
+reply-to resolve to exactly one item even with several blocked sessions.
+
+**Startup replay.** A restart sends only open items with **zero delivery rows**
+that are younger than `attention_replay_open_minutes` (15); older undelivered
+items are marked `attention_replay_skipped` and stay in `/pending` + the
+dashboard, so a restart cannot flood the chat.
+
+**Reply ordering.** The adapter runs first and the item is closed with
+`UPDATE … WHERE state='open'` afterwards, so a failed delivery leaves it open and
+one device cannot close a row another device just answered. `reject` on a
+permission also rejects the session's other pending requests, so the watcher
+cancels the sibling cards.
+
+**Undo.** A session answer is admitted with a deterministic id
+(`msg_att_<attention_id>`), which makes a retried relay idempotent. While it is
+still queued, ↩ calls `DELETE …/inbox/{id}` and reopens the item; ⚡ calls
+`PATCH …/inbox/{id}` with `delivery: "steer"` in place.
+
+**Surfaces.** Telegram (`/pending`, `/answer`, `/cancel`, `/mute`, `/unmute`,
+reply-to, inline buttons), the REST API (`/api/attention…`), and the dashboard's
+"Needs you" card all use the same store, so a Telegram outage never blocks
+answering.
+
+**Settings** (all opt-in; the master switch is off by default):
+`attention_enabled`, `attention_shadow`, `attention_projects`,
+`attention_operator_names`, `attention_ttl_minutes`, `attention_poll_seconds`,
+`attention_replay_open_minutes`, `attention_max_per_hour`,
+`attention_quiet_hours`, `attention_show_paths`, `attention_plain_text_confirm`,
+`attention_default_delivery`.
+
+Not covered in this release: detecting a Perun-owned run that merely *ends* with
+a question (the agent must call `perun_ask_operator`), SSE/plugin event ingestion
+(the 5 s poll is ~1 ms per call), and impersonating the operator in a room (the
+relay is posted as Perun with an `operator (via Telegram)` prefix).
+
+---
+
 ## 10. PerunChat federation
 
 Perun has native support for **PerunChat**, the federated agent-to-agent chat

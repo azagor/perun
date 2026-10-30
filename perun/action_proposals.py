@@ -274,6 +274,23 @@ def create(
         f"Proposal {proposal_id} created by {requester}: {intent}",
         {"proposal_id": proposal_id, "requester": requester, "intent": intent, "targets": targets},
     )
+    # Tell the operator a proposal is waiting for them. Local import: attention
+    # imports this module for its approve/reject adapter.
+    try:
+        from . import attention
+
+        attention.request(
+            project, "proposal", proposal_id, "proposal",
+            f"{requester} proposes: {intent}",
+            options=attention.PROPOSAL_OPTIONS,
+            ref={"room_id": room_id, "requester": requester,
+                 "targets": targets[:10]},
+            dedupe_key=f"proposal|{proposal_id}",
+        )
+    except Exception:  # pragma: no cover - a notice must never block a proposal
+        logging.getLogger("perun.proposals").debug(
+            "could not raise an attention item for %s", proposal_id, exc_info=True
+        )
     created = get(proposal_id)
     return created
 

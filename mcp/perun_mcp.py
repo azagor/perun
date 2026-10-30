@@ -57,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from fastmcp import FastMCP  # noqa: E402
+from fastmcp import Context, FastMCP  # noqa: E402
 
 from perun import config, context, control, db, discovery, grep, handbook, memory, orchestrator, projects, registry, secret_store  # noqa: E402
 
@@ -1318,6 +1318,134 @@ def perun_telegram_send(text: str, chat_id: str = "") -> str:
     except Exception as exc:
         return f"[perun] Telegram send failed: {exc}"
     return "[perun] Sent." if res.get("ok") else f"[perun] Telegram error: {res.get('description')}"
+
+
+# --------------------------------------------------------------------------- #
+# Operator inbox (needs a human)
+# --------------------------------------------------------------------------- #
+def _attention_session_id(ctx: "Context | None") -> str:
+    """The OpenCode session id OpenCode attaches to an MCP tool call.
+
+    OpenCode sends ``_meta["ai.opencode/sessionID"]`` on session-scoped calls;
+    FastMCP lifts that block onto ``ctx.request_context.meta``.  It is an opaque
+    correlation value, never an authorization signal (per the MCP docs).
+    """
+    if ctx is None:
+        return ""
+    try:
+        meta = (ctx.request_context.meta or {})
+    except Exception:
+        return ""
+    return str(meta.get("ai.opencode/sessionID") or "").strip()
+
+
+def _attention_fmt_pending(item: dict) -> str:
+    return (f"[perun] No answer yet (att_{item['id']}). The question is still open; "
+            f"call perun_await_operator({item['id']}) to wait again, or continue "
+            "without it.")
+
+
+@mcp.tool
+def perun_ask_operator(question: str, options: list[str] | None = None,
+                       project: str | None = None, wait_seconds: int = 120,
+                       ctx: Context = None) -> str:
+    """Ask the operator (the human) and wait briefly for their answer.
+
+    Use this instead of ending a turn with an open question: the question is
+    pushed to the operator's Telegram (and the dashboard), and their reply is
+    returned here as the tool result — so it lands in *this* session, even when
+    several sessions are waiting at once.
+
+    Returns the answer, or a handle (``att_<id>``) when nobody answered within
+    ``wait_seconds``. Call ``perun_await_operator`` with that id to wait again
+    without asking a second time.
+    """
+    from perun import attention
+
+    text = (question or "").strip()
+    if not text:
+        return "[perun] A question is required."
+    if len(text) > 2000:
+        return "[perun] Question too long (max 2000 characters)."
+    wait = max(30, min(int(wait_seconds or 120), 600))
+
+    session_id = _attention_session_id(ctx)
+    proj = _resolve_project(project)
+    if proj is None and session_id:
+        try:
+            from perun import opencode_api
+
+            info = opencode_api.default_api().session(session_id) or {}
+            directory = str((info.get("location") or {}).get("directory") or "")
+            proj = attention.project_for_location(directory) if directory else None
+        except Exception:
+            proj = None
+    if proj is None:
+        return ("[perun] Could not resolve a project for this question; pass "
+                "`project=\"<slug>\"` explicitly.")
+
+    opts = [{"id": str(i + 1), "label": str(o)} for i, o in enumerate(options or [])]
+    stored = text
+    if options:
+        listing = "\n".join(f"- {o}" for o in options)
+        stored = f"{text}\n\nOptions:\n{listing}"
+    item = attention.request(
+        proj, "session", session_id or f"unknown:{os.getpid()}", "ask", stored,
+        options=opts,
+        ref={"session_id": session_id, "session_title": ""},
+        dedupe_key=registry.attention_dedupe_key(
+            "session", session_id or f"unknown:{os.getpid()}", "ask", text),
+    )
+    if item is None:
+        return "[perun] Could not record the question (attention store unavailable)."
+
+    answer = attention.wait(item["id"], wait)
+    if answer is None:
+        return _attention_fmt_pending(item)
+    return answer or "[perun] The operator answered without text."
+
+
+@mcp.tool
+def perun_await_operator(attention_id: int, wait_seconds: int = 120,
+                         ctx: "Context | None" = None) -> str:
+    """Wait again on a question already asked with ``perun_ask_operator``."""
+    from perun import attention
+
+    item = registry.get_attention(attention_id)
+    if not item:
+        return f"[perun] No attention item {attention_id}."
+    if item["state"] != "open":
+        return str(item.get("answer") or f"[perun] That item is {item['state']}.")
+
+    wait = max(30, min(int(wait_seconds or 120), 600))
+    answer = attention.wait(item["id"], wait)
+    if answer is None:
+        return _attention_fmt_pending(item)
+    return answer or "[perun] The operator answered without text."
+
+
+@mcp.tool
+def perun_attention_list(state: str = "open", limit: int = 20) -> str:
+    """List items waiting on the operator (or recent closed ones)."""
+    wanted = (state or "open").strip().lower()
+    if wanted == "open":
+        items = registry.open_attention(limit=max(1, min(int(limit), 100)), state="open")
+    else:
+        items = []
+        for s in ("answered", "approved", "rejected", "expired", "cancelled",
+                  "undeliverable"):
+            items.extend(registry.open_attention(
+                limit=max(1, min(int(limit), 100)), state=s))
+        items.sort(key=lambda item: item["id"], reverse=True)
+        items = items[: max(1, min(int(limit), 100))]
+    if not items:
+        return "[perun] Nothing is waiting on the operator."
+    lines = [
+        f"att_{i['id']}  {i['target_kind']}  {i['state']}  "
+        f"{(i.get('question') or '')[:70]}"
+        for i in items
+    ]
+    return "[perun] Operator inbox:\n" + "\n".join(lines)
 
 
 def main() -> None:

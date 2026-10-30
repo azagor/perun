@@ -303,6 +303,70 @@ CREATE TABLE IF NOT EXISTS project_dependencies (
 );
 CREATE INDEX IF NOT EXISTS idx_project_dependencies_project ON project_dependencies(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_dependencies_depends ON project_dependencies(depends_on_project_id);
+
+-- Operator inbox: one row per thing that needs a human decision. ``target_kind``
+-- plus ``target_id`` is what makes a reply land in the right context (a session,
+-- a permission request, a form, a room, a proposal) even when several sessions
+-- are blocked at once. ``dedupe_key`` is unique among open rows so a replayed
+-- permission or a re-asked question cannot produce a second card.
+CREATE TABLE IF NOT EXISTS attention_requests (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id       INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    target_kind      TEXT NOT NULL,
+    target_id        TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    ref              TEXT NOT NULL DEFAULT '{}',
+    question         TEXT NOT NULL,
+    options          TEXT NOT NULL DEFAULT '[]',
+    state            TEXT NOT NULL DEFAULT 'open',
+    answer           TEXT,
+    answered_by      TEXT,
+    delivery         TEXT,
+    dedupe_key       TEXT NOT NULL,
+    waiter_seen_epoch INTEGER,
+    ttl_epoch        INTEGER NOT NULL,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    closed_at        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_attention_open
+    ON attention_requests(dedupe_key) WHERE state='open';
+CREATE INDEX IF NOT EXISTS idx_attention_project ON attention_requests(project_id, state);
+CREATE INDEX IF NOT EXISTS idx_attention_target ON attention_requests(target_kind, target_id);
+
+-- Which Telegram chat was notified about which item (and with which message id,
+-- so a reply-to can be mapped back to exactly one item).
+CREATE TABLE IF NOT EXISTS attention_deliveries (
+    attention_id INTEGER NOT NULL REFERENCES attention_requests(id) ON DELETE CASCADE,
+    chat_id      TEXT NOT NULL,
+    message_id   INTEGER,
+    delivered_at TEXT,
+    PRIMARY KEY (attention_id, chat_id)
+);
+
+-- Replies that could not be delivered yet (PerunChat socket down, service
+-- restarting). Drained on reconnect and by the notifier loop.
+CREATE TABLE IF NOT EXISTS attention_outbox (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    attention_id INTEGER NOT NULL REFERENCES attention_requests(id) ON DELETE CASCADE,
+    target_kind  TEXT NOT NULL,
+    target_id    TEXT NOT NULL,
+    payload      TEXT NOT NULL,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    created_at   TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_attention_outbox_open ON attention_outbox(delivered_at);
+
+-- Per-chat notification mutes ("/mute <project>"), so one noisy project can be
+-- silenced without unplugging the operator's pager.
+CREATE TABLE IF NOT EXISTS attention_mutes (
+    chat_id      TEXT NOT NULL,
+    project_slug TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (chat_id, project_slug)
+);
 """
 
 
@@ -473,7 +537,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def init_db() -> None:

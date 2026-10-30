@@ -108,6 +108,11 @@ with `python -m perun project-roots --add <name> <path>`.
 * **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
   project or a command, but it must never be the only check on a mutating action:
   the guard allowlist, proposal approval and post-run audit stay in force.
+* **Notifications carry a typed target.** `attention_requests.target_kind` +
+  `target_id` decide where a reply goes; never infer the context from the current
+  project or the newest session. Producers only write rows — the process that owns
+  the Telegram poller is the only sender, and every reply runs its adapter before
+  the item is closed.
 * **Never restart Perun under an active run.** `perun stop`/`perun restart` now
   refuse when `/api/runs/active` reports a run (pass `--force` to override); a
   forced restart marks runs `interrupted` and the bridge posts a notice on its

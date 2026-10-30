@@ -158,6 +158,39 @@ class Settings:
     # How far back the bridge looks for runs a restart interrupted, when it
     # notifies the bound chat on startup (minutes).
     telegram_interrupt_notice_minutes: int = 60
+
+    # --- Operator inbox --------------------------------------------------- #
+    # When enabled, anything that needs a human decision (a permission request,
+    # a form, an explicit perun_ask_operator, a proposal, a handoff) is pushed to
+    # every statically paired Telegram chat, and the reply is delivered back to
+    # that exact context. Off by default; see docs/TECHNICAL_DOCUMENTATION.md.
+    attention_enabled: bool = False
+    # Log-only mode: record what would be sent, send nothing.
+    attention_shadow: bool = True
+    # Project slugs allowed to raise items. Empty means every non-control
+    # project.
+    attention_projects: list[str] = field(default_factory=list)
+    # Names that count as "addressed to the operator" in a project room.
+    attention_operator_names: list[str] = field(default_factory=list)
+    # How long an unanswered item stays open before it expires (minutes).
+    attention_ttl_minutes: int = 240
+    # How often the OpenCode watcher polls for permission/form requests (seconds).
+    attention_poll_seconds: int = 5
+    # On startup, re-send only open items that were never delivered and are
+    # younger than this (minutes). Older ones stay in /pending and the dashboard.
+    attention_replay_open_minutes: int = 15
+    # Per-project cap on notices per hour; excess is skipped, not queued.
+    attention_max_per_hour: int = 6
+    # Defer notices inside this local-time window, e.g. "22:00-07:00".
+    attention_quiet_hours: str = ""
+    # Show absolute paths and full commands in notices (off = project-relative).
+    attention_show_paths: bool = False
+    # When exactly one item is open, offer a one-tap "send to att_N" instead of
+    # silently treating plain text as the answer.
+    attention_plain_text_confirm: bool = True
+    # Default delivery for session answers: "queue" (after the current turn) or
+    # "steer" (interrupt now).
+    attention_default_delivery: str = "queue"
     # PerunChat federation credentials. The API key is obtained from the company
     # website at peruninthemachine.com; the endpoint is the WebSocket ingress URL.
     perunchat_api_key: str = ""

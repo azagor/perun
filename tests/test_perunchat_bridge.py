@@ -3478,3 +3478,92 @@ def test_should_reply_ignores_peruns_own_messages(settings):
     decision = bridge._should_reply_to(frame)
     assert decision.should_reply is False
     assert decision.reason == "own message"
+
+
+# --------------------------------------------------------------------------- #
+# Operator inbox producers
+# --------------------------------------------------------------------------- #
+def test_post_to_room_threads_a_relayed_answer(settings, tmp_path):
+    """in_reply_to is forwarded so a relayed answer sits under the question."""
+    _project, room = _make_shared_project(tmp_path)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    def capture_send(sock, frame, **kwargs):  # noqa: ANN001, ANN003
+        sent.append(frame)
+        return True
+
+    with patch.object(bridge, "_send_frame", side_effect=capture_send):
+        assert bridge.post_to_room(room, "operator (via Telegram): yes",
+                                   in_reply_to="msg_parent") is True
+
+    assert sent[0]["in_reply_to"] == "msg_parent"
+    assert sent[0]["payload"] == "operator (via Telegram): yes"
+
+
+def test_proposal_creation_raises_an_attention_item(settings, tmp_path):
+    from perun import action_proposals, registry
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {"intent": "edit the monthly totals", "targets": ["api.py"],
+         "action_type": "edit", "room_id": room},
+    )
+
+    item = registry.get_attention(registry.open_attention()[0]["id"])
+    assert item["target_kind"] == "proposal"
+    assert item["target_id"] == proposal["id"]
+    assert [o["id"] for o in item["options"]] == ["approve", "reject"]
+    assert "frambo proposes" in item["question"]
+
+
+def test_operator_mention_in_a_room_creates_a_room_item(settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(
+            attention_enabled=True, attention_operator_names=["piotr"],
+        )),
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(bridge, "_project_binding", lambda rid: (project, {}))
+
+    frame = {"id": "msg_1", "room_id": room,
+             "payload": "Piotr, can you grant the permission?",
+             "sender": {"agent_id": "frambo"}}
+    bridge._raise_operator_mention(frame, room, SimpleNamespace(reason="no trigger matched"))
+
+    items = registry.open_attention()
+    assert [i["target_kind"] for i in items] == ["room"]
+    assert "grant the permission" in items[0]["question"]
+
+
+def test_a_mention_without_the_operator_name_is_silent(settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(
+            attention_enabled=True, attention_operator_names=["piotr"],
+        )),
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(bridge, "_project_binding", lambda rid: (project, {}))
+
+    frame = {"id": "msg_2", "room_id": room, "payload": "the tests are green",
+             "sender": {"agent_id": "frambo"}}
+    bridge._raise_operator_mention(frame, room, SimpleNamespace(reason="no trigger matched"))
+
+    assert registry.open_attention() == []

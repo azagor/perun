@@ -1203,19 +1203,30 @@ class PerunChatBridge:
             self._drop_from_outbox(frame.get("id"))
         return True
 
+    def is_connected(self) -> bool:
+        """True when the PerunChat socket is up and we know our agent id.
+
+        Used by the operator inbox to decide between posting a reply now and
+        queueing it for the next (re)connect.
+        """
+        with self._lock:
+            return bool(self._ws and self._agent_id)
+
     def post_to_room(
         self,
         room_id: str,
         payload: str | dict[str, Any],
         content_type: str = "text/plain",
         recipient_id: str | None = None,
+        in_reply_to: str | None = None,
     ) -> bool:
         """Post a message to *room_id* from outside the normal reply flow.
 
         *payload* may be a string or a JSON-serialisable dict (e.g. execution
         control ops or package chunk frames). Set *recipient_id* for directed
         handoff frames; the gateway then delivers them only to that agent and
-        does not add them to room history.
+        does not add them to room history. Set *in_reply_to* to thread a relayed
+        operator answer under the message it answers.
         """
         if not room_id or not payload:
             return False
@@ -1237,6 +1248,8 @@ class PerunChatBridge:
                     "payload": payload,
                     "recipient_id": (recipient_id or "").strip() or None,
                 }
+                if in_reply_to:
+                    frame["in_reply_to"] = str(in_reply_to)
                 return self._send_frame(self._ws, frame)
             except Exception:
                 logger.debug("PerunChat post_to_room failed", exc_info=True)
@@ -1789,6 +1802,19 @@ class PerunChatBridge:
                 "package for %s is missing declared target(s): %s",
                 proposal_id, ", ".join(missing),
             )
+            try:
+                from . import attention
+
+                attention.request(
+                    project, "room", str(proposal.get("room_id") or ""), "handoff",
+                    f"Package for {proposal_id} is missing approved target(s): "
+                    f"{', '.join(missing)}. Create or drop them before the claim expires.",
+                    ref={"proposal_id": proposal_id},
+                    dedupe_key="handoff|" + proposal_id + "|" + "|".join(sorted(missing)),
+                )
+            except Exception:  # pragma: no cover - a notice must not block a download
+                logger.debug("could not raise an attention item for %s", proposal_id,
+                             exc_info=True)
         try:
             archive = package_handoff.pack(project, paths)
         except Exception as exc:
@@ -2302,6 +2328,53 @@ class PerunChatBridge:
         self.post_to_room(room_id, notice)
         return True
 
+    def _raise_operator_mention(self, frame: Dict[str, Any], room_id: str,
+                                decision: _ReplyDecision) -> None:
+        """Notify the operator when a room message asks *them*, not Perun.
+
+        Only fires for messages Perun deliberately did not answer and only when
+        the text names an operator alias; a normal lull in conversation must not
+        turn into a Telegram ping.
+        """
+        if decision.reason != "no trigger matched":
+            return
+        try:
+            settings = config.Settings.load()
+        except Exception:  # pragma: no cover - defensive
+            return
+        if not getattr(settings, "attention_enabled", False):
+            return
+        names = [str(n).strip().lower()
+                 for n in (settings.attention_operator_names or []) if str(n).strip()]
+        if not names:
+            return
+        text = frame.get("payload")
+        if not isinstance(text, str) or not text.strip():
+            return
+        lowered = text.lower()
+        if not any(
+            re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", lowered)
+            for name in names
+        ):
+            return
+        binding = self._project_binding(room_id)
+        if not binding:
+            return
+        project, _cfg = binding
+        sender = str((frame.get("sender") or {}).get("agent_id") or "").strip()
+        try:
+            from . import attention
+
+            attention.request(
+                project, "room", room_id, "mention",
+                f"{sender or 'someone'}: {text[:500]}",
+                ref={"frame_id": str(frame.get("id") or ""), "room_id": room_id},
+                dedupe_key=f"room|{room_id}|{frame.get('id') or ''}",
+            )
+        except Exception:  # pragma: no cover - telemetry must never break the room
+            logger.debug("could not raise an operator mention for %s", room_id,
+                         exc_info=True)
+
     def _process_room_frame(self, frame: Dict[str, Any], ws: Any) -> None:
         """Decide whether to reply to a queued frame and do so under rate limits."""
         msg_id = frame.get("id")
@@ -2309,6 +2382,7 @@ class PerunChatBridge:
         decision = self._should_reply_to(frame)
         if not decision.should_reply:
             logger.info("PerunChat decided not to reply to %s: %s", msg_id, decision.reason)
+            self._raise_operator_mention(frame, room_id, decision)
             return
         logger.info("PerunChat decided to reply to %s: %s", msg_id, decision.reason)
 

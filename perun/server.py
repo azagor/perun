@@ -187,6 +187,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logging.getLogger("perun.server").debug(
             "could not prune routing telemetry", exc_info=True
         )
+    # Operator inbox: expire overdue items and drop old closed ones. Open items
+    # are never pruned — they are still waiting on a human.
+    try:
+        registry.expire_attention()
+        registry.prune_attention()
+    except Exception:  # pragma: no cover - startup must not depend on this
+        logging.getLogger("perun.server").debug(
+            "could not prune operator inbox", exc_info=True
+        )
     # Start a background thread that repairs embeddings written while Ollama
     # was down. It is daemonic and signalled on shutdown.
     reembed_stop = _start_reembed_thread()
@@ -2682,6 +2691,106 @@ def api_routing_unmisroute(decision_id: int) -> dict[str, Any]:
     return _ok(reported=False, removed=removed)
 
 
+# --------------------------------------------------------------------------- #
+# Operator inbox
+# --------------------------------------------------------------------------- #
+@app.get("/api/attention")
+def api_attention_list(state: str = "open", limit: int = 50,
+                       project: str | None = None) -> dict[str, Any]:
+    """Items waiting on the operator (or a recent closed window)."""
+    if state not in ("open", "all", "closed"):
+        raise HTTPException(status_code=400, detail="state must be open|closed|all")
+    limit = max(1, min(int(limit), 200))
+    project_id = None
+    if project:
+        row = _project_or_404(project)
+        project_id = row["id"]
+    if state == "open":
+        items = registry.open_attention(project_id=project_id, limit=limit, state="open")
+    elif state == "closed":
+        items = [i for s in ("answered", "approved", "rejected", "expired",
+                             "cancelled", "undeliverable")
+                 for i in registry.open_attention(project_id=project_id, limit=limit, state=s)]
+        items.sort(key=lambda item: item["id"], reverse=True)
+        items = items[:limit]
+    else:
+        items = registry.open_attention(project_id=project_id, limit=limit, state="open")
+        items += [i for s in ("answered", "approved", "rejected", "expired",
+                              "cancelled", "undeliverable")
+                  for i in registry.open_attention(project_id=project_id, limit=limit, state=s)]
+        items.sort(key=lambda item: item["id"], reverse=True)
+        items = items[:limit]
+    for item in items:
+        item["deliveries"] = registry.attention_deliveries(item["id"])
+    return _ok(items=items, total=len(items))
+
+
+@app.get("/api/attention/{attention_id}")
+def api_attention_get(attention_id: int) -> dict[str, Any]:
+    item = registry.get_attention(attention_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="attention item not found")
+    item["deliveries"] = registry.attention_deliveries(attention_id)
+    return _ok(item=item)
+
+
+@app.post("/api/attention/{attention_id}/reply")
+def api_attention_reply(attention_id: int,
+                        payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from . import attention
+
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    result = attention.answer(attention_id, text, by="dashboard")
+    if not result.get("ok"):
+        status = 404 if "not found" in str(result.get("error")) else 409
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return _ok(item=result.get("item"), delivery=result.get("delivery"))
+
+
+@app.post("/api/attention/{attention_id}/choose")
+def api_attention_choose(attention_id: int,
+                         payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from . import attention
+
+    option = str(payload.get("option") or "").strip().lower()
+    if not option:
+        raise HTTPException(status_code=400, detail="option is required")
+    result = attention.choose(attention_id, option, by="dashboard")
+    if not result.get("ok"):
+        status = 404 if "not found" in str(result.get("error")) else 409
+        raise HTTPException(status_code=status, detail=result.get("error"))
+    return _ok(item=result.get("item"))
+
+
+@app.post("/api/attention/{attention_id}/delivery")
+def api_attention_delivery(attention_id: int,
+                           payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from . import attention
+
+    mode = str(payload.get("delivery") or "steer").strip().lower()
+    result = attention.set_delivery(attention_id, mode, by="dashboard")
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error"))
+    return _ok(item=result.get("item"))
+
+
+@app.delete("/api/attention/{attention_id}")
+def api_attention_cancel(attention_id: int) -> dict[str, Any]:
+    from . import attention
+
+    item = registry.get_attention(attention_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="attention item not found")
+    if item["target_kind"] == "session" and item["state"] == "answered":
+        attention.undo(attention_id, by="dashboard")
+    closed = registry.close_attention(attention_id, "cancelled", answered_by="dashboard")
+    if not closed:
+        raise HTTPException(status_code=409, detail=f"item is {item['state']}")
+    return _ok(cancelled=attention_id)
+
+
 @app.get("/api/instructions")
 def api_list_instructions() -> dict[str, Any]:
     """List global instruction Markdown files with parsed metadata."""
@@ -2936,21 +3045,25 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "port", "max_concurrent_runs", "run_timeout", "embed_dim",
         "external_execution_claim_ttl", "external_execution_package_ttl",
         "telegram_interrupt_notice_minutes",
+        "attention_ttl_minutes", "attention_poll_seconds",
+        "attention_replay_open_minutes", "attention_max_per_hour",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
         "routing_enabled", "routing_shadow",
+        "attention_enabled", "attention_shadow", "attention_show_paths",
+        "attention_plain_text_confirm",
     }
     list_fields = {
         "roots", "telegram_allowed_chats", "perunchat_auto_join",
-        "perunchat_trusted",
+        "perunchat_trusted", "attention_projects", "attention_operator_names",
     }
     str_fields = {
         "host", "default_model", "default_agent", "orchestrator_model",
         "orchestrator_agent", "ollama_host", "embed_model", "telegram_token",
         "telegram_bot_name", "terminal", "perunchat_api_key", "perunchat_api_endpoint",
         "perunchat_chat_model", "perunchat_chat_agent", "perun_owner_name",
-        "perun_hitl_secret",
+        "perun_hitl_secret", "attention_quiet_hours", "attention_default_delivery",
     }
     if key in int_fields:
         try:
@@ -2960,8 +3073,11 @@ def _coerce_setting(key: str, value: Any) -> Any:
         if key == "port" and not (1 <= v <= 65535):
             raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 65535")
         if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl",
-                   "telegram_interrupt_notice_minutes") and v < 1:
+                   "telegram_interrupt_notice_minutes", "attention_ttl_minutes",
+                   "attention_replay_open_minutes", "attention_max_per_hour") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
+        if key == "attention_poll_seconds" and v < 2:
+            raise HTTPException(status_code=400, detail=f"{key} must be at least 2")
         if key == "external_execution_package_ttl" and v < 60:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 60")
         if key == "embed_dim" and v < 1:
@@ -2977,11 +3093,16 @@ def _coerce_setting(key: str, value: Any) -> Any:
         if isinstance(value, (list, tuple)):
             return [str(p).strip() for p in value if str(p).strip()]
         raise HTTPException(status_code=400, detail=f"{key} must be a list")
+    if key == "attention_default_delivery":
+        mode = str(value or "").strip().lower()
+        if mode not in ("queue", "steer"):
+            raise HTTPException(status_code=400,
+                                detail="attention_default_delivery must be queue or steer")
+        return mode
     if key in str_fields:
         return str(value).strip() if value is not None else ""
     # Unknown field — fall back to the raw value; the caller filters by allowed keys.
     return value
-
 
 @app.patch("/api/settings")
 def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:

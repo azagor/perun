@@ -4,13 +4,30 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Added
+
+- **Operator inbox.** Anything that needs a human — a permission request, a
+  form, `perun_ask_operator`, a proposal, a handoff, or a room message that names
+  the operator — is pushed to every paired Telegram chat, and the reply is
+  delivered back to **that** context: a session gets a queued message (⚡ can
+  interrupt), a permission gets `once`/`always`/`reject`, a form gets its
+  answers, a room gets a threaded operator message, a proposal gets approved or
+  rejected. Typed targets make several blocked sessions safe at once. Off by
+  default (`attention_enabled`), with shadow mode, `/pending`, `/answer`,
+  `/cancel`, `/mute`, a dashboard "Needs you" card and `/api/attention…`.
+- **MCP tools** `perun_ask_operator`, `perun_await_operator` and
+  `perun_attention_list`, so a TUI session can ask the operator and receive the
+  answer as a tool result (the session id comes from OpenCode's
+  `_meta["ai.opencode/sessionID"]`).
+- **`perun/opencode_api.py`**: a client for the local OpenCode HTTP API
+  (permission reply, form reply, session prompt/inbox) with in-memory Basic auth
+  and one CLI-based URL discovery.
+- **Room replies can thread.** `post_to_room(..., in_reply_to=…)` attaches a
+  relayed operator answer under the message it answers.
 
 ## v0.8.68
 
 *Released 2026-10-30.*
-
-## Unreleased
 
 ### Fixed
 
@@ -28,8 +45,6 @@ _No unreleased changes yet._
 
 *Released 2026-10-30.*
 
-## Unreleased
-
 ### Added
 
 - **Undo a misroute report.** `DELETE /api/routing/decisions/{id}/misroute` clears
@@ -44,8 +59,6 @@ _No unreleased changes yet._
 ## v0.8.66
 
 *Released 2026-10-30.*
-
-## Unreleased
 
 ### Fixed
 

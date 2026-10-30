@@ -83,7 +83,10 @@ SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 `activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`, `tasks`,
 `context_docs` (the Context layer — keyed reference docs, deliberately **not**
 `doc_chunks`, so project-scoped context never leaks into cross-project doc
-search), `secret_store` (encrypted secret values).
+search), `secret_store` (encrypted secret values), plus the operator-inbox
+tables `attention_requests` (typed target + `dedupe_key` unique among open rows),
+`attention_deliveries` (chat → message id), `attention_outbox` (undelivered room
+replies) and `attention_mutes` (per-chat `/mute`).
 * `SCHEMA`, `SCHEMA_VERSION` (the `PRAGMA user_version` migration gate),
   `_ADDED_COLUMNS` (idempotent column additions: `projects.manifest`,
   `projects.manifest_path`, `projects.manifest_loaded_at`, `projects.git_*`,
@@ -128,6 +131,16 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `recent_interrupted_runs()` / `chats_for_session()` / `interrupt_notice_sent()`
   for the restart notice.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
+* Operator inbox: `add_attention()` (returns `_new`, deduped by the unique
+  partial index), `get_attention()`, `open_attention()`, `open_attention_for_chat()`,
+  `attention_by_message()` (reply-to → item), `record_attention_delivery()`,
+  `attention_deliveries()`, `undelivered_attention(within_minutes=…)`,
+  `close_attention()` (conditional on `state='open'`), `update_attention_ref()`,
+  `set_attention_delivery()`, `touch_attention_waiter()`, `expire_attention()`,
+  `reopen_attention()`, `attention_count_since()` (hourly cap),
+  `attention_muted_projects()` / `mute_attention_project()` /
+  `unmute_attention_project()`, the `attention_outbox_*` queue, and
+  `prune_attention(keep_days=30)` (open rows are never pruned).
 
 ### `perun/control.py`
 The **control plane** — Perun as an always-present, undeletable orchestrator
@@ -561,6 +574,61 @@ reason)`.
 * Offline inspection: `python -m perun.routing "<message>"` prints the decision
   as JSON against the live registry.
 
+### `perun/opencode_api.py`
+Thin client for the local OpenCode HTTP API (v2). This is the channel that lets
+Perun answer a permission prompt, fill a form, or deliver a message into a
+**running TUI session** — the parts of a session a child `opencode run` process
+cannot reach.
+* `OpenCodeAPI` — `info()`, `active_sessions()` (global), `locations()`
+  (`/api/debug/location`), `session()`, `pending_permissions(location)`,
+  `pending_forms(location)`, `reply_permission()`, `reply_form()`, `prompt()`
+  (`delivery` `queue`/`steer`, `id` for idempotent admission), `set_inbox_delivery()`,
+  `cancel_inbox()`, `interrupt()`.
+* Auth is HTTP Basic `opencode:<password>` using the password from OpenCode's
+  own service file in the user's config directory (or
+  `OPENCODE_SERVICE_PASSWORD`); it is kept in memory only — never logged,
+  persisted, or copied into Perun's database.
+* `discover_base_url()` asks ``opencode api get /api/info`` (the CLI already knows
+  how the service is registered per platform); one rediscovery after a failed
+  request, then `OpenCodeUnavailable`.
+* Pending permission/form lists are **location-scoped**
+  (``?location[directory]=…``); session routes take no location and resolve from
+  the session record, so sessions in any project are addressable from one process.
+* `default_api()` / `set_default_api()` / `ping()`; `OpenCodeHTTPError` carries the
+  status, and a missing service degrades instead of crashing the caller.
+
+### `perun/attention.py`
+The operator inbox: one row per thing that needs a human, with a **typed target**
+(`permission`, `form`, `session`, `room`, `proposal`, `handoff`). A reply is
+dispatched by that target, never by inference from "the current project".
+* Producers: `request()` (deduped by `dedupe_key`), `project_for_location()`.
+* Policy: `eligible()` (flag, project allow-list, quiet hours, hourly cap, TTL),
+  `recipients()` (every statically paired chat minus per-chat mutes),
+  `render()`, `keyboard()`, `confirmation()`, `followup_keyboard()`.
+* Replies: `answer()` (text → adapter, then a conditional close, so a failed
+  delivery leaves the item open), `choose()` (permission `once`/`always`/`reject`,
+  proposal `approve`/`reject`; `reject` also closes the session's other pending
+  permissions), `set_delivery()` (⚡ promote queue→steer in place), `undo()`
+  (↩ cancel an undelivered inbox item and reopen), `wait()` (blocking wait used by
+  `perun_ask_operator`; the heartbeat is what prevents double delivery),
+  `expire_stale()`.
+* Adapters: `permission` → `reply_permission`; `form` → `reply_form` (a JSON
+  object, or plain text for a single string field); `session` → `prompt` with
+  ``msg_att_<id>``; `room`/`handoff` → `post_to_room(..., in_reply_to=…)` or the
+  outbox when the socket is down; `proposal` → `action_proposals.approve/reject`
+  with actor ``telegram:<chat>``.
+* Imported by the bridge/telegram/server; it imports neither telegram nor
+  perunchat_bridge at module level (the room adapter imports the bridge lazily).
+
+### `perun/attention_watcher.py`
+Detection loop, run inside the Telegram-bridge process (the poller is already a
+singleton). Polls `active_sessions()` for locations, then `pending_permissions()`
+and `pending_forms()` per location, and creates one item per request id via
+`dedupe_key`; a full `/api/debug/location` sweep runs every five minutes.
+`_reconcile()` closes items whose request vanished (answered in the TUI).
+`poll_once()` returns `{created, closed, locations}` and never raises into the
+bridge; it only ever writes rows, never sends.
+
 ### `perun/telegram.py`
 Shared Telegram ⇄ Perun bridge.
 * Formatting: `format_html()`, `chunk()`, `_esc()`.
@@ -585,6 +653,18 @@ Shared Telegram ⇄ Perun bridge.
   killed (runs interrupted within `telegram_interrupt_notice_minutes`, matched
   through `bridge_links.session_pk`, once per run via
   `run_interrupted_notice`); it runs on a daemon thread.
+* Operator inbox: `send()` now returns the first Telegram `message_id`, which is
+  what makes reply-to matching possible. `attention_tick()` creates cards for
+  never-delivered items (eligibility, recipients, `attention_deliveries`),
+  `_attention_startup_replay()` re-sends only open + undelivered items younger
+  than `attention_replay_open_minutes` and marks older ones as skipped,
+  `_attention_loop()` runs detection (`attention_watcher.poll_once()`) and
+  delivery on a daemon thread when `attention_enabled`. `_handle_attention_reply()`
+  (a reply-to on a card), `_maybe_attention_text()` (one-tap "Send to att_N?"
+  instead of silently treating plain text as an answer),
+  `_handle_attention_callback()` (`att:<id>:<choice>`, with a second tap for
+  `always`), and `_handle_attention_command()` (`/pending`, `/answer`, `/cancel`,
+  `/mute`, `/unmute`).
   Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
   With the routing setting enabled, `run_message()` first calls `_route_message()`
   (`_command_argument()`, `_log_routing_decision()`): `status`/`stop`/`remember`/
@@ -887,7 +967,9 @@ FastAPI app + SSE + static dashboard.
   execution handoff and `cancel` for withdrawing an approved-but-unclaimed
   proposal; the list endpoint omits approval tokens/snapshots), routing
   (`/api/routing/decisions` summary + panel rows, `POST
-  /api/routing/decisions/{id}/misroute`), `DELETE /api/sessions/{pk}`; `DELETE` refuses
+  /api/routing/decisions/{id}/misroute`), the operator inbox
+  (`/api/attention` list, `/{id}`, `/{id}/reply`, `/{id}/choose`,
+  `/{id}/delivery` for ⚡, `DELETE` to cancel), `DELETE /api/sessions/{pk}`; `DELETE` refuses
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
@@ -1053,6 +1135,9 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
 `perun_file_exists`, `perun_list_directory`, `perun_read_file`,
 `perun_get_manifest`, `perun_set_manifest`, `perun_start_session`,
 `perun_ask`, `perun_run_status`, `perun_telegram_send`,
+`perun_ask_operator` (**ask the human and return their answer into this
+session**), `perun_await_operator` (**wait again on an already-asked question**),
+`perun_attention_list`,
 `perun_context` (**retrieve context docs — a key, or the context for a task**),
 `perun_secret` (**read/write a named secret in the encrypted store**).
 * `_resolve_project()`, `_project_line()`, `_validate_projects_list()`,
@@ -1090,6 +1175,8 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
   `openManifestLink()`, `wireManifestLinks()`, `projectInstructionsForm`,
   `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,
   `viewPerunChat`, `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`,
+  the operator inbox (`loadAttentionPanel()` — "Needs you" card with reply,
+  choice, ⚡ and dismiss actions; `loadRoutingPanel()` — routing decisions),
   `projectConfigForm()` (project Config tab: name, description, Plan model,
   Build model, Default model, Agent override; saves `agent_models` merged with
   existing per-agent defaults),
@@ -1252,6 +1339,20 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
   disabled-by-default behaviour, status/remember handled without a run,
   ambiguity asks, cross-project run rebinds `bridge_links`, unknown text still
   runs in the bound project, and the activity row omits the message text.
+* `test_opencode_api.py` - the OpenCode HTTP client: Basic auth, location
+  encoding, idempotent prompt bodies, 401 rediscovery, optional 404, error
+  statuses, and degradation when the service is absent.
+* `test_attention.py` - the operator inbox: dedupe, permission/approval adapters,
+  conditional close, queue→steer, undo, form coercion, room outbox, eligibility
+  (flag, project allow-list, quiet hours), recipients, TTL expiry.
+* `test_attention_watcher.py` - detection: one item per request id, forms with
+  their field list, reconciliation when a request is answered in the TUI,
+  active-location polling plus the five-minute sweep, disabled flag.
+* `test_telegram_attention.py` - the Telegram side: cards, reply-to routing,
+  `always` confirmation, `/pending`, `/answer` ambiguity, `/mute`, the plain-text
+  "Send to att_N?" guard, ⚡/↩ callbacks, startup replay, stale cards.
+* `test_mcp_attention.py` - `perun_ask_operator` (session id from `_meta`,
+  options, timeout handle), `perun_await_operator`, `perun_attention_list`.
 * `test_perunchat_bridge.py` — the autonomous PerunChat participant: start/stop
   lifecycle, room auto-join, reply dedupe, the write-ahead outbox and its
   reconnect flush, empty-reply retry, typing/reply sequence-number monotonicity,

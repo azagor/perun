@@ -5287,6 +5287,107 @@ async function loadRoutingPanel() {
     }, 60000);
 }
 
+let attentionTimer = null;
+
+async function loadAttentionPanel() {
+    const host = $('#attention-panel');
+    if (!host) return;
+    if (attentionTimer) { clearInterval(attentionTimer); attentionTimer = null; }
+    let res;
+    try {
+        res = await api('/api/attention?state=open&limit=20');
+    } catch (e) {
+        host.innerHTML = `<div class="meta">inbox unavailable: ${esc(e.message)}</div>`;
+        return;
+    }
+    const items = res.items || [];
+    const badge = $('#attention-count');
+    if (badge) {
+        badge.textContent = items.length ? `${items.length} open` : 'clear';
+        badge.className = 'badge ' + (items.length ? 'amber' : 'green');
+    }
+    if (!items.length) {
+        host.innerHTML = '<div class="meta">Nothing is waiting on you.</div>';
+        attentionTimer = setInterval(() => {
+            if (!document.getElementById('attention-panel')) { clearInterval(attentionTimer); attentionTimer = null; return; }
+            loadAttentionPanel();
+        }, 30000);
+        return;
+    }
+    host.innerHTML = items.map((it) => {
+        const choices = (it.options || []).map((o) =>
+            `<button class="btn sm" data-att-choose="${it.id}" data-att-option="${esc(o.id)}">${esc(o.label)}</button>`
+        ).join(' ');
+        const steer = it.target_kind === 'session' && it.state === 'answered'
+            ? `<button class="btn sm ghost" data-att-steer="${it.id}" title="Deliver now instead of after the current turn">⚡ interrupt</button>`
+            : '';
+        const detail = [it.target_kind, `att_${it.id}`, timeAgo(it.created_at)].filter(Boolean).join(' · ');
+        return `<div class="list-row" style="align-items:flex-start">
+            <span class="badge ${it.target_kind === 'permission' ? 'amber' : 'blue'}">${esc(it.target_kind)}</span>
+            <span class="intent">
+              <div class="msg">${esc(it.question || '')}</div>
+              <div class="meta">${esc(detail)}</div>
+              <div class="row wrap" style="gap:6px;margin-top:6px">
+                <input class="input" data-att-input="${it.id}" placeholder="reply…" style="min-width:240px">
+                <button class="btn sm" data-att-reply="${it.id}">Send</button>
+                ${choices}${steer}
+                <button class="btn sm ghost danger" data-att-dismiss="${it.id}" title="Dismiss">✕</button>
+              </div>
+            </span>
+          </div>`;
+    }).join('');
+    const refresh = () => loadAttentionPanel();
+    host.querySelectorAll('[data-att-reply]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.attReply;
+            const input = host.querySelector(`[data-att-input="${id}"]`);
+            const text = (input?.value || '').trim();
+            if (!text) return;
+            btn.disabled = true;
+            try {
+                await api(`/api/attention/${id}/reply`, { method: 'POST', body: { text } });
+                toast('Answer delivered', 'ok');
+                refresh();
+            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+        });
+    });
+    host.querySelectorAll('[data-att-choose]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+                await api(`/api/attention/${btn.dataset.attChoose}/choose`,
+                    { method: 'POST', body: { option: btn.dataset.attOption } });
+                toast('Recorded', 'ok');
+                refresh();
+            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+        });
+    });
+    host.querySelectorAll('[data-att-steer]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+                await api(`/api/attention/${btn.dataset.attSteer}/delivery`,
+                    { method: 'POST', body: { delivery: 'steer' } });
+                toast('Interrupt requested', 'ok');
+                refresh();
+            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+        });
+    });
+    host.querySelectorAll('[data-att-dismiss]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+                await api(`/api/attention/${btn.dataset.attDismiss}`, { method: 'DELETE' });
+                refresh();
+            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+        });
+    });
+    attentionTimer = setInterval(() => {
+        if (!document.getElementById('attention-panel')) { clearInterval(attentionTimer); attentionTimer = null; return; }
+        loadAttentionPanel();
+    }, 30000);
+}
+
 async function viewSettings() {
     $('#topbar-title').textContent = 'Settings';
     await Promise.all([loadSettings(), loadTerminals()]);
@@ -5335,6 +5436,8 @@ async function viewSettings() {
             <label class="row" style="gap:6px"><input type="checkbox" id="s-indexdisc" ${s.index_docs_on_discover ? 'checked' : ''}> index docs on discover</label>
             <label class="row" style="gap:6px" title="Resolve &quot;run tests in perun&quot; / &quot;status&quot; / &quot;zapamietaj...&quot; locally instead of spending an agent run. Deterministic rules only."><input type="checkbox" id="s-routing" ${s.routing_enabled ? 'checked' : ''}> natural-language routing</label>
             <label class="row" style="gap:6px" title="Log what routing would have done without acting on it. Use this for a week before turning routing on."><input type="checkbox" id="s-routing-shadow" ${s.routing_shadow ? 'checked' : ''}> routing: log only (shadow)</label>
+            <label class="row" style="gap:6px" title="Push anything that needs a human decision (permission requests, forms, agent questions, proposals) to your paired Telegram chats, and deliver the reply back to that exact session."><input type="checkbox" id="s-attention" ${s.attention_enabled ? 'checked' : ''}> operator inbox (Telegram)</label>
+            <label class="row" style="gap:6px" title="Log what would be sent, send nothing. Turn this off once the cards look right."><input type="checkbox" id="s-attention-shadow" ${s.attention_shadow ? 'checked' : ''}> inbox: log only (shadow)</label>
          </div>
          <div class="form-actions">
             <button class="btn primary" id="s-save">Save settings</button>
@@ -5348,6 +5451,12 @@ async function viewSettings() {
          <div id="routing-panel"><div class="meta">loading…</div></div>`);
     v.appendChild(routingPanel);
     loadRoutingPanel();
+
+    const attentionPanel = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Needs you</h4><span class="badge" id="attention-count">—</span></div>
+         <div id="attention-panel"><div class="meta">loading…</div></div>`);
+    v.appendChild(attentionPanel);
+    loadAttentionPanel();
 
     await loadModels();
     await loadAgents();
@@ -5505,6 +5614,8 @@ async function viewSettings() {
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
             routing_enabled: $('#s-routing').checked,
             routing_shadow: $('#s-routing-shadow').checked,
+            attention_enabled: $('#s-attention').checked,
+            attention_shadow: $('#s-attention-shadow').checked,
         };
         const hitlSecret = $('#s-hitl-secret').value.trim();
         if (hitlSecret) payload.perun_hitl_secret = hitlSecret;

@@ -7,8 +7,9 @@ import json
 import os
 import re
 import sqlite3
+import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import config, db
@@ -1326,3 +1327,361 @@ def set_bridge_link(chat_id: str, project_id: int | None,
                  updated_at=excluded.updated_at""",
             (chat_id, project_id, session_pk, now_iso()),
         )
+
+# --------------------------------------------------------------------------- #
+# Operator inbox (attention requests)
+# --------------------------------------------------------------------------- #
+ATTENTION_OPEN = "open"
+ATTENTION_CLOSED = ("answered", "approved", "rejected", "expired", "cancelled",
+                    "undeliverable")
+
+
+def _attention_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    """Decode an ``attention_requests`` row (JSON columns) into a dict."""
+    if not row:
+        return None
+    item = dict(row)
+    for key in ("ref", "options"):
+        try:
+            item[key] = json.loads(item.get(key) or ("{}" if key == "ref" else "[]"))
+        except Exception:
+            item[key] = {} if key == "ref" else []
+    item["id"] = int(item["id"])
+    return item
+
+
+def attention_dedupe_key(target_kind: str, target_id: str, source: str,
+                         question: str) -> str:
+    raw = f"{target_kind}|{target_id}|{source}|{(question or '').strip()}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def add_attention(project_id: int | None, target_kind: str, target_id: str,
+                  source: str, question: str, *,
+                  options: list[dict[str, Any]] | None = None,
+                  ref: dict[str, Any] | None = None,
+                  ttl_minutes: int = 240,
+                  dedupe_key: str = "") -> dict[str, Any] | None:
+    """Insert one attention item, or return the existing open duplicate.
+
+    The unique partial index on ``dedupe_key`` is the concurrency guard: two
+    pollers (or a replayed permission event) cannot create two cards for the
+    same request.
+    """
+    key = dedupe_key or attention_dedupe_key(target_kind, target_id, source, question)
+    now = now_iso()
+    ttl = int(time.time()) + max(1, int(ttl_minutes)) * 60
+    with db.db() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT INTO attention_requests
+                   (project_id,target_kind,target_id,source,ref,question,options,
+                    state,dedupe_key,ttl_epoch,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,'open',?,?,?,?)""",
+                (
+                    int(project_id) if project_id else None,
+                    str(target_kind), str(target_id), str(source),
+                    json.dumps(ref or {}), str(question or "").strip(),
+                    json.dumps(options or []), key, ttl, now, now,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            row = db.one(
+                conn,
+                "SELECT * FROM attention_requests WHERE dedupe_key=? AND state='open'",
+                (key,),
+            )
+            existing = _attention_row(row)
+            if existing is not None:
+                existing["_new"] = False
+            return existing
+        row = db.one(conn, "SELECT * FROM attention_requests WHERE id=?", (cur.lastrowid,))
+    created = _attention_row(row)
+    if created is not None:
+        created["_new"] = True
+    return created
+
+
+def get_attention(attention_id: int) -> dict[str, Any] | None:
+    with db.db() as conn:
+        row = db.one(conn, "SELECT * FROM attention_requests WHERE id=?",
+                     (int(attention_id),))
+    return _attention_row(row)
+
+
+def open_attention(*, project_id: int | None = None, limit: int = 50,
+                   state: str = "open") -> list[dict[str, Any]]:
+    sql = "SELECT * FROM attention_requests WHERE state=?"
+    params: list[Any] = [state]
+    if project_id:
+        sql += " AND project_id=?"
+        params.append(int(project_id))
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+    with db.db() as conn:
+        rows = db.rows(conn, sql, tuple(params))
+    return [item for item in (_attention_row(r) for r in rows) if item]
+
+
+def attention_deliveries(attention_id: int) -> list[dict[str, Any]]:
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT * FROM attention_deliveries WHERE attention_id=? ORDER BY chat_id",
+            (int(attention_id),),
+        )
+    return [dict(r) for r in rows]
+
+
+def record_attention_delivery(attention_id: int, chat_id: str,
+                              message_id: int | None) -> None:
+    with db.db() as conn:
+        conn.execute(
+            """INSERT INTO attention_deliveries
+               (attention_id,chat_id,message_id,delivered_at) VALUES (?,?,?,?)
+               ON CONFLICT(attention_id,chat_id) DO UPDATE SET
+                 message_id=excluded.message_id,
+                 delivered_at=excluded.delivered_at""",
+            (int(attention_id), str(chat_id),
+             int(message_id) if message_id else None, now_iso()),
+        )
+
+
+def attention_by_message(chat_id: str, message_id: int) -> dict[str, Any] | None:
+    """Resolve a Telegram reply-to message id back to its attention item."""
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            """SELECT a.* FROM attention_requests a
+               JOIN attention_deliveries d ON d.attention_id=a.id
+               WHERE d.chat_id=? AND d.message_id=? LIMIT 1""",
+            (str(chat_id), int(message_id)),
+        )
+    return _attention_row(row)
+
+
+def undelivered_attention(*, within_minutes: int | None = None,
+                          limit: int = 50) -> list[dict[str, Any]]:
+    """Open items that were never sent to any chat (oldest first)."""
+    sql = (
+        "SELECT a.* FROM attention_requests a "
+        "WHERE a.state='open' AND NOT EXISTS ("
+        "  SELECT 1 FROM attention_deliveries d WHERE d.attention_id=a.id)"
+    )
+    params: list[Any] = []
+    if within_minutes is not None:
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(minutes=max(1, int(within_minutes)))).isoformat()
+        sql += " AND a.created_at >= ?"
+        params.append(cutoff)
+    sql += " ORDER BY a.id ASC LIMIT ?"
+    params.append(int(limit))
+    with db.db() as conn:
+        rows = db.rows(conn, sql, tuple(params))
+    return [item for item in (_attention_row(r) for r in rows) if item]
+
+
+def close_attention(attention_id: int, state: str, *, answer: str = "",
+                    answered_by: str = "", expect: str = "open") -> bool:
+    """Conditionally close an item; returns False when another client won."""
+    if state not in ATTENTION_CLOSED:
+        raise ValueError(f"unknown attention state: {state}")
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE attention_requests
+               SET state=?, answer=?, answered_by=?, updated_at=?, closed_at=?
+               WHERE id=? AND state=?""",
+            (state, answer or None, answered_by or None, now_iso(), now_iso(),
+             int(attention_id), expect),
+        )
+        return bool(cur.rowcount)
+
+
+def update_attention_ref(attention_id: int, **fields: Any) -> dict[str, Any] | None:
+    """Merge *fields* into the item's ``ref`` JSON and return the fresh row."""
+    item = get_attention(attention_id)
+    if not item:
+        return None
+    ref = dict(item.get("ref") or {})
+    ref.update(fields)
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE attention_requests SET ref=?, updated_at=? WHERE id=?",
+            (json.dumps(ref), now_iso(), int(attention_id)),
+        )
+    return get_attention(attention_id)
+
+
+def set_attention_delivery(attention_id: int, delivery: str) -> bool:
+    if delivery not in ("queue", "steer"):
+        raise ValueError(f"unknown delivery mode: {delivery}")
+    with db.db() as conn:
+        cur = conn.execute(
+            "UPDATE attention_requests SET delivery=?, updated_at=? WHERE id=?",
+            (delivery, now_iso(), int(attention_id)),
+        )
+        return bool(cur.rowcount)
+
+
+def touch_attention_waiter(attention_id: int) -> None:
+    """Heartbeat from a blocked ``perun_ask_operator`` call."""
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE attention_requests SET waiter_seen_epoch=? WHERE id=?",
+            (int(time.time()), int(attention_id)),
+        )
+
+
+def expire_attention(now_epoch: int | None = None) -> int:
+    """Mark open items past their TTL as expired; returns how many."""
+    now = int(now_epoch or time.time())
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE attention_requests
+               SET state='expired', updated_at=?, closed_at=?
+               WHERE state='open' AND ttl_epoch <= ?""",
+            (now_iso(), now_iso(), now),
+        )
+        return int(cur.rowcount or 0)
+
+
+def attention_muted_projects(chat_id: str) -> set[str]:
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT project_slug FROM attention_mutes WHERE chat_id=?",
+            (str(chat_id),),
+        )
+    return {str(r["project_slug"]).lower() for r in rows}
+
+
+def mute_attention_project(chat_id: str, slug: str) -> None:
+    with db.db() as conn:
+        conn.execute(
+            """INSERT INTO attention_mutes (chat_id,project_slug,created_at)
+               VALUES (?,?,?) ON CONFLICT(chat_id,project_slug) DO NOTHING""",
+            (str(chat_id), str(slug).lower(), now_iso()),
+        )
+
+
+def unmute_attention_project(chat_id: str, slug: str) -> int:
+    with db.db() as conn:
+        cur = conn.execute(
+            "DELETE FROM attention_mutes WHERE chat_id=? AND project_slug=?",
+            (str(chat_id), str(slug).lower()),
+        )
+        return int(cur.rowcount or 0)
+
+
+def prune_attention(keep_days: int = 30) -> int:
+    """Drop closed attention rows (and their deliveries) past the window."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(1, int(keep_days)))).isoformat()
+    with db.db() as conn:
+        cur = conn.execute(
+            "DELETE FROM attention_requests WHERE state!='open' AND created_at < ?",
+            (cutoff,),
+        )
+        return int(cur.rowcount or 0)
+
+
+def attention_count_since(project_id: int | None, since_iso: str) -> int:
+    """How many attention items this project raised since *since_iso*."""
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT COUNT(*) AS c FROM attention_requests "
+            "WHERE project_id=? AND created_at >= ?",
+            (int(project_id) if project_id else 0, since_iso),
+        )
+    return int(row["c"] if row else 0)
+
+
+def reopen_attention(attention_id: int, *, reason: str = "") -> bool:
+    """Return an answered item to ``open`` (used by the Undo button)."""
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE attention_requests
+               SET state='open', answer=NULL, answered_by=NULL, closed_at=NULL,
+                   updated_at=?, delivery=NULL
+               WHERE id=? AND state='answered'""",
+            (now_iso(), int(attention_id)),
+        )
+        return bool(cur.rowcount)
+
+
+def attention_siblings(attention_id: int, *, target_kind: str,
+                       target_id: str) -> list[dict[str, Any]]:
+    """Other open items sharing a target (e.g. permissions in one session)."""
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT * FROM attention_requests
+               WHERE target_kind=? AND target_id=? AND state='open' AND id!=?""",
+            (target_kind, target_id, int(attention_id)),
+        )
+    return [item for item in (_attention_row(r) for r in rows) if item]
+
+
+def attention_outbox_add(attention_id: int, target_kind: str, target_id: str,
+                         payload: dict[str, Any]) -> None:
+    """Queue a reply that could not be delivered yet."""
+    with db.db() as conn:
+        conn.execute(
+            """INSERT INTO attention_outbox
+               (attention_id,target_kind,target_id,payload,created_at)
+               VALUES (?,?,?,?,?)""",
+            (int(attention_id), str(target_kind), str(target_id),
+             json.dumps(payload or {}), now_iso()),
+        )
+
+
+def attention_outbox_pending(limit: int = 20) -> list[dict[str, Any]]:
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT * FROM attention_outbox WHERE delivered_at IS NULL
+               ORDER BY id ASC LIMIT ?""",
+            (int(limit),),
+        )
+    out = []
+    for row in rows:
+        entry = dict(row)
+        try:
+            entry["payload"] = json.loads(entry.get("payload") or "{}")
+        except Exception:
+            entry["payload"] = {}
+        out.append(entry)
+    return out
+
+
+def attention_outbox_done(outbox_id: int) -> None:
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE attention_outbox SET delivered_at=? WHERE id=?",
+            (now_iso(), int(outbox_id)),
+        )
+
+
+def attention_outbox_failed(outbox_id: int, error: str) -> None:
+    with db.db() as conn:
+        conn.execute(
+            """UPDATE attention_outbox
+               SET attempts=attempts+1, last_error=? WHERE id=?""",
+            (str(error or "")[:300], int(outbox_id)),
+        )
+
+
+def open_attention_for_chat(chat_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Open items this chat was notified about (used by /pending and replies)."""
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT a.*, MAX(d.delivered_at) AS notified_at
+               FROM attention_requests a
+               JOIN attention_deliveries d ON d.attention_id=a.id
+               WHERE d.chat_id=? AND a.state='open'
+               GROUP BY a.id ORDER BY a.id DESC LIMIT ?""",
+            (str(chat_id), int(limit)),
+        )
+    return [item for item in (_attention_row(r) for r in rows) if item]

@@ -261,6 +261,11 @@ class PerunTelegramBridge:
         # redeliver updates when long polling overlaps with a reconnect.
         self._seen_ids: set[tuple[str, int]] = set()
         self._seen_ids_lock = threading.Lock()
+        # Operator inbox: answers typed as plain text wait here until the
+        # operator taps "Send" (so a normal chat message is never silently
+        # treated as an answer).
+        self._pending_answers: Dict[str, str] = {}
+        self._attention_logged: set[int] = set()
 
     def update_token(self, token: str) -> None:
         """Update the bot token used by this bridge instance."""
@@ -309,7 +314,14 @@ class PerunTelegramBridge:
             return False
 
     def send(self, chat_id: str, text: str, *, reply_to: Optional[int] = None,
-             reply_markup: Optional[Dict[str, Any]] = None) -> None:
+             reply_markup: Optional[Dict[str, Any]] = None) -> Optional[int]:
+        """Send *text*, chunked; returns the first message id (or ``None``).
+
+        The id is what lets an operator reply-to a card and have the answer
+        matched to exactly one attention item, so the first chunk's id is the
+        one that matters (the keyboard rides on that chunk too).
+        """
+        first_id: Optional[int] = None
         for piece in chunk(text or "(empty reply)", self.max_chars):
             payload: Dict[str, Any] = {
                 "chat_id": chat_id,
@@ -327,9 +339,15 @@ class PerunTelegramBridge:
                 payload.pop("parse_mode", None)
                 payload.pop("reply_markup", None)
                 payload["text"] = piece
-                self.api("sendMessage", **payload)
+                res = self.api("sendMessage", **payload)
+            if first_id is None:
+                try:
+                    first_id = int((res.get("result") or {}).get("message_id"))
+                except (TypeError, ValueError, AttributeError):
+                    first_id = None
             reply_to = None
             reply_markup = None
+        return first_id
 
     def _typing_loop(self, chat_id: str, done: threading.Event) -> None:
         while not done.wait(TYPING_INTERVAL):
@@ -732,6 +750,417 @@ class PerunTelegramBridge:
             except Exception:  # pragma: no cover - best effort
                 LOG.debug("could not notify about interrupted run %s", run_uid, exc_info=True)
 
+    # ---- operator inbox ------------------------------------------------ #
+    def _attention_settings(self) -> Optional["config.Settings"]:
+        try:
+            return config.Settings.load()
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _attention_deliver(self, items: List[Dict[str, Any]],
+                           settings: "config.Settings") -> int:
+        """Send cards for never-delivered items; returns how many went out."""
+        from . import attention
+
+        sent = 0
+        for item in items:
+            ok, reason = attention.eligible(item, settings)
+            if not ok:
+                # Log once per item per process; do not mark it delivered, so a
+                # quiet-hours or hourly-cap item still goes out later.
+                if item["id"] not in self._attention_logged:
+                    self._attention_logged.add(item["id"])
+                    registry.log_activity(
+                        item.get("project_id"), "attention_skipped",
+                        f"att_{item['id']} not sent: {reason}",
+                        {"attention_id": item["id"], "reason": reason},
+                    )
+                continue
+            chats = attention.recipients(
+                item, allowed=list(self.allowed),
+                muted=registry.attention_muted_projects,
+            )
+            if not chats:
+                if item["id"] not in self._attention_logged:
+                    self._attention_logged.add(item["id"])
+                    registry.log_activity(
+                        item.get("project_id"), "attention_skipped",
+                        f"att_{item['id']} not sent: no paired chat",
+                        {"attention_id": item["id"], "reason": "no chat"},
+                    )
+                continue
+            text = attention.render(
+                item, show_paths=bool(getattr(settings, "attention_show_paths", False))
+            )
+            markup = attention.keyboard(item)
+            if getattr(settings, "attention_shadow", True):
+                if item["id"] not in self._attention_logged:
+                    self._attention_logged.add(item["id"])
+                    LOG.info("[shadow] att_%s would go to %s: %s",
+                             item["id"], chats, text.splitlines()[0])
+                continue
+            for chat_id in chats:
+                message_id = self.send(chat_id, text, reply_markup=markup)
+                if message_id:
+                    registry.record_attention_delivery(item["id"], chat_id, message_id)
+                    sent += 1
+                else:
+                    # Telegram refused/failed: leave the item undelivered so the
+                    # next tick retries instead of silently losing the card.
+                    if item["id"] not in self._attention_logged:
+                        self._attention_logged.add(item["id"])
+                        LOG.warning("could not send att_%s to %s; will retry",
+                                    item["id"], chat_id)
+        return sent
+
+    def _attention_startup_replay(self, settings: "config.Settings") -> None:
+        """Send only what a restart could have lost: open, undelivered, recent."""
+        from . import attention
+
+        try:
+            window = int(getattr(settings, "attention_replay_open_minutes", 15))
+        except (TypeError, ValueError):
+            window = 15
+        fresh = {item["id"] for item in registry.undelivered_attention(
+            within_minutes=max(1, window))}
+        for item in registry.undelivered_attention():
+            if item["id"] in fresh:
+                continue
+            registry.log_activity(
+                item.get("project_id"), "attention_replay_skipped",
+                f"att_{item['id']} left unsent after restart (older than {window} min)",
+                {"attention_id": item["id"]},
+            )
+            for chat_id in list(self.allowed):
+                registry.record_attention_delivery(item["id"], chat_id, None)
+        if fresh:
+            self._attention_deliver(
+                [item for item in registry.undelivered_attention(
+                    within_minutes=max(1, window)) if item["id"] in fresh],
+                settings,
+            )
+        attention.expire_stale()
+
+    def attention_tick(self, *, replay: bool = False) -> int:
+        """One notifier pass (also used by tests)."""
+        settings = self._attention_settings()
+        if settings is None or not settings.attention_enabled:
+            return 0
+        if replay:
+            self._attention_startup_replay(settings)
+            return 0
+        try:
+            from . import attention_watcher
+            attention_watcher.poll_once()
+        except Exception:  # pragma: no cover - watcher failures must not stop sending
+            LOG.debug("attention watcher tick failed", exc_info=True)
+        return self._attention_deliver(registry.undelivered_attention(), settings)
+
+    def _attention_loop(self) -> None:
+        settings = self._attention_settings()
+        if settings is None or not settings.attention_enabled:
+            return
+        try:
+            registry.prune_attention()
+            attention = __import__("perun.attention", fromlist=["attention"])
+            attention.expire_stale()
+        except Exception:  # pragma: no cover - startup best effort
+            LOG.debug("attention startup sweep failed", exc_info=True)
+        try:
+            self.attention_tick(replay=True)
+        except Exception:  # pragma: no cover - never kill the poller
+            LOG.exception("attention replay failed")
+        while not self.stop_event.is_set():
+            current = self._attention_settings() or settings
+            interval = max(2, int(getattr(current, "attention_poll_seconds", 5) or 5))
+            if self.stop_event.wait(interval):
+                break
+            try:
+                self.attention_tick()
+            except Exception:  # pragma: no cover - keep the loop alive
+                LOG.exception("attention tick failed")
+
+    def _chat_open_items(self, chat_id: str) -> List[Dict[str, Any]]:
+        return registry.open_attention_for_chat(chat_id)
+
+    def _handle_attention_reply(self, chat_id: str, msg: Dict[str, Any]) -> bool:
+        """A Telegram reply-to on a card answers that item."""
+        from . import attention
+
+        text = (msg.get("text") or "").strip()
+        reply_to = (msg.get("reply_to_message") or {}).get("message_id")
+        if not text or not reply_to or text.startswith("/"):
+            return False
+        try:
+            item = registry.attention_by_message(chat_id, int(reply_to))
+        except (TypeError, ValueError):
+            return False
+        if not item:
+            return False
+        message_id = int(msg.get("message_id") or 0)
+        if item["state"] != "open":
+            self.send(chat_id, f"att_{item['id']} is already {item['state']}.",
+                      reply_to=message_id or None)
+            return True
+        result = attention.answer(item["id"], text, by=f"telegram:{chat_id}")
+        if not result.get("ok"):
+            self.send(chat_id, f"⚠️ {result.get('error') or 'could not deliver'}",
+                      reply_to=message_id or None,
+                      reply_markup=attention.keyboard(item) if item["target_kind"] == "permission" else None)
+            return True
+        self.send(chat_id, attention.confirmation(item, result),
+                  reply_to=message_id or None,
+                  reply_markup=attention.followup_keyboard(item, result))
+        return True
+
+    def _maybe_attention_text(self, chat_id: str, text: str, message_id: int) -> bool:
+        """Offer a one-tap confirmation instead of guessing a plain text answer."""
+        settings = self._attention_settings()
+        if settings is None or not getattr(settings, "attention_plain_text_confirm", True):
+            return False
+        if not text or text.startswith("/"):
+            return False
+        items = [item for item in self._chat_open_items(chat_id)
+                 if item["target_kind"] not in ("permission", "proposal")]
+        if len(items) != 1:
+            return False
+        item = items[0]
+        key = f"{chat_id}:{item['id']}"
+        if len(self._pending_answers) > 50:
+            self._pending_answers.clear()
+        self._pending_answers[key] = text
+        label = f"att_{item['id']}"
+        self.send(
+            chat_id,
+            f"Send this to *{label}* ({item['target_kind']})?\n\n> {text[:300]}",
+            reply_to=message_id or None,
+            reply_markup={"inline_keyboard": [[
+                {"text": "Send", "callback_data": f"att:{item['id']}:send_text"},
+                {"text": "No", "callback_data": f"att:{item['id']}:discard_text"},
+            ]]},
+        )
+        return True
+
+    def _handle_attention_callback(self, cq: Dict[str, Any], data: str) -> None:
+        from . import attention
+
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            return
+        try:
+            attention_id = int(parts[1])
+        except ValueError:
+            return
+        action = parts[2]
+        chat_id = str((cq.get("message", {}).get("chat") or {}).get("id"))
+        message_id = int(cq.get("message", {}).get("message_id") or 0)
+        callback_id = cq.get("id")
+
+        def ack(text: str) -> None:
+            self.api("answerCallbackQuery", callback_query_id=callback_id, text=text[:190])
+
+        if not chat_id:
+            return
+        if not self.authorised(chat_id):
+            ack("Not authorised.")
+            return
+        item = registry.get_attention(attention_id)
+        if not item:
+            ack("That item is gone.")
+            return
+
+        if action == "discard_text":
+            text = self._pending_answers.pop(f"{chat_id}:{attention_id}", "")
+            ack("Sent to Perun")
+            if message_id:
+                self.send(chat_id, "Not an answer — passed it to Perun instead.",
+                          reply_to=message_id)
+            if text:
+                # "No" means "this was for Perun, not for the card": keep the
+                # user's message instead of dropping it.
+                self.work.put({"chat_id": chat_id, "text": text,
+                               "message_id": message_id})
+            return
+
+        if action == "send_text":
+            text = self._pending_answers.pop(f"{chat_id}:{attention_id}", "")
+            ack("Sending")
+            if not text:
+                self.send(chat_id, "That draft expired; resend your answer.",
+                          reply_to=message_id or None)
+                return
+            result = attention.answer(attention_id, text, by=f"telegram:{chat_id}")
+            if not result.get("ok"):
+                self.send(chat_id, f"⚠️ {result.get('error')}",
+                          reply_to=message_id or None)
+                return
+            self.send(chat_id, attention.confirmation(item, result),
+                      reply_to=message_id or None,
+                      reply_markup=attention.followup_keyboard(item, result))
+            return
+
+        if action == "show":
+            ack("Here it is")
+            self.send(chat_id, attention.render(item), reply_to=message_id or None,
+                      reply_markup=attention.keyboard(item))
+            return
+
+        if action == "steer":
+            result = attention.set_delivery(attention_id, "steer",
+                                            by=f"telegram:{chat_id}")
+            ack("Interrupting" if result.get("ok") else "Could not interrupt")
+            if result.get("ok"):
+                self.send(chat_id, "⚡ interruption requested — the answer is "
+                                   "being delivered now.", reply_to=message_id or None)
+            else:
+                self.send(chat_id, f"⚠️ {result.get('error')}",
+                          reply_to=message_id or None)
+            return
+
+        if action == "undo":
+            result = attention.undo(attention_id, by=f"telegram:{chat_id}")
+            ack("Undone" if result.get("ok") else "Could not undo")
+            self.send(chat_id,
+                      "↩ answer withdrawn — the item is open again."
+                      if result.get("ok") else f"⚠️ {result.get('error')}",
+                      reply_to=message_id or None,
+                      reply_markup=attention.keyboard(item) if result.get("ok") else None)
+            return
+
+        if action == "always":
+            # A persistent grant needs a second, explicit tap: show the patterns.
+            patterns = ", ".join(
+                str(p) for p in ((item.get("ref") or {}).get("save") or [])[:3]
+            ) or "the tool's proposed patterns"
+            ack("Confirm")
+            self.send(
+                chat_id,
+                f"⚠️ *Always allow* saves `{patterns}` for "
+                f"*{attention.project_label(item)}* and applies to future requests.\n"
+                f"Confirm?  att_{attention_id}",
+                reply_to=message_id or None,
+                reply_markup={"inline_keyboard": [[
+                    {"text": "Confirm always allow", "callback_data": f"att:{attention_id}:always_yes"},
+                    {"text": "Cancel", "callback_data": f"att:{attention_id}:cancel"},
+                ]]},
+            )
+            return
+
+        if action == "cancel":
+            ack("Cancelled")
+            self.send(chat_id, "No change made.", reply_to=message_id or None)
+            return
+
+        if action in ("always_yes", "approve", "reject"):
+            if chat_id not in self.allowed:
+                ack("Only the paired owner can do that.")
+                return
+
+        choice = "always" if action == "always_yes" else action
+        result = attention.choose(attention_id, choice, by=f"telegram:{chat_id}")
+        if not result.get("ok"):
+            ack("Failed")
+            self.send(chat_id, f"⚠️ {result.get('error')}",
+                      reply_to=message_id or None)
+            return
+        ack("Done")
+        self.send(chat_id, attention.confirmation(item, result),
+                  reply_to=message_id or None)
+
+    def _handle_attention_command(self, chat_id: str, text: str,
+                                  message_id: int) -> bool:
+        """``/pending``, ``/answer``, ``/cancel``, ``/mute``, ``/unmute``."""
+        from . import attention
+
+        parts = text.strip().split()
+        if not parts:
+            return False
+        root = parts[0].lower().split("@")[0]
+        if root not in ("/pending", "/answer", "/cancel", "/mute", "/unmute"):
+            return False
+
+        if root == "/pending":
+            items = self._chat_open_items(chat_id)
+            if not items:
+                self.send(chat_id, "Nothing is waiting on you.", reply_to=message_id or None)
+                return True
+            lines = ["*Waiting on you*"]
+            keyboard: List[List[Dict[str, Any]]] = []
+            for item in items:
+                age = item.get("created_at", "")[:16].replace("T", " ")
+                lines.append(
+                    f"• `att_{item['id']}` · {attention.project_label(item)} · "
+                    f"{item['target_kind']} · {age}"
+                )
+                keyboard.append([{
+                    "text": f"att_{item['id']}",
+                    "callback_data": f"att:{item['id']}:show",
+                }])
+            self.send(chat_id, "\n".join(lines), reply_to=message_id or None,
+                      reply_markup={"inline_keyboard": keyboard[:8]})
+            return True
+
+        if root == "/answer":
+            body = text.strip().split(" ", 1)
+            payload = body[1].strip() if len(body) > 1 else ""
+            items = [item for item in self._chat_open_items(chat_id)
+                     if item["target_kind"] not in ("permission", "proposal")]
+            if not payload:
+                self.send(chat_id, "Usage: `/answer <text>`", reply_to=message_id or None)
+                return True
+            if not items:
+                self.send(chat_id, "Nothing accepts a text answer right now.",
+                          reply_to=message_id or None)
+                return True
+            if len(items) > 1:
+                listing = "\n".join(f"• att_{i['id']} — {i['question'][:60]}" for i in items[:8])
+                self.send(chat_id, "More than one is open — reply to the card you mean:\n"
+                                   + listing, reply_to=message_id or None)
+                return True
+            item = items[0]
+            result = attention.answer(item["id"], payload, by=f"telegram:{chat_id}")
+            self.send(chat_id, attention.confirmation(item, result)
+                      if result.get("ok") else f"⚠️ {result.get('error')}",
+                      reply_to=message_id or None,
+                      reply_markup=attention.followup_keyboard(item, result)
+                      if result.get("ok") else None)
+            return True
+
+        if root == "/cancel":
+            if len(parts) < 2:
+                self.send(chat_id, "Usage: `/cancel att_<id>`", reply_to=message_id or None)
+                return True
+            try:
+                attention_id = int(parts[1].replace("att_", ""))
+            except ValueError:
+                self.send(chat_id, "That is not an attention id.", reply_to=message_id or None)
+                return True
+            if registry.close_attention(attention_id, "cancelled",
+                                        answered_by=f"telegram:{chat_id}"):
+                self.send(chat_id, f"att_{attention_id} cancelled.",
+                          reply_to=message_id or None)
+            else:
+                self.send(chat_id, "That item is already closed or does not exist.",
+                          reply_to=message_id or None)
+            return True
+
+        if root in ("/mute", "/unmute"):
+            if len(parts) < 2:
+                self.send(chat_id, f"Usage: `{root} <project>`", reply_to=message_id or None)
+                return True
+            slug = parts[1].lower()
+            if root == "/mute":
+                registry.mute_attention_project(chat_id, slug)
+                self.send(chat_id, f"🔇 {slug}: notices muted for this chat. "
+                                   "They still appear in `/pending`.",
+                          reply_to=message_id or None)
+            else:
+                registry.unmute_attention_project(chat_id, slug)
+                self.send(chat_id, f"🔔 {slug}: notices re-enabled.",
+                          reply_to=message_id or None)
+            return True
+        return False
+
     def run_message(self, chat_id: str, text: str, message_id: int) -> None:
         if self._route_message(chat_id, text, message_id):
             return
@@ -904,7 +1333,13 @@ class PerunTelegramBridge:
             # Keep the set bounded.
             if len(self._seen_ids) > 1000:
                 self._seen_ids = set(list(self._seen_ids)[-500:])
+        if self._handle_attention_command(chat_id, text, message_id):
+            return
+        if self._handle_attention_reply(chat_id, msg):
+            return
         if self.handle_command(chat_id, text, message_id):
+            return
+        if self._maybe_attention_text(chat_id, text, message_id):
             return
         self.work.put({"chat_id": chat_id, "text": text, "message_id": message_id})
 
@@ -922,6 +1357,17 @@ class PerunTelegramBridge:
             target=self._notify_interrupted_runs, daemon=True,
             name="perun-interrupt-notice",
         ).start()
+        # Operator inbox: notifier + OpenCode watcher. Started here because this
+        # process owns the Telegram poller (one consumer per bot token), which is
+        # also what makes the notifier a singleton.
+        try:
+            if config.Settings.load().attention_enabled:
+                threading.Thread(
+                    target=self._attention_loop, daemon=True,
+                    name="perun-attention",
+                ).start()
+        except Exception:  # pragma: no cover - never block polling
+            LOG.exception("could not start the attention loop")
         conflict_logged = 0.0
         while not self.stop_event.is_set():
             data = self.api("getUpdates", timeout=30, offset=self.offset)
