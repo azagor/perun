@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.58 (see §15). Wire deterministic natural-language routing into the Telegram and PerunChat bridges (opt-in).
+**Latest release:** v0.8.59 (see §15). Scope routing keywords to the leading window and ignore negated commands.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1796,6 +1796,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.59: Scope routing keywords to the leading window and ignore negated commands.
+
 ### 2026-10-30 — v0.8.58: Wire deterministic natural-language routing into the Telegram and PerunChat bridges (opt-in).
 
 ### 2026-10-30 — v0.8.57: Always content-hash proposal targets; refuse oversized external targets instead of a weaker check.
