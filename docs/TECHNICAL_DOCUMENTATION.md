@@ -1168,6 +1168,12 @@ confidence, `matched_by`, candidates) and never the message text. Off by
 default; flipping the setting back to false restores the previous behaviour
 immediately.
 
+`routing_shadow` is the safe trial mode: the router still runs and logs every
+decision (message prefix `shadow:`, `shadow: true` in the metadata), but the
+bridge takes the previous path, so nothing changes for the operator. Enable
+routing + shadow for a week, read `routing_decision` rows, then turn shadow off
+once the decisions look right.
+
 **Pairing / allow-list.** An empty `telegram_allowed_chats` grants **nobody** —
 the old "first chat to write wins" behaviour let anyone who found the bot drive
 the machine. Pairing is a persisted one-time code

@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Added
+
+- **Routing shadow mode.** `routing_shadow` (dashboard: *routing: log only*)
+  records every decision as a `routing_decision` activity row — message prefix
+  `shadow:`, `shadow: true` in the metadata — and then takes the previous path,
+  so an operator (or a product rollout) can review real decisions for a week
+  before routing acts.
 
 ## v0.8.59
 

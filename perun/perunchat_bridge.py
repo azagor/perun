@@ -2220,33 +2220,46 @@ class PerunChatBridge:
         except Exception:  # pragma: no cover - routing must never break a room
             logger.debug("routing failed in room %s", room_id, exc_info=True)
             return False
+
+        shadow = bool(getattr(self.settings, "routing_shadow", False))
         if decision.action == "clarify":
-            names = ", ".join(decision.candidates)
-            self.post_to_room(room_id, f"[Routing] Which project: {names}? Name one and resend.")
-            return True
-        if (
+            notice = (
+                f"[Routing] Which project: {', '.join(decision.candidates)}? "
+                "Name one and resend."
+            )
+        elif (
             decision.action in routing.MUTATING
             and decision.project
             and decision.project != project["slug"]
         ):
-            self.post_to_room(
-                room_id,
+            notice = (
                 f"[Routing] This room is `{project['slug']}`; `{decision.project}` was "
-                f"requested. Use the {decision.project} room or the dashboard.",
+                f"requested. Use the {decision.project} room or the dashboard."
             )
-            try:
-                meta = decision.as_dict()
-                meta["source"] = "perunchat"
-                registry.log_activity(
-                    project["id"],
-                    "routing_decision",
-                    f"routing: cross-project -> {decision.project}",
-                    meta,
-                )
-            except Exception:  # pragma: no cover - telemetry is best-effort
-                logger.debug("could not record routing decision", exc_info=True)
-            return True
-        return False
+        else:
+            return False
+
+        try:
+            meta = decision.as_dict()
+            meta["source"] = "perunchat"
+            meta["shadow"] = shadow
+            registry.log_activity(
+                project["id"],
+                "routing_decision",
+                ("shadow: " if shadow else "routing: ")
+                + decision.action
+                + (f" -> {decision.project}" if decision.project else ""),
+                meta,
+            )
+        except Exception:  # pragma: no cover - telemetry is best-effort
+            logger.debug("could not record routing decision", exc_info=True)
+
+        if shadow:
+            # Log what routing would have said, then answer normally.
+            return False
+
+        self.post_to_room(room_id, notice)
+        return True
 
     def _process_room_frame(self, frame: Dict[str, Any], ws: Any) -> None:
         """Decide whether to reply to a queued frame and do so under rate limits."""

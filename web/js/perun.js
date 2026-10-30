@@ -5254,6 +5254,7 @@ async function viewSettings() {
             <label class="row" style="gap:6px"><input type="checkbox" id="s-autodisc" ${s.auto_discover_on_start ? 'checked' : ''}> auto-discover on start</label>
             <label class="row" style="gap:6px"><input type="checkbox" id="s-indexdisc" ${s.index_docs_on_discover ? 'checked' : ''}> index docs on discover</label>
             <label class="row" style="gap:6px" title="Resolve &quot;run tests in perun&quot; / &quot;status&quot; / &quot;zapamietaj...&quot; locally instead of spending an agent run. Deterministic rules only."><input type="checkbox" id="s-routing" ${s.routing_enabled ? 'checked' : ''}> natural-language routing</label>
+            <label class="row" style="gap:6px" title="Log what routing would have done without acting on it. Use this for a week before turning routing on."><input type="checkbox" id="s-routing-shadow" ${s.routing_shadow ? 'checked' : ''}> routing: log only (shadow)</label>
          </div>
          <div class="form-actions">
             <button class="btn primary" id="s-save">Save settings</button>
@@ -5417,6 +5418,7 @@ async function viewSettings() {
             perun_owner_name: $('#s-owner').value.trim(),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
             routing_enabled: $('#s-routing').checked,
+            routing_shadow: $('#s-routing-shadow').checked,
         };
         const hitlSecret = $('#s-hitl-secret').value.trim();
         if (hitlSecret) payload.perun_hitl_secret = hitlSecret;

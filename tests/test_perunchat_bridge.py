@@ -3342,3 +3342,30 @@ def test_room_guard_is_inert_when_routing_is_disabled(settings, tmp_path):
 
     assert bridge._warn_cross_project({"payload": {"text": "uruchom testy w other"}}, "grp:x") is False
     assert posted == []
+
+
+def test_room_guard_shadow_logs_and_does_not_post(settings, tmp_path):
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    (tmp_path / "other-proj").mkdir(exist_ok=True)
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    registry.add_project("other-proj", str(tmp_path / "other-proj"), kind="dir")
+
+    settings.routing_enabled = True
+    settings.routing_shadow = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    frame = {"payload": {"text": "@perun uruchom testy w other-proj"}}
+    assert bridge._warn_cross_project(frame, "grp:perun:room-proj:chat") is False
+    assert posted == []
+    rows = [
+        row
+        for row in registry.list_activity(project_id=room_project["id"], limit=20)
+        if row["kind"] == "routing_decision"
+    ]
+    assert rows and rows[0]["message"].startswith("shadow:")

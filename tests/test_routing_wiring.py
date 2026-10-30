@@ -165,3 +165,32 @@ def test_routing_decision_is_logged_without_the_message_text(
     assert rows, "a routing_decision activity row is expected"
     assert "uruchom" not in rows[0]["message"]
     assert "uruchom" not in (rows[0].get("meta") or "")
+
+
+def test_shadow_mode_logs_but_does_not_act(bridge, orch, routing_on, tmp_path, monkeypatch):
+    """Shadow mode must record the decision and still take the old path."""
+    perun = _add(tmp_path, "perun")
+    registry.set_bridge_link("1", perun["id"], None)
+
+    real_load = config.Settings.load
+
+    def load():
+        settings = real_load()
+        settings.routing_enabled = True
+        settings.routing_shadow = True
+        return settings
+
+    monkeypatch.setattr(config.Settings, "load", staticmethod(load))
+
+    bridge.run_message("1", "status", 1)
+
+    # The old path runs the agent instead of printing status.
+    assert len(orch.started) == 1
+    assert orch.started[0]["prompt"] == "status"
+    rows = [
+        row
+        for row in registry.list_activity(project_id=perun["id"], limit=20)
+        if row["kind"] == "routing_decision"
+    ]
+    assert rows and rows[0]["message"].startswith("shadow:")
+    assert rows[0]["meta"]["shadow"] is True

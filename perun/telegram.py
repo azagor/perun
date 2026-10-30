@@ -597,6 +597,7 @@ class PerunTelegramBridge:
             return False
         if not getattr(settings, "routing_enabled", False):
             return False
+        shadow = bool(getattr(settings, "routing_shadow", False))
         try:
             projects = registry.list_projects(include_hidden=(chat_id in self.allowed))
             current = self._current_project(chat_id)
@@ -609,7 +610,11 @@ class PerunTelegramBridge:
             LOG.exception("routing failed; falling back to the agent path")
             return False
 
-        self._log_routing_decision(decision, chat_id, current)
+        self._log_routing_decision(decision, chat_id, current, shadow=shadow)
+
+        if shadow:
+            # Log what routing *would* have done, then take the previous path.
+            return False
 
         if decision.action == "clarify":
             names = ", ".join(f"`{slug}`" for slug in decision.candidates)
@@ -652,7 +657,8 @@ class PerunTelegramBridge:
         return False
 
     def _log_routing_decision(self, decision: routing.RouteDecision, chat_id: str,
-                              current: Optional[Dict[str, Any]]) -> None:
+                              current: Optional[Dict[str, Any]],
+                              *, shadow: bool = False) -> None:
         """Record a routing decision. Never stores the message text."""
         try:
             project_id = None
@@ -663,10 +669,12 @@ class PerunTelegramBridge:
                 project_id = current.get("id")
             meta = decision.as_dict()
             meta["source"] = "telegram"
+            meta["shadow"] = shadow
             registry.log_activity(
                 project_id,
                 "routing_decision",
-                f"routing: {decision.action}"
+                ("shadow: " if shadow else "routing: ")
+                + decision.action
                 + (f" -> {decision.project}" if decision.project else ""),
                 meta,
             )

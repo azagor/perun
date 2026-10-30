@@ -143,6 +143,10 @@ class Settings:
     # from free text before spending an agent run. Off by default so an upgrade
     # never changes how existing chats behave until the operator opts in.
     routing_enabled: bool = False
+    # Log-only mode: record the decision as if routing were live, then take the
+    # previous path anyway. Lets an operator (or the product) collect real
+    # decisions for a week before trusting them.
+    routing_shadow: bool = False
     telegram_token: str = ""
     telegram_bot_name: str = ""
     telegram_allowed_chats: list[str] = field(default_factory=list)
