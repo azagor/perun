@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.50
+
+*Released 2026-10-30.*
+
 ### Fixed
 
 - **The dashboard no longer puts the PerunChat API key in a WebSocket URL.**

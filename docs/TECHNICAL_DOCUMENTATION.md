@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.49 (see §15). Lock external applies, harden handoff paths/ZIP entries and HITL token validation, and tighten target accounting.
+**Latest release:** v0.8.50 (see §15). Use short-lived WebSocket tickets in the dashboard instead of putting the API key in the URL.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1725,6 +1725,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.50: Use short-lived WebSocket tickets in the dashboard instead of putting the API key in the URL.
+
 ### 2026-10-30 — v0.8.49: Lock external applies, harden handoff paths/ZIP entries and HITL token validation, and tighten target accounting.
 
 ### 2026-10-30 — v0.8.48: Mark external-handoff success frames with ok=true so the MCP client no longer reports successful uploads as errors.
