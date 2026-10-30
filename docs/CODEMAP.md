@@ -451,12 +451,13 @@ its own model/tokens and Perun validates/applies it locally.
   configured package/entry/entry-count caps before building the archive.
 * `unpack()` — decode base64 chunks, reassemble the archive, and validate against
   caps (uncompressed total 50 MB, 500 entries, 10 MB/entry) and anti-abuse rules;
-  directory entries are skipped.
+  directory entries are skipped. Entry names are case-insensitively de-duplicated
+  and reject shell-expansion characters (`$`, `%`, `~`) or backslashes.
 * `validate_package()` — reject traversal (`..`), absolute paths, drive letters,
   symlinks, encrypted entries, duplicate entry names, sensitive paths, and
   entries outside the approved proposal targets.
 * `apply_package()` — stage the validated entries, back up existing targets, and
-  apply with per-file temp + `os.replace`; a mid-apply failure restores the
+  apply with a `mkstemp` temp + `os.replace`; a mid-apply failure restores the
   backups, so a package is not left half-applied.
 * The external download path is restricted to the proposal's approved targets;
   a claimant cannot request arbitrary project paths. External-dependency
@@ -682,12 +683,16 @@ Autonomous PerunChat chat participant for the Orchestrator.
   prefixed guard tools and tells the model to retry the guard tool if a call
   accidentally hits `skill` and returns “Unable to load skill …”.
 * `perun/hitl.py` — local HMAC-SHA256 HITL approval-token engine for action
-  proposals (tokens bind proposal id, action hash, expiry, and nonce); signing
-  secret configurable via `PERUN_HITL_SECRET` / `perun_hitl_secret`.
+  proposals (tokens bind proposal id, canonical JSON action hash, expiry, and
+  nonce); signing secret configurable via `PERUN_HITL_SECRET` /
+  `perun_hitl_secret`. `validate()` checks the signature before consuming the
+  nonce, rejects malformed token/nonce/expiry types, and `HITLConfig` requires
+  `nonce_ttl_seconds >= token_ttl_seconds + 5`.
 * `perun/path_guard.py` — resolves the project allowlist (root + declared
   external deps), resolves relative targets against the project root, validates
-  proposal targets, and denies sensitive paths (credentials, `.env`, VCS/host
-  metadata, manifest/OpenCode config) even inside the root.
+  proposal targets, rejects shell expansions (`$`, `%`, `~`), and denies
+  sensitive paths relative to the matching allowlist root (trailing dots/spaces
+  normalised) even inside the root.
 * `perun/guard_mcp.py` — policy-enforcing filesystem MCP server used by the
   Project Agent for shared-project runs and for read-only inspection in chat;
   validates every path against the manifest allowlist (`PERUN_ALLOWLIST` env),
@@ -741,7 +746,12 @@ Autonomous PerunChat chat participant for the Orchestrator.
   actor that attempted/applied the change (`perun` for local runs, the claimant
   for external handoffs), is cleared on revoke/expiry, and must be read with
   `status`; `create()` binds dashboard/API proposals to the project's
-  `project_chats.room_id` when the envelope carries none.
+  `project_chats.room_id` when the envelope carries none. External applies
+  atomically move `claimed → executing` (matching executor and unexpired lease)
+  before `apply_package`; an expired or lost claim is rejected without writing.
+  `expire_stale()` also fails an abandoned `executing` row after 12 h. Targets
+  are de-duplicated and must be strings; a `create` proposal must touch every
+  approved target before it can be reported `executed`.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is
@@ -791,7 +801,9 @@ FastAPI app + SSE + static dashboard.
   `_post_proposal_rejected()`, `_post_proposal_digest()` (best-effort lifecycle
   notices to the bound project chat, redacted before leaving the process).
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
-  structured `/api/models`), providers (`/api/providers…` — read-only
+  structured `/api/models`), PerunChat (`/api/perunchat/status`, `/api/perunchat/key`
+  kept for legacy loopback callers, and loopback-only `POST /api/perunchat/ws-ticket`
+  which proxies a 30 s single-use WebSocket ticket), providers (`/api/providers…` — read-only
   `opencode auth` status + logout), agents/skills/tools (`/api/agents`,
   `/api/skills`, `/api/tools`),
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config

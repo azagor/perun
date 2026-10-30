@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation
+
+- Refreshed `CODEMAP.md` and `TECHNICAL_DOCUMENTATION.md` for short-lived
+  WebSocket tickets, self-service key rotation, external-apply claim locking,
+  path/ZIP/HITL hardening, and the PerunChat gateway security controls.
 
 ## v0.8.51
 

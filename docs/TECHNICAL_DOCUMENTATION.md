@@ -137,7 +137,7 @@ can all write concurrently.
 | `bridge_links` | Telegram routing | `chat_id` unique → `project_id` + `session_pk`, `updated_at` |
 | `project_dependencies` | Manifest dependency graph | `project_id` + `depends_on_project_id`/`depends_on_slug`, relationship, deploy command/doc, auto-deploy flag, reason; indexes on both project columns |
 | `project_chats` | Shared Projects | Project → `grp:` room mapping, lifecycle state, `manifest_rev`, last sync |
-| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, status (`pending`/`approved`/`claimed`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens, executor/claim fields (`executor_id`, `claimed_at`, `claim_expires_at`, `claim_snapshot`) |
+| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, `room_id`, status (`pending`/`approved`/`claimed`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens, executor/claim fields (`executor_id`, `executed_by`, `claimed_at`, `claim_expires_at`, `claim_snapshot`) |
 | `pending_room_deletions` | Shared Projects | Retry queue for room teardown when gateway offline |
 
 Column additions after the first release are applied idempotently by
@@ -801,7 +801,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/telegram/unlock` | `{password,remember?}` — decrypt and unlock an encrypted stored token, set `PERUN_PASSWORD` for the running process, optionally persist it (Windows DPAPI-encrypted in `<PERUN_HOME>/secret`), then start/reload the bridge; if another process owns the bridge lock and `remember` is false, `bridge.reason` explains why |
 | POST | `/api/telegram/send` | send a message |
 | GET | `/api/perunchat/status` | `{configured, endpoint, rest_base, agent_id}` — reports whether a PerunChat API key is configured and, when the gateway is reachable, the agent id resolved from `GET /api/v1/me` (failures are swallowed) |
-| GET | `/api/perunchat/key` | loopback only — returns the configured PerunChat API key so the dashboard can open a WebSocket directly |
+| GET | `/api/perunchat/key` | loopback only — legacy endpoint that returns the configured PerunChat API key; the dashboard now uses `/api/perunchat/ws-ticket` instead |
+| POST | `/api/perunchat/ws-ticket` | loopback only — proxies `POST /api/v1/ws-ticket` to the gateway and returns a 30-second single-use WebSocket ticket, so the long-lived API key never appears in a URL |
 | GET | `/api/perunchat/bridge/status` | the autonomous chat bridge's state: `{available, enabled, running, ...bridge.status}` — or all-false when no bridge exists |
 | GET | `/api/perunchat/rooms` | proxies the gateway's `/api/v1/rooms` room discovery (active, joined, well-known public rooms) to feed the dashboard auto-join picker |
 | GET/POST/DELETE | `/api/perunchat/social/*` | proxied social graph endpoints (friends, requests, blocked, status) forwarded to the PerunChat gateway |
@@ -913,6 +914,20 @@ read together with `status` — a `failed` completion still names the actor that
 tried. Proposals created without a chat envelope (dashboard/API) inherit the
 project's bound `project_chats.room_id` so the audit record names the room.
 
+An external apply first performs an atomic `claimed → executing` transition that
+matches the executor and an unexpired lease, immediately before
+`package_handoff.apply_package`; an expired or lost claim is rejected without
+writing. `expire_stale()` also fails an abandoned `executing` row after 12 hours.
+ZIP entries are rejected on case-insensitive duplicates, shell-expansion
+characters (`$`, `%`, `~`) or backslashes, and staging uses `mkstemp`. Proposal
+targets are de-duplicated and must be strings; a `create` proposal must touch
+every approved target before it can be recorded `executed`.
+
+HITL tokens are HMAC-SHA256 over the proposal id, a canonical JSON action hash,
+expiry and nonce. `validate()` checks the signature before consuming the nonce,
+rejects malformed token/nonce/expiry types, and `HITLConfig` requires the nonce
+window to exceed the token TTL by at least 5 seconds.
+
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools
 (`perun-guard_guard_read_file`, `perun-guard_guard_write_file`,
@@ -946,7 +961,9 @@ configured idle TTL (`external_execution_package_ttl`, 30 minutes by default,
 60 s floor — **Settings → Package slot idle TTL (s)**); every accepted chunk
 refreshes the deadline, so a slow but progressing upload is not reclaimed
 mid-transfer. Execution results carry `op`, `ok`, `proposal_id` and
-`transfer_id` so the MCP client can correlate replies.
+`transfer_id` so the MCP client can correlate replies. The external apply is
+claim-locked as described above, so an expired or superseded claim cannot still
+write.
 Handoff frames are directed with `recipient_id`: results and downloads go to the
 claimant, upload chunks go to the room owner, and the gateway rejects
 unaddressed package chunks or result/`package_ready` frames from non-owners.
@@ -966,6 +983,17 @@ this machine's own resolved Perun agent id are always authorized. Revoking trust
 removes the agent from the manifest, bumps `manifest_rev`, and re-syncs the room
 ACL. Agent ids are gateway-assigned and differ per machine, so no code assumes
 that a particular id such as `peruntheoverseer` is universal.
+
+The PerunChat gateway (v0.4.9+) authenticates browser WebSockets with a
+30-second single-use ticket from `POST /api/v1/ws-ticket`; `?token=` remains only
+as an opt-in legacy fallback (`PERUNCHAT_ALLOW_QUERY_TOKEN`). The gateway also
+enforces `PERUNCHAT_ALLOWED_ORIGINS` on WebSocket and REST, rebuilds frames from
+`ChatFrame` before broadcast, re-checks revoked keys every 30 seconds, and
+redacts `token=` from uvicorn records. `POST /api/v1/keys/rotate` atomically
+revokes the caller's key and returns a replacement; the matching
+`perunchat_rotate_key` MCP tool probes `PERUNCHAT_KEY_FILE` before rotating,
+persists the new key with `0600`, and reconnects. Active legacy `prn_test_` keys
+are logged at startup and every 24 hours for migration.
 
 A shared project is owned by the Perun instance that created its managed room.
 If you want a second Perun installation to participate in the same project room,

@@ -1,6 +1,10 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
-> **Implementation status (v0.8.37):** implemented as described below. See
+> **Implementation status (v0.8.51):** implemented as described below, plus the
+> post-v0.8.37 hardening: claim-locked external applies (`claimed → executing`
+> with a matching executor and unexpired lease before `apply_package`), stricter
+> ZIP/path validation, and HITL nonce/TTL invariants. Browser WebSocket auth uses
+> short-lived tickets and agents rotate their own keys. See
 > `docs/CODEMAP.md` (`shared_projects.py`, `action_proposals.py`,
 > `perunchat_bridge.py`, `proposals_mcp.py`) and
 > `docs/TECHNICAL_DOCUMENTATION.md` for the module-level and API-level detail.

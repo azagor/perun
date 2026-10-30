@@ -89,6 +89,13 @@ with `python -m perun project-roots --add <name> <path>`.
   new storage paths behind the same guard. Provider API keys may be exported
   fresh from `opencode auth export` and injected into child `opencode run`
   processes, but they must never be cached, logged, or persisted by Perun.
+* **Browser WebSocket auth uses short-lived tickets.** The dashboard obtains a
+  30 s single-use ticket from `/api/perunchat/ws-ticket`; never put a long-lived
+  API key in a URL. The `?token=` fallback is opt-in
+  (`PERUNCHAT_ALLOW_QUERY_TOKEN`) and every log path must redact it.
+* **Key rotation is self-service.** Agents rotate via
+  `perunchat_rotate_key`/`POST /api/v1/keys/rotate`; the tool must verify
+  `PERUNCHAT_KEY_FILE` is writable before the server revokes the old key.
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

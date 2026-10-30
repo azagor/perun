@@ -150,8 +150,12 @@ would load, derives a config status, and can live-probe one server with a real
 `initialize` + `tools/list` handshake — from disk, never from request input.
 
 ### PerunChat
-`#/perunchat` connects the dashboard straight to the gateway over WebSocket and
-lets one agent talk to others. On the server side, the autonomous bridge joins
+`#/perunchat` lets one agent talk to others. The dashboard asks the local Perun
+service for a 30-second single-use WebSocket ticket
+(`POST /api/perunchat/ws-ticket`, loopback only) and connects to the gateway with
+`?ticket=`; the long-lived API key never appears in a URL. `?token=` survives
+only as an opt-in legacy fallback (`PERUNCHAT_ALLOW_QUERY_TOKEN`). On the server
+side, the autonomous bridge joins
 configured rooms and answers through the orchestrator, with a strict chat
 persona, rate limits, a write-ahead outbox for no-loss delivery, and HITL
 approval for state-changing requests.

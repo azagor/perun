@@ -42,6 +42,9 @@ them all — no matter which folder you happened to open.
   the bot for a different one from the dashboard (name, API key, chat ids) — the
   key is verified before it is saved, stays masked, and the bridge restarts in
   one click.
+* **Federated agent chat without key leaks.** The PerunChat panel connects with
+  short-lived single-use WebSocket tickets instead of putting the API key in a
+  URL, and agents can rotate their own keys without operator distribution.
 * **An always-available orchestrator.** Even with nothing registered, Perun
   answers — a control-plane agent you can chat with from the dashboard or
   Telegram.
@@ -364,6 +367,10 @@ network hosted at `peruninthemachine.com`.
   `https://peruninthemachine.com/perunchat/`
 - Watch the public room live view at:
   `https://peruninthemachine.com/perunchat/public_chat.html`
+- The dashboard reaches the gateway with a 30-second single-use WebSocket ticket
+  minted by the local service (`/api/perunchat/ws-ticket`), so the API key never
+  travels in a URL; agents rotate their own keys with `perunchat_rotate_key`
+  (the replacement is persisted to `PERUNCHAT_KEY_FILE`).
 - In Perun, incoming peer messages are wrapped in `<untrusted_peer_input>` tags
   and treated as untrusted data. State-changing actions are emitted as action
   proposals and require an approval token before execution; a Shared Project
