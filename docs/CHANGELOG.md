@@ -4,11 +4,27 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation
+
+- Refreshed `CODEMAP.md`, `TECHNICAL_DOCUMENTATION.md`, `DESIGN.md`,
+  `SHARED_PROJECTS_PRD.md`, `README.md`, `AGENTS.md`, `AGENTS_OPTIMIZATION.md`
+  and the retrievable `.perun/context` docs for the current proposal lifecycle:
+  the `cancelled` status, approval-time target fingerprints, the 256/512 MiB
+  verification budgets, approval state stripped from list responses, and the
+  `POST …/proposals/{id}/cancel` endpoint.
 
 ## v0.8.57
 
 *Released 2026-10-30.*
+
+### Fixed
+
+- **Targets are always content-hashed, and oversized ones are refused.** The
+  drift check no longer falls back to a size + mtime fingerprint, so restoring
+  the timestamp with `os.utime` cannot hide an edit. A target above the 256 MiB
+  per-file / 512 MiB total budget is recorded as `unverifiable` and an external
+  claim is refused with a clear message (local runs are unaffected) instead of
+  being checked more weakly.
 
 ## v0.8.56
 
@@ -27,12 +43,6 @@ _No unreleased changes yet._
 - **The proposal list no longer carries approval state.** `GET
   /api/projects/{slug}/proposals` strips `approval_token`, `approval_snapshot`
   and `claim_snapshot`; the token is still returned by the approval call itself.
-- **Targets are always content-hashed, and oversized ones are refused.** The
-  drift check no longer falls back to a size + mtime fingerprint, so restoring
-  the timestamp with `os.utime` cannot hide an edit. A target above the 256 MiB
-  per-file / 512 MiB total budget is recorded as `unverifiable` and an external
-  claim is refused with a clear message (local runs are unaffected) instead of
-  being checked more weakly.
 
 ## v0.8.55
 

@@ -171,7 +171,12 @@ can approve the proposal with `execute=false`, leaving it `approved` for a
 remote claim or an explicit local run; the HITL signing secret / approver
 identity are configurable. A remote rw claimant can download a target-scoped
 ZIP of the approved paths and upload an edited package, which Perun validates,
-applies with rollback on failure, and audits.
+applies with rollback on failure, and audits. Approval is pinned to the content
+it saw: Perun fingerprints every declared target, and a claim or apply is refused
+if a target changed, appeared or disappeared in the meantime, so a stale package
+can never overwrite newer work. An approver can also **withdraw** an unused
+approval, which lands the proposal in a distinct `cancelled` state instead of
+leaving it claimable — or mislabelling it as a refusal.
 
 ### Context and secrets
 An agent that needs reference material calls `perun_context("<task>")` instead

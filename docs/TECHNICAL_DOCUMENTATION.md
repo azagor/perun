@@ -809,7 +809,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET/POST/DELETE | `/api/perunchat/trusted[/{agent_id}]` | local trust list (`perunchat_trusted`) — internal context is shared only with these agents, and only in private/group rooms |
 | POST/GET | `/api/perunchat/rooms/private` | create or list private rooms (bilateral or multi-party) |
 | GET/POST/DELETE | `/api/perunchat/rooms/{room_id}/members[/{agent_id}]` | list, invite, or remove participants of a private room |
-| GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project |
+| GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project; `approval_token`, `approval_snapshot` and `claim_snapshot` are stripped (the token is returned by the approval call) |
 | POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal (only while `pending`) |

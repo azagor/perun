@@ -827,7 +827,8 @@ FastAPI app + SSE + static dashboard.
   `/api/projects/{slug}/git…`,
   `/api/projects/{slug}/tasks…`, shared-project proposals
   (`/api/projects/{slug}/proposals…` incl. `claim`/`revoke-claim` for external
-  execution handoff), `DELETE /api/sessions/{pk}`; `DELETE` refuses
+  execution handoff and `cancel` for withdrawing an approved-but-unclaimed
+  proposal; the list endpoint omits approval tokens/snapshots), `DELETE /api/sessions/{pk}`; `DELETE` refuses
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,

@@ -97,9 +97,14 @@ with `python -m perun project-roots --add <name> <path>`.
   `perunchat_rotate_key`/`POST /api/v1/keys/rotate`; the tool must verify
   `PERUNCHAT_KEY_FILE` is writable before the server revokes the old key.
 * **Never abandon an approved proposal.** `reject()` only accepts `pending`, so a
-  superseded approval must be withdrawn with `cancel()`; leaving it `approved`
-  keeps it claimable for its whole lifetime. `execution_mode` is empty until an
-  execution actually starts — never infer ownership from it on an unclaimed row.
+  superseded approval must be withdrawn with `cancel()` (terminal `cancelled`
+  status); leaving it `approved` keeps it claimable for its whole lifetime.
+  `execution_mode` is empty until an execution actually starts — never infer
+  ownership from it on an unclaimed row.
+* **Approval pins target content.** `approve()` stores a sha256 of every declared
+  target, and claim/apply refuse a target that changed since. Never bypass that
+  check to "unblock" a handoff: cancel and re-propose so the approver sees the
+  current content.
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

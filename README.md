@@ -79,8 +79,10 @@ them all — no matter which folder you happened to open.
   skips peer review and lets the system approve and execute proposals
   immediately. A remote rw participant can claim an approved proposal,
   download a target-scoped ZIP, upload the edited package over PerunChat using
-  its own model/tokens, and Perun validates, applies, and audits it.
-  Lifecycle notices (started, completed, failed, rejected) are posted back to the
+  its own model/tokens, and Perun validates, applies, and audits it. Approval is
+  pinned to the content the approver saw: a claim or apply is refused if a target
+  changed since, and an unused approval can be withdrawn (`cancelled`).
+  Lifecycle notices (started, completed, failed, withdrawn) are posted back to the
   project chat, and completed proposals move to a collapsed-by-default list in the
   dashboard. Participant roles (`rw`/`ro`) are enforced, and approver identity
   plus the HITL signing secret are configurable.

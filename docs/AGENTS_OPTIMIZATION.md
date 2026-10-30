@@ -1,7 +1,7 @@
 # Perun — AGENTS.md context-budget optimisation
 
-> **Status:** phases 0–4, 6 and 7 **implemented** (2026-10-28); v0.8.31 shipped,
-> and the same context layer is unchanged through **v0.8.51**.
+> **Status:** phases 0-4, 6 and 7 **implemented** (2026-10-28); v0.8.31 shipped,
+> and the same context layer is unchanged through **v0.8.57**.
 > All five managed projects migrated, a production-readiness audit hardened the
 > implementation, and v0.8.31 completed anchor resolution, CODEMAP-aware
 > chunking, the compact CODEMAP outline, and local-embedding fallback. Phase 5 —

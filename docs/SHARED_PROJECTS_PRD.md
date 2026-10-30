@@ -1,9 +1,14 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
-> **Implementation status (v0.8.51):** implemented as described below, plus the
+> **Implementation status (v0.8.57):** implemented as described below, plus the
 > post-v0.8.37 hardening: claim-locked external applies (`claimed → executing`
 > with a matching executor and unexpired lease before `apply_package`), stricter
-> ZIP/path validation, and HITL nonce/TTL invariants. Browser WebSocket auth uses
+> ZIP/path validation, HITL nonce/TTL invariants, and a target-drift guard
+> (approval stores a content fingerprint of every declared target; claim and
+> apply refuse a target that changed, was created or was deleted in between, and
+> oversized targets are refused rather than checked more weakly). Withdrawing an
+> approval records the terminal `cancelled` status instead of reusing `rejected`.
+> Browser WebSocket auth uses
 > short-lived tickets and agents rotate their own keys. See
 > `docs/CODEMAP.md` (`shared_projects.py`, `action_proposals.py`,
 > `perunchat_bridge.py`, `proposals_mcp.py`) and
@@ -193,13 +198,16 @@ external) are readable/writable.
 ### 3.8 Dashboard UX (v0.8.3)
 
 - **FR-28** Active/completed split: the Shared tab proposal list separates active
-  proposals (`pending`, `approved`, `executing`) from completed proposals
-  (`executed`, `failed`, `rejected`, `expired`).
+  proposals (`pending`, `approved`, `claimed`, `executing`) from completed
+  proposals (`executed`, `failed`, `rejected`, `cancelled`, `expired`).
+  `cancelled` (a withdrawn approval) is distinct from `rejected` (a reviewer's
+  refusal).
 - **FR-29** Collapsed completed list: completed proposals are rendered in a
   collapsed-by-default section with a count, expandable via a header click.
 - **FR-30** No run confirmations: `Approve & run`, `Run now`, and `Retry` start
   the headless run immediately. Confirmation dialogs remain for destructive or
-  irreversible actions (`Approve only`, `Reject`, `Cancel`, `Delete`).
+  irreversible actions (`Approve only`, `Reject`, `Withdraw` an approved
+  proposal, `Cancel` a running one, `Delete`).
 
 ### 3.9 Non-Functional Requirements
 
