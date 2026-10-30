@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.47 (see §15). Make package upload slots idle-based, expose the slot TTL in Settings, and pin the behaviour with tests.
+**Latest release:** v0.8.48 (see §15). Mark external-handoff success frames with ok=true so the MCP client no longer reports successful uploads as errors.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1725,6 +1725,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.48: Mark external-handoff success frames with ok=true so the MCP client no longer reports successful uploads as errors.
+
 ### 2026-10-30 — v0.8.47: Make package upload slots idle-based, expose the slot TTL in Settings, and pin the behaviour with tests.
 
 ### 2026-10-30 — v0.8.46: Complete executor attribution for local runs, make the external claim TTL configurable in Settings, and add the missing proposal-record regression tests.
