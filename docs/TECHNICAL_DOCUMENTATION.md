@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.9.0 (see §15). Operator inbox: Telegram and the dashboard can ask you for decisions from any session, room or proposal, and your reply lands back in that exact context.
+**Latest release:** v0.9.1 (see §15). Deliver operator answers queued while the PerunChat socket was down.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1905,6 +1905,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.9.1: Deliver operator answers queued while the PerunChat socket was down.
+
 ### 2026-10-31 — v0.9.0: Operator inbox: Telegram and the dashboard can ask you for decisions from any session, room or proposal, and your reply lands back in that exact context.
 
 ### 2026-10-30 — v0.8.68: Stop PerunChat routing-notice loops and report approved targets that are missing on disk.
