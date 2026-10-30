@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.62 (see §15). Routing panel shows the real mode (off/shadow/live) instead of inferring it from traffic.
+**Latest release:** v0.8.63 (see §15). Bound routing telemetry (index + retention), dedupe and redact misroute reports.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1810,6 +1810,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.63: Bound routing telemetry (index + retention), dedupe and redact misroute reports.
+
 ### 2026-10-30 — v0.8.62: Routing panel shows the real mode (off/shadow/live) instead of inferring it from traffic.
 
 ### 2026-10-30 — v0.8.61: Add a routing decisions panel and misroute reporting.
