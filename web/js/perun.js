@@ -4804,15 +4804,13 @@ async function viewPerunChat() {
         clearTimeout(wsReconnectTimer);
         wsReconnectTimer = null;
         if (ws) { try { ws.close(); } catch (err) { /* ignore */ } ws = null; }
-        let key, endpoint;
+        let endpoint;
         try {
-            // The PerunChat gateway accepts the API key via query parameter because
-            // browser WebSocket cannot set custom headers. The key is revealed only
-            // to loopback clients.
-            const k = await api('/api/perunchat/key');
-            key = encodeURIComponent(k.key);
+            // Browsers cannot set Authorization on a WebSocket. Fetch a 30-second
+            // single-use ticket instead of putting the long-lived key in the URL.
+            const t = await api('/api/perunchat/ws-ticket', { method: 'POST', body: {} });
             const s = await api('/api/perunchat/status');
-            endpoint = `${s.endpoint}${s.endpoint.includes('?') ? '&' : '?'}token=${key}`;
+            endpoint = `${s.endpoint}${s.endpoint.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(t.ticket)}`;
         } catch (e) { toast('Could not load chat credentials: ' + e.message, 'err'); return; }
         try {
             wsExplicitClose = false;

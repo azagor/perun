@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **The dashboard no longer puts the PerunChat API key in a WebSocket URL.**
+  It calls the new `POST /api/perunchat/ws-ticket` proxy, which asks the gateway
+  for a 30-second single-use ticket, and connects with `?ticket=`. The raw key
+  stays in the server-side request header.
 
 ## v0.8.49
 

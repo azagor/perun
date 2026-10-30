@@ -3244,6 +3244,13 @@ def api_perunchat_status() -> dict[str, Any]:
     return _ok(configured=bool(key), endpoint=endpoint, rest_base=rest_base, agent_id=agent_id)
 
 
+@app.post("/api/perunchat/ws-ticket")
+def api_perunchat_ws_ticket() -> dict[str, Any]:
+    """Issue a short-lived WebSocket ticket for the browser dashboard."""
+    data = _perunchat_proxy("POST", "/api/v1/ws-ticket", body={})
+    return _ok(ticket=data.get("ticket"), expires_in=data.get("expires_in", 30))
+
+
 @app.get("/api/perunchat/key")
 def api_perunchat_key(request: Request) -> dict[str, Any]:
     """Reveal the PerunChat API key only to loopback clients so the dashboard
