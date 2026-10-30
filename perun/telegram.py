@@ -792,6 +792,16 @@ class PerunTelegramBridge:
             text = attention.render(
                 item, show_paths=bool(getattr(settings, "attention_show_paths", False))
             )
+            # If other things are already waiting, say so on the card: a burst of
+            # separate messages is confusing, and /pending is the list.
+            try:
+                waiting = [other for other in registry.open_attention(
+                    project_id=item.get("project_id"), limit=50)
+                    if other["id"] != item["id"]]
+            except Exception:  # pragma: no cover - cosmetic only
+                waiting = []
+            if waiting:
+                text += f"\n\n＋{len(waiting)} more waiting — /pending"
             markup = attention.keyboard(item)
             if getattr(settings, "attention_shadow", True):
                 if item["id"] not in self._attention_logged:
@@ -876,6 +886,9 @@ class PerunTelegramBridge:
             self.attention_tick(replay=True)
         except Exception:  # pragma: no cover - never kill the poller
             LOG.exception("attention replay failed")
+        LOG.info("operator inbox online (chats=%s, poll=%ss)",
+                 self.allowed or "<no paired chat>",
+                 max(2, int(getattr(settings, "attention_poll_seconds", 5) or 5)))
         while not self.stop_event.is_set():
             current = self._attention_settings() or settings
             interval = max(2, int(getattr(current, "attention_poll_seconds", 5) or 5))

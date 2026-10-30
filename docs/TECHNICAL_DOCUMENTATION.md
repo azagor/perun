@@ -1272,7 +1272,7 @@ target, and a room message that names an operator alias raises a `room` item.
 **Delivery.** The notifier runs in the process that owns the Telegram poller and
 sends every notice to **every statically paired chat** (`telegram_allowed_chats`
 / `TELEGRAM_CHAT_ID`) regardless of which project that chat last selected, minus
-per-chat mutes (`/mute`). Runtime-paired chats never receive notices. Each card
+per-chat mutes (`/mute`); a card also says "＋N more waiting" when other items are open. Runtime-paired chats never receive notices. Each card
 stores its `message_id` in `attention_deliveries`, which is what makes a
 reply-to resolve to exactly one item even with several blocked sessions.
 

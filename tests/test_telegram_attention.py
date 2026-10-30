@@ -340,3 +340,14 @@ def test_declining_the_plain_text_prompt_passes_the_message_to_perun(bridge, pro
     queued = bridge.work.get_nowait()
     assert queued["text"] == "please run the tests"
     assert registry.get_attention(item["id"])["state"] == "open"
+
+
+def test_each_card_says_how_many_others_are_waiting(bridge, project):
+    _permission(project, "per_1")
+    _permission(project, "per_2")
+
+    bridge.attention_tick()
+
+    assert len(bridge.sent) == 2
+    assert all("1 more waiting" in m["text"] for m in bridge.sent)
+    assert all("/pending" in m["text"] for m in bridge.sent)

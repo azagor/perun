@@ -34,6 +34,9 @@ _No unreleased changes yet._
   and one CLI-based URL discovery.
 - **Room replies can thread.** `post_to_room(..., in_reply_to=…)` attaches a
   relayed operator answer under the message it answers.
+- **Cards say how many others are waiting.** When several items are open, each
+  card ends with "＋N more waiting — /pending" instead of leaving you to discover
+  the rest later.
 
 ## v0.8.68
 
