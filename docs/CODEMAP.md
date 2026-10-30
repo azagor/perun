@@ -722,8 +722,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   logs allowlist violations, target-scope violations, and created/modified/
   deleted parent-directory entries to the activity table. Also provides
   `target_digests()` / `drifted_targets()` — the per-target sha256+size fingerprint
-  captured at approval and re-checked at claim/apply (8 MB hash cap, size-only
-  above it, `null` for a not-yet-created target).
+  captured at approval and re-checked at claim/apply (full content hash up to
+  64 MB, size + `mtime_ns` above it, `null` for a not-yet-created target).
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
   CAS approve/reject/cancel, atomic `approved → executing` claim, synchronous
   `execute`
@@ -731,8 +731,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   for the external rw handoff, startup `reconcile_interrupted`, post-run audit
   enforcement, State Digests for the project chat, and activity logging
   (`proposal_created`/`approved`/`rejected`/`cancelled`/`executed`). `cancel()`
-  withdraws an approved-but-unclaimed proposal (`approved → rejected`, result
-  `cancelled: <reason>`) and is restricted to the requester or the project owner,
+  withdraws an approved-but-unclaimed proposal (`approved → cancelled`, reason in
+  `result`) and is restricted to the requester or the project owner,
   because `reject()` only accepts `pending`. `approve()` stores
   `approval_snapshot` (per-target digests from `fs_audit.target_digests()`);
   `claim_execution()` and `complete_external_execution()` refuse a target that

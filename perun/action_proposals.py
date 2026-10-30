@@ -411,6 +411,9 @@ def cancel(
     (or the project owner) may cancel while the proposal is still unclaimed.
     A claimed or executing proposal must be revoked or completed instead, so a
     half-written handoff can never be silently abandoned.
+
+    The terminal status is ``cancelled`` — distinct from ``rejected`` — so the
+    audit trail separates "a reviewer said no" from "the requester withdrew it".
     """
     proposal = get(proposal_id)
     if not proposal:
@@ -430,7 +433,7 @@ def cancel(
         cur = conn.execute(
             "UPDATE action_proposals SET status=?, result=?, updated_at=? "
             "WHERE id=? AND status='approved'",
-            ("rejected", f"cancelled: {reason}" if reason else "cancelled", ts, proposal_id),
+            ("cancelled", reason, ts, proposal_id),
         )
         if cur.rowcount != 1:
             raise ValueError("proposal is no longer approved")

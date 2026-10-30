@@ -1324,11 +1324,11 @@ def test_cancel_withdraws_an_approved_unclaimed_proposal(tmp_path):
     cancelled = action_proposals.cancel(
         proposal["id"], "frambo", reason="superseded"
     )
-    assert cancelled["status"] == "rejected"
-    assert cancelled["result"] == "cancelled: superseded"
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["result"] == "superseded"
 
     # It can no longer be claimed.
-    with pytest.raises(ValueError, match="proposal is rejected"):
+    with pytest.raises(ValueError, match="proposal is cancelled"):
         action_proposals.claim_execution(proposal["id"], "frambo")
 
 
@@ -1345,7 +1345,7 @@ def test_cancel_requires_requester_or_owner(tmp_path):
         action_proposals.cancel(proposal["id"], "someone-else")
 
     cancelled = action_proposals.cancel(proposal["id"], "owner", owner="owner")
-    assert cancelled["status"] == "rejected"
+    assert cancelled["status"] == "cancelled"
 
 
 def test_new_proposal_has_no_execution_mode(tmp_path):
@@ -1505,3 +1505,54 @@ def test_apply_refuses_a_target_changed_during_upload(tmp_path):
 
     assert (root / "api.py").read_text() == "newer work during upload"
     assert action_proposals.get(proposal["id"])["status"] == "claimed"
+
+
+def test_large_targets_fall_back_to_size_and_mtime(tmp_path, monkeypatch):
+    """Above the hash cap, a same-size rewrite is still detected."""
+    import json
+    import os
+    import time as _time
+
+    from perun import fs_audit
+
+    monkeypatch.setattr(fs_audit, "TARGET_DIGEST_MAX_BYTES", 16)
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "big.bin")
+    (root / "big.bin").write_bytes(b"a" * 64)
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    snapshot = json.loads(action_proposals.get(proposal["id"])["approval_snapshot"])
+    assert snapshot[target]["kind"] == "large"
+    assert snapshot[target]["size"] == 64
+    assert "sha256" not in snapshot[target]
+    assert "mtime_ns" in snapshot[target]
+
+    # Same size, different mtime: the fallback still catches it.
+    later = _time.time_ns() + 5_000_000_000
+    os.utime(root / "big.bin", ns=(later, later))
+    with pytest.raises(ValueError, match="changed since approval"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+
+def test_small_targets_use_a_content_hash(tmp_path):
+    import json
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("content")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    snapshot = json.loads(action_proposals.get(proposal["id"])["approval_snapshot"])
+    assert snapshot[target]["kind"] == "file"
+    assert len(snapshot[target]["sha256"]) == 64

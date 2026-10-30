@@ -2011,7 +2011,7 @@ async function proposalsCard(detail) {
     }
 
     const activeStatuses = new Set(['pending', 'approved', 'executing', 'claimed']);
-    const completedStatuses = new Set(['executed', 'failed', 'rejected', 'expired']);
+    const completedStatuses = new Set(['executed', 'failed', 'rejected', 'cancelled', 'expired']);
     let active = proposals.filter((prop) => activeStatuses.has(prop.status));
     let completed = proposals.filter((prop) => completedStatuses.has(prop.status));
 
@@ -2037,6 +2037,7 @@ async function proposalsCard(detail) {
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         } else if (prop.status === 'approved') {
             actions.push(`<button class="btn sm primary" data-execute="${esc(prop.id)}">Run now</button>`);
+            actions.push(`<button class="btn sm ghost" data-withdraw="${esc(prop.id)}" title="Withdraw this approval; the record stays in the audit trail">Withdraw</button>`);
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         } else if (prop.status === 'claimed') {
             actions.push(`<button class="btn sm ghost" data-revoke-claim="${esc(prop.id)}">Revoke claim</button>`);
@@ -2055,11 +2056,15 @@ async function proposalsCard(detail) {
             const expires = prop.claim_expires_at ? new Date(prop.claim_expires_at * 1000).toLocaleString() : '';
             meta += ` · claimed by ${esc(executor)}${expires ? ' · expires ' + esc(expires) : ''}`;
         }
-        if (prop.status === 'approved' || prop.status === 'rejected') {
+        if (prop.status === 'approved' || prop.status === 'rejected' || prop.status === 'cancelled') {
             const who = prop.approved_by || 'owner';
-            meta += ` · ${prop.status === 'rejected' ? 'rejected' : 'approved'} by ${esc(who)}`;
-            if (prop.status === 'rejected' && prop.result) {
-                meta += `: ${esc(prop.result)}`;
+            if (prop.status === 'cancelled') {
+                meta += ' · withdrawn' + (prop.result ? `: ${esc(prop.result)}` : '');
+            } else {
+                meta += ` · ${prop.status === 'rejected' ? 'rejected' : 'approved'} by ${esc(who)}`;
+                if (prop.status === 'rejected' && prop.result) {
+                    meta += `: ${esc(prop.result)}`;
+                }
             }
         }
         // The approver must see exactly what they are approving: free-form
@@ -2078,7 +2083,7 @@ async function proposalsCard(detail) {
             ? `<div class="meta truncate" title="${esc(outcome)}">result: ${esc(outcome)}</div>`
             : '';
         const row = el('div', { class: 'list-row' },
-            `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' || prop.status === 'executing' ? 'blue' : prop.status === 'rejected' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
+            `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' || prop.status === 'executing' ? 'blue' : prop.status === 'rejected' || prop.status === 'cancelled' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
              <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
              <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}</span>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
@@ -2102,6 +2107,11 @@ async function proposalsCard(detail) {
         });
         row.querySelector('[data-reject]')?.addEventListener('click', async () => {
             try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/reject`, { method: 'POST' }); toast('Rejected', 'ok'); viewProject(p.slug, 'shared'); }
+            catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-withdraw]')?.addEventListener('click', async () => {
+            if (!confirm(`Withdraw this approval?\n\n${prop.intent}\n\nThe proposal is cancelled for good; it stays in the audit trail.`)) return;
+            try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'withdrawn from dashboard' }) }); toast('Withdrawn', 'ok'); viewProject(p.slug, 'shared'); }
             catch (e) { toast(e.message, 'err'); }
         });
         row.querySelector('[data-execute]')?.addEventListener('click', async () => {

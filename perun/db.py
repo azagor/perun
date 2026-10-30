@@ -439,6 +439,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
     except sqlite3.OperationalError:
         pass
+    # Cancellations were initially recorded as ``rejected`` with a
+    # ``cancelled: <reason>`` result. Give them their own terminal status.
+    try:
+        conn.execute(
+            "UPDATE action_proposals SET status='cancelled', "
+            "result=TRIM(SUBSTR(result, ?)) "
+            "WHERE status='rejected' AND result LIKE 'cancelled:%'",
+            (len("cancelled:") + 1,),
+        )
+        conn.execute(
+            "UPDATE action_proposals SET status='cancelled', result='' "
+            "WHERE status='rejected' AND result='cancelled'"
+        )
+    except sqlite3.OperationalError:
+        pass
     for table, columns in _REMOVED_COLUMNS.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         for name in columns:

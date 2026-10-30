@@ -2118,8 +2118,74 @@ def test_cancel_endpoint_withdraws_an_approved_proposal(client, tmp_path, monkey
         json={"reason": "superseded"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["proposal"]["status"] == "rejected"
+    assert r.json()["proposal"]["status"] == "cancelled"
 
     # Cancelling twice is refused, and the proposal is no longer claimable.
     r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/cancel", json={})
     assert r.status_code == 400
+
+
+def test_proposal_list_hides_approval_state(client, tmp_path, monkeypatch):
+    """The polled list must not carry tokens or snapshots."""
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["list-bot"])
+    target = tmp_path / "shared-list"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedList", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "list-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "list-bot",
+        "envelope": {
+            "intent": "add logging",
+            "targets": [str(target / "main.py")],
+            "action_type": "edit",
+        },
+    })
+    prop_id = r.json()["proposal"]["id"]
+    approved = client.post(f"/api/projects/{slug}/proposals/{prop_id}/approve")
+    assert approved.status_code == 200
+    assert approved.json()["proposal"]["approval_token"]
+
+    listed = client.get(f"/api/projects/{slug}/proposals").json()["proposals"]
+    row = next(p for p in listed if p["id"] == prop_id)
+    assert "approval_token" not in row
+    assert "approval_snapshot" not in row
+    assert "claim_snapshot" not in row
+    # Ordinary fields still travel.
+    assert row["intent"] == "add logging"
+
+
+def test_legacy_cancellations_get_the_cancelled_status(client, tmp_path, monkeypatch):
+    """Rows written before the status split are migrated on startup."""
+    from perun import action_proposals, db, registry, server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["legacy-bot"])
+    target = tmp_path / "shared-legacy-cancel"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "LegacyCancel", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "legacy-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+    project = registry.get_project(slug)
+
+    proposal = action_proposals.create(
+        project, "legacy-bot",
+        {"intent": "old", "targets": [str(target / "main.py")], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET status='rejected', result=? WHERE id=?",
+            ("cancelled: superseded", proposal["id"]),
+        )
+    with db.db() as conn:
+        db._migrate(conn)
+    migrated = action_proposals.get(proposal["id"])
+    assert migrated["status"] == "cancelled"
+    assert migrated["result"] == "superseded"

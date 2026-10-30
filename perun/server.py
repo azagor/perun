@@ -225,9 +225,10 @@ def _post_proposal_started(project: dict[str, Any], proposal: dict[str, Any]) ->
 
 
 def _post_proposal_rejected(
-    project: dict[str, Any], proposal: dict[str, Any], reason: str = ""
+    project: dict[str, Any], proposal: dict[str, Any], reason: str = "",
+    *, verb: str = "rejected",
 ) -> None:
-    """Post a rejection notice to the bound project chat."""
+    """Post a rejection/withdrawal notice to the bound project chat."""
     chat = registry.get_project_chat(project["id"])
     if not chat or not chat.get("room_id") or not PERUNCHAT_BRIDGE:
         return
@@ -236,7 +237,7 @@ def _post_proposal_rejected(
         targets = ", ".join(str(t) for t in (proposal.get("targets") or []))[:80]
         if targets:
             summary += f" -> {targets}"
-        text = f"[Proposal {proposal['id']} rejected: {summary}]"
+        text = f"[Proposal {proposal['id']} {verb}: {summary}]"
         if reason:
             text += f" Reason: {reason}"
         redact = getattr(PERUNCHAT_BRIDGE, "_redact_internal_info", None)
@@ -1449,10 +1450,20 @@ def api_update_shared_project(slug: str, payload: dict[str, Any] = Body(...)) ->
 
 @app.get("/api/projects/{slug}/proposals")
 def api_list_proposals(slug: str, status: str | None = None) -> dict[str, Any]:
-    """List action proposals for a shared project."""
+    """List action proposals for a shared project.
+
+    Approval tokens and snapshots are server-side state: they are returned only
+    by the approval call itself, never in a list every dashboard poll fetches.
+    """
     project = _project_or_404(slug)
     proposals = action_proposals.list_by_project(project["id"], status=status)
-    return _ok(proposals=proposals)
+    hidden = {"approval_token", "approval_snapshot", "claim_snapshot"}
+    return _ok(
+        proposals=[
+            {k: v for k, v in proposal.items() if k not in hidden}
+            for proposal in proposals
+        ]
+    )
 
 
 @app.post("/api/projects/{slug}/proposals")
@@ -1532,6 +1543,7 @@ def api_cancel_proposal(
         result = action_proposals.cancel(
             proposal_id, operator, reason=reason, owner=operator
         )
+        _post_proposal_rejected(project, result, reason=reason, verb="withdrawn")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(proposal=result)

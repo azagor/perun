@@ -4,7 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Added
+
+- **`cancelled` is a first-class proposal status.** Withdrawing an approved
+  proposal now records `cancelled` (reason in `result`) instead of reusing
+  `rejected`, so the audit trail separates "a reviewer said no" from "the
+  requester withdrew it". Legacy rows are migrated on startup, and the dashboard
+  gains a **Withdraw** action on approved proposals.
+
+### Fixed
+
+- **The proposal list no longer carries approval state.** `GET
+  /api/projects/{slug}/proposals` strips `approval_token`, `approval_snapshot`
+  and `claim_snapshot`; the token is still returned by the approval call itself.
+- **Large targets are fingerprinted by size + `mtime_ns`, not size alone.** The
+  drift check hashes content up to 64 MB and now catches a same-size rewrite of a
+  larger file.
 
 ## v0.8.55
 

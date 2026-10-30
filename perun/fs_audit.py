@@ -14,9 +14,10 @@ from typing import Any
 
 from . import path_guard, registry, shared_projects
 
-# Targets larger than this are fingerprinted by size only: hashing a huge file
-# inside an approval/claim request would stall the caller for no practical gain.
-TARGET_DIGEST_MAX_BYTES = 8 * 1024 * 1024
+# Targets above this size are fingerprinted by size + nanosecond mtime instead of
+# a content hash: hashing hundreds of megabytes inside an approval/claim request
+# would stall the caller, while an ordinary rewrite always changes mtime.
+TARGET_DIGEST_MAX_BYTES = 64 * 1024 * 1024
 
 
 def _stat_key(path: Path) -> tuple[int, float, int]:
@@ -125,7 +126,12 @@ def target_digests(
                 continue
             size = path.stat().st_size
             if size > TARGET_DIGEST_MAX_BYTES:
-                digests[label] = {"kind": "large", "size": size}
+                stat = path.stat()
+                digests[label] = {
+                    "kind": "large",
+                    "size": size,
+                    "mtime_ns": int(stat.st_mtime_ns),
+                }
                 continue
             digest = hashlib.sha256()
             with path.open("rb") as handle:
