@@ -722,8 +722,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   logs allowlist violations, target-scope violations, and created/modified/
   deleted parent-directory entries to the activity table. Also provides
   `target_digests()` / `drifted_targets()` — the per-target sha256+size fingerprint
-  captured at approval and re-checked at claim/apply (full content hash up to
-  64 MB, size + `mtime_ns` above it, `null` for a not-yet-created target).
+  captured at approval and re-checked at claim/apply. Content is always hashed
+  (so `os.utime` cannot hide an edit); a target above the 256 MiB/file and
+  512 MiB total budget is marked `unverifiable` and refused for external claims
+  rather than checked more weakly. `null` means the target does not exist yet.
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
   CAS approve/reject/cancel, atomic `approved → executing` claim, synchronous
   `execute`

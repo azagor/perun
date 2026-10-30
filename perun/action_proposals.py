@@ -466,7 +466,21 @@ def _assert_targets_unchanged(
         raise ValueError(
             "approval snapshot is unreadable; cancel and re-propose this action"
         )
-    drifted = fs_audit.drifted_targets(project, proposal.get("targets") or [], stored)
+    current = fs_audit.target_digests(project, proposal.get("targets") or [])
+    unverifiable = [
+        label
+        for label, entry in current.items()
+        if isinstance(entry, dict) and entry.get("kind") == "unverifiable"
+    ]
+    if unverifiable:
+        shown = ", ".join(unverifiable[:5])
+        raise ValueError(
+            f"target too large to verify for an external handoff: {shown}. "
+            "Shrink the target, or use a local run instead."
+        )
+    drifted = fs_audit.drifted_targets(
+        project, proposal.get("targets") or [], stored, current=current
+    )
     if not drifted:
         return
     shown = ", ".join(drifted[:5])

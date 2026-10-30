@@ -23,9 +23,12 @@ _No unreleased changes yet._
 - **The proposal list no longer carries approval state.** `GET
   /api/projects/{slug}/proposals` strips `approval_token`, `approval_snapshot`
   and `claim_snapshot`; the token is still returned by the approval call itself.
-- **Large targets are fingerprinted by size + `mtime_ns`, not size alone.** The
-  drift check hashes content up to 64 MB and now catches a same-size rewrite of a
-  larger file.
+- **Targets are always content-hashed, and oversized ones are refused.** The
+  drift check no longer falls back to a size + mtime fingerprint, so restoring
+  the timestamp with `os.utime` cannot hide an edit. A target above the 256 MiB
+  per-file / 512 MiB total budget is recorded as `unverifiable` and an external
+  claim is refused with a clear message (local runs are unaffected) instead of
+  being checked more weakly.
 
 ## v0.8.55
 

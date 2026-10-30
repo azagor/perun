@@ -14,10 +14,13 @@ from typing import Any
 
 from . import path_guard, registry, shared_projects
 
-# Targets above this size are fingerprinted by size + nanosecond mtime instead of
-# a content hash: hashing hundreds of megabytes inside an approval/claim request
-# would stall the caller, while an ordinary rewrite always changes mtime.
-TARGET_DIGEST_MAX_BYTES = 64 * 1024 * 1024
+# Budgets for the approval-time content hash. Everything under these limits is
+# hashed (so `os.utime` cannot hide an edit); a target above them is marked
+# `unverifiable` and an external claim is refused rather than silently weakened.
+# Both are generous: the handoff package cap is 50 MiB, so a target that cannot
+# be hashed here could not be delivered as an external package anyway.
+TARGET_DIGEST_MAX_BYTES = 256 * 1024 * 1024
+TARGET_DIGEST_TOTAL_BYTES = 512 * 1024 * 1024
 
 
 def _stat_key(path: Path) -> tuple[int, float, int]:
@@ -108,8 +111,14 @@ def target_digests(
     does not exist maps to ``None``; a later creation is therefore drift, which
     is what stops an external apply from overwriting a file that appeared after
     approval.
+
+    Every verifiable target is content-hashed (streaming), so restoring the mtime
+    with ``os.utime`` cannot hide an edit. A target too large to hash within the
+    budgets is marked ``unverifiable`` instead of silently weakening the check;
+    the external claim path refuses those (see ``_assert_targets_unchanged``).
     """
     digests: dict[str, Any] = {}
+    total = 0
     for target in targets or []:
         label = str(target)
         try:
@@ -125,14 +134,13 @@ def target_digests(
                 digests[label] = None
                 continue
             size = path.stat().st_size
-            if size > TARGET_DIGEST_MAX_BYTES:
-                stat = path.stat()
-                digests[label] = {
-                    "kind": "large",
-                    "size": size,
-                    "mtime_ns": int(stat.st_mtime_ns),
-                }
+            if (
+                size > TARGET_DIGEST_MAX_BYTES
+                or total + size > TARGET_DIGEST_TOTAL_BYTES
+            ):
+                digests[label] = {"kind": "unverifiable", "size": size}
                 continue
+            total += size
             digest = hashlib.sha256()
             with path.open("rb") as handle:
                 for block in iter(lambda: handle.read(1 << 20), b""):
@@ -147,15 +155,20 @@ def drifted_targets(
     project: dict[str, Any],
     targets: list[str] | None,
     before: dict[str, Any] | None,
+    *,
+    current: dict[str, Any] | None = None,
 ) -> list[str]:
     """Return the declared targets that no longer match *before*.
 
     ``before`` is the digest map captured at approval time. An empty/absent map
     means the proposal predates drift tracking; callers decide how to treat it.
+    Pass ``current`` to reuse an already-computed fingerprint instead of hashing
+    the targets a second time.
     """
     if not isinstance(before, dict):
         return []
-    current = target_digests(project, targets)
+    if current is None:
+        current = target_digests(project, targets)
     drifted: list[str] = []
     for label in set(before) | set(current):
         if before.get(label) != current.get(label):

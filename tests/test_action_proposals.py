@@ -1507,11 +1507,36 @@ def test_apply_refuses_a_target_changed_during_upload(tmp_path):
     assert action_proposals.get(proposal["id"])["status"] == "claimed"
 
 
-def test_large_targets_fall_back_to_size_and_mtime(tmp_path, monkeypatch):
-    """Above the hash cap, a same-size rewrite is still detected."""
-    import json
+def test_utime_cannot_hide_an_edit(tmp_path):
+    """Restoring the mtime must not defeat the drift check (content hash)."""
     import os
-    import time as _time
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    path = root / "api.py"
+    path.write_text("approved content")
+    before = path.stat()
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    # Same size, same mtime, different bytes.
+    path.write_text("replaced content")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_size == before.st_size
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+
+    with pytest.raises(ValueError, match="changed since approval"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+
+def test_oversized_target_is_refused_for_an_external_claim(tmp_path, monkeypatch):
+    """Above the verification budget, refuse instead of silently degrading."""
+    import json
 
     from perun import fs_audit
 
@@ -1528,16 +1553,45 @@ def test_large_targets_fall_back_to_size_and_mtime(tmp_path, monkeypatch):
     action_proposals.approve(proposal["id"], "owner")
 
     snapshot = json.loads(action_proposals.get(proposal["id"])["approval_snapshot"])
-    assert snapshot[target]["kind"] == "large"
-    assert snapshot[target]["size"] == 64
+    assert snapshot[target]["kind"] == "unverifiable"
     assert "sha256" not in snapshot[target]
-    assert "mtime_ns" in snapshot[target]
 
-    # Same size, different mtime: the fallback still catches it.
-    later = _time.time_ns() + 5_000_000_000
-    os.utime(root / "big.bin", ns=(later, later))
-    with pytest.raises(ValueError, match="changed since approval"):
+    with pytest.raises(ValueError, match="too large to verify"):
         action_proposals.claim_execution(proposal["id"], "frambo")
+    # Local execution is unaffected; the proposal stays approved.
+    assert action_proposals.get(proposal["id"])["status"] == "approved"
+
+
+def test_total_digest_budget_marks_remaining_targets_unverifiable(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from perun import fs_audit
+
+    monkeypatch.setattr(fs_audit, "TARGET_DIGEST_MAX_BYTES", 1024)
+    monkeypatch.setattr(fs_audit, "TARGET_DIGEST_TOTAL_BYTES", 40)
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    first = root / "a.bin"
+    second = root / "b.bin"
+    first.write_bytes(b"a" * 32)
+    second.write_bytes(b"b" * 32)
+
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {
+            "intent": "x",
+            "targets": [str(first), str(second)],
+            "action_type": "edit",
+        },
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    snapshot = json.loads(action_proposals.get(proposal["id"])["approval_snapshot"])
+    kinds = sorted(entry["kind"] for entry in snapshot.values())
+    assert kinds == ["file", "unverifiable"]
 
 
 def test_small_targets_use_a_content_hash(tmp_path):

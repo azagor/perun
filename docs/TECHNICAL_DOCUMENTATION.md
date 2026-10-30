@@ -924,16 +924,22 @@ status distinct from `rejected`), stores the reason in `result`, and logs
 proposals.
 
 **Target-drift guard.** Approval fingerprints each declared target
-(`approval_snapshot`: sha256 + size per target, or size + nanosecond mtime above
-64 MB, `null` for a file that does not exist yet) and `claim_execution()`
-recomputes it. If a target was modified, created or deleted between approval and
-claim, the claim is refused with `target changed since approval: …`; the same
-check runs again in `complete_external_execution()` (reported as `changed during
-upload`), so a package built against older content cannot overwrite newer work.
-The remediation is to `cancel()` the proposal and re-propose it — a fresh
-approval captures the current content. Proposals approved before this column
-existed have an empty snapshot and keep the old behaviour, so an upgrade cannot
-strand in-flight handoffs.
+(`approval_snapshot`: sha256 + size per target, `null` for a file that does not
+exist yet) and `claim_execution()` recomputes it. Every verifiable target is
+content-hashed, so restoring the timestamp with `os.utime` cannot hide an edit.
+If a target was modified, created or deleted between approval and claim, the
+claim is refused with `target changed since approval: …`; the same check runs
+again in `complete_external_execution()` (reported as `changed during upload`), so
+a package built against older content cannot overwrite newer work. The
+remediation is to `cancel()` the proposal and re-propose it — a fresh approval
+captures the current content. Proposals approved before this column existed have
+an empty snapshot and keep the old behaviour, so an upgrade cannot strand
+in-flight handoffs.
+
+A target above the verification budget (256 MiB per file, 512 MiB in total) is
+recorded as `unverifiable` and an external claim is **refused** rather than
+silently checked more weakly; local runs are unaffected. The budgets sit far above
+the 50 MiB handoff package cap, so an ordinary handoff is always fully hashed.
 
 An external apply first performs an atomic `claimed → executing` transition that
 matches the executor and an unexpired lease, immediately before
