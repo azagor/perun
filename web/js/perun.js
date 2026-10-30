@@ -5248,28 +5248,37 @@ async function loadRoutingPanel() {
         const conf = d.confidence == null ? '' : `${Math.round(d.confidence * 100)}%`;
         const detail = [d.matched_by || '', conf, d.source || '', timeAgo(d.ts)]
             .filter(Boolean).join(' · ');
+        const report = d.reported
+            ? `<button class="btn sm ghost" data-unmisroute="${d.id}" title="Reported as wrong — click to undo">↺</button>`
+            : `<button class="btn sm ghost danger" data-misroute="${d.id}" title="This decision was wrong">✗</button>`;
         return `<div class="list-row">
             <span class="badge ${cls}">${esc(d.action || '?')}</span>
             <span class="intent"><div class="msg truncate">${esc(d.project || '—')}</div>
             <div class="meta">${esc(detail)}</div></span>
-            <span class="row" style="gap:6px"><button class="btn sm ghost danger" data-misroute="${d.id}" title="This decision was wrong">✗</button></span>
+            <span class="row" style="gap:6px">${report}</span>
           </div>`;
     }).join('');
     host.innerHTML = head + (rows || '<div class="meta">No routing decisions yet. Send a Telegram message and it will appear here (shadow mode logs only).</div>');
     $('#routing-refresh')?.addEventListener('click', () => loadRoutingPanel());
+    const reportOne = async (btn, method, url, okText) => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try {
+            await api(url, { method, body: {} });
+            toast(okText, 'ok');
+            loadRoutingPanel();
+        } catch (e) {
+            btn.disabled = false;
+            toast(e.message, 'err');
+        }
+    };
     host.querySelectorAll('[data-misroute]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            if (btn.disabled) return;
-            btn.disabled = true;
-            try {
-                await api(`/api/routing/decisions/${btn.dataset.misroute}/misroute`, { method: 'POST', body: {} });
-                toast('Reported — thanks', 'ok');
-                loadRoutingPanel();
-            } catch (e) {
-                btn.disabled = false;
-                toast(e.message, 'err');
-            }
-        });
+        btn.addEventListener('click', () => reportOne(
+            btn, 'POST', `/api/routing/decisions/${btn.dataset.misroute}/misroute`, 'Reported — thanks'));
+    });
+    host.querySelectorAll('[data-unmisroute]').forEach((btn) => {
+        btn.addEventListener('click', () => reportOne(
+            btn, 'DELETE', `/api/routing/decisions/${btn.dataset.unmisroute}/misroute`, 'Report cleared'));
     });
     // Refresh only while this panel is on screen; navigating away clears it.
     routingTimer = setInterval(() => {

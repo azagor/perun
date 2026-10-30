@@ -699,7 +699,11 @@ class PerunTelegramBridge:
         matches, so a dashboard/API run does not message a random chat.
         """
         try:
-            runs = registry.recent_interrupted_runs(minutes=60)
+            minutes = int(config.Settings.load().telegram_interrupt_notice_minutes)
+        except Exception:
+            minutes = 60
+        try:
+            runs = registry.recent_interrupted_runs(minutes=max(1, minutes))
         except Exception:  # pragma: no cover - startup must not depend on this
             LOG.debug("could not list interrupted runs", exc_info=True)
             return
@@ -913,7 +917,11 @@ class PerunTelegramBridge:
         self.offset = (results[-1]["update_id"] + 1) if results else 0
         LOG.info("perun telegram bridge online (allow=%s)",
                  self.allowed or "<pair-on-first-message>")
-        self._notify_interrupted_runs()
+        # Off the polling thread: a slow sendMessage must not delay updates.
+        threading.Thread(
+            target=self._notify_interrupted_runs, daemon=True,
+            name="perun-interrupt-notice",
+        ).start()
         conflict_logged = 0.0
         while not self.stop_event.is_set():
             data = self.api("getUpdates", timeout=30, offset=self.offset)

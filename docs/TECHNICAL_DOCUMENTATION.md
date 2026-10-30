@@ -812,6 +812,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project; `approval_token`, `approval_snapshot` and `claim_snapshot` are stripped (the token is returned by the approval call) |
 | GET | `/api/routing/decisions` | Recent `routing_decision` rows for the dashboard panel: `total`, `by_action`, `unknown_share`, `shadow` count, `enabled`/`shadow_mode` from settings, and per-decision action/project/confidence/`matched_by`/candidates (never the message text) |
 | POST | `/api/routing/decisions/{id}/misroute` | Record that a routing decision was wrong (`routing_misroute` activity row, used for threshold tuning); idempotent per decision, and a note that looks like a credential is stored as `[redacted]` |
+| DELETE | `/api/routing/decisions/{id}/misroute` | Undo a misroute report (`reported: false` in the panel row again) |
 | POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal (only while `pending`) |
@@ -1196,11 +1197,12 @@ chat) so one chat can no longer kill another's.
 
 **Restarts are visible.** A restart marks in-flight runs `interrupted`. On the
 next bridge start, `_notify_interrupted_runs()` finds runs interrupted in the
-last hour whose `session_pk` maps to a `bridge_links` chat and sends one
-notice ("interrupted by a Perun restart, please resend"), once per run
-(`run_interrupted_notice` activity row). A dashboard/API run with no bound chat
-is not announced anywhere. Avoid restarting while a run is active — check
-`GET /api/runs/active` first.
+last `telegram_interrupt_notice_minutes` (default 60), maps their `session_pk` to
+bound chats and sends one notice ("interrupted by a Perun restart, please
+resend"), once per run (`run_interrupted_notice` activity row). The lookup runs
+on a daemon thread so a slow Telegram call cannot delay polling. `perun stop`
+and `perun restart` refuse while `/api/runs/active` reports a run unless
+`--force` is passed; dashboard/API runs with no bound chat are not announced.
 
 **Exactly one poller.** `getUpdates` allows a single consumer per bot token, so
 two bridges would fight with HTTP 409s. Single-instance is enforced machine-wide

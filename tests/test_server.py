@@ -2348,3 +2348,56 @@ def test_prune_activity_keeps_recent_and_other_kinds(tmp_path):
     kinds = [row["kind"] for row in registry.list_activity(limit=50)]
     assert "routing_decision" in kinds  # the recent one survives
     assert "run" in kinds  # other kinds are never pruned
+
+
+def test_unreport_clears_the_marker(client, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("RouteUndo", str(tmp_path / "routeundo"), kind="dir")
+    decision = registry.log_activity(
+        project["id"], "routing_decision", "routing: status",
+        {"action": "status", "project": "perun"},
+    )
+    assert client.post(f"/api/routing/decisions/{decision['id']}/misroute", json={}).status_code == 200
+
+    body = client.get("/api/routing/decisions?hours=24&limit=10").json()
+    row = next(d for d in body["decisions"] if d["id"] == decision["id"])
+    assert row["reported"] is True
+
+    r = client.delete(f"/api/routing/decisions/{decision['id']}/misroute")
+    assert r.status_code == 200, r.text
+    assert r.json()["removed"] == 1
+    assert registry.misroute_reported(decision["id"]) is False
+
+    body = client.get("/api/routing/decisions?hours=24&limit=10").json()
+    row = next(d for d in body["decisions"] if d["id"] == decision["id"])
+    assert row["reported"] is False
+
+    # A second delete is a no-op, not an error.
+    assert client.delete(f"/api/routing/decisions/{decision['id']}/misroute").json()["removed"] == 0
+
+
+def test_startup_prunes_old_routing_rows_only(client, tmp_path):
+    """The lifespan sweep runs on start and leaves run/audit rows alone."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from starlette.testclient import TestClient
+
+    from perun import db, registry, server
+
+    project = registry.add_project("RouteStartup", str(tmp_path / "routestartup"), kind="dir")
+    old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    with db.db() as conn:
+        for kind in ("routing_decision", "run"):
+            conn.execute(
+                "INSERT INTO activity (project_id,ts,kind,message,meta) VALUES (?,?,?,?,?)",
+                (project["id"], old, kind, "old", json.dumps({})),
+            )
+
+    with TestClient(server.app):
+        pass  # entering the app runs the lifespan (and its prune)
+
+    kinds = [row["kind"] for row in registry.list_activity(limit=50)]
+    assert "routing_decision" not in kinds
+    assert "run" in kinds

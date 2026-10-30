@@ -2601,6 +2601,7 @@ def api_routing_decisions(hours: int = 24, limit: int = 50) -> dict[str, Any]:
     rows = registry.routing_decisions(hours=hours, limit=limit)
     by_action: dict[str, int] = {}
     shadow = 0
+    reported_ids = registry.misroute_ids()
     decisions: list[dict[str, Any]] = []
     for row in rows:
         meta = row.get("meta") or {}
@@ -2620,6 +2621,7 @@ def api_routing_decisions(hours: int = 24, limit: int = 50) -> dict[str, Any]:
                 "candidates": meta.get("candidates") or [],
                 "shadow": bool(meta.get("shadow")),
                 "source": meta.get("source") or "",
+                "reported": row["id"] in reported_ids,
             }
         )
     total = len(rows)
@@ -2668,6 +2670,16 @@ def api_routing_misroute(
         },
     )
     return _ok(reported=decision_id)
+
+
+@app.delete("/api/routing/decisions/{decision_id}/misroute")
+def api_routing_unmisroute(decision_id: int) -> dict[str, Any]:
+    """Undo a misroute report (the decision was judged correct after all)."""
+    row = registry.get_activity(decision_id)
+    if not row or row.get("kind") != "routing_decision":
+        raise HTTPException(status_code=404, detail="routing decision not found")
+    removed = registry.clear_misroute(decision_id)
+    return _ok(reported=False, removed=removed)
 
 
 @app.get("/api/instructions")
@@ -2923,6 +2935,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
     int_fields = {
         "port", "max_concurrent_runs", "run_timeout", "embed_dim",
         "external_execution_claim_ttl", "external_execution_package_ttl",
+        "telegram_interrupt_notice_minutes",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
@@ -2946,7 +2959,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400, detail=f"{key} must be an integer") from exc
         if key == "port" and not (1 <= v <= 65535):
             raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 65535")
-        if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl") and v < 1:
+        if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl",
+                   "telegram_interrupt_notice_minutes") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
         if key == "external_execution_package_ttl" and v < 60:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 60")

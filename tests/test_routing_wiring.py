@@ -296,3 +296,35 @@ def test_recall_searches_the_named_project(bridge, routing_on, tmp_path, monkeyp
     bridge.run_message("1", "co wiesz o trading-bocie", 1)
 
     assert captured["project_id"] == trading["id"]
+
+
+def test_interrupt_notice_reaches_every_chat_bound_to_the_session(bridge, tmp_path):
+    from unittest.mock import Mock
+
+    from perun import registry
+
+    project = registry.add_project("MultiChat", str(tmp_path / "multichat"), kind="dir")
+    registry.create_run("run_multi", project["id"], "x", session_pk=1234)
+    registry.update_run("run_multi", status="interrupted", ended_at=registry.now_iso())
+    registry.set_bridge_link("1", project["id"], 1234)
+    registry.set_bridge_link("2", project["id"], 1234)
+
+    sent: list[tuple[str, str]] = []
+    bridge.send = lambda chat_id, text, **kw: sent.append((chat_id, text))  # type: ignore[assignment]
+    bridge._notify_interrupted_runs()
+
+    assert {chat for chat, _ in sent} == {"1", "2"}
+
+
+def test_project_override_falls_back_when_the_slug_vanishes(bridge, routing_on, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("StillHere", str(tmp_path / "stillhere"), kind="dir")
+    registry.set_bridge_link("1", project["id"], None)
+
+    handled = bridge._handle_text_command(
+        "1", "/status", 1, project_override="deleted-project"
+    )
+
+    assert handled is True
+    assert "stillhere" in bridge.sent[-1]

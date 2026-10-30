@@ -6,6 +6,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## Unreleased
+
+### Added
+
+- **Undo a misroute report.** `DELETE /api/routing/decisions/{id}/misroute` clears
+  the marker; the panel row shows `reported` and the ✗ button becomes ↺.
+- **Configurable restart-notice window.** `telegram_interrupt_notice_minutes`
+  (default 60) replaces the hard-coded hour; the startup lookup runs on a daemon
+  thread so a slow Telegram call cannot delay polling.
+- **`perun stop` / `perun restart` refuse while a run is active.** They query
+  `/api/runs/active` and abort with a clear message unless `--force` is passed,
+  so a restart can no longer silently interrupt a chat reply.
+
 ## v0.8.66
 
 *Released 2026-10-30.*

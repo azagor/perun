@@ -36,6 +36,7 @@ import os
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +127,34 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _active_run_count(settings: "config.Settings") -> int | None:
+    """How many agent runs the live server reports, or ``None`` if unknown.
+
+    Read-only loopback call; a missing/unreachable server must never block a
+    stop or restart.
+    """
+    try:
+        url = f"http://{settings.host}:{settings.port}/api/runs/active"
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+        return int(payload.get("count") or 0)
+    except Exception:
+        return None
+
+
+def _refuse_under_active_runs(settings: "config.Settings", force: bool) -> bool:
+    """Return True when the caller should abort (runs active and no --force)."""
+    active = _active_run_count(settings)
+    if active and not force:
+        print(
+            f"[perun] {active} agent run(s) are still active; stopping now would "
+            "interrupt them (the chat is notified on the next start)."
+        )
+        print("[perun] wait for them to finish, or re-run with --force.")
+        return True
+    return False
+
+
 def cmd_stop(args: argparse.Namespace) -> int:
     """Stop the running Perun server."""
     settings = config.Settings.load()
@@ -133,6 +162,8 @@ def cmd_stop(args: argparse.Namespace) -> int:
     if existing is None:
         print("[perun] not running")
         return 0
+    if _refuse_under_active_runs(settings, force=bool(getattr(args, "force", False))):
+        return 1
     print(f"[perun] stopping PID {existing}...")
     if daemon.stop(existing, timeout=args.timeout):
         daemon.clear_pid()
@@ -186,6 +217,10 @@ def cmd_restart(args: argparse.Namespace) -> int:
     """
     settings = config.Settings.load()
     existing = daemon.is_another_perun_running(settings)
+    if existing and _refuse_under_active_runs(
+        settings, force=bool(getattr(args, "force", False))
+    ):
+        return 1
     if existing:
         print(f"[perun] stopping existing server (PID {existing})...")
         if not daemon.stop(existing, timeout=args.timeout):

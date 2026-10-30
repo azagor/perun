@@ -121,9 +121,12 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `delete_task()` (reusable project tasks queued into the TUI prompt chain).
 * Activity: `log_activity()`, `list_activity()`, `get_activity()` (one row with
   `meta` parsed), `routing_decisions(hours, limit)` (the `routing_decision`
-  window used by the dashboard panel), `misroute_reported(decision_id)` (dedupes
-  the ✗ report), and `prune_activity(keep_days=90)` (routing telemetry only —
-  run/proposal/audit rows are never pruned).
+  window used by the dashboard panel), `misroute_reported(decision_id)` /
+  `misroute_ids()` / `clear_misroute(decision_id)` (dedupe, the panel's
+  `reported` flag, and undo), `prune_activity(keep_days=90)` (routing telemetry
+  only — run/proposal/audit rows are never pruned), plus
+  `recent_interrupted_runs()` / `chats_for_session()` / `interrupt_notice_sent()`
+  for the restart notice.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 
 ### `perun/control.py`
@@ -579,8 +582,9 @@ Shared Telegram ⇄ Perun bridge.
   nobody), `_handle_pair()` (`/pair <code>`, `hmac.compare_digest`, dispatched
   *before* the auth gate), `pair_code()`, `active_runs()`, `run_for()`, `run()`.
   On startup `_notify_interrupted_runs()` messages a chat whose run a restart
-  killed (runs interrupted in the last 15 minutes, matched through
-  `bridge_links.session_pk`, once per run via `run_interrupted_notice`).
+  killed (runs interrupted within `telegram_interrupt_notice_minutes`, matched
+  through `bridge_links.session_pk`, once per run via
+  `run_interrupted_notice`); it runs on a daemon thread.
   Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
   With the routing setting enabled, `run_message()` first calls `_route_message()`
   (`_command_argument()`, `_log_routing_decision()`): `status`/`stop`/`remember`/

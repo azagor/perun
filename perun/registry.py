@@ -1181,6 +1181,32 @@ def misroute_reported(decision_id: int) -> bool:
     return bool(row)
 
 
+def misroute_ids() -> set[int]:
+    """Decision ids that already carry a misroute marker."""
+    with db.db() as conn:
+        rows = db.rows(
+            conn, "SELECT meta FROM activity WHERE kind='routing_misroute'"
+        )
+    ids: set[int] = set()
+    for row in rows:
+        try:
+            ids.add(int(json.loads(row["meta"] or "{}").get("decision_id")))
+        except Exception:
+            continue
+    return ids
+
+
+def clear_misroute(decision_id: int) -> int:
+    """Remove a misroute marker (undo a mistaken report). Returns rows removed."""
+    message = f"misroute reported for routing decision {int(decision_id)}"
+    with db.db() as conn:
+        cur = conn.execute(
+            "DELETE FROM activity WHERE kind='routing_misroute' AND message=?",
+            (message,),
+        )
+        return int(cur.rowcount or 0)
+
+
 def recent_interrupted_runs(minutes: int = 60) -> list[dict[str, Any]]:
     """Runs this process (or a previous one) marked ``interrupted`` recently."""
     from datetime import datetime, timedelta, timezone

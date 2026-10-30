@@ -155,6 +155,9 @@ class Settings:
     # (clears it) as soon as a chat completes ``/pair <code>``. An empty
     # allow-list therefore grants *nobody* access by default.
     telegram_pair_code: str = ""
+    # How far back the bridge looks for runs a restart interrupted, when it
+    # notifies the bound chat on startup (minutes).
+    telegram_interrupt_notice_minutes: int = 60
     # PerunChat federation credentials. The API key is obtained from the company
     # website at peruninthemachine.com; the endpoint is the WebSocket ingress URL.
     perunchat_api_key: str = ""
