@@ -5220,8 +5220,11 @@ async function loadRoutingPanel() {
     }
     const mode = $('#routing-mode');
     if (mode) {
-        mode.textContent = res.total ? (res.shadow ? 'shadow' : 'live') : 'off / no traffic';
-        mode.className = 'badge ' + (res.shadow ? 'amber' : res.total ? 'green' : '');
+        const enabled = res.enabled !== false;
+        const shadowMode = res.shadow_mode !== false;
+        mode.textContent = enabled ? (shadowMode ? 'shadow' : 'live') : 'off';
+        if (enabled && !res.total) mode.textContent += ' · no traffic yet';
+        mode.className = 'badge ' + (!enabled ? '' : shadowMode ? 'amber' : 'green');
     }
     const parts = Object.entries(res.by_action || {})
         .sort((a, b) => b[1] - a[1])

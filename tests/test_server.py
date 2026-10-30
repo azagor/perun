@@ -2191,8 +2191,11 @@ def test_legacy_cancellations_get_the_cancelled_status(client, tmp_path, monkeyp
     assert migrated["result"] == "superseded"
 
 
-def test_routing_decisions_endpoint_summarises_and_never_leaks_text(client, tmp_path):
-    from perun import registry
+def test_routing_decisions_endpoint_summarises_and_never_leaks_text(client, tmp_path, monkeypatch):
+    from perun import registry, server
+
+    monkeypatch.setattr(server.SETTINGS, "routing_enabled", True)
+    monkeypatch.setattr(server.SETTINGS, "routing_shadow", True)
 
     project = registry.add_project("RouteStats", str(tmp_path / "routestats"), kind="dir")
     first = registry.log_activity(
@@ -2213,6 +2216,9 @@ def test_routing_decisions_endpoint_summarises_and_never_leaks_text(client, tmp_
     assert body["shadow"] == 2
     assert body["by_action"] == {"status": 1, "unknown": 1}
     assert body["unknown_share"] == 0.5
+    # Mode reflects settings, not whether any decisions exist yet.
+    assert body["enabled"] is True
+    assert body["shadow_mode"] is True
     row = next(d for d in body["decisions"] if d["id"] == first["id"])
     assert row["action"] == "status" and row["project"] == "perun"
     # The decision payload never carries the message text.

@@ -2612,6 +2612,10 @@ def api_routing_decisions(hours: int = 24, limit: int = 50) -> dict[str, Any]:
         by_action=by_action,
         unknown_share=round(by_action.get("unknown", 0) / total, 3) if total else 0.0,
         shadow=shadow,
+        # Mode comes from settings, not from traffic: an enabled router with no
+        # messages yet is still "shadow", not "off".
+        enabled=bool(getattr(SETTINGS, "routing_enabled", False)),
+        shadow_mode=bool(getattr(SETTINGS, "routing_shadow", False)),
         decisions=decisions,
     )
 
