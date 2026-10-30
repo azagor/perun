@@ -424,6 +424,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         # Table missing entirely on a very old database; SCHEMA creates it.
         pass
+    # ``execution_mode`` used to default to 'perun', so unclaimed proposals from
+    # older builds claim a pipeline that never ran. Only rewrite rows that have
+    # not executed yet.
+    try:
+        conn.execute(
+            "UPDATE action_proposals SET execution_mode='' "
+            "WHERE execution_mode='perun' AND status IN ('pending','approved') "
+            "AND executed_by=''"
+        )
+    except sqlite3.OperationalError:
+        pass
     for table, columns in _REMOVED_COLUMNS.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         for name in columns:
