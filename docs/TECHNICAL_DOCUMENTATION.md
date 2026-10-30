@@ -945,8 +945,8 @@ flight, and cap concurrent uploads at 8. Upload slots expire after the
 configured idle TTL (`external_execution_package_ttl`, 30 minutes by default,
 60 s floor — **Settings → Package slot idle TTL (s)**); every accepted chunk
 refreshes the deadline, so a slow but progressing upload is not reclaimed
-mid-transfer. Execution results carry `op`,
-`proposal_id` and `transfer_id` so the MCP client can correlate replies.
+mid-transfer. Execution results carry `op`, `ok`, `proposal_id` and
+`transfer_id` so the MCP client can correlate replies.
 Handoff frames are directed with `recipient_id`: results and downloads go to the
 claimant, upload chunks go to the room owner, and the gateway rejects
 unaddressed package chunks or result/`package_ready` frames from non-owners.

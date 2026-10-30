@@ -636,7 +636,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   once, so one claimant cannot replace or exhaust another's slot. Upload slots
   are an idle lease: `external_execution_package_ttl` (default 30 min, 60 s
   floor) is refreshed by every accepted chunk, and stale slots are dropped from
-  memory and SQLite. Downloads are
+  memory and SQLite. Result frames carry `op`, `ok`, `proposal_id` and
+  `transfer_id` (`package_accepted` with `ok: true`, `package_rejected` with
+  `ok: false`), so the MCP client can distinguish success from rejection.
+  Downloads are
   restricted to the proposal targets, skip sensitive files, and enforce
   package/entry/entry-count caps. Handoff frames set `recipient_id`: results and
   downloads are delivered only to the claimant, upload chunks only to the room

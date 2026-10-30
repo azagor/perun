@@ -2982,6 +2982,7 @@ def test_external_package_upload_end_to_end(settings, tmp_path):
     assert proposal["status"] == "executed"
     assert (root / "api.py").read_text(encoding="utf-8") == "new"
     assert sent[-1]["payload"]["op"] == "package_accepted"
+    assert sent[-1]["payload"]["ok"] is True
     assert sent[-1]["recipient_id"] == "frambo"
 
 

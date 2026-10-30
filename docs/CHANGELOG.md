@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **External-handoff success frames carry `ok: true`.** `package_accepted` used
+  to omit `ok`, so the MCP client treated a successful upload as `isError: true`
+  even though the file had been applied. Rejection frames now carry
+  `ok: false` as well. The client additionally treats a matching
+  `package_accepted` without `ok` as success for older Perun builds.
 
 ## v0.8.47
 

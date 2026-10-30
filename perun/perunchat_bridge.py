@@ -2069,11 +2069,13 @@ class PerunChatBridge:
         if proposal_status == "executed":
             return {
                 "op": "package_accepted",
+                "ok": True,
                 "transfer_id": transfer_id,
                 "proposal_id": proposal_id,
             }
         return {
             "op": "package_rejected",
+            "ok": False,
             "transfer_id": transfer_id,
             "proposal_id": proposal_id,
             "error": (result or {}).get("result", "handoff rejected or failed"),
