@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.67 (see §15). Restart guard, configurable interrupt-notice window, and undoable misroute reports.
+**Latest release:** v0.8.68 (see §15). Stop PerunChat routing-notice loops and report approved targets that are missing on disk.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1823,6 +1823,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.68: Stop PerunChat routing-notice loops and report approved targets that are missing on disk.
+
 ### 2026-10-30 — v0.8.67: Restart guard, configurable interrupt-notice window, and undoable misroute reports.
 
 ### 2026-10-30 — v0.8.66: Target status/remember/recall at the project named in the message.
