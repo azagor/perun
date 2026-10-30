@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **Routing no longer fires on a keyword mentioned mid-sentence.** Command
+  keywords are matched in the leading window only (after an optional mention or
+  "please"), negation returns `unknown`, and a question in the opening words
+  wins over a verb later. "dodaj komendę status" now runs the agent instead of
+  printing status, prose containing *zapamiętać* no longer stores a memory fact,
+  and "nie uruchom testów" no longer starts a run.
 
 ## v0.8.58
 

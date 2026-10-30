@@ -302,3 +302,28 @@ def test_hyphenated_slug_with_inflected_tail() -> None:
         decision = route(text, projects=PROJECTS)
         assert decision.project == "trading-bot", text
         assert decision.matched_by == "inflected"
+
+
+# --- regression: keywords must not fire mid-sentence ----------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # A request *about* the word "status" is still a run.
+        ("dodaj komende status do bota", "run"),
+        # Prose that merely contains "zapamietac" must not store a memory.
+        ("napisz w dokumentacji ze uzytkownik moze zapamietac ustawienia", "unknown"),
+        # Negation never starts a run.
+        ("nie uruchom testow", "unknown"),
+        ("do not run the tests", "unknown"),
+        # A question about a command is a question.
+        ("jak dodac status do dashboardu", "ask"),
+        # Leading politeness and mentions are skipped.
+        ("prosze uruchom testy", "run"),
+        ("@perun status", "status"),
+        ("pokaz status projektu", "status"),
+    ],
+)
+def test_command_keywords_are_scoped_to_the_leading_window(text: str, expected: str) -> None:
+    assert detect_action(text) == expected

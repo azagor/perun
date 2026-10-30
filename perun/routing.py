@@ -411,31 +411,75 @@ _KEYWORD_BLOCKERS = {
 }
 
 
+# Words that may precede the real command ("please run …", "proszę uruchom …").
+_POLITE = frozenset({"prosze", "proszę", "please", "hej", "hey", "ok", "okay"})
+_NEGATIONS = frozenset({"nie", "never", "dont", "don't", "nope"})
+
+
+def _leading_tokens(tokens: Sequence[str]) -> list[str]:
+    """Content tokens after an optional mention and politeness word.
+
+    ``normalize`` strips ``@``, so ``@perun status`` arrives as ``perun status``;
+    a leading bot name is skipped the same way a politeness word is.
+    """
+    index = 0
+    while index < len(tokens) and tokens[index] in _POLITE:
+        index += 1
+    if index < len(tokens) and tokens[index] in {"perun", "peruntheoverseer", "overseer"}:
+        index += 1
+    while index < len(tokens) and tokens[index] in _POLITE:
+        index += 1
+    return list(tokens[index:])
+
+
 def detect_action(text: str) -> str:
-    """Classify the requested action from explicit keywords only."""
+    """Classify the requested action from explicit keywords only.
+
+    Commands must appear in the **leading window** (after an optional mention or
+    "please"). Matching a keyword anywhere turned "dodaj komendę status" into a
+    status query and stored prose that merely mentioned *zapamiętać* as a memory
+    fact; those false positives suppress the agent run that was actually asked
+    for. Negation ("nie uruchom testów") also yields ``unknown`` instead of
+    starting a run.
+    """
     norm = normalize(text)
     if not norm:
         return "unknown"
-    tokens = set(norm.split())
+    tokens = norm.split()
+    head = _leading_tokens(tokens)
     padded = f" {norm} "
 
+    if tokens and (tokens[0] in _NEGATIONS or tokens[:2] == ["do", "not"]):
+        return "unknown"
+
+    # Phrase commands are anchored at the start of the message.
+    head_text = f" {' '.join(head)} "
     for phrase in _RECALL_PHRASES:
-        if f" {phrase} " in padded:
+        if head_text.startswith(f" {phrase} "):
             return "recall"
     for phrase in _STATUS_PHRASES:
-        if f" {phrase} " in padded:
+        if head_text.startswith(f" {phrase} "):
             return "status"
 
-    # Order matters: "stop" and memory commands are unambiguous, imperatives
-    # win over a trailing question mark, and only then do we look for a question.
-    for action in ("stop", "remember", "recall", "status", "run"):
-        if not (tokens & _KEYWORDS[action]):
+    # A question in the opening words wins over a verb later in the sentence:
+    # "jak dodać status" is a question, not a status command. Commands in the
+    # leading window are checked first so "przypomnij, co ustaliliśmy" stays a
+    # recall command.
+    window = set(head[:2])
+    for action in ("stop", "remember", "recall", "status"):
+        if not (window & _KEYWORDS[action]):
             continue
         blocked = any(f" {blocker} " in padded for blocker in _KEYWORD_BLOCKERS.get(action, ()))
         if not blocked:
             return action
 
-    if text.strip().endswith("?") or (tokens & _QUESTION_WORDS):
+    if set(tokens[:3]) & _QUESTION_WORDS:
+        return "ask"
+
+    if window & _KEYWORDS["run"]:
+        return "run"
+
+    if text.strip().endswith("?"):
         return "ask"
     return "unknown"
 

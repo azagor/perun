@@ -541,8 +541,11 @@ reason)`.
   Tags are ignored unless unique and non-generic (live tags include `docs`,
   `tests`, `opencode`, and `perunchat` itself is tagged `perun`).
 * `detect_action()` — explicit PL/EN keyword sets (`stop`, `remember`, `recall`,
-  `status`, `run`), imperative beats a trailing `?`, then question words/`?`
-  give `ask`, otherwise `unknown` (caller keeps its existing LLM path).
+  `status`, `run`), matched in the **leading window** (after an optional mention
+  or "please") so a sentence that merely mentions a command word — "dodaj
+  komendę status" — stays a run instead of becoming a status query. Negation
+  ("nie uruchom") returns `unknown`; a question in the opening words wins over a
+  verb later in the sentence; a trailing `?` on an imperative is still a run.
   `stop loss`/`stop limit` are domain terms, not commands.
 * `is_addressed()` — `@mention`, `@perun`, slash command, or a direct message.
 * `route()` — applies the policy: ambiguity ⇒ `clarify`; a mutating action

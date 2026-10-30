@@ -1157,8 +1157,12 @@ plain message first goes through `perun.routing.route()` in `run_message()`:
 `status`/`stop`/`remember`/`recall` are answered without starting an agent run,
 an ambiguous project mention asks which project instead of guessing, and a `run`
 that names another project switches the chat's binding (`bridge_links`) before
-the run starts. Anything unrecognised (`unknown`) or a question (`ask`) follows
-the previous path unchanged, so the feature cannot regress the long tail. Each
+the run starts. Command keywords are matched in the leading window only (after
+an optional mention or "please"), negation yields `unknown`, and a question at
+the start wins over a verb later — so "dodaj komendę status" runs the agent,
+"nie uruchom testów" does nothing, and "jak dodać status" is a question.
+Anything unrecognised or a question follows the previous path unchanged, so the
+feature cannot regress the long tail. Each
 decision writes one `routing_decision` activity row (action, project,
 confidence, `matched_by`, candidates) and never the message text. Off by
 default; flipping the setting back to false restores the previous behaviour
