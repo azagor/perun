@@ -1152,6 +1152,18 @@ treated as a prompt and answered by a Perun-orchestrated run, with a typing
 indicator and reply threading. `format_html()` renders a safe subset of Markdown
 into Telegram HTML; `chunk()` splits at 3900 chars.
 
+**Natural-language routing (opt-in).** With `Settings.routing_enabled` on, a
+plain message first goes through `perun.routing.route()` in `run_message()`:
+`status`/`stop`/`remember`/`recall` are answered without starting an agent run,
+an ambiguous project mention asks which project instead of guessing, and a `run`
+that names another project switches the chat's binding (`bridge_links`) before
+the run starts. Anything unrecognised (`unknown`) or a question (`ask`) follows
+the previous path unchanged, so the feature cannot regress the long tail. Each
+decision writes one `routing_decision` activity row (action, project,
+confidence, `matched_by`, candidates) and never the message text. Off by
+default; flipping the setting back to false restores the previous behaviour
+immediately.
+
 **Pairing / allow-list.** An empty `telegram_allowed_chats` grants **nobody** —
 the old "first chat to write wins" behaviour let anyone who found the bot drive
 the machine. Pairing is a persisted one-time code

@@ -105,6 +105,9 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
+* **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
+  project or a command, but it must never be the only check on a mutating action:
+  the guard allowlist, proposal approval and post-run audit stay in force.
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

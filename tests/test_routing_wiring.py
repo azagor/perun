@@ -1,0 +1,167 @@
+"""The deterministic router wired into the Telegram bridge.
+
+Routing is opt-in (``Settings.routing_enabled``), so these tests cover both the
+disabled path (behaviour identical to before) and the enabled path (clarify,
+status, remember, and switching the bound project before a run).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from perun import config, registry
+from perun.telegram import PerunTelegramBridge
+
+
+class FakeOrch:
+    def __init__(self) -> None:
+        self.started: list[dict] = []
+
+    def start_run(self, slug, prompt, **kw):  # noqa: ANN001, ANN003
+        uid = f"run{len(self.started) + 1}"
+        self.started.append({"slug": slug, "prompt": prompt, **kw})
+        proj = registry.get_project(slug)
+        registry.create_run(
+            uid,
+            proj["id"],
+            prompt,
+            session_pk=kw.get("session_pk"),
+            opencode_session_id=kw.get("opencode_session_id", ""),
+            model=kw.get("model", ""),
+            agent=kw.get("agent", ""),
+        )
+        registry.update_run(uid, status="done", output=f"reply::{slug}")
+        return registry.get_run(uid)
+
+    def is_final(self, uid: str) -> bool:  # noqa: ARG002
+        return True
+
+    def cancel(self, uid: str) -> bool:  # noqa: ARG002
+        return False
+
+
+@pytest.fixture()
+def orch():
+    return FakeOrch()
+
+
+@pytest.fixture()
+def bridge(control_repo, orch):  # noqa: ARG001 - control_repo patches config
+    b = PerunTelegramBridge(orch, token="test-token", allowed=["1"])
+    b.sent: list[str] = []
+    b.markups: list[dict | None] = []
+
+    def _send(chat_id, text, reply_to=None, reply_markup=None):  # noqa: ANN001
+        b.sent.append(text)
+        b.markups.append(reply_markup)
+
+    b.send = _send  # type: ignore[assignment]
+    b.api_calls: list[tuple[str, dict]] = []
+
+    def _api(method, **kw):  # noqa: ANN003
+        b.api_calls.append((method, kw))
+        return {"ok": True, "result": {}}
+
+    b.api = _api  # type: ignore[assignment]
+    yield b
+    b.client.close()
+
+
+@pytest.fixture()
+def routing_on(monkeypatch):
+    real_load = config.Settings.load
+
+    def load():
+        settings = real_load()
+        settings.routing_enabled = True
+        return settings
+
+    monkeypatch.setattr(config.Settings, "load", staticmethod(load))
+    return load
+
+
+def _add(tmp_path, name: str) -> dict:
+    path = tmp_path / name
+    path.mkdir()
+    return registry.add_project(name, str(path), kind="dir")
+
+
+# --- disabled: unchanged behaviour ---------------------------------------- #
+
+
+def test_routing_disabled_starts_a_run_as_before(bridge, orch) -> None:
+    bridge.run_message("1", "status", 1)
+    assert len(orch.started) == 1
+    assert orch.started[0]["prompt"] == "status"
+
+
+# --- enabled: handled without a run --------------------------------------- #
+
+
+def test_enabled_status_is_answered_without_a_run(bridge, orch, routing_on) -> None:
+    bridge.run_message("1", "status", 1)
+    assert orch.started == []
+    assert bridge.sent, "a reply is expected"
+    assert "status" in bridge.sent[-1].lower() or "perun" in bridge.sent[-1].lower()
+
+
+def test_enabled_ambiguity_asks_instead_of_running(bridge, orch, routing_on, tmp_path) -> None:
+    _add(tmp_path, "perun")
+    _add(tmp_path, "perunchat")
+    bridge.run_message("1", "porownaj perun i perunchat", 1)
+    assert orch.started == []
+    assert "Which project" in bridge.sent[-1]
+    assert "perun" in bridge.sent[-1] and "perunchat" in bridge.sent[-1]
+
+
+def test_enabled_remember_does_not_start_a_run(bridge, orch, routing_on) -> None:
+    bridge.run_message("1", "zapamietaj ze wole poranne raporty", 1)
+    assert orch.started == []
+    assert bridge.sent
+
+
+# --- enabled: routing a run to another project ---------------------------- #
+
+
+def test_enabled_run_switches_the_bound_project(bridge, orch, routing_on, tmp_path) -> None:
+    perun = _add(tmp_path, "perun")
+    trading = _add(tmp_path, "trading-bot")
+    registry.set_bridge_link("1", trading["id"], None)
+
+    bridge.run_message("1", "uruchom testy w perunie", 1)
+
+    assert len(orch.started) == 1
+    assert orch.started[0]["slug"] == perun["slug"]
+    assert "→ `perun`" in bridge.sent
+
+
+def test_enabled_unknown_text_still_runs_in_the_bound_project(
+    bridge, orch, routing_on, tmp_path
+) -> None:
+    trading = _add(tmp_path, "trading-bot")
+    registry.set_bridge_link("1", trading["id"], None)
+
+    bridge.run_message("1", "dzieki, do zobaczenia", 1)
+
+    assert len(orch.started) == 1
+    assert orch.started[0]["slug"] == "trading-bot"
+
+
+# --- telemetry ------------------------------------------------------------- #
+
+
+def test_routing_decision_is_logged_without_the_message_text(
+    bridge, orch, routing_on, tmp_path
+) -> None:  # noqa: ARG001
+    perun = _add(tmp_path, "perun")
+    registry.set_bridge_link("1", perun["id"], None)
+    bridge.run_message("1", "uruchom testy w perunie", 1)
+
+    rows = [
+        row
+        for row in registry.list_activity(project_id=perun["id"], limit=20)
+        if row["kind"] == "routing_decision"
+    ]
+    assert rows, "a routing_decision activity row is expected"
+    assert "uruchom" not in rows[0]["message"]
+    assert "uruchom" not in (rows[0].get("meta") or "")

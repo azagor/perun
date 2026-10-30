@@ -139,6 +139,10 @@ class Settings:
     ollama_host: str = "http://127.0.0.1:11434"
     embed_model: str = "nomic-embed-text"
     embed_dim: int = 768
+    # Deterministic router (`perun/routing.py`): resolve a project and an action
+    # from free text before spending an agent run. Off by default so an upgrade
+    # never changes how existing chats behave until the operator opts in.
+    routing_enabled: bool = False
     telegram_token: str = ""
     telegram_bot_name: str = ""
     telegram_allowed_chats: list[str] = field(default_factory=list)

@@ -48,7 +48,7 @@ except Exception:  # pragma: no cover
 
 from . import (
     action_proposals, config, control, db, memory, path_guard, registry,
-    shared_project_sync, shared_projects,
+    routing, shared_project_sync, shared_projects,
 )
 
 if False:  # type: ignore
@@ -2185,6 +2185,69 @@ class PerunChatBridge:
             self._room_workers.pop(room_id, None)
             self._room_queues.pop(room_id, None)
 
+    @staticmethod
+    def _frame_text(frame: Dict[str, Any]) -> str:
+        """Return the human text of a chat frame, whatever shape it arrived in."""
+        payload = frame.get("payload")
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("text", "content", "message"):
+                value = payload.get(key)
+                if isinstance(value, str):
+                    return value
+        return ""
+
+    def _warn_cross_project(self, frame: Dict[str, Any], room_id: str) -> bool:
+        """Handle a room message that belongs to a different project.
+
+        A room is bound to one project, so a mutating request for another one
+        cannot run here. Post one short notice (and an activity row) instead of
+        answering in the wrong context. Returns True when the frame was handled.
+        """
+        if not getattr(self.settings, "routing_enabled", False):
+            return False
+        binding = self._project_binding(room_id) if room_id else None
+        if not binding:
+            return False
+        project, _cfg = binding
+        text = self._frame_text(frame)
+        if not text:
+            return False
+        try:
+            projects = registry.list_projects(include_hidden=True)
+            decision = routing.route(text, projects=projects, current=project["slug"])
+        except Exception:  # pragma: no cover - routing must never break a room
+            logger.debug("routing failed in room %s", room_id, exc_info=True)
+            return False
+        if decision.action == "clarify":
+            names = ", ".join(decision.candidates)
+            self.post_to_room(room_id, f"[Routing] Which project: {names}? Name one and resend.")
+            return True
+        if (
+            decision.action in routing.MUTATING
+            and decision.project
+            and decision.project != project["slug"]
+        ):
+            self.post_to_room(
+                room_id,
+                f"[Routing] This room is `{project['slug']}`; `{decision.project}` was "
+                f"requested. Use the {decision.project} room or the dashboard.",
+            )
+            try:
+                meta = decision.as_dict()
+                meta["source"] = "perunchat"
+                registry.log_activity(
+                    project["id"],
+                    "routing_decision",
+                    f"routing: cross-project -> {decision.project}",
+                    meta,
+                )
+            except Exception:  # pragma: no cover - telemetry is best-effort
+                logger.debug("could not record routing decision", exc_info=True)
+            return True
+        return False
+
     def _process_room_frame(self, frame: Dict[str, Any], ws: Any) -> None:
         """Decide whether to reply to a queued frame and do so under rate limits."""
         msg_id = frame.get("id")
@@ -2218,6 +2281,12 @@ class PerunChatBridge:
         last_reply = self._last_reply_time.get(room_id, 0)
         if not decision.is_direct and now - last_reply < _MIN_REPLY_INTERVAL_SECONDS:
             logger.info("PerunChat cooldown active for %s (%.1fs left); skipping %s", room_id, _MIN_REPLY_INTERVAL_SECONDS - (now - last_reply), msg_id)
+            return
+
+        # Deterministic routing guard. A room is bound to one project, so a
+        # mutating request that names a different project cannot be honoured
+        # here; say so instead of replying in the wrong context.
+        if decision.is_direct and self._warn_cross_project(frame, room_id):
             return
 
         # Run the actual reply generation with a hard wall-clock timeout so a

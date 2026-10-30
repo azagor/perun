@@ -2834,6 +2834,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
+        "routing_enabled",
     }
     list_fields = {
         "roots", "telegram_allowed_chats", "perunchat_auto_join",

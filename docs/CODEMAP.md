@@ -572,6 +572,11 @@ Shared Telegram ⇄ Perun bridge.
   nobody), `_handle_pair()` (`/pair <code>`, `hmac.compare_digest`, dispatched
   *before* the auth gate), `pair_code()`, `active_runs()`, `run_for()`, `run()`.
   Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
+  With the routing setting enabled, `run_message()` first calls `_route_message()`
+  (`_command_argument()`, `_log_routing_decision()`): `status`/`stop`/`remember`/
+  `recall` are answered without a run, ambiguity asks, and a `run` naming another
+  project rebinds `bridge_links` before starting. Decisions are logged as
+  `routing_decision` activity rows without the message text.
   Commands include `/orchestrator` (`/perun`, `/overseer`) and `/pair`.
 * Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
   are configured; cancels all active runs on shutdown), `_setup_logging()`.
@@ -589,6 +594,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `restart()`; connects to the gateway via the configured API key,
   auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and
   answers through `Orchestrator.run_and_wait()` with the chat system prompt.
+  With the routing setting enabled, an addressed message is first checked by
+  `_warn_cross_project()`: a mutating request for a different project is answered
+  with one `[Routing]` notice (and a `routing_decision` activity row) instead of
+  replying from the room's own project. `_frame_text()` normalises the payload.
   Rate-limited (15 replies/min). Shared-project chats run against the bound
   project's slug with `agent="perunchat"` and the configured chat model, and
   load the project's `opencode.json` so the agent can use the
@@ -1213,6 +1222,10 @@ stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
   tag resolution, Polish inflection and palatalisation, prefix collisions
   (`perun` vs `perunchat` vs `perun-in-the-machine`), ambiguity, action
   keywords, `stop loss` as a domain term, addressed detection, normalisation.
+* `test_routing_wiring.py` - the router wired into the Telegram bridge:
+  disabled-by-default behaviour, status/remember handled without a run,
+  ambiguity asks, cross-project run rebinds `bridge_links`, unknown text still
+  runs in the bound project, and the activity row omits the message text.
 * `test_perunchat_bridge.py` — the autonomous PerunChat participant: start/stop
   lifecycle, room auto-join, reply dedupe, the write-ahead outbox and its
   reconnect flush, empty-reply retry, typing/reply sequence-number monotonicity,

@@ -13,8 +13,15 @@ All notable changes are recorded here. Single source of truth for release notes.
   mentions return `clarify` with candidates instead of guessing, and messages
   with no recognisable action return `unknown` so the existing LLM path is
   unchanged. Includes `is_addressed()` for room messages and
-  `python -m perun.routing "<message>"` for offline inspection. Not wired into
-  the Telegram bridge or the PerunChat bridge yet — that is the next step.
+  `python -m perun.routing "<message>"` for offline inspection.
+- **Routing is wired into the Telegram bridge and PerunChat.** With the new
+  `routing_enabled` setting (dashboard toggle, default **off**), a plain Telegram
+  message resolves `status`/`stop`/`remember`/`recall` without an agent run, asks
+  which project when a mention is ambiguous, and rebinds the chat before a `run`
+  that names another project. PerunChat posts one `[Routing]` notice when an
+  addressed message asks for a different project than the room's. Decisions are
+  logged as `routing_decision` activity rows without the message text; turning
+  the setting off restores the previous behaviour immediately.
 
 ### Documentation
 

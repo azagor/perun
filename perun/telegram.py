@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from . import config, control, memory, registry
+from . import config, control, memory, registry, routing
 from .orchestrator import Orchestrator
 
 LOG = logging.getLogger("perun-telegram")
@@ -563,8 +563,120 @@ class PerunTelegramBridge:
     def handle_command(self, chat_id: str, text: str, message_id: int) -> bool:
         return self._handle_text_command(chat_id, text, message_id)
 
+    # ---- deterministic routing ------------------------------------------- #
+    _ROUTE_LEADS: Dict[str, tuple[str, ...]] = {
+        "remember": ("zapamietaj", "zapamiętaj", "remember", "zapisz"),
+        "recall": ("co pamietasz o", "co pamiętasz o", "co wiesz o", "przypomnij", "recall"),
+    }
+
+    @classmethod
+    def _command_argument(cls, text: str, action: str) -> str:
+        """Strip the trigger word/phrase so ``/remember`` gets just the payload."""
+        lowered = text.casefold()
+        best = -1
+        length = 0
+        for lead in cls._ROUTE_LEADS.get(action, ()):
+            index = lowered.find(lead)
+            if index < 0:
+                continue
+            if best < 0 or index < best or (index == best and len(lead) > length):
+                best, length = index, len(lead)
+        if best < 0:
+            return text.strip(" \t,.:;-")
+        return text[best + length :].strip(" \t,.:;-")
+
+    def _route_message(self, chat_id: str, text: str, message_id: int) -> bool:
+        """Apply the deterministic router. True when the message is fully handled.
+
+        Disabled by default (``Settings.routing_enabled``): with routing off this
+        is a no-op and every message follows the previous path.
+        """
+        try:
+            settings = config.Settings.load()
+        except Exception:  # pragma: no cover - defensive
+            return False
+        if not getattr(settings, "routing_enabled", False):
+            return False
+        try:
+            projects = registry.list_projects(include_hidden=(chat_id in self.allowed))
+            current = self._current_project(chat_id)
+            decision = routing.route(
+                text,
+                projects=projects,
+                current=(current or {}).get("slug"),
+            )
+        except Exception:  # pragma: no cover - routing must never break the chat
+            LOG.exception("routing failed; falling back to the agent path")
+            return False
+
+        self._log_routing_decision(decision, chat_id, current)
+
+        if decision.action == "clarify":
+            names = ", ".join(f"`{slug}`" for slug in decision.candidates)
+            self.send(
+                chat_id,
+                f"❓ Which project? {names}\n\nPick one with `/project <name>` "
+                "or send the message again naming a single project.",
+                reply_to=message_id,
+            )
+            return True
+
+        if decision.action in ("status", "stop"):
+            return self._handle_text_command(chat_id, f"/{decision.action}", message_id)
+
+        if decision.action in ("remember", "recall"):
+            argument = self._command_argument(text, decision.action)
+            if not argument:
+                self.send(
+                    chat_id,
+                    "What should I remember?" if decision.action == "remember" else "What should I look up?",
+                    reply_to=message_id,
+                )
+                return True
+            return self._handle_text_command(
+                chat_id, f"/{decision.action} {argument}", message_id
+            )
+
+        if (
+            decision.action == "run"
+            and decision.project
+            and (not current or decision.project != current.get("slug"))
+        ):
+            target = registry.get_project(decision.project)
+            if target:
+                # Switching the bound project is the same effect as /project,
+                # without the operator having to type it.
+                registry.set_bridge_link(chat_id, target["id"], None)
+                self.send(chat_id, f"→ `{target['slug']}`", reply_to=message_id)
+        # ``ask``/``unknown`` and same-project runs continue to the agent path.
+        return False
+
+    def _log_routing_decision(self, decision: routing.RouteDecision, chat_id: str,
+                              current: Optional[Dict[str, Any]]) -> None:
+        """Record a routing decision. Never stores the message text."""
+        try:
+            project_id = None
+            if decision.project:
+                project = registry.get_project(decision.project)
+                project_id = project["id"] if project else None
+            elif current:
+                project_id = current.get("id")
+            meta = decision.as_dict()
+            meta["source"] = "telegram"
+            registry.log_activity(
+                project_id,
+                "routing_decision",
+                f"routing: {decision.action}"
+                + (f" -> {decision.project}" if decision.project else ""),
+                meta,
+            )
+        except Exception:  # pragma: no cover - telemetry is best-effort
+            LOG.debug("could not record routing decision", exc_info=True)
+
     # ---- run a message ---- #
     def run_message(self, chat_id: str, text: str, message_id: int) -> None:
+        if self._route_message(chat_id, text, message_id):
+            return
         proj = self._current_project(chat_id)
         if not proj:
             if not registry.list_projects():

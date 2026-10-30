@@ -3287,3 +3287,58 @@ def test_transient_finalize_failure_keeps_the_upload(settings, tmp_path):
     # Slot and chunks survive, so a reclaim can finalize without re-uploading.
     assert "trf_retry" in bridge._package_transfers
     assert bridge._package_transfers["trf_retry"]["received"]
+
+
+def test_room_guard_flags_a_cross_project_mutating_request(settings, tmp_path):
+    """A room bound to one project must not silently act for another."""
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    (tmp_path / "other-proj").mkdir(exist_ok=True)
+    registry.add_project("other-proj", str(tmp_path / "other-proj"), kind="dir")
+
+    settings.routing_enabled = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    frame = {"payload": {"text": "@perun uruchom testy w other-proj"}}
+    assert bridge._warn_cross_project(frame, "grp:perun:room-proj:chat") is True
+    assert posted and "other-proj" in posted[-1]
+    assert "this room is" in posted[-1].lower()
+
+
+def test_room_guard_leaves_same_project_and_chatter_alone(settings, tmp_path):
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    settings.routing_enabled = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    assert bridge._warn_cross_project({"payload": {"text": "dzieki, do zobaczenia"}}, "grp:x") is False
+    assert bridge._warn_cross_project({"payload": {"text": "uruchom testy w room-proj"}}, "grp:x") is False
+    assert posted == []
+
+
+def test_room_guard_is_inert_when_routing_is_disabled(settings, tmp_path):
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    settings.routing_enabled = False
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    assert bridge._warn_cross_project({"payload": {"text": "uruchom testy w other"}}, "grp:x") is False
+    assert posted == []

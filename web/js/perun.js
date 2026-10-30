@@ -5253,6 +5253,7 @@ async function viewSettings() {
          <div class="row wrap" style="gap:18px;margin:6px 0 4px">
             <label class="row" style="gap:6px"><input type="checkbox" id="s-autodisc" ${s.auto_discover_on_start ? 'checked' : ''}> auto-discover on start</label>
             <label class="row" style="gap:6px"><input type="checkbox" id="s-indexdisc" ${s.index_docs_on_discover ? 'checked' : ''}> index docs on discover</label>
+            <label class="row" style="gap:6px" title="Resolve &quot;run tests in perun&quot; / &quot;status&quot; / &quot;zapamietaj...&quot; locally instead of spending an agent run. Deterministic rules only."><input type="checkbox" id="s-routing" ${s.routing_enabled ? 'checked' : ''}> natural-language routing</label>
          </div>
          <div class="form-actions">
             <button class="btn primary" id="s-save">Save settings</button>
@@ -5415,6 +5416,7 @@ async function viewSettings() {
             ollama_host: $('#s-ollama').value, embed_model: $('#s-embed').value || $('#s-embed-custom').value.trim(),
             perun_owner_name: $('#s-owner').value.trim(),
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
+            routing_enabled: $('#s-routing').checked,
         };
         const hitlSecret = $('#s-hitl-secret').value.trim();
         if (hitlSecret) payload.perun_hitl_secret = hitlSecret;
