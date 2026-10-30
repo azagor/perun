@@ -1517,6 +1517,26 @@ def api_reject_proposal(
     return _ok(proposal=result)
 
 
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/cancel")
+def api_cancel_proposal(
+    slug: str, proposal_id: str, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """Withdraw an approved-but-unclaimed proposal (requester or owner)."""
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    reason = str(payload.get("reason") or "").strip()
+    try:
+        operator = _approver_identity()
+        result = action_proposals.cancel(
+            proposal_id, operator, reason=reason, owner=operator
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
+
+
 @app.post(
     "/api/projects/{slug}/proposals/{proposal_id}/approve-and-execute",
     status_code=202,

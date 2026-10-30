@@ -1029,8 +1029,18 @@ class Orchestrator:
             fd, prompt_file = tempfile.mkstemp(
                 suffix=".txt", prefix="perun_prompt_", dir=config.RUNS_DIR, text=True
             )
-            with os.fdopen(fd, "w", encoding="utf-8") as pf:
-                pf.write(prompt)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as pf:
+                    pf.write(prompt)
+            except BaseException:
+                # A failed write (disk full, lone surrogate) must not leave the
+                # prompt — which contains raw chat history — behind until the
+                # 24 h sweep.
+                try:
+                    os.unlink(prompt_file)
+                except OSError:
+                    pass
+                raise
             argv += ["--file", prompt_file, "--", "Respond to the attached prompt."]
             with self._lock:
                 self._prompt_files[run_uid] = prompt_file

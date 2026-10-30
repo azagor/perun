@@ -212,6 +212,7 @@ _PACKAGE_SWEEP_INTERVAL_SECONDS = 60.0
 # Upper bound on chunk count; prevents a huge range()/set allocation at
 # finalize. A 50 MB package at 360 KiB/chunk is ~143 chunks.
 _MAX_PACKAGE_CHUNKS = 10000
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 # A single bridge process should not hold an unbounded number of partial
 # uploads: each slot can buffer up to the package size cap in memory.
 _MAX_PACKAGE_TRANSFERS = 8
@@ -1129,6 +1130,12 @@ class PerunChatBridge:
             logger.exception("Failed to persist package transfer %s", transfer_id)
             return None
 
+    def _discard_package_transfer(self, transfer_id: str) -> None:
+        """Drop a transfer from memory and storage (permanent failures only)."""
+        with self._package_transfers_lock:
+            self._package_transfers.pop(transfer_id, None)
+        self._delete_package_transfer(transfer_id)
+
     def _delete_package_transfer(self, transfer_id: str) -> None:
         try:
             from . import db as db_module
@@ -1595,7 +1602,12 @@ class PerunChatBridge:
         hidden = {"approval_token", "approval_expiry", "claim_snapshot"}
         if not include_details:
             hidden.add("details")
-        return {k: v for k, v in proposal.items() if k not in hidden}
+        view = {k: v for k, v in proposal.items() if k not in hidden}
+        # An unexecuted proposal has no execution mode yet. Publishing the
+        # column default made both agents think Perun's pipeline owned it.
+        if not view.get("execution_mode"):
+            view.pop("execution_mode", None)
+        return view
 
     def _handle_execution_frame(self, frame: Dict[str, Any], ws: Any) -> None:
         room_id = frame.get("room_id")
@@ -1833,8 +1845,11 @@ class PerunChatBridge:
         if not transfer_id:
             return {"ok": False, "error": "transfer_id is required"}
         digest = str(payload.get("sha256") or "").strip().lower()
-        if not digest:
-            return {"ok": False, "error": "sha256 is required"}
+        if not _SHA256_RE.fullmatch(digest):
+            return {
+                "ok": False,
+                "error": "sha256 must be 64 lowercase hex characters",
+            }
         configured_chunk = getattr(
             settings, "external_execution_chunk_bytes", 360 * 1024) or 360 * 1024
         max_chunk_bytes = max(1024 * 1024, int(configured_chunk) * 2)
@@ -1906,8 +1921,18 @@ class PerunChatBridge:
                 )
                 return
 
+            raw_seq = payload.get("seq")
+            if not isinstance(raw_seq, int) or isinstance(raw_seq, bool):
+                self.post_to_room(
+                    room_id,
+                    {"op": "package_rejected", "transfer_id": transfer_id,
+                     "error": "seq must be an integer"},
+                    _EXECUTION_CONTENT_TYPE,
+                    recipient_id=sender_id,
+                )
+                return
             try:
-                seq = int(payload.get("seq") or 0)
+                seq = int(raw_seq)
                 total_chunks = int(transfer.get("total_chunks") or 0)
             except (TypeError, ValueError):
                 self.post_to_room(
@@ -2030,31 +2055,37 @@ class PerunChatBridge:
                     "ok": False,
                     "error": f"incomplete transfer: {len(received)}/{total_chunks} chunks received",
                 }
-            try:
-                raw = b"".join(
-                    base64.b64decode(received[seq], validate=True)
-                    for seq in range(total_chunks)
-                )
-            except Exception as exc:
-                return {"ok": False, "error": f"base64 decode failed: {exc}"}
+            # Copy what we need under the lock, then decode and hash outside it:
+            # hashing a large package while holding a lock that every other
+            # chunk handler needs stalls every room.
+            chunks = [received[seq] for seq in range(total_chunks)]
             expected_size = int(transfer.get("total_size") or 0)
-            if expected_size and len(raw) != expected_size:
-                return {
-                    "ok": False,
-                    "error": f"size mismatch: expected {expected_size}, got {len(raw)}",
-                }
             expected = str(transfer.get("sha256") or "").lower()
-            if expected and package_handoff.sha256_hex(raw) != expected:
-                return {"ok": False, "error": "sha256 mismatch"}
             proposal_id = str(transfer.get("proposal_id") or "")
-            del self._package_transfers[transfer_id]
-        self._delete_package_transfer(transfer_id)
+        try:
+            raw = b"".join(
+                base64.b64decode(chunk, validate=True) for chunk in chunks
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"base64 decode failed: {exc}"}
+        if expected_size and len(raw) != expected_size:
+            return {
+                "ok": False,
+                "error": f"size mismatch: expected {expected_size}, got {len(raw)}",
+            }
+        if expected and package_handoff.sha256_hex(raw) != expected:
+            # Keep the slot: a corrupted chunk in transit can be re-sent, and a
+            # full restart would cost the sender the whole upload. The TTL sweep
+            # reclaims it if the sender never retries.
+            return {"ok": False, "error": "sha256 mismatch"}
 
         try:
             result = action_proposals.complete_external_execution(
                 proposal_id, sender, raw, owner=owner
             )
         except Exception as exc:
+            # Transient failure (claim expired, revoked, apply error): keep the
+            # slot so a reclaim can finalize without re-sending every chunk.
             logger.warning("External execution completion failed for %s: %s", proposal_id, exc)
             return {"ok": False, "error": str(exc)}
 
@@ -2064,6 +2095,9 @@ class PerunChatBridge:
                 "transfer_id": transfer_id,
                 "error": result.get("reason", "validation failed"),
             }
+
+        # Applied (or audited as failed): the upload is consumed either way.
+        self._discard_package_transfer(transfer_id)
 
         proposal_status = (result or {}).get("status")
         if proposal_status == "executed":

@@ -4,6 +4,30 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+- **`POST /api/projects/{slug}/proposals/{id}/cancel`** and
+  `action_proposals.cancel()`: the requester or the project owner can withdraw an
+  approved-but-unclaimed proposal. `reject()` only accepts `pending`, so a
+  superseded approval used to stay claimable for its whole lifetime with no way
+  to retire it.
+
+### Fixed
+
+- **External uploads survive a transient finalize failure.** The reassembly slot
+  is now discarded only after `complete_external_execution` returns; a claim that
+  expired or was revoked during a slow upload no longer throws away every chunk.
+  Base64 decode and hashing run outside the transfer lock.
+- **Upload frame validation.** A chunk without an integer `seq` is rejected
+  instead of being stored as chunk 0, and `package_begin` requires a 64-hex
+  `sha256`.
+- **`execution_mode` is empty until something executes.** The column defaulted to
+  `perun`, so an approved-unclaimed proposal looked like it belonged to Perun's
+  own pipeline; the bridge view omits the field when unset.
+- **A failed prompt-file write no longer leaks the prompt.** The temp file holds
+  raw chat history and was previously left for the 24 h sweep if the write
+  raised.
+
 ### Documentation
 
 - Refreshed `CODEMAP.md` and `TECHNICAL_DOCUMENTATION.md` for short-lived

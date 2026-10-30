@@ -321,7 +321,7 @@ def get_proposal(proposal_id: str) -> dict[str, Any]:
         "room_id": proposal.get("room_id", ""),
         "executor_id": proposal.get("executor_id", ""),
         "executed_by": proposal.get("executed_by", ""),
-        "execution_mode": proposal.get("execution_mode", "perun"),
+        "execution_mode": proposal.get("execution_mode") or "",
         "intent": proposal["intent"],
         "targets": proposal["targets"],
         "result": proposal.get("result", ""),

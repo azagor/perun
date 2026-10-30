@@ -2088,3 +2088,38 @@ def test_on_proposal_completed_still_posts_digest_when_refresh_fails(monkeypatch
     server._on_proposal_completed(project, proposal)
 
     assert digest_called["ok"] is True
+
+
+def test_cancel_endpoint_withdraws_an_approved_proposal(client, tmp_path, monkeypatch):
+    from perun import server
+
+    monkeypatch.setattr(server.SETTINGS, "perunchat_trusted", ["cancel-bot"])
+    target = tmp_path / "shared-cancel"
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "SharedCancel", "path": str(target), "bootstrap": False,
+        "shared": True, "participants": [{"agent_id": "cancel-bot", "roles": ["rw"]}],
+    })
+    assert r.status_code == 200, r.text
+    slug = r.json()["project"]["slug"]
+
+    r = client.post(f"/api/projects/{slug}/proposals", json={
+        "requester": "cancel-bot",
+        "envelope": {
+            "intent": "obsolete change",
+            "targets": [str(target / "main.py")],
+            "action_type": "edit",
+        },
+    })
+    prop_id = r.json()["proposal"]["id"]
+    assert client.post(f"/api/projects/{slug}/proposals/{prop_id}/approve").status_code == 200
+
+    r = client.post(
+        f"/api/projects/{slug}/proposals/{prop_id}/cancel",
+        json={"reason": "superseded"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["proposal"]["status"] == "rejected"
+
+    # Cancelling twice is refused, and the proposal is no longer claimable.
+    r = client.post(f"/api/projects/{slug}/proposals/{prop_id}/cancel", json={})
+    assert r.status_code == 400

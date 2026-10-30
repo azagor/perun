@@ -1305,3 +1305,59 @@ def test_expire_stale_fails_abandoned_executing(tmp_path):
         )
     action_proposals.expire_stale()
     assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
+def test_cancel_withdraws_an_approved_unclaimed_proposal(tmp_path):
+    """reject() only accepts pending; a superseded approval needs a way out."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    # reject() refuses, which is what left proposals claimable forever.
+    with pytest.raises(ValueError, match="proposal is approved"):
+        action_proposals.reject(proposal["id"], "owner")
+
+    cancelled = action_proposals.cancel(
+        proposal["id"], "frambo", reason="superseded"
+    )
+    assert cancelled["status"] == "rejected"
+    assert cancelled["result"] == "cancelled: superseded"
+
+    # It can no longer be claimed.
+    with pytest.raises(ValueError, match="proposal is rejected"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+
+def test_cancel_requires_requester_or_owner(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    with pytest.raises(ValueError, match="only the requester"):
+        action_proposals.cancel(proposal["id"], "someone-else")
+
+    cancelled = action_proposals.cancel(proposal["id"], "owner", owner="owner")
+    assert cancelled["status"] == "rejected"
+
+
+def test_new_proposal_has_no_execution_mode(tmp_path):
+    """An unexecuted proposal must not advertise a pipeline it never used."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    assert proposal["execution_mode"] == ""
+
+    action_proposals.approve(proposal["id"], "owner")
+    claimed = action_proposals.claim_execution(proposal["id"], "frambo")
+    assert claimed["execution_mode"] == "external"

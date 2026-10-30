@@ -722,11 +722,15 @@ Autonomous PerunChat chat participant for the Orchestrator.
   logs allowlist violations, target-scope violations, and created/modified/
   deleted parent-directory entries to the activity table.
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
-  CAS approve/reject, atomic `approved → executing` claim, synchronous `execute`
+  CAS approve/reject/cancel, atomic `approved → executing` claim, synchronous
+  `execute`
   and non-blocking `start_execution`, `claim_execution`/`revoke_execution_claim`
   for the external rw handoff, startup `reconcile_interrupted`, post-run audit
   enforcement, State Digests for the project chat, and activity logging
-  (`proposal_created`/`approved`/`rejected`/`executed`). `_same_actor()` enforces
+  (`proposal_created`/`approved`/`rejected`/`cancelled`/`executed`). `cancel()`
+  withdraws an approved-but-unclaimed proposal (`approved → rejected`, result
+  `cancelled: <reason>`) and is restricted to the requester or the project owner,
+  because `reject()` only accepts `pending`. `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
   `approve()`/`reject()`; the human dashboard routes and
   `auto_approve_and_execute()` pass `allow_self=True`. Approved runs use the

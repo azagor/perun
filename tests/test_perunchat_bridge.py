@@ -3138,3 +3138,152 @@ def test_package_ttl_is_configurable_with_a_floor(settings, tmp_path):
     assert bridge._package_ttl_seconds() == 60
 
 
+
+
+def test_package_begin_rejects_malformed_sha256(settings, tmp_path):
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    with patch.object(bridge, "_send_frame", side_effect=lambda s, f, **k: sent.append(f) or True), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})):
+        bridge._handle_execution_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {
+                "op": "package_begin",
+                "proposal_id": proposal["id"],
+                "transfer_id": "trf_bad_sha",
+                "sha256": "zz",
+                "total_size": 5,
+                "total_chunks": 1,
+            },
+        }, None)
+
+    assert sent[-1]["payload"]["ok"] is False
+    assert "64 lowercase hex" in sent[-1]["payload"]["error"]
+    assert "trf_bad_sha" not in bridge._package_transfers
+
+
+def test_chunk_without_seq_is_rejected(settings, tmp_path):
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+
+    with patch.object(bridge, "_send_frame", side_effect=lambda s, f, **k: sent.append(f) or True), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})):
+        bridge._handle_execution_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {
+                "op": "package_begin",
+                "proposal_id": proposal["id"],
+                "transfer_id": "trf_noseq",
+                "sha256": package_handoff.sha256_hex(b"abc"),
+                "total_size": 3,
+                "total_chunks": 2,
+            },
+        }, None)
+        assert sent[-1]["payload"]["ok"] is True
+        bridge._handle_package_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-package",
+            "payload": {
+                "transfer_id": "trf_noseq",
+                "data": base64.b64encode(b"abc").decode(),
+            },
+        }, None)
+
+    assert sent[-1]["payload"]["op"] == "package_rejected"
+    assert "seq must be an integer" in sent[-1]["payload"]["error"]
+    assert bridge._package_transfers["trf_noseq"]["received"] == {}
+
+
+def test_transient_finalize_failure_keeps_the_upload(settings, tmp_path):
+    """A lost claim must not throw away every chunk the sender uploaded."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    sent = []
+    body = b"payload"
+
+    with patch.object(bridge, "_send_frame", side_effect=lambda s, f, **k: sent.append(f) or True), \
+            patch.object(bridge, "_project_binding", return_value=(project, {})), \
+            patch.object(
+                action_proposals,
+                "complete_external_execution",
+                side_effect=ValueError("claim has expired; claim again"),
+            ):
+        bridge._handle_execution_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {
+                "op": "package_begin",
+                "proposal_id": proposal["id"],
+                "transfer_id": "trf_retry",
+                "sha256": package_handoff.sha256_hex(body),
+                "total_size": len(body),
+                "total_chunks": 1,
+            },
+        }, None)
+        bridge._handle_package_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-package",
+            "payload": {
+                "transfer_id": "trf_retry",
+                "seq": 0,
+                "data": base64.b64encode(body).decode(),
+            },
+        }, None)
+        bridge._handle_execution_frame({
+            "room_id": room,
+            "sender": {"agent_id": "frambo"},
+            "content_type": "application/perun-execution",
+            "payload": {"op": "package_end", "transfer_id": "trf_retry"},
+        }, None)
+
+    assert sent[-1]["payload"]["ok"] is False
+    assert "claim has expired" in sent[-1]["payload"]["error"]
+    # Slot and chunks survive, so a reclaim can finalize without re-uploading.
+    assert "trf_retry" in bridge._package_transfers
+    assert bridge._package_transfers["trf_retry"]["received"]

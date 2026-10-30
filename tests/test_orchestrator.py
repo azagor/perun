@@ -1069,3 +1069,50 @@ def test_prompt_file_sweeper_removes_stale_files(tmp_path, monkeypatch):
     assert fresh.exists()
     assert not stale.exists()
     assert other.exists()
+
+
+def test_failed_prompt_file_write_leaves_no_file_behind(monkeypatch, tmp_path):
+    """A failed write must not leave raw chat history on disk for 24 h."""
+    import pytest
+
+    import os
+    from perun import config, orchestrator, registry
+
+    project_path = tmp_path / "pfail"
+    project_path.mkdir()
+    project = registry.add_project("PFail", str(project_path))
+    run = registry.create_run("pfailrun", project["id"], "secret prompt")
+    run["skip_instructions"] = True
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    monkeypatch.setattr(config, "RUNS_DIR", runs_dir)
+
+    real_fdopen = os.fdopen
+
+    class _Boom:
+        def __init__(self, fd):
+            self._fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            os.close(self._fd)
+            return False
+
+        def write(self, _text):
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "invalid")
+
+    def fake_fdopen(fd, *args, **kwargs):
+        return _Boom(fd)
+
+    monkeypatch.setattr(os, "fdopen", fake_fdopen)
+    o = orchestrator.Orchestrator()
+    try:
+        with pytest.raises(UnicodeEncodeError):
+            o._execute("pfailrun", project, "secret prompt", run, use_prompt_file=True)
+    finally:
+        monkeypatch.setattr(os, "fdopen", real_fdopen)
+
+    assert list(runs_dir.glob("perun_prompt_*.txt")) == []

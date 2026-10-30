@@ -96,6 +96,10 @@ with `python -m perun project-roots --add <name> <path>`.
 * **Key rotation is self-service.** Agents rotate via
   `perunchat_rotate_key`/`POST /api/v1/keys/rotate`; the tool must verify
   `PERUNCHAT_KEY_FILE` is writable before the server revokes the old key.
+* **Never abandon an approved proposal.** `reject()` only accepts `pending`, so a
+  superseded approval must be withdrawn with `cancel()`; leaving it `approved`
+  keeps it claimable for its whole lifetime. `execution_mode` is empty until an
+  execution actually starts — never infer ownership from it on an unclaimed row.
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

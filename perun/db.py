@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     approved_at     TEXT,
     result          TEXT,
     executor_id     TEXT DEFAULT '',
-    execution_mode  TEXT DEFAULT 'perun',
+    execution_mode  TEXT DEFAULT '',
     claimed_at      TEXT DEFAULT '',
     claim_expires_at INTEGER DEFAULT 0,
     claim_snapshot  TEXT DEFAULT '',
@@ -369,7 +369,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("expires_at", "INTEGER NOT NULL DEFAULT 0"),
         # External execution handoff columns (v0.8.17).
         ("executor_id", "TEXT DEFAULT ''"),
-        ("execution_mode", "TEXT DEFAULT 'perun'"),
+        ("execution_mode", "TEXT DEFAULT ''"),
         ("claimed_at", "TEXT DEFAULT ''"),
         ("claim_expires_at", "INTEGER DEFAULT 0"),
         ("claim_snapshot", "TEXT DEFAULT ''"),

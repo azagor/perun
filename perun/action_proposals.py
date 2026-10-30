@@ -246,8 +246,9 @@ def create(
         conn.execute(
             """INSERT INTO action_proposals
                (id, project_id, room_id, requester, action_type, intent, targets,
-                details, manifest_rev, status, expires_at, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                details, manifest_rev, status, expires_at, execution_mode,
+                created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 proposal_id,
                 pid,
@@ -260,6 +261,9 @@ def create(
                 manifest_rev,
                 "pending",
                 expires_at,
+                # Empty until something actually executes: 'perun' here made an
+                # unclaimed proposal look like it belonged to Perun's pipeline.
+                "",
                 ts,
                 ts,
             ),
@@ -379,6 +383,54 @@ def reject(proposal_id: str, approver: str, reason: str = "",
             "proposal_rejected",
             f"Proposal {proposal_id} rejected by {approver}: {reason}",
             {"proposal_id": proposal_id, "approver": approver, "reason": reason},
+        )
+    return proposal
+
+
+def cancel(
+    proposal_id: str,
+    actor: str,
+    reason: str = "",
+    *,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    """Withdraw an approved but unclaimed proposal.
+
+    ``reject`` only accepts ``pending``, which left superseded approvals
+    claimable for their whole lifetime with no way to retire them. The requester
+    (or the project owner) may cancel while the proposal is still unclaimed.
+    A claimed or executing proposal must be revoked or completed instead, so a
+    half-written handoff can never be silently abandoned.
+    """
+    proposal = get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["status"] != "approved":
+        raise ValueError(f"proposal is {proposal['status']}")
+    requester = str(proposal.get("requester") or "")
+    actor_id = str(actor or "").strip()
+    owner_id = str(owner or "").strip()
+    is_requester = bool(actor_id) and _same_actor(requester, actor_id)
+    is_owner = bool(actor_id) and bool(owner_id) and _same_actor(owner_id, actor_id)
+    if not (is_requester or is_owner):
+        raise ValueError("only the requester or the project owner can cancel a proposal")
+    reason = str(reason or "").strip()[:1000]
+    ts = _now()
+    with db.db() as conn:
+        cur = conn.execute(
+            "UPDATE action_proposals SET status=?, result=?, updated_at=? "
+            "WHERE id=? AND status='approved'",
+            ("rejected", f"cancelled: {reason}" if reason else "cancelled", ts, proposal_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("proposal is no longer approved")
+    proposal = get(proposal_id)
+    if proposal:
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_cancelled",
+            f"Proposal {proposal_id} cancelled by {actor_id}: {reason or 'no reason given'}",
+            {"proposal_id": proposal_id, "actor": actor_id, "reason": reason},
         )
     return proposal
 

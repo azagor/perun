@@ -812,7 +812,8 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project |
 | POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
-| POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal (only while `pending`) |
+| POST | `/api/projects/{slug}/proposals/{proposal_id}/cancel` | Withdraw an approved-but-unclaimed proposal (requester or owner); records `rejected` with a `cancelled:` result |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/execute` | Start an already-approved proposal's headless run in the background (`202`); the atomic `approved → executing` claim happens inside `start_execution` |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve-and-execute` | Approve and start the headless run in one owner action (`202`) |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/claim` | Reserve an approved proposal for external execution by this machine's bound room agent; returns the target `details` once for the claimant |
@@ -911,8 +912,14 @@ change, not only a successful run: local executions write `perun`
 (`execution_mode='external'`). The field is written when the proposal enters
 `executing`/`claimed`, cleared when a claim is revoked or expires, and must be
 read together with `status` — a `failed` completion still names the actor that
-tried. Proposals created without a chat envelope (dashboard/API) inherit the
+tried. `execution_mode` is **empty until execution starts**, so an approved
+proposal is never mistaken for one owned by Perun's pipeline. Proposals created
+without a chat envelope (dashboard/API) inherit the
 project's bound `project_chats.room_id` so the audit record names the room.
+
+`reject()` only accepts `pending`; a superseded approval is withdrawn with
+`cancel()` (`POST …/cancel`), which moves `approved → rejected` with a
+`cancelled:` result and logs `proposal_cancelled`.
 
 An external apply first performs an atomic `claimed → executing` transition that
 matches the executor and an unexpired lease, immediately before
