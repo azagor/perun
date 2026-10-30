@@ -616,6 +616,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `_warn_cross_project()`: a mutating request for a different project is answered
   with one `[Routing]` notice (and a `routing_decision` activity row) instead of
   replying from the room's own project. `_frame_text()` normalises the payload.
+  Loop guards: `_should_reply_to()` ignores frames whose sender is Perun's own
+  agent id, and `_warn_cross_project()` ignores its own `[Routing] …` text, any
+  message with no actionable intent (`routing.detect_action() == "unknown"`), and
+  posts at most one notice per room every two minutes (`_last_routing_notice`).
   Rate-limited (15 replies/min). Shared-project chats run against the bound
   project's slug with `agent="perunchat"` and the configured chat model, and
   load the project's `opencode.json` so the agent can use the
@@ -691,6 +695,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   memory and SQLite. Result frames carry `op`, `ok`, `proposal_id` and
   `transfer_id` (`package_accepted` with `ok: true`, `package_rejected` with
   `ok: false`), so the MCP client can distinguish success from rejection.
+  Downloads report approved targets that do not exist on disk in
+  `package_ready.missing_targets` rather than shipping a partial archive.
   Downloads are
   restricted to the proposal targets, skip sensitive files, and enforce
   package/entry/entry-count caps. Handoff frames set `recipient_id`: results and

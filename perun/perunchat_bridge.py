@@ -47,8 +47,8 @@ except Exception:  # pragma: no cover
     _HAS_HTTPX = False
 
 from . import (
-    action_proposals, config, control, db, memory, path_guard, registry,
-    routing, shared_project_sync, shared_projects,
+    action_proposals, config, control, db, fs_audit, memory, path_guard,
+    registry, routing, shared_project_sync, shared_projects,
 )
 
 if False:  # type: ignore
@@ -537,6 +537,8 @@ class PerunChatBridge:
         self._reply_count_minute = 0
         self._minute_window_start = time.time()
         self._rate_limit_lock = threading.Lock()
+        # Room -> wall-clock of the last [Routing] notice (anti-burst).
+        self._last_routing_notice: Dict[str, float] = {}
         self._seq = self._load_seq()
         # Wall-clock ms of the most recent successful gateway connect. Used to
         # detect messages that predate the connection (the gateway replays
@@ -1770,6 +1772,23 @@ class PerunChatBridge:
             paths = targets
         if not paths:
             return {"ok": False, "error": "no approved targets to package"}
+        # A declared target that does not exist is silently absent from the
+        # archive, which leaves the executor with a package that cannot satisfy
+        # the proposal (e.g. a checksum manifest nobody created). Name it
+        # instead of letting the agent discover the gap after unpacking.
+        try:
+            missing = [
+                name for name, digest in fs_audit.target_digests(
+                    project, targets
+                ).items() if digest is None
+            ]
+        except Exception:  # pragma: no cover - never block a download on this
+            missing = []
+        if missing:
+            logger.warning(
+                "package for %s is missing declared target(s): %s",
+                proposal_id, ", ".join(missing),
+            )
         try:
             archive = package_handoff.pack(project, paths)
         except Exception as exc:
@@ -1792,6 +1811,7 @@ class PerunChatBridge:
                 "sha256": digest,
                 "total_size": total,
                 "total_chunks": total_chunks,
+                "missing_targets": missing,
             },
             _EXECUTION_CONTENT_TYPE,
             recipient_id=recipient_id or sender,
@@ -1811,7 +1831,10 @@ class PerunChatBridge:
                 recipient_id=recipient_id or sender,
             )
 
-        return {"ok": True, "transfer_id": transfer_id, "direction": "download"}
+        return {
+            "ok": True, "transfer_id": transfer_id, "direction": "download",
+            "missing_targets": missing,
+        }
 
     def _register_upload_transfer(
         self, project: Dict[str, Any], payload: Dict[str, Any], sender: str,
@@ -2214,6 +2237,13 @@ class PerunChatBridge:
         text = self._frame_text(frame)
         if not text:
             return False
+        # Our own notices are not user intent, and a statement that merely names
+        # two projects is not a question. Routing only speaks up for an
+        # actionable message (run/ask/status/remember/recall/stop).
+        if text.lstrip().startswith("[Routing]"):
+            return False
+        if routing.detect_action(text) == "unknown":
+            return False
         try:
             projects = registry.list_projects(include_hidden=True)
             decision = routing.route(text, projects=projects, current=project["slug"])
@@ -2258,6 +2288,17 @@ class PerunChatBridge:
             # Log what routing would have said, then answer normally.
             return False
 
+        # One routing notice per room per two minutes: a burst of messages must
+        # not turn into a burst of identical questions.
+        now = time.time()
+        last_notice = self._last_routing_notice.get(room_id, 0.0)
+        if now - last_notice < 120.0:
+            logger.info(
+                "PerunChat suppressing a routing notice in %s (last one %.0fs ago)",
+                room_id, now - last_notice,
+            )
+            return False
+        self._last_routing_notice[room_id] = now
         self.post_to_room(room_id, notice)
         return True
 
@@ -2683,6 +2724,14 @@ class PerunChatBridge:
         text = (frame.get("payload", "") or "").strip()
         in_reply_to = frame.get("in_reply_to")
         lowered = text.lower()
+
+        # Never answer our own messages. The gateway echoes what we post, and a
+        # notice that happens to be phrased as a question would otherwise be
+        # answered by another notice — a self-sustaining loop.
+        sender = str((frame.get("sender") or {}).get("agent_id") or "").strip().lower()
+        own_id = str(self._agent_id or "").strip().lower()
+        if sender and own_id and sender == own_id:
+            return _ReplyDecision(False, "own message")
 
         # Always reply in private 1:1 rooms.
         if room_id.startswith("priv:") or room_id.startswith("private:"):

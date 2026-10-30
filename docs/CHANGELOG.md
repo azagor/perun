@@ -6,6 +6,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## Unreleased
+
+### Fixed
+
+- **Downloads name missing approved targets.** `package_ready` (and the
+  `request_download_package` result) now carries `missing_targets`: a target the
+  proposal declares but that does not exist on disk is silently absent from the
+  archive, which left the executor with a package it could not verify.
+- **PerunChat `[Routing]` notices can no longer loop.** The bridge answered its
+  own notice (it is phrased as a question) and the notice named two projects, so
+  it clarified again. `_should_reply_to()` now ignores frames from Perun's own
+  agent id; `_warn_cross_project()` ignores `[Routing] …` text and messages with
+  no actionable intent, and posts at most one notice per room every two minutes.
+
 ## v0.8.67
 
 *Released 2026-10-30.*

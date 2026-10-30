@@ -2588,6 +2588,38 @@ def test_download_transfer_publishes_package_frames(settings, tmp_path):
     assert sent[2]["recipient_id"] == "frambo"
 
 
+def test_download_names_declared_targets_that_do_not_exist(settings, tmp_path):
+    """A declared-but-absent target is reported, not silently dropped."""
+    from perun import action_proposals
+
+    project, room = _make_shared_project(
+        tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
+    root = Path(project["path"])
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project,
+        "frambo",
+        {
+            "intent": "edit api and pin a manifest",
+            "targets": ["api.py", "MANIFEST.sha256"],
+            "action_type": "edit",
+            "room_id": room,
+        },
+    )
+    proposal = action_proposals.approve(proposal["id"], "owner")
+    proposal = action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+
+    result = bridge._start_download_transfer(
+        project, {"proposal_id": proposal["id"]}, "frambo"
+    )
+
+    assert result["ok"] is True
+    assert result["missing_targets"] == ["MANIFEST.sha256"]
+
+
 def test_download_rejects_paths_outside_targets(settings, tmp_path):
     from perun import action_proposals
 
@@ -3369,3 +3401,80 @@ def test_room_guard_shadow_logs_and_does_not_post(settings, tmp_path):
         if row["kind"] == "routing_decision"
     ]
     assert rows and rows[0]["message"].startswith("shadow:")
+
+
+def test_room_guard_ignores_its_own_notice(settings, tmp_path):
+    """A [Routing] notice is not user intent and must not re-trigger itself."""
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    settings.routing_enabled = True
+    settings.routing_shadow = False
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    notice = "[Routing] Which project: perun, perunchat? Name one and resend."
+    assert bridge._warn_cross_project({"payload": {"text": notice}}, "grp:x") is False
+    assert posted == []
+
+
+def test_room_guard_ignores_a_statement_that_merely_names_two_projects(
+    settings, tmp_path
+):
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    settings.routing_enabled = True
+    settings.routing_shadow = False
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    frame = {"payload": {"text": "perun i perunchat maja podobne nazwy"}}
+    assert bridge._warn_cross_project(frame, "grp:x") is False
+    assert posted == []
+
+
+def test_room_guard_posts_at_most_one_notice_per_two_minutes(settings, tmp_path):
+    from perun import registry
+    from perun.perunchat_bridge import PerunChatBridge
+
+    (tmp_path / "room-proj").mkdir(exist_ok=True)
+    (tmp_path / "other-proj").mkdir(exist_ok=True)
+    room_project = registry.add_project("room-proj", str(tmp_path / "room-proj"), kind="dir")
+    registry.add_project("other-proj", str(tmp_path / "other-proj"), kind="dir")
+    settings.routing_enabled = True
+    settings.routing_shadow = False
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text)  # type: ignore[assignment]
+    bridge._project_binding = lambda rid: (room_project, {})  # type: ignore[assignment]
+
+    frame = {"payload": {"text": "@perun uruchom testy w other-proj"}}
+    assert bridge._warn_cross_project(frame, "grp:x") is True
+    assert bridge._warn_cross_project(frame, "grp:x") is False
+    assert len(posted) == 1
+
+
+def test_should_reply_ignores_peruns_own_messages(settings):
+    from perun.perunchat_bridge import PerunChatBridge
+
+    settings.routing_enabled = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "peruntheoverseer"
+
+    frame = {
+        "room_id": "grp:perun:room-proj:chat",
+        "payload": "What is perun?",
+        "sender": {"agent_id": "PerunTheOverseer"},
+    }
+    decision = bridge._should_reply_to(frame)
+    assert decision.should_reply is False
+    assert decision.reason == "own message"

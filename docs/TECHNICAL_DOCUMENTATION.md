@@ -993,7 +993,9 @@ refreshes the deadline, so a slow but progressing upload is not reclaimed
 mid-transfer. Execution results carry `op`, `ok`, `proposal_id` and
 `transfer_id` so the MCP client can correlate replies. The external apply is
 claim-locked as described above, so an expired or superseded claim cannot still
-write.
+write. Downloads name any declared target that does not exist on disk in
+`package_ready.missing_targets` (and in the tool result) instead of shipping a
+silently partial archive.
 Handoff frames are directed with `recipient_id`: results and downloads go to the
 claimant, upload chunks go to the room owner, and the gateway rejects
 unaddressed package chunks or result/`package_ready` frames from non-owners.
