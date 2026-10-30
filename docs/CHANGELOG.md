@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.55
+
+*Released 2026-10-30.*
+
 ### Added
 
 - **Target-drift guard for external execution.** `approve()` now records
