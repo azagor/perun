@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.65 (see §15). Route an ask that names another project into that project.
+**Latest release:** v0.8.66 (see §15). Target status/remember/recall at the project named in the message.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1819,6 +1819,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.66: Target status/remember/recall at the project named in the message.
+
 ### 2026-10-30 — v0.8.65: Route an ask that names another project into that project.
 
 ### 2026-10-30 — v0.8.64: Notify the Telegram chat when a restart interrupted its run.
