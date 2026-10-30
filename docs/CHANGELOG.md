@@ -4,7 +4,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Added
+
+- **Target-drift guard for external execution.** `approve()` now records
+  `approval_snapshot` (per-target sha256 + size, size-only above 8 MB, `null` for
+  a not-yet-created file) via `fs_audit.target_digests()`. `claim_execution()`
+  refuses a proposal whose target was modified, created or deleted since
+  approval, and `complete_external_execution()` re-checks before writing, so a
+  package built against older content cannot overwrite newer work. Proposals
+  approved before this column existed keep the old behaviour.
+
+### Fixed
+
+- **External claims verify the approval token.** `claim_execution` now refuses a
+  proposal whose HITL token is missing or corrupt, matching what the local
+  execution path already enforced.
+- **Legacy `execution_mode` rows are reset** for proposals that never executed, so
+  the label no longer claims a pipeline that did not run.
 
 ## v0.8.54
 
@@ -41,11 +57,6 @@ _No unreleased changes yet._
 - **A failed prompt-file write no longer leaks the prompt.** The temp file holds
   raw chat history and was previously left for the 24 h sweep if the write
   raised.
-- **External claims verify the approval token.** `claim_execution` now refuses a
-  proposal whose HITL token is missing or corrupt, matching what the local
-  execution path already enforced.
-- **Legacy `execution_mode` rows are reset** for proposals that never executed, so
-  the label no longer claims a pipeline that did not run.
 
 ### Documentation
 

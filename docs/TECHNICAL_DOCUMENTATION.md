@@ -137,7 +137,7 @@ can all write concurrently.
 | `bridge_links` | Telegram routing | `chat_id` unique → `project_id` + `session_pk`, `updated_at` |
 | `project_dependencies` | Manifest dependency graph | `project_id` + `depends_on_project_id`/`depends_on_slug`, relationship, deploy command/doc, auto-deploy flag, reason; indexes on both project columns |
 | `project_chats` | Shared Projects | Project → `grp:` room mapping, lifecycle state, `manifest_rev`, last sync |
-| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, `room_id`, status (`pending`/`approved`/`claimed`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens, executor/claim fields (`executor_id`, `executed_by`, `claimed_at`, `claim_expires_at`, `claim_snapshot`) |
+| `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, `room_id`, status (`pending`/`approved`/`claimed`/`executing`/`rejected`/`executed`/`failed`/`expired`), action hash, approver, tokens, target digests captured at approval (`approval_snapshot`), executor/claim fields (`executor_id`, `executed_by`, `claimed_at`, `claim_expires_at`, `claim_snapshot`) |
 | `pending_room_deletions` | Shared Projects | Retry queue for room teardown when gateway offline |
 
 Column additions after the first release are applied idempotently by
@@ -920,6 +920,18 @@ project's bound `project_chats.room_id` so the audit record names the room.
 `reject()` only accepts `pending`; a superseded approval is withdrawn with
 `cancel()` (`POST …/cancel`), which moves `approved → rejected` with a
 `cancelled:` result and logs `proposal_cancelled`.
+
+**Target-drift guard.** Approval fingerprints each declared target
+(`approval_snapshot`: sha256 + size per target, size-only above 8 MB, `null` for
+a file that does not exist yet) and `claim_execution()` recomputes it. If a
+target was modified, created or deleted between approval and claim, the claim is
+refused with `target changed since approval: …`; the same check runs again in
+`complete_external_execution()` (reported as `changed during upload`), so a
+package built against older content cannot overwrite newer work. The remediation
+is to `cancel()` the proposal and re-propose it — a fresh approval captures the
+current content. Proposals approved before this column existed have an empty
+snapshot and keep the old behaviour, so an upgrade cannot strand in-flight
+handoffs.
 
 An external apply first performs an atomic `claimed → executing` transition that
 matches the executor and an unexpired lease, immediately before

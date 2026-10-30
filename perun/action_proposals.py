@@ -328,16 +328,26 @@ def approve(proposal_id: str, approver: str, *,
         "details": proposal["details"],
     }
     token = engine.issue(proposal_id, execution_details)
+    # Capture what the approver is approving. An external claim recomputes this
+    # and refuses if a target changed in between, so a stale approval can never
+    # be applied over newer work.
+    project = registry.get_project(proposal["project_id"])
+    approval_snapshot = (
+        _to_json(fs_audit.target_digests(project, proposal["targets"]))
+        if project
+        else ""
+    )
     ts = _now()
     with db.db() as conn:
         cur = conn.execute(
             """UPDATE action_proposals SET status=?, approval_token=?, approval_expiry=?,
-               approved_by=?, approved_at=?, updated_at=?
+               approval_snapshot=?, approved_by=?, approved_at=?, updated_at=?
                WHERE id=? AND status='pending'""",
             (
                 "approved",
                 _to_json(token),
                 token["expiry_epoch"],
+                approval_snapshot,
                 approver.lower(),
                 ts,
                 ts,
@@ -435,6 +445,37 @@ def cancel(
     return proposal
 
 
+def _assert_targets_unchanged(
+    project: dict[str, Any], proposal: dict[str, Any], *, stage: str
+) -> None:
+    """Refuse to proceed when a declared target changed since approval.
+
+    ``stage`` only shapes the error message ("claimed" = before the download,
+    "applied" = before the upload is written). Proposals approved before this
+    tracking existed carry no snapshot; they are allowed through so an upgrade
+    cannot strand in-flight work, and the next approval captures one.
+    """
+    raw = proposal.get("approval_snapshot")
+    if not raw:
+        return
+    stored = _from_json(raw) if isinstance(raw, str) else raw
+    if not isinstance(stored, dict):
+        raise ValueError(
+            "approval snapshot is unreadable; cancel and re-propose this action"
+        )
+    drifted = fs_audit.drifted_targets(project, proposal.get("targets") or [], stored)
+    if not drifted:
+        return
+    shown = ", ".join(drifted[:5])
+    if len(drifted) > 5:
+        shown += f" (+{len(drifted) - 5} more)"
+    verb = "changed since approval" if stage == "claimed" else "changed during upload"
+    raise ValueError(
+        f"target {verb}: {shown}. Cancel this proposal and re-propose it so "
+        "approval captures the current content, then claim again."
+    )
+
+
 def claim_execution(
     proposal_id: str,
     executor_id: str,
@@ -483,6 +524,8 @@ def claim_execution(
     token = _from_json(token_raw) if isinstance(token_raw, str) else token_raw
     if not isinstance(token, dict) or not token.get("token"):
         raise ValueError("proposal has no valid approval token; re-approve it")
+
+    _assert_targets_unchanged(project, proposal, stage="claimed")
 
     # Snapshot before the external agent touches anything; this is the audit baseline.
     snapshot = fs_audit.snapshot(project, targets=proposal["targets"])
@@ -587,6 +630,7 @@ def complete_external_execution(
     # Lock the claim before touching the filesystem. The expiry sweep may have
     # returned the proposal to ``approved`` while the package was uploading; a
     # stale executor must not write, and a second claimant must not race us.
+    _assert_targets_unchanged(project, proposal, stage="applied")
     ts = _now()
     with db.db() as conn:
         cur = conn.execute(

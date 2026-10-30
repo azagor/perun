@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     expires_at      INTEGER NOT NULL,
     approval_token  TEXT,
     approval_expiry INTEGER,
+    approval_snapshot TEXT DEFAULT '',
     approved_by     TEXT,
     approved_at     TEXT,
     result          TEXT,
@@ -374,6 +375,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("claim_expires_at", "INTEGER DEFAULT 0"),
         ("claim_snapshot", "TEXT DEFAULT ''"),
         ("executed_by", "TEXT DEFAULT ''"),
+        # Target digests captured at approval (v0.8.55): claim refuses a target
+        # that changed between approval and external execution.
+        ("approval_snapshot", "TEXT DEFAULT ''"),
     ],
     # The room binding was not persisted before v0.8.40, so a transfer
     # restored after a restart could not be continued (it looked like it

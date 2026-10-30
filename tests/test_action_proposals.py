@@ -1382,3 +1382,126 @@ def test_claim_requires_a_valid_approval_token(tmp_path):
 
     # The proposal is untouched and can be re-approved.
     assert action_proposals.get(proposal["id"])["status"] == "approved"
+
+
+# --- claim-time target-drift check (backlog item 11) ----------------------
+
+def test_claim_refuses_a_target_changed_since_approval(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("approved content")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    (root / "api.py").write_text("someone else's newer work")
+
+    with pytest.raises(ValueError, match="changed since approval"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+    # The proposal is untouched and still claimable after re-approval.
+    assert action_proposals.get(proposal["id"])["status"] == "approved"
+
+
+def test_claim_refuses_a_target_created_since_approval(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "new_file.md")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "create"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    (root / "new_file.md").write_text("appeared later")
+
+    with pytest.raises(ValueError, match="changed since approval"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+
+def test_claim_refuses_a_target_deleted_since_approval(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("content")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    (root / "api.py").unlink()
+
+    with pytest.raises(ValueError, match="changed since approval"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+
+
+def test_claim_allows_unchanged_targets(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("stable")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    claimed = action_proposals.claim_execution(proposal["id"], "frambo")
+    assert claimed["status"] == "claimed"
+
+
+def test_claim_of_a_legacy_proposal_without_snapshot_is_allowed(tmp_path):
+    """Upgrading must not strand proposals approved before drift tracking."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("content")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET approval_snapshot='' WHERE id=?",
+            (proposal["id"],),
+        )
+    (root / "api.py").write_text("changed")
+
+    assert action_proposals.claim_execution(proposal["id"], "frambo")["status"] == "claimed"
+
+
+def test_apply_refuses_a_target_changed_during_upload(tmp_path):
+    import io
+    import zipfile
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("approved content")
+
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    # Another actor writes to the target while the package is being built.
+    (root / "api.py").write_text("newer work during upload")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("api.py", "external edit")
+    with pytest.raises(ValueError, match="changed during upload"):
+        action_proposals.complete_external_execution(
+            proposal["id"], "frambo", buf.getvalue()
+        )
+
+    assert (root / "api.py").read_text() == "newer work during upload"
+    assert action_proposals.get(proposal["id"])["status"] == "claimed"

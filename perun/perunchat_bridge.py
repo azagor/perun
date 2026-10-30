@@ -1599,7 +1599,12 @@ class PerunChatBridge:
         ``details`` once on claim so it can build the package; status/revoke
         responses omit it.
         """
-        hidden = {"approval_token", "approval_expiry", "claim_snapshot"}
+        hidden = {
+            "approval_token",
+            "approval_expiry",
+            "approval_snapshot",
+            "claim_snapshot",
+        }
         if not include_details:
             hidden.add("details")
         view = {k: v for k, v in proposal.items() if k not in hidden}

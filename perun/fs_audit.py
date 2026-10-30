@@ -7,11 +7,16 @@ for unexpected new top-level entries as a lightweight escape detector.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
 
 from . import path_guard, registry, shared_projects
+
+# Targets larger than this are fingerprinted by size only: hashing a huge file
+# inside an approval/claim request would stall the caller for no practical gain.
+TARGET_DIGEST_MAX_BYTES = 8 * 1024 * 1024
 
 
 def _stat_key(path: Path) -> tuple[int, float, int]:
@@ -90,6 +95,66 @@ def _is_under(target: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def target_digests(
+    project: dict[str, Any], targets: list[str] | None
+) -> dict[str, Any]:
+    """Fingerprint the proposal's declared targets for a drift check.
+
+    The result is JSON-safe and keyed by the *declared* target string, so it
+    survives a project move and stays readable in the audit trail. A target that
+    does not exist maps to ``None``; a later creation is therefore drift, which
+    is what stops an external apply from overwriting a file that appeared after
+    approval.
+    """
+    digests: dict[str, Any] = {}
+    for target in targets or []:
+        label = str(target)
+        try:
+            path = Path(path_guard.resolve_target(project["path"], target))
+        except Exception:
+            digests[label] = {"kind": "unresolvable"}
+            continue
+        try:
+            if path.is_dir():
+                digests[label] = {"kind": "dir"}
+                continue
+            if not path.is_file():
+                digests[label] = None
+                continue
+            size = path.stat().st_size
+            if size > TARGET_DIGEST_MAX_BYTES:
+                digests[label] = {"kind": "large", "size": size}
+                continue
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(block)
+            digests[label] = {"kind": "file", "sha256": digest.hexdigest(), "size": size}
+        except OSError:
+            digests[label] = {"kind": "unreadable"}
+    return digests
+
+
+def drifted_targets(
+    project: dict[str, Any],
+    targets: list[str] | None,
+    before: dict[str, Any] | None,
+) -> list[str]:
+    """Return the declared targets that no longer match *before*.
+
+    ``before`` is the digest map captured at approval time. An empty/absent map
+    means the proposal predates drift tracking; callers decide how to treat it.
+    """
+    if not isinstance(before, dict):
+        return []
+    current = target_digests(project, targets)
+    drifted: list[str] = []
+    for label in set(before) | set(current):
+        if before.get(label) != current.get(label):
+            drifted.append(label)
+    return sorted(drifted)
 
 
 def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:

@@ -720,7 +720,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/
-  deleted parent-directory entries to the activity table.
+  deleted parent-directory entries to the activity table. Also provides
+  `target_digests()` / `drifted_targets()` — the per-target sha256+size fingerprint
+  captured at approval and re-checked at claim/apply (8 MB hash cap, size-only
+  above it, `null` for a not-yet-created target).
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
   CAS approve/reject/cancel, atomic `approved → executing` claim, synchronous
   `execute`
@@ -730,7 +733,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   (`proposal_created`/`approved`/`rejected`/`cancelled`/`executed`). `cancel()`
   withdraws an approved-but-unclaimed proposal (`approved → rejected`, result
   `cancelled: <reason>`) and is restricted to the requester or the project owner,
-  because `reject()` only accepts `pending`. `_same_actor()` enforces
+  because `reject()` only accepts `pending`. `approve()` stores
+  `approval_snapshot` (per-target digests from `fs_audit.target_digests()`);
+  `claim_execution()` and `complete_external_execution()` refuse a target that
+  changed in between. `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
   `approve()`/`reject()`; the human dashboard routes and
   `auto_approve_and_execute()` pass `allow_self=True`. Approved runs use the
