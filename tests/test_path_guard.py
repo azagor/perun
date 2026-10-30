@@ -1,3 +1,4 @@
+import pytest
 import os
 
 from perun import path_guard
@@ -103,3 +104,22 @@ def test_validate_targets_returns_errors(tmp_path):
     errors = path_guard.validate_targets(str(tmp_path), [str(tmp_path / "ok.py"), str(outside)])
     assert len(errors) == 1
     assert "outside the project allowlist" in errors[0]
+
+
+def test_ancestor_named_like_sensitive_dir_does_not_deny(tmp_path):
+    project = tmp_path / "venv" / "proj"
+    (project / "docs").mkdir(parents=True)
+    ok, reason = path_guard.check(str(project), "docs/a.md")
+    assert ok, reason
+    ok, _ = path_guard.check(str(project), ".git/config")
+    assert not ok
+    ok, _ = path_guard.check(str(project), "docs/.ssh/x")
+    assert not ok
+    ok, _ = path_guard.check(str(project), "opencode.json.")
+    assert not ok
+
+
+@pytest.mark.parametrize("target", ["$HOME/a.md", "~/a.md", "%TEMP%\\a.md"])
+def test_shell_expansions_are_rejected(tmp_path, target):
+    with pytest.raises(ValueError):
+        path_guard.resolve_target(str(tmp_path), target)

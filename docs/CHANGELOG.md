@@ -4,7 +4,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **External apply locks the claim before writing.** `complete_external_execution`
+  atomically moves `claimed → executing` (matching executor and unexpired lease)
+  before `apply_package`, so a claim that expired or was taken by another agent
+  cannot still write. A stale `executing` row is failed after 12 hours.
+- **Handoff paths and ZIP entries are stricter.** Targets containing `$`, `%` or
+  `~` are rejected; sensitive-name checks run relative to the allowlist root
+  (no false positives from an ancestor named `venv`); trailing dots/spaces are
+  normalised; ZIP entries are rejected on case-insensitive duplicates, shell
+  characters or backslashes; staging uses `mkstemp`.
+- **HITL validation checks the signature before consuming the nonce.** Malformed
+  tokens/nonces/expiries return `invalid_signature` instead of raising or
+  burning a live nonce; `action_hash` uses canonical JSON for nested data; and
+  `HITLConfig` rejects a nonce window shorter than the token TTL + 5 s.
+- **Proposal targets are de-duplicated and type-checked**, and a `create`
+  proposal must touch every approved target before it can be `executed`.
 
 ## v0.8.48
 

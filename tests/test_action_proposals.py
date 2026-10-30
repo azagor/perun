@@ -1258,3 +1258,50 @@ def test_complete_external_execution_fails_on_no_target_changes(tmp_path):
     assert "NO TARGET CHANGES" in result["result"]
     # A failed completion still names the actor that attempted the handoff.
     assert result["executed_by"] == "frambo"
+
+def test_external_apply_rejects_stale_claim(tmp_path, monkeypatch):
+    import io, zipfile
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = str(root / "api.py")
+    (root / "api.py").write_text("old")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo")
+
+    monkeypatch.setattr(action_proposals, "expire_stale", lambda *a, **k: [])
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET claim_expires_at=? WHERE id=?",
+            (int(time.time()) - 1, proposal["id"]),
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("api.py", "new")
+    result = action_proposals.complete_external_execution(
+        proposal["id"], "frambo", buf.getvalue()
+    )
+    assert result["ok"] is False
+    assert "claim expired" in result["reason"]
+    assert (root / "api.py").read_text() == "old"
+
+
+def test_expire_stale_fails_abandoned_executing(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "api.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+    )
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET status='executing', updated_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", proposal["id"]),
+        )
+    action_proposals.expire_stale()
+    assert action_proposals.get(proposal["id"])["status"] == "failed"

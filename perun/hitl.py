@@ -13,10 +13,14 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
+
+_PROPOSAL_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_NONCE_RE = re.compile(r"[0-9a-f]{16,64}")
 
 
 @dataclass
@@ -24,6 +28,14 @@ class HITLConfig:
     secret_key: bytes
     token_ttl_seconds: int = 180
     nonce_ttl_seconds: int = 300
+
+    def __post_init__(self) -> None:
+        # Single-use tokens rely on the nonce outliving the token. Without this
+        # guard a short nonce window lets an expired token's nonce be reused.
+        if self.nonce_ttl_seconds < self.token_ttl_seconds + 5:
+            raise ValueError(
+                "nonce_ttl_seconds must be at least token_ttl_seconds + 5"
+            )
 
 
 class ApprovalStore:
@@ -71,10 +83,20 @@ class HITLTokenEngine:
     @staticmethod
     def action_hash(action: Dict[str, Any]) -> str:
         """Deterministic hash of execution details for token binding."""
-        canonical = json.dumps(action, sort_keys=True, ensure_ascii=False) if isinstance(action, dict) else str(action)
+        canonical = json.dumps(
+            action,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        ) if isinstance(action, dict) else str(action)
         return hashlib.sha256(canonical.encode()).hexdigest()
 
     def issue(self, proposal_id: str, execution_details: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(proposal_id, str) or not _PROPOSAL_ID_RE.fullmatch(proposal_id):
+            raise ValueError("invalid proposal_id for HITL token")
+        if not isinstance(execution_details, dict):
+            raise ValueError("execution_details must be an object")
         expiry = int(time.time()) + self.config.token_ttl_seconds
         nonce = secrets.token_hex(16)
         ahash = self.action_hash(execution_details)
@@ -96,15 +118,29 @@ class HITLTokenEngine:
         expiry_epoch: int,
         nonce: str,
     ) -> Tuple[bool, Optional[str]]:
+        # Reject malformed inputs before touching the nonce store so a bad call
+        # cannot burn a legitimate nonce.
+        if (
+            not isinstance(token, str)
+            or not token.isascii()
+            or not isinstance(proposal_id, str)
+            or not _PROPOSAL_ID_RE.fullmatch(proposal_id)
+            or not isinstance(nonce, str)
+            or not _NONCE_RE.fullmatch(nonce)
+            or not isinstance(expiry_epoch, int)
+            or isinstance(expiry_epoch, bool)
+            or not isinstance(execution_details, dict)
+        ):
+            return False, "invalid_signature"
         if int(time.time()) > expiry_epoch:
             return False, "expired"
-        if not self.store.consume(nonce):
-            return False, "nonce_replay"
         ahash = self.action_hash(execution_details)
         message = f"{proposal_id}||{ahash}||{expiry_epoch}||{nonce}".encode()
         expected = hmac.new(self.config.secret_key, message, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, token):
+        if not hmac.compare_digest(expected.encode(), token.encode()):
             return False, "invalid_signature"
+        if not self.store.consume(nonce):
+            return False, "nonce_replay"
         return True, None
 
 

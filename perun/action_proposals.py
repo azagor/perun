@@ -36,6 +36,9 @@ DEFAULT_PENDING_TTL_SECONDS = 24 * 3600
 APPROVED_TTL_SECONDS = 7 * 24 * 3600
 # External-agent execution handoff: how long a claimed proposal stays reserved.
 EXTERNAL_CLAIM_TTL_SECONDS = 3600
+# A run that never reports back is marked failed after this long. It is much
+# larger than any configured run timeout, so live runs are not reaped.
+EXECUTING_STALE_SECONDS = 12 * 3600
 # Approver identity recorded when a proposal is approved automatically by the
 # autonomous shared-project policy rather than by a human click.
 AUTO_APPROVER = "auto"
@@ -168,12 +171,21 @@ def create(
     if isinstance(raw_targets, str) or not isinstance(raw_targets, (list, tuple)):
         raise ValueError("proposal targets must be a list")
     targets = []
+    if len(raw_targets) > MAX_TARGETS:
+        raise ValueError(f"proposal has more than {MAX_TARGETS} targets")
+    seen_targets: set[str] = set()
     for target in raw_targets:
-        value = str(target).strip()
+        if not isinstance(target, str):
+            raise ValueError("proposal targets must be strings")
+        value = target.strip()
         if not value:
             continue
         if any(ord(ch) < 32 for ch in value):
             raise ValueError("proposal targets must not contain control characters")
+        key = value.replace("\\", "/").lower()
+        if key in seen_targets:
+            continue
+        seen_targets.add(key)
         targets.append(value)
     details = envelope.get("details")
     if details is None:
@@ -512,8 +524,33 @@ def complete_external_execution(
         )
         return {"ok": False, "reason": reason}
 
+    # Lock the claim before touching the filesystem. The expiry sweep may have
+    # returned the proposal to ``approved`` while the package was uploading; a
+    # stale executor must not write, and a second claimant must not race us.
+    ts = _now()
+    with db.db() as conn:
+        cur = conn.execute(
+            "UPDATE action_proposals SET status='executing', updated_at=? "
+            "WHERE id=? AND status='claimed' AND lower(executor_id)=? "
+            "AND (claim_expires_at=0 OR claim_expires_at>?)",
+            (ts, proposal_id, requester_id, int(time.time())),
+        )
+        claimed_now = cur.rowcount == 1
+    if not claimed_now:
+        registry.log_activity(
+            proposal["project_id"],
+            "proposal_handoff_rejected",
+            f"Proposal {proposal_id} claim expired or lost before apply",
+            {"proposal_id": proposal_id, "executor_id": executor_id},
+        )
+        return {"ok": False, "reason": "claim expired or lost before apply"}
+
     # Apply atomically (per-file temp + rename). Validation already passed.
-    package_handoff.apply_package(project, files)
+    try:
+        package_handoff.apply_package(project, files)
+    except Exception as exc:
+        _set_status(proposal_id, "failed", f"apply failed: {exc}"[:4000])
+        return {"ok": False, "reason": f"apply failed: {exc}"}
 
     # Audit against the claim-time snapshot. The snapshot is stored as JSON in
     # the DB but parsed to a dict by `_row_to_dict`; accept either form.
@@ -750,7 +787,46 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
             f"Claim on proposal {proposal_id} expired; returned to approved",
             {"proposal_id": proposal_id},
         )
-    return expired_ids + approved_ids + reclaimed_ids
+
+    # Recover rows stuck in ``executing`` (a crashed local run or a process that
+    # died between the claim lock and completion). ``updated_at`` is ISO here.
+    stale_executing: list[str] = []
+    stale_threshold = (
+        datetime.now(timezone.utc) - timedelta(seconds=EXECUTING_STALE_SECONDS)
+    ).isoformat()
+    try:
+        with db.db() as conn:
+            rows = db.rows(
+                conn,
+                "SELECT id FROM action_proposals "
+                "WHERE status='executing' AND updated_at<?",
+                (stale_threshold,),
+            )
+            stale_executing = [r["id"] for r in rows]
+            if stale_executing:
+                placeholders = ",".join("?" * len(stale_executing))
+                conn.execute(
+                    f"UPDATE action_proposals SET status='failed', result=?, "
+                    f"updated_at=? WHERE id IN ({placeholders}) "
+                    f"AND status='executing'",
+                    (
+                        "executor lost: stale executing run",
+                        _now(),
+                        *stale_executing,
+                    ),
+                )
+    except Exception as exc:  # pragma: no cover - schema drift
+        if "no such column" not in str(exc).lower():
+            raise
+        stale_executing = []
+    for proposal_id in stale_executing:
+        registry.log_activity(
+            None,
+            "proposal_executor_lost",
+            f"Proposal {proposal_id} marked failed: stale executing run",
+            {"proposal_id": proposal_id},
+        )
+    return expired_ids + approved_ids + reclaimed_ids + stale_executing
 
 
 def _prepare_execution(proposal_id: str) -> dict[str, Any]:
@@ -976,17 +1052,26 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
                 + list(audit_result.get("deleted") or [])
             )
         ]
-        if target_paths and not any(
-            _path_under(path, target)
-            for path in changed_paths
-            for target in target_paths
+        touched = [
+            target for target in target_paths
+            if any(_path_under(path, target) for path in changed_paths)
+        ]
+        missing = [t for t in target_paths if t not in touched]
+        if target_paths and (
+            not touched
+            or (proposal.get("action_type") == "create" and missing)
         ):
             status = "failed"
-            shown = ", ".join(str(t) for t in target_paths[:10])
+            if touched:
+                shown = ", ".join(str(t) for t in missing[:10])
+                label = "TARGETS NOT CHANGED"
+            else:
+                shown = ", ".join(str(t) for t in target_paths[:10])
+                label = "NO TARGET CHANGES"
             output = (
                 output
-                + "\n\n[NO TARGET CHANGES: the run reported success but none of "
-                f"the approved targets were created, modified or deleted: {shown}]"
+                + f"\n\n[{label}: the run reported success but these approved "
+                f"targets were not created, modified or deleted: {shown}]"
             ).strip()
 
     _set_status(proposal_id, status, output[:4000])

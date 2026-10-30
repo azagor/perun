@@ -166,6 +166,7 @@ def unpack(
 
     files: dict[str, bytes] = {}
     seen_names: set[str] = set()
+    seen_casefold: set[str] = set()
     total_uncompressed = 0
     try:
         with zipfile.ZipFile(io.BytesIO(archive_bytes), "r") as zf:
@@ -177,6 +178,12 @@ def unpack(
                 if info.filename in seen_names:
                     raise PackageError(f"duplicate entry name not allowed: {info.filename}")
                 seen_names.add(info.filename)
+                lowered_name = info.filename.replace("\\", "/").casefold()
+                if lowered_name in seen_casefold:
+                    raise PackageError(
+                        f"duplicate entry (case-insensitive): {info.filename}"
+                    )
+                seen_casefold.add(lowered_name)
                 # Reject encrypted entries.
                 if info.flag_bits & 0x1:
                     raise PackageError(f"encrypted entry not allowed: {info.filename}")
@@ -198,6 +205,10 @@ def unpack(
                 parts = name.replace("\\", "/").split("/")
                 if any(part == ".." for part in parts):
                     raise PackageError(f"entry escapes archive root: {name}")
+                if "\\" in name or any(ch in name for ch in "$%~"):
+                    raise PackageError(
+                        f"entry name contains unsupported characters: {name}"
+                    )
                 if info.is_dir():
                     # The protocol transfers files only; a directory entry
                     # would otherwise be applied as an empty regular file.
@@ -305,7 +316,11 @@ def apply_package(
             rel = target.relative_to(root)
             staged = new_dir / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_suffix(target.suffix + ".perun-tmp")
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=target.stem + ".", suffix=".perun-tmp", dir=target.parent
+            )
+            os.close(fd)
+            tmp = Path(tmp_name)
             try:
                 shutil.copy2(staged, tmp)
                 os.replace(str(tmp), str(target))

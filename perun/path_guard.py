@@ -45,7 +45,7 @@ def is_sensitive_path(path: str | Path) -> bool:
     except (TypeError, ValueError):
         return True
     for part in parts:
-        lowered = part.lower()
+        lowered = part.lower().rstrip(" .")
         if lowered in _SENSITIVE_DIR_NAMES:
             return True
         if lowered in _SENSITIVE_FILE_NAMES:
@@ -98,9 +98,11 @@ def allowlist(project_path: str | Path, deps: list[dict[str, Any]]) -> list[tupl
 
 def resolve_target(project_path: str | Path, target: str | Path) -> Path:
     """Resolve *target* relative to the project root, never the process CWD."""
+    raw = str(target)
+    if "$" in raw or "%" in raw or raw.startswith("~"):
+        raise ValueError("proposal targets must not contain shell expansions")
     base = _normalize(project_path)
-    expanded = os.path.expandvars(os.path.expanduser(str(target)))
-    target_path = Path(expanded)
+    target_path = Path(raw)
     if target_path.is_absolute():
         return target_path.resolve()
     return (base / target_path).resolve()
@@ -127,12 +129,12 @@ def check(
     base = _normalize(project_path)
     target_path = resolve_target(project_path, target)
 
-    if is_sensitive_path(target_path):
-        return False, f"{target_path} is a protected or sensitive path"
-
     entries = allowlist(project_path, deps or [])
     for parent, access in entries:
         if _is_under(target_path, parent):
+            rel = target_path.relative_to(parent)
+            if is_sensitive_path(rel):
+                return False, f"{target_path} is a protected or sensitive path"
             if require_write and access == "ro":
                 return False, f"{target_path} is read-only in the project manifest"
             return True, ""

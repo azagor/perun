@@ -266,3 +266,20 @@ def test_validate_rejects_external_dependency_targets(tmp_path):
 
 def test_sha256_helper():
     assert package_handoff.sha256_hex(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+def test_unpack_rejects_case_insensitive_duplicates():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("CANARY8.md", "one")
+        zf.writestr("canary8.md", "two")
+    with pytest.raises(package_handoff.PackageError):
+        package_handoff.unpack(buf.getvalue())
+
+
+@pytest.mark.parametrize("name", ["$HOME/x.md", "%TEMP%\\x.md"])
+def test_unpack_rejects_shell_or_backslash_names(name):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(name, "x")
+    with pytest.raises(package_handoff.PackageError):
+        package_handoff.unpack(buf.getvalue())

@@ -147,3 +147,40 @@ def test_default_secret_decrypts_encrypted_setting(monkeypatch, tmp_path):
     s.save()
 
     assert hitl._default_secret() == hashlib.sha256(b"hidden-secret").digest()
+
+def test_bad_signature_does_not_consume_nonce():
+    engine = HITLTokenEngine(HITLConfig(secret_key=b"test-secret"))
+    issued = engine.issue("prop_101", {"x": 1})
+    args = dict(
+        proposal_id="prop_101",
+        execution_details={"x": 1},
+        expiry_epoch=issued["expiry_epoch"],
+        nonce=issued["nonce"],
+    )
+    assert engine.validate(token="0" * 64, **args) == (False, "invalid_signature")
+    assert engine.validate(token=issued["token"], **args) == (True, None)
+
+
+def test_action_hash_ignores_nested_key_order():
+    digest = HITLTokenEngine.action_hash
+    assert digest({"a": {"x": 1, "y": 2}}) == digest({"a": {"y": 2, "x": 1}})
+
+
+@pytest.mark.parametrize("bad", [123, None, "é"])
+def test_non_string_token_is_rejected(bad):
+    engine = HITLTokenEngine(HITLConfig(secret_key=b"test-secret"))
+    issued = engine.issue("prop_102", {"x": 1})
+    ok, reason = engine.validate(
+        token=bad,
+        proposal_id="prop_102",
+        execution_details={"x": 1},
+        expiry_epoch=issued["expiry_epoch"],
+        nonce=issued["nonce"],
+    )
+    assert ok is False
+    assert reason == "invalid_signature"
+
+
+def test_config_rejects_short_nonce_window():
+    with pytest.raises(ValueError):
+        HITLConfig(secret_key=b"k" * 32, token_ttl_seconds=600, nonce_ttl_seconds=60)
