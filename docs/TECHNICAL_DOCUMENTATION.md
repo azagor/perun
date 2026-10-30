@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.53 (see §15). Reset the legacy execution_mode label on unexecuted proposals.
+**Latest release:** v0.8.54 (see §15). Require a valid HITL token before an external claim; reset legacy execution_mode rows.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1760,6 +1760,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.54: Require a valid HITL token before an external claim; reset legacy execution_mode rows.
+
 ### 2026-10-30 — v0.8.53: Reset the legacy execution_mode label on unexecuted proposals.
 
 ### 2026-10-30 — v0.8.52: DLP no longer rewrites payloads; NaN frames rejected; proposal cancel; upload and prompt-file hardening.
