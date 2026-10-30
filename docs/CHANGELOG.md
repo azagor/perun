@@ -6,6 +6,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+### Fixed
+
+- **A restart no longer leaves a Telegram run unanswered without a word.** When
+  the bridge starts, `_notify_interrupted_runs()` finds runs marked `interrupted`
+  in the last 15 minutes, maps their `session_pk` to a bound chat and sends one
+  "interrupted by a Perun restart, please resend" notice (once per run). Runs with
+  no bound chat are left alone.
+
 ## v0.8.63
 
 *Released 2026-10-30.*

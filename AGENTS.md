@@ -108,6 +108,10 @@ with `python -m perun project-roots --add <name> <path>`.
 * **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
   project or a command, but it must never be the only check on a mutating action:
   the guard allowlist, proposal approval and post-run audit stay in force.
+* **Never restart Perun under an active run.** A forced restart marks runs
+  `interrupted` and kills the reply; the bridge now posts a notice on its next
+  start, but the right check is `GET /api/runs/active` (or the dashboard's working
+  layer) before restarting.
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

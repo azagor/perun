@@ -1181,6 +1181,50 @@ def misroute_reported(decision_id: int) -> bool:
     return bool(row)
 
 
+def recent_interrupted_runs(minutes: int = 60) -> list[dict[str, Any]]:
+    """Runs this process (or a previous one) marked ``interrupted`` recently."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=max(1, int(minutes)))
+    ).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT r.*, p.slug AS project_slug FROM runs r "
+            "LEFT JOIN projects p ON p.id = r.project_id "
+            "WHERE r.status='interrupted' AND r.ended_at>=? ORDER BY r.id DESC",
+            (cutoff,),
+        )
+    return [dict(row) for row in rows]
+
+
+def chats_for_session(session_pk: int | str | None) -> list[str]:
+    """Chat ids bound to a session (used to notify a run's owner)."""
+    if session_pk in (None, ""):
+        return []
+    try:
+        key = int(session_pk)
+    except (TypeError, ValueError):
+        return []
+    with db.db() as conn:
+        rows = db.rows(
+            conn, "SELECT chat_id FROM bridge_links WHERE session_pk=?", (key,)
+        )
+    return [str(row["chat_id"]) for row in rows]
+
+
+def interrupt_notice_sent(run_uid: str) -> bool:
+    """True when this interrupted run already produced a chat notice."""
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT 1 FROM activity WHERE kind='run_interrupted_notice' AND message=?",
+            (f"interrupted run notice for {run_uid}",),
+        )
+    return bool(row)
+
+
 def prune_activity(
     keep_days: int = 90,
     *,

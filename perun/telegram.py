@@ -682,6 +682,44 @@ class PerunTelegramBridge:
             LOG.debug("could not record routing decision", exc_info=True)
 
     # ---- run a message ---- #
+    def _notify_interrupted_runs(self) -> None:
+        """Tell the chat when a restart killed its run.
+
+        A restart marks in-flight runs ``interrupted``; without this the operator
+        sees silence and no reply. Only runs from the last hour are
+        announced, only once per run, and only to chats whose ``session_pk``
+        matches, so a dashboard/API run does not message a random chat.
+        """
+        try:
+            runs = registry.recent_interrupted_runs(minutes=60)
+        except Exception:  # pragma: no cover - startup must not depend on this
+            LOG.debug("could not list interrupted runs", exc_info=True)
+            return
+        for run in runs:
+            run_uid = str(run.get("run_uid") or "")
+            if not run_uid:
+                continue
+            try:
+                if registry.interrupt_notice_sent(run_uid):
+                    continue
+                chats = registry.chats_for_session(run.get("session_pk"))
+                if not chats:
+                    continue
+                for chat_id in chats:
+                    self.send(
+                        chat_id,
+                        "⚠️ Your previous run was interrupted by a Perun restart, "
+                        "so no reply was produced. Please resend the message.",
+                    )
+                registry.log_activity(
+                    run.get("project_id"),
+                    "run_interrupted_notice",
+                    f"interrupted run notice for {run_uid}",
+                    {"run_uid": run_uid, "chats": chats},
+                )
+            except Exception:  # pragma: no cover - best effort
+                LOG.debug("could not notify about interrupted run %s", run_uid, exc_info=True)
+
     def run_message(self, chat_id: str, text: str, message_id: int) -> None:
         if self._route_message(chat_id, text, message_id):
             return
@@ -867,6 +905,7 @@ class PerunTelegramBridge:
         self.offset = (results[-1]["update_id"] + 1) if results else 0
         LOG.info("perun telegram bridge online (allow=%s)",
                  self.allowed or "<pair-on-first-message>")
+        self._notify_interrupted_runs()
         conflict_logged = 0.0
         while not self.stop_event.is_set():
             data = self.api("getUpdates", timeout=30, offset=self.offset)

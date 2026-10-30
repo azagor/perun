@@ -1192,10 +1192,17 @@ dashboard; sending `/pair <code>` (compared with `hmac.compare_digest`, handled
 grants access. `/stop` cancels only the *caller's* run (`self._runs`, keyed by
 chat) so one chat can no longer kill another's.
 
+**Restarts are visible.** A restart marks in-flight runs `interrupted`. On the
+next bridge start, `_notify_interrupted_runs()` finds runs interrupted in the
+last hour whose `session_pk` maps to a `bridge_links` chat and sends one
+notice ("interrupted by a Perun restart, please resend"), once per run
+(`run_interrupted_notice` activity row). A dashboard/API run with no bound chat
+is not announced anywhere. Avoid restarting while a run is active — check
+`GET /api/runs/active` first.
+
 **Exactly one poller.** `getUpdates` allows a single consumer per bot token, so
 two bridges would fight with HTTP 409s. Single-instance is enforced machine-wide
-by `telegram.PidLock` (a named Windows mutex namespaced by `PERUN_HOME`; on POSIX
-an `O_EXCL` pid file so two bridges cannot both "acquire") and honoured by both
+by `telegram.PidLock` (a named Windows mutex namespaced by `PERUN_HOME`; on POSIXan `O_EXCL` pid file so two bridges cannot both "acquire") and honoured by both
 `run_bridge()` (the `bridge` CLI, and the optional `PerunBridge` logon task) and
 `_start_bridge_thread()` (`serve --bridge`, which now keeps the lock referenced
 for the process lifetime). A second attempt refuses instead of poller-fighting,

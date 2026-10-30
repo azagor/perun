@@ -578,6 +578,9 @@ Shared Telegram ⇄ Perun bridge.
   `run_message()`, `worker()`, `authorised()` (strict: an empty allow-list grants
   nobody), `_handle_pair()` (`/pair <code>`, `hmac.compare_digest`, dispatched
   *before* the auth gate), `pair_code()`, `active_runs()`, `run_for()`, `run()`.
+  On startup `_notify_interrupted_runs()` messages a chat whose run a restart
+  killed (runs interrupted in the last 15 minutes, matched through
+  `bridge_links.session_pk`, once per run via `run_interrupted_notice`).
   Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
   With the routing setting enabled, `run_message()` first calls `_route_message()`
   (`_command_argument()`, `_log_routing_decision()`): `status`/`stop`/`remember`/

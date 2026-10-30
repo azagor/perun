@@ -194,3 +194,45 @@ def test_shadow_mode_logs_but_does_not_act(bridge, orch, routing_on, tmp_path, m
     ]
     assert rows and rows[0]["message"].startswith("shadow:")
     assert rows[0]["meta"]["shadow"] is True
+
+
+def test_bridge_notifies_a_chat_when_its_run_was_interrupted(bridge, tmp_path):
+    """A restart must not leave the operator with silence."""
+    from perun import registry
+
+    project = registry.add_project("Interrupt", str(tmp_path / "interrupt"), kind="dir")
+    run = registry.create_run(
+        "run_interrupted_1", project["id"], "what is perun the trader",
+        session_pk=77,
+    )
+    registry.update_run(
+        "run_interrupted_1", status="interrupted",
+        ended_at=registry.now_iso(), error="interrupted by a Perun restart",
+    )
+    registry.set_bridge_link("1", project["id"], 77)
+
+    bridge.sent.clear()
+    bridge._notify_interrupted_runs()
+
+    assert any("interrupted by a Perun restart" in text for text in bridge.sent)
+
+    # Second start must not repeat the notice.
+    bridge.sent.clear()
+    bridge._notify_interrupted_runs()
+    assert bridge.sent == []
+
+
+def test_bridge_does_not_notify_a_chat_that_has_no_matching_session(bridge, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("InterruptOther", str(tmp_path / "interruptother"), kind="dir")
+    registry.create_run("run_interrupted_2", project["id"], "x", session_pk=88)
+    registry.update_run(
+        "run_interrupted_2", status="interrupted",
+        ended_at=registry.now_iso(), error="interrupted",
+    )
+    registry.set_bridge_link("1", project["id"], None)
+
+    bridge.sent.clear()
+    bridge._notify_interrupted_runs()
+    assert bridge.sent == []
