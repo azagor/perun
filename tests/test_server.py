@@ -2248,3 +2248,103 @@ def test_routing_misroute_report_appends_an_activity_row(client, tmp_path):
 def test_routing_misroute_rejects_an_unknown_id(client):
     r = client.post("/api/routing/decisions/999999/misroute", json={})
     assert r.status_code == 404
+
+
+def test_routing_decisions_window_excludes_old_rows(client, tmp_path):
+    """The panel window is a real time filter, not just a row limit."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from perun import db, registry
+
+    project = registry.add_project("RouteWindow", str(tmp_path / "routewin"), kind="dir")
+    now = datetime.now(timezone.utc)
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO activity (project_id,ts,kind,message,meta) VALUES (?,?,?,?,?)",
+            (project["id"], (now - timedelta(hours=48)).isoformat(),
+             "routing_decision", "old", json.dumps({"action": "status"})),
+        )
+        conn.execute(
+            "INSERT INTO activity (project_id,ts,kind,message,meta) VALUES (?,?,?,?,?)",
+            (project["id"], now.isoformat(), "routing_decision", "new",
+             json.dumps({"action": "run"})),
+        )
+
+    body = client.get("/api/routing/decisions?hours=24&limit=50").json()
+    assert body["total"] == 1
+    assert body["decisions"][0]["action"] == "run"
+
+    body = client.get("/api/routing/decisions?hours=72&limit=50").json()
+    assert body["total"] == 2
+
+
+def test_routing_decisions_limit_is_clamped(client, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("RouteLimit", str(tmp_path / "routelimit"), kind="dir")
+    for index in range(3):
+        registry.log_activity(
+            project["id"], "routing_decision", f"routing: status {index}",
+            {"action": "status", "project": "perun"},
+        )
+    body = client.get("/api/routing/decisions?hours=24&limit=2").json()
+    assert body["total"] == 2
+
+
+def test_misroute_is_idempotent_and_redacts_a_secret_note(client, tmp_path):
+    from perun import registry
+
+    project = registry.add_project("RouteNote", str(tmp_path / "routenote"), kind="dir")
+    decision = registry.log_activity(
+        project["id"], "routing_decision", "shadow: run -> perun",
+        {"action": "run", "project": "perun", "shadow": True},
+    )
+
+    first = client.post(f"/api/routing/decisions/{decision['id']}/misroute", json={"note": "wrong"})
+    assert first.status_code == 200
+    assert first.json().get("duplicate") is not True
+
+    second = client.post(f"/api/routing/decisions/{decision['id']}/misroute", json={"note": "again"})
+    assert second.status_code == 200
+    assert second.json()["duplicate"] is True
+
+    rows = [r for r in registry.list_activity(limit=20) if r["kind"] == "routing_misroute"]
+    assert len(rows) == 1
+
+    other = registry.log_activity(
+        project["id"], "routing_decision", "shadow: status",
+        {"action": "status", "project": "perun", "shadow": True},
+    )
+    secret = "prn_live_" + "a1b2c3d4" * 6
+    r = client.post(f"/api/routing/decisions/{other['id']}/misroute", json={"note": secret})
+    assert r.status_code == 200
+    stored = [row for row in registry.list_activity(limit=20) if row["kind"] == "routing_misroute"]
+    assert any(row["meta"].get("note") == "[redacted]" for row in stored)
+
+
+def test_misroute_rejects_a_non_integer_id(client):
+    assert client.post("/api/routing/decisions/abc/misroute", json={}).status_code == 422
+
+
+def test_prune_activity_keeps_recent_and_other_kinds(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from perun import db, registry
+
+    project = registry.add_project("RoutePrune", str(tmp_path / "routeprune"), kind="dir")
+    old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    with db.db() as conn:
+        for kind in ("routing_decision", "run"):
+            conn.execute(
+                "INSERT INTO activity (project_id,ts,kind,message,meta) VALUES (?,?,?,?,?)",
+                (project["id"], old, kind, "old", json.dumps({})),
+            )
+    registry.log_activity(project["id"], "routing_decision", "new", {"action": "run"})
+
+    removed = registry.prune_activity(keep_days=90)
+    assert removed == 1
+    kinds = [row["kind"] for row in registry.list_activity(limit=50)]
+    assert "routing_decision" in kinds  # the recent one survives
+    assert "run" in kinds  # other kinds are never pruned

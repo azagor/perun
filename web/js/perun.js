@@ -5207,9 +5207,16 @@ async function viewProviders(refresh = false) {
 }
 
 /* ========================================================= SETTINGS ===== */
+let routingTimer = null;
+
+function stopRoutingTimer() {
+    if (routingTimer) { clearInterval(routingTimer); routingTimer = null; }
+}
+
 async function loadRoutingPanel() {
     const host = $('#routing-panel');
     if (!host) return;
+    stopRoutingTimer();
     host.innerHTML = '<div class="meta">loading routing decisions…</div>';
     let res;
     try {
@@ -5252,13 +5259,23 @@ async function loadRoutingPanel() {
     $('#routing-refresh')?.addEventListener('click', () => loadRoutingPanel());
     host.querySelectorAll('[data-misroute]').forEach((btn) => {
         btn.addEventListener('click', async () => {
+            if (btn.disabled) return;
+            btn.disabled = true;
             try {
                 await api(`/api/routing/decisions/${btn.dataset.misroute}/misroute`, { method: 'POST', body: {} });
                 toast('Reported — thanks', 'ok');
                 loadRoutingPanel();
-            } catch (e) { toast(e.message, 'err'); }
+            } catch (e) {
+                btn.disabled = false;
+                toast(e.message, 'err');
+            }
         });
     });
+    // Refresh only while this panel is on screen; navigating away clears it.
+    routingTimer = setInterval(() => {
+        if (!document.getElementById('routing-panel')) { stopRoutingTimer(); return; }
+        loadRoutingPanel();
+    }, 60000);
 }
 
 async function viewSettings() {

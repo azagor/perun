@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixed
+
+- **Routing telemetry is bounded and its reports are safe.** `activity(kind, ts)`
+  is indexed; `registry.prune_activity()` removes `routing_decision` /
+  `routing_misroute` rows older than 90 days at startup and daily (other kinds
+  untouched). The ✗ report is idempotent per decision, and a note that looks like
+  a credential is stored as `[redacted]`. `memory.is_sensitive()` now also
+  recognises `prn_live_`/`prn_test_` and generic `sk-…` keys. The panel disables
+  the button after a report and refreshes itself while the page is open.
 
 ## v0.8.62
 

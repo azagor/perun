@@ -1169,6 +1169,45 @@ def get_activity(activity_id: int) -> dict[str, Any] | None:
     return entry
 
 
+def misroute_reported(decision_id: int) -> bool:
+    """True when this routing decision already has a misroute marker."""
+    message = f"misroute reported for routing decision {int(decision_id)}"
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT 1 FROM activity WHERE kind='routing_misroute' AND message=?",
+            (message,),
+        )
+    return bool(row)
+
+
+def prune_activity(
+    keep_days: int = 90,
+    *,
+    kinds: tuple[str, ...] = ("routing_decision", "routing_misroute"),
+) -> int:
+    """Delete old routing telemetry rows (never run/proposal audit rows).
+
+    Shadow mode writes one row per inbound message; without a sweep the table
+    grows forever. Only the routing kinds are pruned — run history and the
+    proposal/audit trail stay.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if not kinds:
+        return 0
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=max(1, int(keep_days)))
+    ).isoformat()
+    placeholders = ",".join("?" for _ in kinds)
+    with db.db() as conn:
+        cur = conn.execute(
+            f"DELETE FROM activity WHERE kind IN ({placeholders}) AND ts < ?",
+            (*kinds, cutoff),
+        )
+        return int(cur.rowcount or 0)
+
+
 def routing_decisions(hours: int = 24, limit: int = 50) -> list[dict[str, Any]]:
     """Recent ``routing_decision`` rows, newest first (dashboard panel).
 

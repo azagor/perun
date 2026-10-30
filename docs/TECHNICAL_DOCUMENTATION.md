@@ -811,7 +811,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET/POST/DELETE | `/api/perunchat/rooms/{room_id}/members[/{agent_id}]` | list, invite, or remove participants of a private room |
 | GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project; `approval_token`, `approval_snapshot` and `claim_snapshot` are stripped (the token is returned by the approval call) |
 | GET | `/api/routing/decisions` | Recent `routing_decision` rows for the dashboard panel: `total`, `by_action`, `unknown_share`, `shadow` count, `enabled`/`shadow_mode` from settings, and per-decision action/project/confidence/`matched_by`/candidates (never the message text) |
-| POST | `/api/routing/decisions/{id}/misroute` | Record that a routing decision was wrong (`routing_misroute` activity row, used for threshold tuning) |
+| POST | `/api/routing/decisions/{id}/misroute` | Record that a routing decision was wrong (`routing_misroute` activity row, used for threshold tuning); idempotent per decision, and a note that looks like a credential is stored as `[redacted]` |
 | POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal (only while `pending`) |
@@ -1175,6 +1175,12 @@ decision (message prefix `shadow:`, `shadow: true` in the metadata), but the
 bridge takes the previous path, so nothing changes for the operator. Enable
 routing + shadow for a week, read `routing_decision` rows, then turn shadow off
 once the decisions look right.
+
+Routing telemetry is high-volume (one row per inbound message in shadow), so it
+is bounded: `activity(kind, ts)` is indexed, and
+`registry.prune_activity()` deletes `routing_decision`/`routing_misroute` rows
+older than 90 days at startup and once a day. Run history, proposal and audit
+rows are never pruned.
 
 **Pairing / allow-list.** An empty `telegram_allowed_chats` grants **nobody** —
 the old "first chat to write wins" behaviour let anyone who found the bot drive

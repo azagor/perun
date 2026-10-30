@@ -121,7 +121,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `delete_task()` (reusable project tasks queued into the TUI prompt chain).
 * Activity: `log_activity()`, `list_activity()`, `get_activity()` (one row with
   `meta` parsed), `routing_decisions(hours, limit)` (the `routing_decision`
-  window used by the dashboard panel).
+  window used by the dashboard panel), `misroute_reported(decision_id)` (dedupes
+  the ✗ report), and `prune_activity(keep_days=90)` (routing telemetry only —
+  run/proposal/audit rows are never pruned).
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 
 ### `perun/control.py`

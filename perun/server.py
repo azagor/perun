@@ -108,7 +108,16 @@ def _start_reembed_thread() -> threading.Event | None:
     stop = threading.Event()
     def _loop() -> None:
         delay = _REEMBED_INITIAL_DELAY_SECONDS
+        next_prune = 0.0
         while not stop.wait(delay):
+            # Daily retention sweep for routing telemetry (idempotent; the
+            # startup pass covers a restart before the first interval).
+            if time.time() >= next_prune:
+                try:
+                    registry.prune_activity()
+                except Exception:  # pragma: no cover - best effort
+                    pass
+                next_prune = time.time() + 86_400
             try:
                 res = memory.reembed_missing(limit=32)
                 try:
@@ -170,6 +179,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         shared_project_sync.retry_pending_room_deletions()
     except Exception:  # pragma: no cover - best-effort retry
         pass
+    # Drop routing telemetry older than the retention window (shadow mode writes
+    # one row per inbound message). Best-effort: never block startup.
+    try:
+        registry.prune_activity()
+    except Exception:  # pragma: no cover - startup must not depend on this
+        logging.getLogger("perun.server").debug(
+            "could not prune routing telemetry", exc_info=True
+        )
     # Start a background thread that repairs embeddings written while Ollama
     # was down. It is daemonic and signalled on shutdown.
     reembed_stop = _start_reembed_thread()
@@ -2628,8 +2645,13 @@ def api_routing_misroute(
     row = registry.get_activity(decision_id)
     if not row or row.get("kind") != "routing_decision":
         raise HTTPException(status_code=404, detail="routing decision not found")
+    if registry.misroute_reported(decision_id):
+        return _ok(reported=decision_id, duplicate=True)
     meta = row.get("meta") or {}
     note = str(payload.get("note") or "").strip()[:500]
+    if note and memory.is_sensitive(note):
+        # A free-text note must not become a secret store.
+        note = "[redacted]"
     registry.log_activity(
         row.get("project_id") or None,
         "routing_misroute",

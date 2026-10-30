@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
 CREATE INDEX IF NOT EXISTS idx_activity_project_id ON activity(project_id, id DESC);
+-- Routing telemetry is queried by kind + window (dashboard panel) and pruned by
+-- kind + age; without this index that is a full scan once the table grows.
+CREATE INDEX IF NOT EXISTS idx_activity_kind_ts ON activity(kind, ts);
 
 -- Unified memory. scope='global' rows use project_id=0 so the UNIQUE
 -- constraint works (SQLite treats NULLs as distinct). Deliberately no FK to

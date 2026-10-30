@@ -93,6 +93,8 @@ _SENSITIVE = [
     re.compile(r"\bxox[abpos]-[A-Za-z0-9\-]{10,}\b"),                        # Slack tokens
     re.compile(r"\bsk_live_[0-9a-zA-Z]{24,}\b"),                             # Stripe live keys
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"),                           # Anthropic keys
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}\b"),                               # OpenAI-style keys
+    re.compile(r"\bprn_(?:live|test)_[A-Za-z0-9]{8,}\b"),                    # PerunChat keys
     re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"),  # JWT
     # Connection strings carrying inline credentials (postgres://user:pass@host…).
     re.compile(r"\b[a-z][a-z0-9+.\-]*://[^\s/:@'\"\"]{1,64}:[^\s@'\"\"]{4,}@"),
