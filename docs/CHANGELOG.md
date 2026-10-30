@@ -6,6 +6,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## Unreleased
+
+### Fixed
+
+- **`status` / `remember` / `recall` now act on the project named in the message.**
+  Routing resolved a project for every action but only `run`/`ask` used it, so
+  "status trading-bot" while bound to Perun showed Perun's status and a memory
+  fact mentioning another project was stored under the wrong scope. Those three
+  actions now receive the resolved slug as `project_override` (one message only —
+  the chat binding is untouched).
+
 ## v0.8.65
 
 *Released 2026-10-30.*

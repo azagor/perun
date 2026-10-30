@@ -251,3 +251,48 @@ def test_enabled_ask_switches_to_the_named_project(bridge, orch, routing_on, tmp
     assert orch.started[0]["slug"] == "trading-bot"
     assert "→ `trading-bot`" in bridge.sent
     assert registry.get_bridge_link("1")["project_id"] == trading["id"]
+
+
+def test_status_targets_the_named_project_without_rebinding(bridge, routing_on, tmp_path):
+    perun = _add(tmp_path, "perun")
+    _add(tmp_path, "trading-bot")
+    registry.set_bridge_link("1", perun["id"], None)
+
+    bridge.run_message("1", "status trading-bot", 1)
+
+    assert "trading-bot" in bridge.sent[-1]
+    assert registry.get_bridge_link("1")["project_id"] == perun["id"]
+
+
+def test_remember_targets_the_named_project(bridge, routing_on, tmp_path, monkeypatch):
+    perun = _add(tmp_path, "perun")
+    trading = _add(tmp_path, "trading-bot")
+    registry.set_bridge_link("1", perun["id"], None)
+    captured: dict = {}
+
+    def fake_remember(fact, **kw):  # noqa: ANN001, ANN003
+        captured["fact"] = fact
+        captured.update(kw)
+        return {"ok": True}
+
+    monkeypatch.setattr("perun.telegram.memory.remember", fake_remember)
+    bridge.run_message("1", "zapamietaj ze trading-bot ma 12 gield", 1)
+
+    assert captured["project_id"] == trading["id"]
+    assert "12 gield" in captured["fact"]
+
+
+def test_recall_searches_the_named_project(bridge, routing_on, tmp_path, monkeypatch):
+    perun = _add(tmp_path, "perun")
+    trading = _add(tmp_path, "trading-bot")
+    registry.set_bridge_link("1", perun["id"], None)
+    captured: dict = {}
+
+    def fake_search(query, project_id=0, **kw):  # noqa: ANN001, ANN003
+        captured["project_id"] = project_id
+        return []
+
+    monkeypatch.setattr("perun.telegram.memory.unified_search", fake_search)
+    bridge.run_message("1", "co wiesz o trading-bocie", 1)
+
+    assert captured["project_id"] == trading["id"]

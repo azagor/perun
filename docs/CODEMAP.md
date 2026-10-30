@@ -585,7 +585,9 @@ Shared Telegram ⇄ Perun bridge.
   With the routing setting enabled, `run_message()` first calls `_route_message()`
   (`_command_argument()`, `_log_routing_decision()`): `status`/`stop`/`remember`/
   `recall` are answered without a run, ambiguity asks, and a `run`/`ask` naming another
-  project rebinds `bridge_links` before starting. `routing_shadow` logs the same
+  project rebinds `bridge_links` before starting. `status`/`remember`/`recall`
+  pass the resolved slug as `project_override` so they act on the named project
+  without moving the chat. `routing_shadow` logs the same
   decision (message prefixed `shadow:`) and then takes the previous path, for a
   log-only trial week. Decisions are logged as
   `routing_decision` activity rows without the message text.

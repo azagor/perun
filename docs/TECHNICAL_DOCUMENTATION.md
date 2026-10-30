@@ -1159,7 +1159,9 @@ plain message first goes through `perun.routing.route()` in `run_message()`:
 `status`/`stop`/`remember`/`recall` are answered without starting an agent run,
 an ambiguous project mention asks which project instead of guessing, and a `run`
 or `ask` that names another project switches the chat's binding (`bridge_links`)
-before the run starts. Command keywords are matched in the leading window only (after
+before the run starts. `status`/`remember`/`recall` target the named project for
+that one message (`project_override`) without moving the chat, so "status
+trading-bot" reports that project while your next message keeps its binding. Command keywords are matched in the leading window only (after
 an optional mention or "please"), negation yields `unknown`, and a question at
 the start wins over a verb later — so "dodaj komendę status" runs the agent,
 "nie uruchom testów" does nothing, and "jak dodać status" is a question.

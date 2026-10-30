@@ -410,7 +410,8 @@ class PerunTelegramBridge:
         self.send(chat_id, f"✅ Now talking to *{project['name']}* (`{project['slug']}`).",
                   reply_to=message_id if message_id else None)
 
-    def _handle_text_command(self, chat_id: str, text: str, message_id: int) -> bool:
+    def _handle_text_command(self, chat_id: str, text: str, message_id: int,
+                             *, project_override: str | None = None) -> bool:
         parts = text.strip().split()
         if not parts:
             return True
@@ -494,7 +495,8 @@ class PerunTelegramBridge:
             self.send(chat_id, "🆕 New session. Context cleared.", reply_to=message_id)
             return True
         if root == "/status":
-            proj = self._current_project(chat_id)
+            proj = (registry.get_project(project_override) if project_override else None) \
+                or self._current_project(chat_id)
             link = self._chat_state(chat_id)
             up = int(time.time() - self.started_at)
             self.send(chat_id,
@@ -513,7 +515,8 @@ class PerunTelegramBridge:
                 self.send(chat_id, "Nothing is running.", reply_to=message_id)
             return True
         if root == "/remember":
-            proj = self._current_project(chat_id)
+            proj = (registry.get_project(project_override) if project_override else None) \
+                or self._current_project(chat_id)
             fact = text.split(" ", 1)[1].strip() if len(parts) > 1 else ""
             if not fact:
                 self.send(chat_id, "Usage: `/remember <fact>`", reply_to=message_id)
@@ -525,7 +528,8 @@ class PerunTelegramBridge:
                       reply_to=message_id)
             return True
         if root == "/recall":
-            proj = self._current_project(chat_id)
+            proj = (registry.get_project(project_override) if project_override else None) \
+                or self._current_project(chat_id)
             query = text.split(" ", 1)[1].strip() if len(parts) > 1 else ""
             if not query:
                 self.send(chat_id, "Usage: `/recall <query>`", reply_to=message_id)
@@ -627,7 +631,10 @@ class PerunTelegramBridge:
             return True
 
         if decision.action in ("status", "stop"):
-            return self._handle_text_command(chat_id, f"/{decision.action}", message_id)
+            return self._handle_text_command(
+                chat_id, f"/{decision.action}", message_id,
+                project_override=decision.project,
+            )
 
         if decision.action in ("remember", "recall"):
             argument = self._command_argument(text, decision.action)
@@ -639,7 +646,8 @@ class PerunTelegramBridge:
                 )
                 return True
             return self._handle_text_command(
-                chat_id, f"/{decision.action} {argument}", message_id
+                chat_id, f"/{decision.action} {argument}", message_id,
+                project_override=decision.project,
             )
 
         if (
