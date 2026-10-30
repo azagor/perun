@@ -6,6 +6,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.8.65
+
+*Released 2026-10-30.*
+
+_No unreleased changes yet._
+
 ### Fixed
 
 - **A question that names another project now runs there.** Routing only

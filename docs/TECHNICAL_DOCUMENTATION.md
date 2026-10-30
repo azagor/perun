@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.64 (see §15). Notify the Telegram chat when a restart interrupted its run.
+**Latest release:** v0.8.65 (see §15). Route an ask that names another project into that project.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1817,6 +1817,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.65: Route an ask that names another project into that project.
+
 ### 2026-10-30 — v0.8.64: Notify the Telegram chat when a restart interrupted its run.
 
 ### 2026-10-30 — v0.8.63: Bound routing telemetry (index + retention), dedupe and redact misroute reports.
