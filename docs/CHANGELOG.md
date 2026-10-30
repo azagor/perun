@@ -6,6 +6,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+### Fixed
+
+- **A question that names another project now runs there.** Routing only
+  rebound the chat for `run`; an `ask` such as "what is trading-bot?" stayed on
+  the bound project (orchestrator), so the answer appeared in the wrong project's
+  history. `ask` now rebinds exactly like `run` and prints the `→ <slug>` notice.
+
 ## v0.8.64
 
 *Released 2026-10-30.*

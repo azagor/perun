@@ -236,3 +236,18 @@ def test_bridge_does_not_notify_a_chat_that_has_no_matching_session(bridge, tmp_
     bridge.sent.clear()
     bridge._notify_interrupted_runs()
     assert bridge.sent == []
+
+
+def test_enabled_ask_switches_to_the_named_project(bridge, orch, routing_on, tmp_path):
+    """A question about another project must be answered in that project, not
+    in whichever project the chat happened to be bound to."""
+    perun = _add(tmp_path, "perun")
+    trading = _add(tmp_path, "trading-bot")
+    registry.set_bridge_link("1", perun["id"], None)
+
+    bridge.run_message("1", "what is trading-bot?", 1)
+
+    assert len(orch.started) == 1
+    assert orch.started[0]["slug"] == "trading-bot"
+    assert "→ `trading-bot`" in bridge.sent
+    assert registry.get_bridge_link("1")["project_id"] == trading["id"]

@@ -643,7 +643,7 @@ class PerunTelegramBridge:
             )
 
         if (
-            decision.action == "run"
+            decision.action in ("run", "ask")
             and decision.project
             and (not current or decision.project != current.get("slug"))
         ):
