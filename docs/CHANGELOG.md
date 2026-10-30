@@ -6,6 +6,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.8.64
+
+*Released 2026-10-30.*
+
+_No unreleased changes yet._
+
 ### Fixed
 
 - **A restart no longer leaves a Telegram run unanswered without a word.** When
