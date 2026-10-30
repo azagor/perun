@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.8.56
+
+*Released 2026-10-30.*
+
 ### Added
 
 - **`cancelled` is a first-class proposal status.** Withdrawing an approved

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.8.55 (see §15). Refuse an external claim when a target changed since approval.
+**Latest release:** v0.8.56 (see §15). Cancelled proposal status, approval state stripped from list responses, mtime-based digests for large targets.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1774,6 +1774,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-30 — v0.8.56: Cancelled proposal status, approval state stripped from list responses, mtime-based digests for large targets.
+
 ### 2026-10-30 — v0.8.55: Refuse an external claim when a target changed since approval.
 
 ### 2026-10-30 — v0.8.54: Require a valid HITL token before an external claim; reset legacy execution_mode rows.
