@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Every MCP block on this machine is V2 now
+
+* The two remaining V1-flat configs were converted: `ai_playground` (guard and
+  proposals) migrated through `sync_opencode_config`, with the pre-migration copy
+  landing in `~/.perun/backups/ai-playground/`; the Perun repo's own
+  `opencode.json` dropped its local `mcp.perun` entry entirely. That entry
+  shadowed the global one with a bare `python` and no `PERUN_HOME` pin, so a
+  session here could have opened a different database than the running server.
+  The global `mcp.servers.perun` already covers every project with the pinned
+  form — `opencode mcp list` in this repo still reports `perun connected`.
+* New projects are unaffected: `scaffold._OPENCODE_JSON` only writes `$schema`,
+  so nothing regenerates the redundant entry.
 
 ## v0.10.16
 
