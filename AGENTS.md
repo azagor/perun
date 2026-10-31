@@ -113,6 +113,9 @@ with `python -m perun project-roots --add <name> <path>`.
   through the event stream; never make "a run" mean "a child process" again, never
   re-admit without checking `admitted_at`, and keep the reply exactly-once
   (`runs.reply_sent_at`).
+* **A TUI run is standalone.** `POST /api/runs/tui` records an external
+  terminal (`runs.standalone=1`); never mark it interrupted on restart, never
+  offer a Stop button for it, and only sweep it after `tui_run_stale_hours`.
 * **Notifications carry a typed target.** `attention_requests.target_kind` +
   `target_id` decide where a reply goes; never infer the context from the current
   project or the newest session. Producers only write rows — the process that owns

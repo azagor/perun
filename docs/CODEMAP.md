@@ -87,7 +87,9 @@ search), `secret_store` (encrypted secret values), plus the operator-inbox
 tables `attention_requests` (typed target + `dedupe_key` unique among open rows),
 `attention_deliveries` (chat → message id), `attention_outbox` (undelivered room
 replies) and `attention_mutes` (per-chat `/mute`), and `telegram_jobs` (the durable update
-queue: dedupe key, state, attempts, backoff) and `run_leases` (run ownership with
+queue: dedupe key, state, attempts, backoff), `runs.standalone` (an external TUI
+terminal, never interrupted by a restart, swept after `tui_run_stale_hours`) and
+`run_leases` (run ownership with
 heartbeat + epoch). `runs` carries `admitted_at`, `created_at` and
 `reply_sent_at` for durable runs.
 * `SCHEMA`, `SCHEMA_VERSION` (the `PRAGMA user_version` migration gate),

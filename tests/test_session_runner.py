@@ -356,3 +356,42 @@ def test_idle_while_the_session_is_active_does_not_end_the_turn(orch, hub, api, 
     final = registry.get_run(run["run_uid"])
     assert final["status"] == "done"
     assert final["output"] == "done"
+
+
+def test_a_standalone_tui_run_survives_a_restart(orch, api, project):
+    """The card's ▶ Run owns an external terminal: a restart must not kill it."""
+    registry.create_run("run_tui", project["id"], "Started a working session",
+                        standalone=True)
+    registry.update_run("run_tui", status="running", started_at=registry.now_iso())
+
+    result = orch.reconcile_startup()
+
+    assert "run_tui" not in result["interrupted"]
+    assert registry.get_run("run_tui")["status"] == "running"
+    assert [r["run_uid"] for r in registry.list_active_runs()] == ["run_tui"]
+    assert registry.list_active_runs()[0]["standalone"] == 1
+
+
+def test_an_old_standalone_run_is_swept(orch, api, project):
+    registry.create_run("run_tui_old", project["id"], "Started a working session",
+                        standalone=True)
+    registry.update_run("run_tui_old", status="running", started_at=registry.now_iso())
+    with registry.db.db() as conn:
+        conn.execute("UPDATE runs SET started_at='2020-01-01T00:00:00+00:00' "
+                     "WHERE run_uid='run_tui_old'")
+
+    result = orch.reconcile_startup()
+
+    assert "run_tui_old" in result["interrupted"]
+    assert registry.get_run("run_tui_old")["status"] == "interrupted"
+
+
+def test_reconcile_runs_ignores_standalone_rows(orch, api, project):
+    registry.create_run("run_tui_live", project["id"], "TUI", standalone=True)
+    registry.update_run("run_tui_live", status="running",
+                        started_at=registry.now_iso())
+
+    result = orch.reconcile_runs()
+
+    assert result == {"reattached": [], "finalized": [], "interrupted": []}
+    assert registry.get_run("run_tui_live")["status"] == "running"

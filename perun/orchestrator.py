@@ -1309,6 +1309,15 @@ class Orchestrator:
             row = registry.get_run(uid) or run
             if row.get("admitted_at"):
                 continue
+            if row.get("standalone"):
+                # An external TUI terminal owns this run; it is alive exactly as
+                # long as that terminal is. Only an old one is swept, so a stale
+                # card cannot stay "working" forever after the terminal is gone.
+                if self._standalone_stale(row):
+                    self._mark_interrupted(
+                        uid, "TUI session ended while Perun was down")
+                    interrupted.append(uid)
+                continue
             if row.get("status") == "queued":
                 stamp = row.get("created_at") or row.get("started_at") or ""
                 young = False
@@ -1329,6 +1338,18 @@ class Orchestrator:
                 interrupted.append(uid)
         return {"resumed": resumed, "interrupted": interrupted}
 
+    def _standalone_stale(self, run: dict[str, Any]) -> bool:
+        try:
+            hours = int(getattr(self.settings, "tui_run_stale_hours", 24))
+        except (TypeError, ValueError):
+            hours = 24
+        stamp = run.get("started_at") or run.get("created_at") or ""
+        try:
+            return datetime.fromisoformat(stamp) < (
+                datetime.now(timezone.utc) - timedelta(hours=max(1, hours)))
+        except (TypeError, ValueError):
+            return False
+
     def reconcile_runs(self) -> dict[str, list[str]]:
         """Reattach to running sessions, finalize finished ones, close orphans."""
         from . import opencode_api
@@ -1340,6 +1361,8 @@ class Orchestrator:
         for run in registry.list_active_runs():
             uid = run["run_uid"]
             if uid in live:
+                continue
+            if run.get("standalone"):
                 continue
             if run["status"] != "running" or not run.get("admitted_at"):
                 continue

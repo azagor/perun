@@ -2371,7 +2371,7 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     _registry.create_run(
         run_uid, project["id"], prompt,
         model=model, model_explicit=bool(model),
-        agent=agent,
+        agent=agent, standalone=True,
     )
     _registry.update_run(run_uid, status="running", started_at=_registry.now_iso())
     _registry.log_activity(project["id"], "run",
@@ -3103,7 +3103,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "telegram_interrupt_notice_minutes",
         "attention_ttl_minutes", "attention_poll_seconds",
         "attention_replay_open_minutes", "attention_max_per_hour",
-        "run_resume_window_minutes",
+        "run_resume_window_minutes", "tui_run_stale_hours",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
@@ -3132,7 +3132,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl",
                    "telegram_interrupt_notice_minutes", "attention_ttl_minutes",
                    "attention_replay_open_minutes", "attention_max_per_hour",
-                   "run_resume_window_minutes") and v < 1:
+                   "run_resume_window_minutes", "tui_run_stale_hours") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
         if key == "attention_poll_seconds" and v < 2:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 2")

@@ -501,7 +501,10 @@ function applyCardStates() {
                 const span = banner.querySelector('.pr-prompt');
                 if (span) span.textContent = run.prompt ? run.prompt.slice(0, 140) : '';
             }
-            if (!stopBtn) {
+            if (run.standalone) {
+                // An external terminal owns this run; Perun cannot stop it.
+                if (stopBtn) stopBtn.remove();
+            } else if (!stopBtn) {
                 stopBtn = el('button', {
                     class: 'btn sm danger',
                     dataset: { stop: '', runUid: run.run_uid },
@@ -943,8 +946,8 @@ function projectCard(p) {
             <span data-pip-label>${ps.label}</span>
          </span>`;
     const run = ps.working ? (state.activeRuns || []).find((r) => r.project_slug === p.slug) : null;
-    const running = run ? `<div class="pc-running">⚡ <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span></div>` : '';
-    const stopBtn = ps.working && run ? `<button class="btn sm danger" data-stop data-run-uid="${esc(run.run_uid)}" title="Cancel this run">■ Stop</button>` : '';
+    const running = run ? `<div class="pc-running">${run.standalone ? '🖥' : '⚡'} <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span>${run.standalone ? ' <span class="muted">TUI session</span>' : ''}</div>` : '';
+    const stopBtn = ps.working && run && !run.standalone ? `<button class="btn sm danger" data-stop data-run-uid="${esc(run.run_uid)}" title="Cancel this run">■ Stop</button>` : '';
     const card = el('div', { class: 'card clickable proj-card' + stateCls, dataset: { slug: p.slug } },
         `<div class="pc-top">
             <div><div class="pc-name">${fav}${esc(p.name)}</div><div class="pc-path">${esc(p.path)}</div></div>

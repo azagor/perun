@@ -200,6 +200,9 @@ class Settings:
     # On startup, re-admit a run that never reached the session if it is younger
     # than this (minutes); older ones are marked interrupted.
     run_resume_window_minutes: int = 30
+    # A standalone TUI run (an external terminal) is kept "working" across a
+    # restart; only one older than this is assumed closed and swept (hours).
+    tui_run_stale_hours: int = 24
     # PerunChat federation credentials. The API key is obtained from the company
     # website at peruninthemachine.com; the endpoint is the WebSocket ingress URL.
     perunchat_api_key: str = ""

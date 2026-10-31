@@ -2576,3 +2576,19 @@ def test_telegram_jobs_dead_letter_is_inspectable_and_retryable(client):
 
     assert client.post("/api/telegram/jobs/999999/retry", json={}).status_code == 404
     assert client.get("/api/telegram/jobs?state=bogus").status_code == 400
+
+
+def test_tui_run_endpoint_marks_the_run_standalone(client, tmp_path):
+    from perun import registry
+
+    (tmp_path / "tui-proj").mkdir()
+    project = registry.add_project("tui-proj", str(tmp_path / "tui-proj"), kind="dir")
+
+    body = client.post("/api/runs/tui", json={"project": project["slug"]}).json()
+    run = body["run"]
+    assert run["standalone"] == 1
+    assert registry.get_run(run["run_uid"])["standalone"] == 1
+
+    active = client.get("/api/runs/active").json()
+    row = next(r for r in active["runs"] if r["run_uid"] == run["run_uid"])
+    assert row["standalone"] == 1

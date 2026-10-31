@@ -448,6 +448,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("reply_sent_at", "TEXT DEFAULT ''"),
         ("lease_epoch", "INTEGER DEFAULT 0"),
         ("created_at", "TEXT DEFAULT ''"),
+        # A TUI run is an external terminal, not a Perun child process: a restart
+        # must not mark it interrupted while the session is still open.
+        ("standalone", "INTEGER DEFAULT 0"),
     ],
     # ``embedded_hash`` records which content the stored vector was computed
     # from, so a chunk whose content changed while Ollama was down can be

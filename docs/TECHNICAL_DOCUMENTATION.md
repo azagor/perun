@@ -736,6 +736,12 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
 - **Fallback.** If the OpenCode service is unreachable *before* admission, the
   worker falls back to the legacy `opencode run` child; `PERUN_SESSION_RUNNER=0`
   forces the legacy path for tests or an emergency rollback.
+- **Standalone TUI runs** (`POST /api/runs/tui`) are the one exception to
+  "a run is a session": the terminal is external, so Perun has no process and no
+  session to observe. `runs.standalone` marks them, restart reconciliation leaves
+  them alone (the card keeps its "working" pip and banner), and only a run older
+  than `tui_run_stale_hours` (default 24) is swept as "TUI session ended while
+  Perun was down". The dashboard shows a TUI banner and no Stop button for them.
 - **Limits (honest):** step-level checkpointing would require Perun to own the
   model loop; it does not. Durability here is admission + session resume +
   observation, which covers process crashes but cannot replay a half-finished

@@ -985,15 +985,16 @@ def delete_session(pk: int) -> None:
 def create_run(run_uid: str, project_id: int, prompt: str, *,
                session_pk: int | None = None, opencode_session_id: str = "",
                model: str = "", model_explicit: bool = False,
-               agent: str = "") -> dict[str, Any]:
+               agent: str = "", standalone: bool = False) -> dict[str, Any]:
     with db.db() as conn:
         conn.execute(
             """INSERT INTO runs
                (run_uid,project_id,session_pk,opencode_session_id,prompt,
-                model,model_explicit,agent,status,created_at)
-               VALUES (?,?,?,?,?,?,?,?, 'queued', ?)""",
+                model,model_explicit,agent,status,created_at,standalone)
+               VALUES (?,?,?,?,?,?,?,?, 'queued', ?, ?)""",
             (run_uid, project_id, session_pk, opencode_session_id, prompt,
-             model, int(bool(model_explicit)), agent, now_iso()),
+             model, int(bool(model_explicit)), agent, now_iso(),
+             int(bool(standalone))),
         )
         row = db.one(conn, "SELECT * FROM runs WHERE run_uid=?", (run_uid,))
         return dict(row)
@@ -1044,7 +1045,7 @@ def list_active_runs() -> list[dict[str, Any]]:
             """SELECT r.id, r.run_uid, r.project_id, r.status, r.prompt,
                       r.model, r.model_explicit, r.agent,
                       r.session_pk, r.opencode_session_id,
-                      r.started_at, r.admitted_at, r.reply_sent_at,
+                      r.started_at, r.admitted_at, r.reply_sent_at, r.standalone,
                       p.slug AS project_slug, p.name AS project_name,
                       p.path AS project_path
                FROM runs r JOIN projects p ON p.id = r.project_id
