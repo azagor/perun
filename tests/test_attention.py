@@ -548,3 +548,42 @@ def test_two_devices_answering_at_once_only_one_wins(project, api):
 
     assert sum(1 for r in results if r.get("ok")) == 1
     assert registry.get_attention(item["id"])["state"] == "answered"
+
+
+def test_cookie_headers_and_url_credentials_are_redacted(project):
+    item = attention.request(
+        project, "permission", "per_cookie", "permission", "shell",
+        options=attention.PERMISSION_OPTIONS,
+        ref={"request_id": "per_cookie", "session_id": "ses_x", "action": "shell",
+             "resources": [
+                 'curl -H "Cookie: session=abcdef123456" https://x',
+                 'psql "postgres://user:secret123@host/db"',
+                 "git push https://ghp_abcdefghijklmnopqrstuvwxyz012345@github.com/x/y",
+             ]},
+    )
+
+    text = attention.render(item)
+
+    assert "abcdef123456" not in text
+    assert "secret123" not in text
+    assert "ghp_abcdefghijklmnopqrstuvwxyz012345" not in text
+    assert "Cookie: [redacted]" in text
+    assert "postgres://[redacted]@host/db" in text
+
+
+def test_a_proposal_that_changed_state_closes_its_card(project, monkeypatch):
+    item = attention.request(
+        project, "proposal", "prop_gone", "proposal", "approve me",
+        options=attention.PROPOSAL_OPTIONS,
+    )
+
+    def boom(*_a, **_k):
+        raise ValueError("proposal is approved")
+
+    monkeypatch.setattr(attention.action_proposals, "approve", boom)
+
+    result = attention.choose(item["id"], "approve", by="telegram:1")
+
+    assert result["ok"] is False
+    assert "proposal is approved" in result["error"]
+    assert registry.get_attention(item["id"])["state"] == "cancelled"

@@ -58,8 +58,10 @@ _STATE_LABELS = {
 # send the secret to Telegram. Order matters: the broader header rule runs first
 # so the narrower ones cannot leave a fragment behind.
 _AUTH_HEADER = re.compile(
-    r"(?i)\b(authorization|proxy-authorization)\s*:\s*[^\s\"']+(?:\s+[^\s\"']+)?"
+    r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key)"
+    r"\s*:\s*[^\r\n\"']+"
 )
+_URL_CREDS = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]*:[^\s/@]+@")
 _BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-+/=]{6,}")
 _PREFIXED_KEY = re.compile(
     r"(?i)\b(?:sk|ghp|gho|ghu|ghs|ghr|xox[abprs])[-_][A-Za-z0-9_\-]{8,}"
@@ -219,6 +221,7 @@ def recipients(item: Dict[str, Any], *, allowed: List[str],
 
 def _redact(text: str) -> str:
     text = _AUTH_HEADER.sub(lambda m: f"{m.group(1)}: [redacted]", text or "")
+    text = _URL_CREDS.sub(lambda m: f"{m.group(1)}[redacted]@", text)
     text = _BEARER.sub(lambda m: f"{m.group(1)} [redacted]", text)
     text = _PREFIXED_KEY.sub("[redacted]", text)
     text = _SECRETISH.sub(lambda m: f"{m.group(1)}=[redacted]", text)
