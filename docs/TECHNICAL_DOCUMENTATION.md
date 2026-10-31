@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.14 (see §15). Redact coalesced notices like ordinary cards; keep the dashboard's empty-message guard in the no-module fallback.
+**Latest release:** v0.10.15 (see §15). Close the audit follow-ups: digested items survive restarts as shown, the poller tolerates a bad interval, backups keep the pre-migration copy, and the CLI probe runs once.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2079,6 +2079,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.15: Close the audit follow-ups: digested items survive restarts as shown, the poller tolerates a bad interval, backups keep the pre-migration copy, and the CLI probe runs once.
+
 ### 2026-10-31 — v0.10.14: Redact coalesced notices like ordinary cards; keep the dashboard's empty-message guard in the no-module fallback.
 
 ### 2026-10-31 — v0.10.13: Write the global MCP entry in the shape the installed CLI uses, migrating a V1 entry once with a backup.

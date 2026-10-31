@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.15
+
+*Released 2026-10-31.*
+
 ### Audit follow-ups
 
 * A digested item is no longer listed again after a restart: the flush writes an
