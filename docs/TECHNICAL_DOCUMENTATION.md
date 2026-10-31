@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.17 (see §15). Stop re-listing a digest one chat already received, and refuse backup labels that could escape PERUN_HOME/backups.
+**Latest release:** v0.10.18 (see §15). Run the installed /update-docs command after a shared-project proposal executes; the sandboxed executor could never write docs itself.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2098,6 +2098,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.18: Run the installed /update-docs command after a shared-project proposal executes; the sandboxed executor could never write docs itself.
+
 ### 2026-10-31 — v0.10.17: Stop re-listing a digest one chat already received, and refuse backup labels that could escape PERUN_HOME/backups.
 
 ### 2026-10-31 — v0.10.16: Keep config backups out of project repos under PERUN_HOME/backups, and let the dashboard adjust the digest window.

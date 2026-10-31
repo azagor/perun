@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.18
+
+*Released 2026-10-31.*
+
 ### Documentation follows the code
 
 * A shared-project proposal is executed by an agent that is **sandboxed to its
