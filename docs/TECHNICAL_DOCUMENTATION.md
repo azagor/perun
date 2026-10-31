@@ -1443,7 +1443,7 @@ answering.
 on), `attention_replay_open_minutes`, `attention_max_per_hour`,
 `attention_quiet_hours`, `attention_show_paths`, `attention_plain_text_confirm`,
 `attention_default_delivery`, `attention_digest_seconds` (30; 0 = every card
-immediately).
+immediately; editable in Settings → *group a burst for N s*).
 
 Not covered in this release: detecting a Perun-owned run that merely *ends* with
 a question (the agent must call `perun_ask_operator`), SSE/plugin event ingestion
@@ -1678,8 +1678,11 @@ understands. Reading is shape-agnostic, so the dashboard's MCP view, the "stale
 config" hint and the guard check before an approved proposal executes all work on
 either file. Detection is deliberately conservative — an unparseable version
 writes the legacy shape, which both versions still read — and rewriting the block
-leaves `opencode.json.bak` behind, preserves unrelated servers and `mcp.timeout`,
-and is idempotent, so the migration runs exactly once.
+preserves unrelated servers and `mcp.timeout`, and is idempotent, so the migration
+runs exactly once. Before the rewrite the previous file is copied to
+`PERUN_HOME/backups/<slug>/opencode.json-<timestamp>` (newest five kept); the copy
+never lands beside the config, because a project config lives in a repository and
+a sibling `.bak` would show up as an untracked file.
 
 Lifecycle chat notifications keep project participants informed without
 requiring the dashboard: a plain-text "Proposal … is now executing" notice is
@@ -1708,10 +1711,11 @@ and uncluttered.
      pointed at the running server's database even if a session overrides the env),
    * appends the instructions path to `instructions[]`,
    * adds `command.perun-projects` / `command.perun-ask` / `command.logwork` / `command.update-docs`;
-3. **backs up** the prior config to `opencode.json.perun-backup-<ts>` — but only
-   when the merge actually changes the file, so re-running the installer no longer
-   piles up identical backups. A config that is not valid JSON/JSONC aborts the
-   install (exit 2) instead of being silently replaced;
+3. **backs up** the prior config to `PERUN_HOME/backups/opencode/opencode.json-<ts>`
+   (same helper as the project writer, newest five kept) — but only when the merge
+   actually changes the file, so re-running the installer no longer piles up
+   identical backups. A config that is not valid JSON/JSONC aborts the install
+   (exit 2) instead of being silently replaced;
 4. seeds the registry (this repo + a discovery pass) and optionally indexes docs;
 5. **writes the global kernel** into `~/.config/opencode/AGENTS.md` and indexes
    the handbook.

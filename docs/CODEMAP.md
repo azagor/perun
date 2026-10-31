@@ -180,6 +180,18 @@ Shared project creation/registration, used by **both** the HTTP wizard
   health check: reports whether a shared project's `opencode.json` has
   `perun-guard` / `perun-proposals` with `PERUN_PROJECT_PATH`.
 
+### `perun/backups.py`
+Pre-change copies of the configs Perun rewrites (project and global
+`opencode.json`). They live under `PERUN_HOME/backups/<label>/` — `<label>` is the
+project slug, or `opencode` for the global config — never beside the original, so
+a project repository never gains an untracked `.bak` that could be committed.
+* `backup_dir(label)`, `save_copy(path, label=…, keep=5)` (second-resolution stamp,
+  `-2`/`-3` on a same-second collision, prunes after writing, returns the copy or
+  nothing), `prune()`, `DEFAULT_KEEP`. A failed copy is logged and ignored: a
+  backup must never break the write it protects.
+* Used by `projects.sync_opencode_config()` (which returns the path as `backup`)
+  and `install_global._backup()`.
+
 ### `perun/providers.py`
 LLM provider discovery, status and configuration. Perun never stores credentials
 itself; it edits OpenCode's own config so the CLI/server remain the source of truth.

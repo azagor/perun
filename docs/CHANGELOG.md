@@ -4,7 +4,26 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Backups leave the repository
+
+* Config backups no longer sit next to the file they protect. `opencode.json.bak`
+  is gone; both the project writer (`sync_opencode_config`) and the global
+  installer copy into `~/.perun/backups/<label>/opencode.json-<timestamp>`
+  (`<label>` = project slug, or `opencode` for the global config), keeping the
+  newest five. A project repository therefore never gains an untracked `.bak` that
+  a `git add -A` could commit, and the copy survives even when the file is
+  replaced wholesale.
+* The new `perun/backups.py` (`save_copy`, `prune`, `backup_dir`) is shared by both
+  writers, so there is one retention rule instead of "one file forever" on the
+  project side and "unbounded" on the global side.
+
+### The digest window is adjustable from the dashboard
+
+* Settings → *inbox: group a burst for N s* writes `attention_digest_seconds`
+  (0 = every card immediately). The field ships empty-safe: clearing it leaves the
+  stored value alone instead of silently disabling the digest.
+* `attention_poll_seconds` stays out of the UI on purpose: detection is
+  event-driven, so the timer only reconciles (and closes cards answered in the TUI).
 
 ## v0.10.15
 

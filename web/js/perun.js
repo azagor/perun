@@ -5498,6 +5498,7 @@ async function viewSettings() {
             <label class="row" style="gap:6px" title="Log what routing would have done without acting on it. Use this for a week before turning routing on."><input type="checkbox" id="s-routing-shadow" ${s.routing_shadow ? 'checked' : ''}> routing: log only (shadow)</label>
             <label class="row" style="gap:6px" title="Push anything that needs a human decision (permission requests, forms, agent questions, proposals) to your paired Telegram chats, and deliver the reply back to that exact session."><input type="checkbox" id="s-attention" ${s.attention_enabled ? 'checked' : ''}> operator inbox (Telegram)</label>
             <label class="row" style="gap:6px" title="Log what would be sent, send nothing. Turn this off once the cards look right."><input type="checkbox" id="s-attention-shadow" ${s.attention_shadow ? 'checked' : ''}> inbox: log only (shadow)</label>
+            <label class="row" style="gap:6px" title="A room message that needs you waits this long, so a burst becomes one card per project (up to five items). 0 = send every card immediately. Permissions, forms, proposals and agent questions are never delayed.">inbox: group a burst for <input type="number" min="0" id="s-digest" style="width:5.5em" value="${esc(s.attention_digest_seconds ?? 0)}"> s</label>
          </div>
          <div class="form-actions">
             <button class="btn primary" id="s-save">Save settings</button>
@@ -5677,6 +5678,12 @@ async function viewSettings() {
             attention_enabled: $('#s-attention').checked,
             attention_shadow: $('#s-attention-shadow').checked,
         };
+        // An empty field means "leave it as it is"; 0 is a real value (send every
+        // card immediately), so it must not be confused with "unset".
+        const digestRaw = $('#s-digest').value.trim();
+        if (digestRaw !== '' && Number.isFinite(Number(digestRaw))) {
+            payload.attention_digest_seconds = Number(digestRaw);
+        }
         const hitlSecret = $('#s-hitl-secret').value.trim();
         if (hitlSecret) payload.perun_hitl_secret = hitlSecret;
         try { await api('/api/settings', { method: 'PATCH', body: payload }); toast('Settings saved', 'ok'); }

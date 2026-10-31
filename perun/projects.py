@@ -179,17 +179,14 @@ def sync_opencode_config(project: dict[str, Any],
             del data[key]
 
     existed_before = target.is_file()
+    backup_path = None
     if mcp_changed and existed_before:
         # The MCP block is the part a hand edit is most likely to have customised
-        # (extra servers, environment tweaks). Keep the *first* pre-Perun copy:
-        # overwriting it on every later change would destroy the only recovery
-        # point that predates the migration.
-        backup = target.with_name(target.name + ".bak")
-        if not backup.exists():
-            try:
-                backup.write_bytes(target.read_bytes())
-            except OSError:
-                pass
+        # (extra servers, environment tweaks). The copy goes under
+        # PERUN_HOME/backups/<slug>/ so a project repo never gains a stray .bak.
+        from . import backups as _backups
+        copy = _backups.save_copy(target, label=str(project.get("slug") or "project"))
+        backup_path = str(copy) if copy else None
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp_name = ""
     try:
@@ -206,7 +203,10 @@ def sync_opencode_config(project: dict[str, Any],
                 pass
         return {"action": "error", "path": str(target),
                 "warning": f"could not write {target.name}: {exc}"}
-    return {"action": "updated" if existed_before else "created", "path": str(target)}
+    result = {"action": "updated" if existed_before else "created", "path": str(target)}
+    if backup_path:
+        result["backup"] = backup_path
+    return result
 
 
 def shared_mcp_config_status(project: dict[str, Any]) -> dict[str, Any]:

@@ -569,7 +569,7 @@ def test_sync_opencode_config_migrates_a_v1_file_once_and_keeps_others(tmp_path,
     assert "context7" not in cfg["mcp"]                       # moved, not lost
     assert cfg["mcp"]["servers"]["context7"]["url"] == "https://mcp.example/mcp"
     assert cfg["mcp"]["servers"]["perun-guard"]["environment"]["PERUN_PROJECT_PATH"] == "."
-    assert cfg_path.with_name("opencode.json.bak").is_file()
+    assert not cfg_path.with_name("opencode.json.bak").exists()
 
     # Second sync is a no-op: the file is already in the target shape.
     assert projects.sync_opencode_config(project)["action"] == "unchanged"
@@ -606,8 +606,11 @@ def test_entry_for_style_translates_enabled_and_disabled():
     back = mcp_servers.entry_for_style(off, mcp_servers.STYLE_V1)
     assert back["enabled"] is True
 
-def test_the_backup_keeps_the_first_pre_migration_copy(tmp_path, monkeypatch):
-    """A second MCP change must not overwrite the only pre-migration snapshot."""
+def test_the_backup_lands_outside_the_project_and_keeps_the_pre_migration_copy(
+        tmp_path, monkeypatch):
+    """A config lives in a repo: its backup must not appear there as a stray file."""
+    from perun import backups
+
     monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
     project = _make_project(tmp_path, "backup-once")
     _enable_shared(project)
@@ -617,15 +620,36 @@ def test_the_backup_keeps_the_first_pre_migration_copy(tmp_path, monkeypatch):
                                 "enabled": True}},
     }), encoding="utf-8")
 
-    projects.sync_opencode_config(project)
-    backup = cfg_path.with_name("opencode.json.bak")
-    assert backup.is_file()
-    first = backup.read_text(encoding="utf-8")
+    result = projects.sync_opencode_config(project)
+    assert result.get("backup"), result
+    copy = Path(result["backup"])
+    assert copy.is_file()
+    assert copy.parent == backups.backup_dir(project["slug"])
+    # Nothing was left beside the config.
+    assert not (cfg_path.with_name("opencode.json.bak")).exists()
+    assert [p.name for p in cfg_path.parent.iterdir() if p.name.startswith("opencode.json.")] == []
 
-    # Change the block again: the snapshot must stay at the pre-migration state.
-    projects.sync_opencode_config(project)
-    assert backup.read_text(encoding="utf-8") == first
-    assert json.loads(first)["mcp"]["perun-guard"]["command"] == ["python", "old.py"]
+    # Rewriting again is a no-op for the config, so no second copy is taken...
+    assert projects.sync_opencode_config(project)["action"] == "unchanged"
+    assert len(backups._copies(copy.parent, "opencode.json")) == 1
+    # ...and the copy still holds the pre-migration content.
+    assert json.loads(copy.read_text(encoding="utf-8"))["mcp"]["perun-guard"]["command"] == [
+        "python", "old.py"]
+
+
+def test_backups_are_pruned_to_the_newest_five(tmp_path, monkeypatch):
+    from perun import backups
+
+    monkeypatch.setattr(backups.config, "BACKUPS_DIR", tmp_path / "backups")
+    source = tmp_path / "opencode.json"
+    source.write_text("{}", encoding="utf-8")
+    for index in range(8):
+        copy = backups.save_copy(source, label="demo", now=1_700_000_000 + index)
+        assert copy is not None
+    copies = backups._copies(backups.backup_dir("demo"), "opencode.json")
+    assert len(copies) == backups.DEFAULT_KEEP
+    # The newest survive (the stamp sorts lexically).
+    assert all("-" in p.name for p in copies)
 
 
 def test_v2_keeps_mcp_timeout_when_rewriting(tmp_path, monkeypatch):

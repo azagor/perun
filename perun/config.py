@@ -49,6 +49,10 @@ CONFIG_PATH: Path = HOME / "config.json"
 API_TOKEN_PATH: Path = HOME / "api-token"
 LOGS_DIR: Path = HOME / "logs"
 RUNS_DIR: Path = HOME / "runs"
+# Pre-change copies of configs Perun rewrites (OpenCode's ``opencode.json``).
+# Kept out of the project tree on purpose: a config lives in a git repo, and a
+# sibling ``.bak`` would show up as an untracked file that can be committed.
+BACKUPS_DIR: Path = HOME / "backups"
 WEB_DIR: Path = REPO_ROOT / "web"
 MCP_SERVER: Path = REPO_ROOT / "mcp" / "perun_mcp.py"
 TEMPLATES_DIR: Path = PACKAGE_DIR / "integrations" / "templates"

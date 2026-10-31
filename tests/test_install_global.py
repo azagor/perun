@@ -13,6 +13,11 @@ from perun.integrations import install_global
 @pytest.fixture()
 def fake_xdg(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    # Backups live under PERUN_HOME/backups; keep the real home untouched.
+    from perun import backups, config
+
+    monkeypatch.setattr(config, "BACKUPS_DIR", tmp_path / "perun-home" / "backups")
+    assert backups.backup_dir("opencode").is_relative_to(tmp_path)
     # On Windows the code honours XDG_CONFIG_HOME too (see config_dir()).
     return tmp_path / "opencode"
 
@@ -67,8 +72,11 @@ def test_install_backs_up_existing(fake_xdg):
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("{}", encoding="utf-8")
     install_global.install(index=False)
-    backups = list(cfg_path.parent.glob("opencode.json.perun-backup-*"))
-    assert backups, "expected a backup of the previous config"
+    from perun import backups as _backups
+
+    copies = _backups._copies(_backups.backup_dir("opencode"), "opencode.json")
+    assert copies, "expected a backup of the previous config"
+    assert not list(cfg_path.parent.glob("opencode.json*backup*"))
 
 
 def test_install_is_idempotent(fake_xdg):
@@ -184,7 +192,9 @@ def test_install_aborts_on_unparseable_config(fake_xdg):
     assert install_global.install(index=False) == 2
     # The user's file is left exactly as it was (no silent replacement).
     assert cfg_path.read_text(encoding="utf-8") == original
-    assert not list(cfg_path.parent.glob("opencode.json.perun-backup-*"))
+    from perun import backups as _backups
+
+    assert _backups._copies(_backups.backup_dir("opencode"), "opencode.json") == []
 
 
 def test_install_honours_opencode_config_env(fake_xdg, monkeypatch, tmp_path):
@@ -206,8 +216,10 @@ def test_reinstall_does_not_pile_up_backups(fake_xdg):
     install_global.install(index=False)
     install_global.install(index=False)
     install_global.install(index=False)
-    backups = list(cfg_path.parent.glob("opencode.json.perun-backup-*"))
-    assert len(backups) == 1, f"expected a single backup, got {len(backups)}"
+    from perun import backups as _backups
+
+    copies = _backups._copies(_backups.backup_dir("opencode"), "opencode.json")
+    assert len(copies) == 1, f"expected a single backup, got {len(copies)}"
 
 
 def test_instructions_pointer_is_written(fake_xdg):
@@ -229,8 +241,10 @@ def test_instructions_pointer_is_idempotent(fake_xdg):
     install_global.install(index=False)
     assert pointer.read_text(encoding="utf-8") == install_global._INSTRUCTIONS_POINTER
     # No backup of the pointer should have been created.
-    backups = list(pointer.parent.glob("INSTRUCTIONS.md.perun-backup-*"))
-    assert backups == []
+    from perun import backups as _backups
+
+    assert _backups._copies(_backups.backup_dir("opencode"), "INSTRUCTIONS.md") == []
+    assert not list(pointer.parent.glob("INSTRUCTIONS.md*backup*"))
 
 
 def test_uninstall_removes_instructions_pointer(fake_xdg):

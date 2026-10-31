@@ -2657,3 +2657,18 @@ def test_opencode_standalone_is_not_confused_with_a_tui_run():
     signature = inspect.signature(Orchestrator.start_run)
     assert "opencode_standalone" in signature.parameters
     assert "standalone" not in signature.parameters
+
+def test_attention_digest_setting_accepts_zero_and_rejects_negatives(client):
+    """0 is a real value (every card immediately); -1 and text are errors."""
+    for value in (30, 0, 120):
+        response = client.patch("/api/settings",
+                                json={"attention_digest_seconds": value})
+        assert response.status_code == 200, response.text
+        assert response.json()["settings"]["attention_digest_seconds"] == value
+
+    assert client.patch("/api/settings",
+                        json={"attention_digest_seconds": -1}).status_code == 400
+    assert client.patch("/api/settings",
+                        json={"attention_digest_seconds": "soon"}).status_code == 400
+
+    client.patch("/api/settings", json={"attention_digest_seconds": 30})

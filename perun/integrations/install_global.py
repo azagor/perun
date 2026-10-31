@@ -30,7 +30,6 @@ import os
 import re
 import shutil
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -212,18 +211,10 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def _backup(path: Path) -> Path | None:
-    if not path.is_file():
-        return None
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest = path.with_suffix(path.suffix + f".perun-backup-{stamp}")
-    # A second-resolution stamp collides when two installs run in the same
-    # second; keep the copies distinct rather than overwriting one.
-    counter = 2
-    while dest.exists():
-        dest = path.with_suffix(path.suffix + f".perun-backup-{stamp}-{counter}")
-        counter += 1
-    shutil.copy2(path, dest)
-    return dest
+    """Copy the global config into ``PERUN_HOME/backups/opencode/`` before a rewrite."""
+    from .. import backups as _backups
+
+    return _backups.save_copy(path, label="opencode")
 
 
 def _python_cmd() -> list[str]:
