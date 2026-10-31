@@ -415,9 +415,12 @@ class PerunTelegramBridge:
         return {"inline_keyboard": buttons}
 
     def _handle_callback(self, update: Dict[str, Any]) -> None:
-        """Handle inline-keyboard button taps for project selection."""
+        """Handle inline-keyboard button taps (operator inbox + project picker)."""
         cq = update.get("callback_query") or {}
         data = (cq.get("data") or "").strip()
+        if data.startswith("att:"):
+            self._handle_attention_callback(cq, data)
+            return
         if not data or not data.startswith("project:"):
             return
         payload = data.split(":", 1)[1]
@@ -1000,6 +1003,11 @@ class PerunTelegramBridge:
         item = registry.get_attention(attention_id)
         if not item:
             ack("That item is gone.")
+            return
+        if item["state"] != "open" and action not in ("show", "steer", "undo"):
+            # A tap on an old card must say so, not try to act again. ``steer``
+            # and ``undo`` act on an *answered* item by design.
+            ack(f"Already {item['state']}")
             return
 
         if action == "discard_text":

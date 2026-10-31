@@ -382,3 +382,49 @@ def test_telegram_429_waits_as_instructed_then_retries(bridge, monkeypatch):
 
     assert result["ok"] is True
     assert sleeps == [3.0]
+
+
+def test_a_button_tap_through_the_real_dispatch_answers_the_item(bridge, project, api):
+    """Regression: ``att:`` callbacks must reach the handler via _handle_update.
+
+    The unit tests called ``_handle_attention_callback`` directly, so a missing
+    dispatch in ``_handle_callback`` went unnoticed and every Telegram button
+    tap was silently dropped.
+    """
+    item = _permission(project)
+    registry.record_attention_delivery(item["id"], "1", 42)
+
+    bridge._handle_update({"update_id": 1, "callback_query": {
+        "id": "cb-1", "data": f"att:{item['id']}:once",
+        "message": {"message_id": 42, "chat": {"id": "1"}},
+    }})
+
+    assert api.calls == [("permission", "ses_tg", "per_1", "once")]
+    assert registry.get_attention(item["id"])["state"] == "approved"
+    assert bridge.api_calls[-1][0] == "answerCallbackQuery"
+
+
+def test_a_tap_on_a_stale_card_reports_the_state_and_does_nothing(bridge, project, api):
+    item = _permission(project)
+    registry.close_attention(item["id"], "rejected", answered_by="dashboard")
+    registry.record_attention_delivery(item["id"], "1", 42)
+
+    bridge._handle_update({"update_id": 2, "callback_query": {
+        "id": "cb-2", "data": f"att:{item['id']}:once",
+        "message": {"message_id": 42, "chat": {"id": "1"}},
+    }})
+
+    assert api.calls == []
+    assert "already rejected" in bridge.api_calls[-1][1]["text"].lower()
+
+
+def test_project_buttons_still_work_after_the_attention_dispatch(bridge, project):
+    bridge.api_calls.clear()
+
+    bridge._handle_callback({"callback_query": {
+        "id": "cb-3", "data": f"project:{project['slug']}",
+        "message": {"message_id": 5, "chat": {"id": "1"}},
+    }})
+
+    assert any(method == "answerCallbackQuery" for method, _ in bridge.api_calls)
+    assert registry.get_bridge_link("1")["project_id"] == project["id"]
