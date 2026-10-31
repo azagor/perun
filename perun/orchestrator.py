@@ -1356,11 +1356,22 @@ class Orchestrator:
             if active:
                 if self.attach_session_run(run):
                     LOG.info("reattached run %s to session %s", uid, sid)
+                    registry.log_activity(
+                        run.get("project_id"), "run_reconciled",
+                        f"Run {uid} reattached to session {sid}",
+                        {"run_uid": uid, "session": sid, "action": "reattached"},
+                    )
                     result["reattached"].append(uid)
                 continue
             reply = self._session_reply_from_messages(api, sid)
             status = "done" if reply else "interrupted"
             LOG.info("finalized run %s from session %s as %s", uid, sid, status)
+            registry.log_activity(
+                run.get("project_id"), "run_reconciled",
+                f"Run {uid} finalized from session {sid} as {status}",
+                {"run_uid": uid, "session": sid, "action": "finalized",
+                 "status": status},
+            )
             self._finalize(
                 uid, status, None,
                 "" if reply else "session ended while Perun was down",

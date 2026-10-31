@@ -229,6 +229,8 @@ def test_reconcile_reattaches_active_and_finalizes_finished(orch, hub, api, proj
 
     assert attached == ["run_live"]
     assert "run_done" in result["finalized"]
+    kinds = {row["kind"] for row in registry.list_activity(limit=20)}
+    assert "run_reconciled" in kinds
     final = registry.get_run("run_done")
     assert final["status"] == "done"
     assert final["output"] == "finished while away"
