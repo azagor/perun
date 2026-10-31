@@ -1,5 +1,5 @@
 #define MyAppName "Perun"
-#define MyAppVersion "0.10.5"
+#define MyAppVersion "0.10.6"
 #define MyAppPublisher "Perun in The Machine"
 #define MyAppURL "https://github.com/azagor/perun"
 #define MyAppExeName "Perun.cmd"
