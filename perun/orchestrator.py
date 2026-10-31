@@ -1313,7 +1313,7 @@ class Orchestrator:
                 # An external TUI terminal owns this run; it is alive exactly as
                 # long as that terminal is. Only an old one is swept, so a stale
                 # card cannot stay "working" forever after the terminal is gone.
-                if self._standalone_stale(row):
+                if self._standalone_gone(row):
                     self._mark_interrupted(
                         uid, "TUI session ended while Perun was down")
                     interrupted.append(uid)
@@ -1338,7 +1338,17 @@ class Orchestrator:
                 interrupted.append(uid)
         return {"resumed": resumed, "interrupted": interrupted}
 
-    def _standalone_stale(self, run: dict[str, Any]) -> bool:
+    def _standalone_gone(self, run: dict[str, Any]) -> bool:
+        """Whether a standalone TUI run's terminal is gone.
+
+        The persisted pid is authoritative when present: a live pid means the
+        terminal is still open (keep the card lit), a dead one means it closed
+        while Perun was away. Without a pid (older rows) fall back to the age
+        window so a card can never stay "working" forever.
+        """
+        pid = int(run.get("pid") or 0)
+        if pid:
+            return not registry.pid_alive(pid)
         try:
             hours = int(getattr(self.settings, "tui_run_stale_hours", 24))
         except (TypeError, ValueError):
@@ -1363,6 +1373,10 @@ class Orchestrator:
             if uid in live:
                 continue
             if run.get("standalone"):
+                # No session to observe; sweep only when the terminal is gone.
+                if self._standalone_gone(run):
+                    self._mark_interrupted(uid, "TUI session ended")
+                    result["interrupted"].append(uid)
                 continue
             if run["status"] != "running" or not run.get("admitted_at"):
                 continue

@@ -230,18 +230,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             reembed_stop.set()
         if PERUNCHAT_BRIDGE is not None:
             PERUNCHAT_BRIDGE.stop()
-    # Shutdown: stop what we started so a restart does not orphan interactive
-    # terminals or leave agent processes writing into a database nobody watches.
-    # Run the blocking cleanup in a thread so the event loop is not stalled.
+    # Shutdown: stop the agent runs Perun itself started. Tracked TUI terminals
+    # are **not** killed: they belong to the user and must survive a restart
+    # (their runs are standalone, see orchestrator.reconcile_startup). Run the
+    # blocking cleanup in a thread so the event loop is not stalled.
     def _shutdown_sync() -> None:
         try:
             for uid in ORCH.active():
                 ORCH.cancel(uid)
-        except Exception:  # pragma: no cover - best effort
-            pass
-        try:
-            from . import process_tracker
-            process_tracker.TRACKER.terminate_all()
         except Exception:  # pragma: no cover - best effort
             pass
     try:

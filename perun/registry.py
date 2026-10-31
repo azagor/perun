@@ -1003,7 +1003,7 @@ def create_run(run_uid: str, project_id: int, prompt: str, *,
 def update_run(run_uid: str, **fields: Any) -> None:
     allowed = {"session_pk", "opencode_session_id", "status", "exit_code",
                "started_at", "ended_at", "output", "error",
-               "admitted_at", "reply_sent_at", "lease_epoch"}
+               "admitted_at", "reply_sent_at", "lease_epoch", "pid"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
@@ -1046,6 +1046,7 @@ def list_active_runs() -> list[dict[str, Any]]:
                       r.model, r.model_explicit, r.agent,
                       r.session_pk, r.opencode_session_id,
                       r.started_at, r.admitted_at, r.reply_sent_at, r.standalone,
+                      r.pid,
                       p.slug AS project_slug, p.name AS project_name,
                       p.path AS project_path
                FROM runs r JOIN projects p ON p.id = r.project_id
@@ -1942,6 +1943,11 @@ def _pid_alive(pid: int) -> bool:
         return True
     except Exception:  # pragma: no cover - defensive
         return True
+
+
+def pid_alive(pid: int) -> bool:
+    """Public wrapper around the lease liveness check (TUI runs, too)."""
+    return _pid_alive(pid)
 
 
 def _lease_owner_dead(owner: str) -> bool:

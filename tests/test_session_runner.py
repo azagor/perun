@@ -395,3 +395,38 @@ def test_reconcile_runs_ignores_standalone_rows(orch, api, project):
 
     assert result == {"reattached": [], "finalized": [], "interrupted": []}
     assert registry.get_run("run_tui_live")["status"] == "running"
+
+
+def test_a_standalone_run_with_a_live_terminal_is_kept(orch, api, project):
+    import os
+
+    registry.create_run("run_tui_pid", project["id"], "TUI", standalone=True)
+    registry.update_run("run_tui_pid", status="running",
+                        started_at=registry.now_iso(), pid=os.getpid())
+
+    result = orch.reconcile_startup()
+
+    assert "run_tui_pid" not in result["interrupted"]
+    assert registry.get_run("run_tui_pid")["status"] == "running"
+
+
+def test_a_standalone_run_with_a_dead_terminal_is_swept(orch, api, project):
+    registry.create_run("run_tui_dead", project["id"], "TUI", standalone=True)
+    registry.update_run("run_tui_dead", status="running",
+                        started_at=registry.now_iso(), pid=999999)
+
+    result = orch.reconcile_startup()
+
+    assert "run_tui_dead" in result["interrupted"]
+    assert registry.get_run("run_tui_dead")["status"] == "interrupted"
+
+
+def test_reconcile_runs_sweeps_a_closed_terminal_without_a_restart(orch, api, project):
+    registry.create_run("run_tui_closed", project["id"], "TUI", standalone=True)
+    registry.update_run("run_tui_closed", status="running",
+                        started_at=registry.now_iso(), pid=999999)
+
+    result = orch.reconcile_runs()
+
+    assert result["interrupted"] == ["run_tui_closed"]
+    assert registry.get_run("run_tui_closed")["status"] == "interrupted"

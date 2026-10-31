@@ -97,3 +97,53 @@ def test_watcher_auto_finalizes(tmp_path, fresh_tracker, monkeypatch):
 
     updated = registry.get_run("tui-2")
     assert updated["status"] == "done"
+import os
+import subprocess
+import sys
+import time
+
+import pytest
+
+from perun import registry
+from perun.process_tracker import ProcessTracker
+
+
+@pytest.fixture()
+def project(tmp_path):
+    (tmp_path / "tui-track").mkdir()
+    return registry.add_project("tui-track", str(tmp_path / "tui-track"), kind="dir")
+
+
+def _sleeper():
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+
+def test_register_persists_the_terminal_pid(project):
+    proc = _sleeper()
+    try:
+        tracker = ProcessTracker()
+        run = registry.create_run("run_tui_track", project["id"], "TUI", standalone=True)
+        tracker.register(run["run_uid"], proc)
+        assert registry.get_run(run["run_uid"])["pid"] == proc.pid
+    finally:
+        proc.kill()
+
+
+def test_is_alive_falls_back_to_the_persisted_pid_after_a_restart(project):
+    proc = _sleeper()
+    try:
+        run = registry.create_run("run_tui_alive", project["id"], "TUI", standalone=True)
+        registry.update_run(run["run_uid"], status="running", pid=proc.pid)
+        restarted = ProcessTracker()          # empty in-memory map
+        assert restarted.is_alive(run["run_uid"]) is True
+
+        registry.update_run(run["run_uid"], pid=999999)
+        assert restarted.is_alive(run["run_uid"]) is False
+    finally:
+        proc.kill()
+
+
+def test_terminate_without_a_tracked_entry_refuses_a_dead_pid(project):
+    run = registry.create_run("run_tui_dead", project["id"], "TUI", standalone=True)
+    registry.update_run(run["run_uid"], status="running", pid=999999)
+    assert ProcessTracker().terminate(run["run_uid"]) is False

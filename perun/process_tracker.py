@@ -49,6 +49,12 @@ class ProcessTracker:
                 "run_uid": run_uid,
                 "started_at": time.time(),
             }
+        # Persist the pid so a restart can still tell whether the terminal is
+        # open (the in-memory entry does not survive a restart).
+        try:
+            registry.update_run(run_uid, pid=int(proc.pid))
+        except Exception:  # pragma: no cover - tracking is best effort
+            pass
         self._ensure_watcher()
 
     def get(self, run_uid: str) -> dict[str, Any] | None:
@@ -58,7 +64,11 @@ class ProcessTracker:
     def is_alive(self, run_uid: str) -> bool:
         entry = self.get(run_uid)
         if not entry:
-            return False
+            # After a restart the in-memory entry is gone; fall back to the pid
+            # persisted when the terminal was launched.
+            run = registry.get_run(run_uid) or {}
+            pid = int(run.get("pid") or 0)
+            return registry.pid_alive(pid) if pid else False
         proc = entry.get("proc")
         if proc and proc.poll() is None:
             return True
@@ -69,7 +79,14 @@ class ProcessTracker:
         """Kill the process tree for a tracked session and finalize its run."""
         entry = self.get(run_uid)
         if not entry:
-            return False
+            # Explicit Stop after a restart: use the persisted pid.
+            run = registry.get_run(run_uid) or {}
+            pid = int(run.get("pid") or 0)
+            if not pid or not registry.pid_alive(pid):
+                return False
+            self._kill_tree(pid)
+            self.finalize(run_uid)
+            return True
         pid = self._resolve_child_pid(entry) or entry.get("pid")
         if pid:
             self._kill_tree(pid)
@@ -87,10 +104,10 @@ class ProcessTracker:
         return True
 
     def terminate_all(self) -> int:
-        """Kill every tracked terminal process (used on server shutdown).
+        """Kill every tracked terminal process (explicit teardown only).
 
-        The run rows are left to the caller: the lifespan marks them
-        ``interrupted`` rather than pretending the runs completed.
+        Deliberately **not** called on server shutdown: those terminals belong to
+        the user, not to Perun, and a restart must leave them open.
         """
         with self._lock:
             entries = list(self._entries.items())
@@ -121,7 +138,8 @@ class ProcessTracker:
             del self._entries[run_uid]
         run = registry.get_run(run_uid)
         if run and run.get("status") in ("queued", "running"):
-            registry.update_run(run_uid, status="done", ended_at=registry.now_iso())
+            registry.update_run(run_uid, status="done",
+                                ended_at=registry.now_iso(), pid=0)
 
     def _resolve_child_pid(self, entry: dict[str, Any]) -> int | None:
         """Find the real interactive process when the launcher exited early."""

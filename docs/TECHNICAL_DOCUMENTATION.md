@@ -742,6 +742,11 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   them alone (the card keeps its "working" pip and banner), and only a run older
   than `tui_run_stale_hours` (default 24) is swept as "TUI session ended while
   Perun was down". The dashboard shows a TUI banner and no Stop button for them.
+  The terminal pid is persisted (`runs.pid`) when the terminal is launched, so
+  after a restart the card stays lit while that pid is alive and is swept as soon
+  as it is gone; the age window only covers rows without a pid. Server shutdown
+  **does not** call `ProcessTracker.terminate_all()` — those terminals are the
+  user's, not Perun's.
   `/api/runs/active` reports `blocking` (non-standalone runs) and the CLI restart
   guard uses it, so an open TUI does not force `--force`.
 - **Limits (honest):** step-level checkpointing would require Perun to own the
