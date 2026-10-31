@@ -2592,3 +2592,15 @@ def test_tui_run_endpoint_marks_the_run_standalone(client, tmp_path):
     active = client.get("/api/runs/active").json()
     row = next(r for r in active["runs"] if r["run_uid"] == run["run_uid"])
     assert row["standalone"] == 1
+
+
+def test_tui_runs_do_not_block_a_restart(client, tmp_path):
+    from perun import registry
+
+    (tmp_path / "tui-guard").mkdir()
+    project = registry.add_project("tui-guard", str(tmp_path / "tui-guard"), kind="dir")
+    client.post("/api/runs/tui", json={"project": project["slug"]})
+
+    active = client.get("/api/runs/active").json()
+    assert active["count"] == 1
+    assert active["blocking"] == 0

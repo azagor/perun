@@ -2223,7 +2223,11 @@ def api_active_runs() -> dict[str, Any]:
     """
     runs = registry.list_active_runs()
     slugs = sorted({r["project_slug"] for r in runs if r.get("project_slug")})
-    return _ok(runs=runs, live=ORCH.active(), projects=slugs, count=len(runs))
+    # A standalone (TUI) run survives a restart, so it must not make the CLI
+    # refuse one: ``blocking`` is what the restart guard reads.
+    blocking = sum(1 for r in runs if not r.get("standalone"))
+    return _ok(runs=runs, live=ORCH.active(), projects=slugs,
+               count=len(runs), blocking=blocking)
 
 
 @app.post("/api/runs")

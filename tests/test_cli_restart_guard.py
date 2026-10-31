@@ -55,3 +55,18 @@ def test_restart_refuses_while_runs_are_active(control_repo, monkeypatch):  # no
 def test_active_run_count_returns_none_when_the_server_is_unreachable(monkeypatch):
     monkeypatch.setattr(cli.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
     assert cli._active_run_count(_Settings()) is None
+
+
+def test_active_run_count_prefers_blocking_over_count(monkeypatch):
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def read(self):
+            return b'{"count": 3, "blocking": 0}'
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", lambda *a, **k: Resp())
+    assert cli._active_run_count(_Settings()) == 0

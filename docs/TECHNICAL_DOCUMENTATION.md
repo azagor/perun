@@ -742,6 +742,8 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   them alone (the card keeps its "working" pip and banner), and only a run older
   than `tui_run_stale_hours` (default 24) is swept as "TUI session ended while
   Perun was down". The dashboard shows a TUI banner and no Stop button for them.
+  `/api/runs/active` reports `blocking` (non-standalone runs) and the CLI restart
+  guard uses it, so an open TUI does not force `--force`.
 - **Limits (honest):** step-level checkpointing would require Perun to own the
   model loop; it does not. Durability here is admission + session resume +
   observation, which covers process crashes but cannot replay a half-finished

@@ -137,7 +137,9 @@ def _active_run_count(settings: "config.Settings") -> int | None:
         url = f"http://{settings.host}:{settings.port}/api/runs/active"
         with urllib.request.urlopen(url, timeout=2.0) as response:
             payload = json.loads(response.read().decode("utf-8", "replace"))
-        return int(payload.get("count") or 0)
+        # Standalone TUI runs outlive Perun, so they do not block a restart.
+        value = payload.get("blocking", payload.get("count", 0))
+        return int(value or 0)
     except Exception:
         return None
 
