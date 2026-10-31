@@ -94,6 +94,21 @@ def bridge(control_repo, api):  # noqa: ARG001 - control_repo patches config
     b.client.close()
 
 
+def _last_card_text(bridge) -> str:
+    """Last text the operator would see: an edit wins over an earlier send."""
+    for method, kw in reversed(bridge.api_calls):
+        if method in ("editMessageText", "sendMessage"):
+            return str(kw.get("text") or "")
+    return bridge.sent[-1]["text"] if bridge.sent else ""
+
+
+def _last_edit(bridge) -> dict:
+    for method, kw in reversed(bridge.api_calls):
+        if method == "editMessageText":
+            return kw
+    return {}
+
+
 def _permission(project, request_id="per_1", session_id="ses_tg"):
     return attention.request(
         project, "permission", request_id, "permission", "read .env",
@@ -155,7 +170,10 @@ def test_reply_to_a_card_answers_that_item(bridge, project, api):
 
     assert api.calls == [("permission", "ses_tg", "per_1", "once")]
     assert registry.get_attention(item["id"])["state"] == "approved"
-    assert bridge.sent[-1]["reply_to"] == 42
+    # The card is edited in place (same message), not answered with a new one.
+    last = _last_edit(bridge)
+    assert last.get("message_id") == 42
+    assert "approved" in last.get("text", "").lower()
 
 
 def test_always_requires_a_second_tap(bridge, project, api):
@@ -167,9 +185,9 @@ def test_always_requires_a_second_tap(bridge, project, api):
     bridge._handle_attention_callback(first, first["data"])
 
     assert api.calls == []
-    assert "would" not in bridge.sent[-1]["text"].lower()  # wording differs here
-    assert "always allow" in bridge.sent[-1]["text"].lower()
-    assert "`*`" in bridge.sent[-1]["text"]
+    confirm = _last_card_text(bridge).lower()
+    assert "always allow" in confirm
+    assert "<code>*</code>" in confirm
 
     second = {"id": "c2", "data": f"att:{item['id']}:always_yes",
               "message": {"message_id": 43, "chat": {"id": "1"}}}
@@ -401,7 +419,9 @@ def test_a_button_tap_through_the_real_dispatch_answers_the_item(bridge, project
 
     assert api.calls == [("permission", "ses_tg", "per_1", "once")]
     assert registry.get_attention(item["id"])["state"] == "approved"
-    assert bridge.api_calls[-1][0] == "answerCallbackQuery"
+    # Acknowledged immediately, then the card is edited with the outcome.
+    assert any(method == "answerCallbackQuery" for method, _ in bridge.api_calls)
+    assert any(method == "editMessageText" for method, _ in bridge.api_calls)
 
 
 def test_a_tap_on_a_stale_card_reports_the_state_and_does_nothing(bridge, project, api):

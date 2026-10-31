@@ -372,6 +372,10 @@ def confirmation(item: Dict[str, Any], result: Dict[str, Any]) -> str:
         return f"📥 reply queued for `{item.get('target_id')}` — will be posted when it reconnects."
     if mode == "tool":
         return f"✅ delivered to the waiting agent ({label})."
+    if mode == "steer":
+        return "⚡ delivered now — the answer is no longer queued."
+    if mode == "undone":
+        return "↩ answer withdrawn — reply again to send a new one."
     if item["target_kind"] == "room":
         return f"✅ posted in `{item.get('target_id')}`."
     return f"✅ {label} — att_{item['id']}"

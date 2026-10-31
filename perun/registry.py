@@ -1753,3 +1753,157 @@ def attention_outbox_retry(outbox_id: int) -> bool:
             (int(outbox_id),),
         )
         return bool(cur.rowcount)
+
+
+# --------------------------------------------------------------------------- #
+# Durable Telegram update queue
+# --------------------------------------------------------------------------- #
+MAX_TELEGRAM_JOB_ATTEMPTS = 5
+
+
+def _telegram_job_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    entry = dict(row)
+    try:
+        entry["payload"] = json.loads(entry.get("payload") or "{}")
+    except Exception:
+        entry["payload"] = {}
+    return entry
+
+
+def enqueue_telegram_job(chat_id: str, kind: str, payload: dict[str, Any],
+                         dedupe_key: str) -> bool:
+    """Queue one update. Returns False when it was already queued/processed."""
+    now = now_iso()
+    with db.db() as conn:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO telegram_jobs
+               (chat_id,kind,payload,dedupe_key,state,attempts,not_before,
+                created_at,updated_at)
+               VALUES (?,?,?,?,'queued',0,0,?,?)""",
+            (str(chat_id), str(kind), json.dumps(payload or {}), str(dedupe_key),
+             now, now),
+        )
+        return bool(cur.rowcount)
+
+
+def claim_telegram_jobs(limit: int = 20, now: float | None = None) -> list[dict[str, Any]]:
+    """Atomically claim up to *limit* queued jobs, at most one per chat.
+
+    Marking them ``running`` in the same transaction is what enforces per-chat
+    ordering: the next claim sees the chat as busy and leaves its later jobs
+    queued even though they are older than another chat's.
+    """
+    stamp = now_iso()
+    claimed: list[dict[str, Any]] = []
+    with db.db() as conn:
+        busy = {
+            str(r["chat_id"])
+            for r in db.rows(
+                conn, "SELECT DISTINCT chat_id FROM telegram_jobs WHERE state='running'"
+            )
+        }
+        rows = db.rows(
+            conn,
+            """SELECT * FROM telegram_jobs
+               WHERE state='queued' AND not_before <= ?
+               ORDER BY id ASC LIMIT ?""",
+            (float(now if now is not None else time.time()), max(1, int(limit)) * 4),
+        )
+        for row in rows:
+            chat_id = str(row["chat_id"])
+            if chat_id in busy:
+                continue
+            cur = conn.execute(
+                """UPDATE telegram_jobs SET state='running', updated_at=?
+                   WHERE id=? AND state='queued'""",
+                (stamp, int(row["id"])),
+            )
+            if not cur.rowcount:
+                continue
+            busy.add(chat_id)
+            entry = _telegram_job_row(row)
+            if entry:
+                entry["state"] = "running"
+                claimed.append(entry)
+            if len(claimed) >= limit:
+                break
+    return claimed
+
+
+def finish_telegram_job(job_id: int) -> None:
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE telegram_jobs SET state='done', updated_at=? WHERE id=?",
+            (now_iso(), int(job_id)),
+        )
+
+
+def fail_telegram_job(job_id: int, error: str,
+                      max_attempts: int = MAX_TELEGRAM_JOB_ATTEMPTS) -> str:
+    """Record a failure; returns the resulting state (queued or failed)."""
+    with db.db() as conn:
+        row = db.one(conn, "SELECT attempts FROM telegram_jobs WHERE id=?",
+                     (int(job_id),))
+        attempts = int((row or {"attempts": 0})["attempts"] or 0) + 1
+        state = "failed" if attempts >= max_attempts else "queued"
+        # Exponential backoff, capped; a dead-lettered job keeps its error.
+        delay = min(60.0, float(2 ** attempts))
+        conn.execute(
+            """UPDATE telegram_jobs
+               SET state=?, attempts=?, not_before=?, last_error=?, updated_at=?
+               WHERE id=?""",
+            (state, attempts, time.time() + (delay if state == "queued" else 0),
+             str(error or "")[:500], now_iso(), int(job_id)),
+        )
+        return state
+
+
+def reset_telegram_jobs() -> int:
+    """Re-queue jobs a restart interrupted (they were ``running``)."""
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE telegram_jobs
+               SET state='queued', attempts=attempts+1, not_before=0, updated_at=?
+               WHERE state='running'""",
+            (now_iso(),),
+        )
+        return int(cur.rowcount or 0)
+
+
+def list_telegram_jobs(state: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM telegram_jobs"
+    params: list[Any] = []
+    if state:
+        sql += " WHERE state=?"
+        params.append(str(state))
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+    with db.db() as conn:
+        rows = db.rows(conn, sql, tuple(params))
+    return [job for job in (_telegram_job_row(r) for r in rows) if job]
+
+
+def retry_telegram_job(job_id: int) -> bool:
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE telegram_jobs
+               SET state='queued', attempts=0, not_before=0, last_error='',
+                   updated_at=?
+               WHERE id=? AND state='failed'""",
+            (now_iso(), int(job_id)),
+        )
+        return bool(cur.rowcount)
+
+
+def prune_telegram_jobs(keep_days: int = 7) -> int:
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(1, int(keep_days)))).isoformat()
+    with db.db() as conn:
+        cur = conn.execute(
+            "DELETE FROM telegram_jobs WHERE state IN ('done','failed') "
+            "AND created_at < ?",
+            (cutoff,),
+        )
+        return int(cur.rowcount or 0)

@@ -139,7 +139,7 @@ class OpenCodeAPI:
         *,
         base_url: str = "",
         password: str = "",
-        timeout: float = 5.0,
+        timeout: float = 2.0,
         discovery=discover_base_url,
     ):
         self._base = (base_url or "").rstrip("/")

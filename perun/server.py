@@ -2725,6 +2725,23 @@ def api_attention_list(state: str = "open", limit: int = 50,
     return _ok(items=items, total=len(items))
 
 
+@app.get("/api/telegram/jobs")
+def api_telegram_jobs(state: str = "failed", limit: int = 50) -> dict[str, Any]:
+    """Durable Telegram update queue (inspect dead-lettered updates)."""
+    wanted = (state or "").strip().lower()
+    if wanted not in ("queued", "running", "done", "failed", ""):
+        raise HTTPException(status_code=400, detail="unknown state")
+    items = registry.list_telegram_jobs(wanted or None, limit=max(1, min(int(limit), 200)))
+    return _ok(items=items, total=len(items))
+
+
+@app.post("/api/telegram/jobs/{job_id}/retry")
+def api_telegram_job_retry(job_id: int) -> dict[str, Any]:
+    if not registry.retry_telegram_job(job_id):
+        raise HTTPException(status_code=404, detail="job not found or not failed")
+    return _ok(retried=job_id)
+
+
 @app.get("/api/attention/outbox")
 def api_attention_outbox(limit: int = 20) -> dict[str, Any]:
     """Operator replies still queued (or retired after repeated failures)."""

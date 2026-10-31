@@ -359,6 +359,25 @@ CREATE TABLE IF NOT EXISTS attention_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_attention_outbox_open ON attention_outbox(delivered_at);
 
+-- Durable Telegram update queue. The poller only enqueues (offset advances after
+-- the row commits), a small keyed executor processes per chat in order, and a
+-- crash resumes from here instead of dropping the update.
+CREATE TABLE IF NOT EXISTS telegram_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'update',
+    payload     TEXT NOT NULL DEFAULT '{}',
+    dedupe_key  TEXT NOT NULL UNIQUE,
+    state       TEXT NOT NULL DEFAULT 'queued',  -- queued|running|done|failed
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    not_before  REAL NOT NULL DEFAULT 0,
+    last_error  TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tg_jobs_state ON telegram_jobs(state, not_before);
+CREATE INDEX IF NOT EXISTS idx_tg_jobs_chat ON telegram_jobs(chat_id, state);
+
 -- Per-chat notification mutes ("/mute <project>"), so one noisy project can be
 -- silenced without unplugging the operator's pager.
 CREATE TABLE IF NOT EXISTS attention_mutes (
@@ -537,7 +556,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def init_db() -> None:

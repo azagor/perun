@@ -1229,6 +1229,32 @@ The bridge resolves its token **once, at startup** (`run_bridge()` →
 
 ---
 
+### Update ingestion (durable queue)
+
+The poller does one thing: `getUpdates` → `INSERT` into `telegram_jobs`
+(`dedupe_key = upd:<update_id>`) → advance the offset. Only after the row
+commits, so a crash re-delivers rather than loses the update, and the unique key
+absorbs the duplicate. A single dispatcher thread claims up to four jobs per
+tick with `claim_telegram_jobs()`, which marks them `running` in the same
+transaction and **skips any chat that already has a running job** — per-chat
+ordering, cross-chat concurrency (four worker threads). `_handle_update` runs on
+a worker; a plain message is still handed to the agent queue (`self.work`), so
+long runs never occupy a worker.
+
+Failures retry with exponential backoff (`2^attempts`, capped at 60 s); after
+five attempts the job becomes `failed`, is listed by
+`GET /api/telegram/jobs?state=failed` and can be re-queued with
+`POST /api/telegram/jobs/{id}/retry`. `reset_telegram_jobs()` runs at bridge
+start to re-queue rows a restart interrupted, and `prune_telegram_jobs()` drops
+finished rows after seven days.
+
+**Card lifecycle.** A tap is acknowledged (`answerCallbackQuery`) before any
+work, the inline keyboard is cleared (`editMessageReplyMarkup`), and the outcome
+is written into the same message (`editMessageText`) — including "already
+approved", "session gone" and the ⚡/↩ follow-ups. A new message is only sent
+when Telegram refuses the edit (card too old), so the chat keeps one card per
+decision.
+
 ## 9.1 Operator inbox ("needs you")
 
 Perun can reach the operator wherever work is waiting — a TUI session, a

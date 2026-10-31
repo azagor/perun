@@ -981,6 +981,62 @@ class PerunTelegramBridge:
         )
         return True
 
+    # ---- card edits (in-place, so the chat stays one card per decision) ---- #
+    def _clear_buttons(self, chat_id: str, message_id: int) -> None:
+        if not chat_id or not message_id:
+            return
+        self.api("editMessageReplyMarkup", chat_id=chat_id,
+                 message_id=message_id,
+                 reply_markup={"inline_keyboard": []}, retries=2)
+
+    def _edit_card(self, chat_id: str, message_id: int, text: str, *,
+                   reply_markup: Optional[Dict[str, Any]] = None,
+                   retries: int = 2) -> bool:
+        """Edit a card in place; falls back to a plain edit, then to a send."""
+        if not chat_id or not message_id:
+            return False
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": format_html(text),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        res = self.api("editMessageText", retries=retries, **payload)
+        if not res.get("ok"):
+            # HTML rejected, or the message is too old / not modified: one plain
+            # retry covers "too old"; a genuine failure falls back to send().
+            payload.pop("parse_mode", None)
+            payload["text"] = text
+            res = self.api("editMessageText", retries=1, **payload)
+        return bool(res.get("ok"))
+
+    def _show_item_state(self, chat_id: str, message_id: int,
+                         item: Dict[str, Any], note: str) -> None:
+        from . import attention
+
+        if not self._edit_card(chat_id, message_id,
+                               attention.render(item) + f"\n\n{note}",
+                               reply_markup=attention.keyboard(item)):
+            self.send(chat_id, note, reply_to=message_id or None)
+
+    def _finish_card(self, chat_id: str, message_id: int,
+                     item: Dict[str, Any], result: Dict[str, Any]) -> None:
+        from . import attention
+
+        item = result.get("item") or item
+        if result.get("ok"):
+            text = attention.render(item) + "\n\n" + attention.confirmation(item, result)
+            keyboard = attention.followup_keyboard(item, result)
+        else:
+            text = attention.render(item) + f"\n\n⚠️ {result.get('error')}"
+            keyboard = attention.keyboard(item)
+        if not self._edit_card(chat_id, message_id, text, reply_markup=keyboard):
+            self.send(chat_id, text, reply_to=message_id or None,
+                      reply_markup=keyboard)
+
     def _handle_attention_callback(self, cq: Dict[str, Any], data: str) -> None:
         from . import attention
 
@@ -1002,7 +1058,6 @@ class PerunTelegramBridge:
         action = parts[2]
         chat_id = str((cq.get("message", {}).get("chat") or {}).get("id"))
         message_id = int(cq.get("message", {}).get("message_id") or 0)
-
         if not chat_id:
             return
         if not self.authorised(chat_id):
@@ -1017,105 +1072,89 @@ class PerunTelegramBridge:
             # and ``undo`` act on an *answered* item by design.
             self._pending_answers.pop(f"{chat_id}:{attention_id}", None)
             ack(f"Already {item['state']}")
+            self._show_item_state(chat_id, message_id, item,
+                                  f"Already {item['state']}.")
             return
-
-        if action == "discard_text":
-            text = self._pending_answers.pop(f"{chat_id}:{attention_id}", "")
-            ack("Sent to Perun")
-            if message_id:
-                self.send(chat_id, "Not an answer — passed it to Perun instead.",
-                          reply_to=message_id)
-            if text:
-                # "No" means "this was for Perun, not for the card": keep the
-                # user's message instead of dropping it.
-                self.work.put({"chat_id": chat_id, "text": text,
-                               "message_id": message_id})
-            return
-
-        if action == "send_text":
-            text = self._pending_answers.pop(f"{chat_id}:{attention_id}", "")
-            ack("Sending")
-            if not text:
-                self.send(chat_id, "That draft expired; resend your answer.",
-                          reply_to=message_id or None)
-                return
-            result = attention.answer(attention_id, text, by=f"telegram:{chat_id}")
-            if not result.get("ok"):
-                self.send(chat_id, f"⚠️ {result.get('error')}",
-                          reply_to=message_id or None)
-                return
-            self.send(chat_id, attention.confirmation(item, result),
-                      reply_to=message_id or None,
-                      reply_markup=attention.followup_keyboard(item, result))
+        if action in ("always_yes", "approve", "reject") and chat_id not in self.allowed:
+            ack("Only the paired owner can do that.")
             return
 
         if action == "show":
             ack("Here it is")
-            self.send(chat_id, attention.render(item), reply_to=message_id or None,
-                      reply_markup=attention.keyboard(item))
+            self._edit_card(chat_id, message_id, attention.render(item),
+                            reply_markup=attention.keyboard(item))
             return
 
-        if action == "steer":
-            result = attention.set_delivery(attention_id, "steer",
-                                            by=f"telegram:{chat_id}")
-            ack("Interrupting" if result.get("ok") else "Could not interrupt")
-            if result.get("ok"):
-                self.send(chat_id, "⚡ interruption requested — the answer is "
-                                   "being delivered now.", reply_to=message_id or None)
-            else:
-                self.send(chat_id, f"⚠️ {result.get('error')}",
-                          reply_to=message_id or None)
-            return
-
-        if action == "undo":
-            result = attention.undo(attention_id, by=f"telegram:{chat_id}")
-            ack("Undone" if result.get("ok") else "Could not undo")
-            self.send(chat_id,
-                      "↩ answer withdrawn — the item is open again."
-                      if result.get("ok") else f"⚠️ {result.get('error')}",
-                      reply_to=message_id or None,
-                      reply_markup=attention.keyboard(item) if result.get("ok") else None)
-            return
+        # Acknowledge immediately, then edit the card in place: the spinner is
+        # gone before any work and the chat keeps one card per decision.
+        ack("Working…")
+        self._clear_buttons(chat_id, message_id)
 
         if action == "always":
             # A persistent grant needs a second, explicit tap: show the patterns.
             patterns = ", ".join(
                 str(p) for p in ((item.get("ref") or {}).get("save") or [])[:3]
             ) or "the tool's proposed patterns"
-            ack("Confirm")
-            self.send(
-                chat_id,
+            self._edit_card(
+                chat_id, message_id,
                 f"⚠️ *Always allow* saves `{patterns}` for "
                 f"*{attention.project_label(item)}* and applies to future requests.\n"
                 f"Confirm?  att_{attention_id}",
-                reply_to=message_id or None,
                 reply_markup={"inline_keyboard": [[
-                    {"text": "Confirm always allow", "callback_data": f"att:{attention_id}:always_yes"},
+                    {"text": "Confirm always allow",
+                     "callback_data": f"att:{attention_id}:always_yes"},
                     {"text": "Cancel", "callback_data": f"att:{attention_id}:cancel"},
                 ]]},
             )
             return
 
         if action == "cancel":
-            ack("Cancelled")
-            self.send(chat_id, "No change made.", reply_to=message_id or None)
+            self._edit_card(chat_id, message_id,
+                            attention.render(item) + "\n\nNo change made.",
+                            reply_markup=attention.keyboard(item))
             return
 
-        if action in ("always_yes", "approve", "reject"):
-            if chat_id not in self.allowed:
-                ack("Only the paired owner can do that.")
+        if action == "discard_text":
+            text = self._pending_answers.pop(f"{chat_id}:{attention_id}", "")
+            if text:
+                # "No" means "this was for Perun, not for the card": keep the
+                # user's message instead of dropping it.
+                self.work.put({"chat_id": chat_id, "text": text,
+                               "message_id": message_id})
+            self._edit_card(chat_id, message_id,
+                            attention.render(item)
+                            + "\n\nNot an answer — passed it to Perun instead.",
+                            reply_markup=attention.keyboard(item))
+            return
+
+        if action == "send_text":
+            text = self._pending_answers.pop(f"{chat_id}:{attention_id}", "")
+            if not text:
+                self._edit_card(chat_id, message_id,
+                                attention.render(item)
+                                + "\n\nThat draft expired; resend your answer.",
+                                reply_markup=attention.keyboard(item))
                 return
+            self._finish_card(chat_id, message_id, item,
+                              attention.answer(attention_id, text,
+                                               by=f"telegram:{chat_id}"))
+            return
+
+        if action == "steer":
+            self._finish_card(chat_id, message_id, item,
+                              attention.set_delivery(attention_id, "steer",
+                                                     by=f"telegram:{chat_id}"))
+            return
+
+        if action == "undo":
+            self._finish_card(chat_id, message_id, item,
+                              attention.undo(attention_id, by=f"telegram:{chat_id}"))
+            return
 
         choice = "always" if action == "always_yes" else action
-        result = attention.choose(attention_id, choice, by=f"telegram:{chat_id}")
-        if not result.get("ok"):
-            ack("Failed")
-            self.send(chat_id, f"⚠️ {result.get('error')}",
-                      reply_to=message_id or None)
-            return
-        ack("Done")
-        self.send(chat_id, attention.confirmation(item, result),
-                  reply_to=message_id or None)
+        self._finish_card(chat_id, message_id, item,
+                          attention.choose(attention_id, choice,
+                                           by=f"telegram:{chat_id}"))
 
     def _handle_attention_command(self, chat_id: str, text: str,
                                   message_id: int) -> bool:
@@ -1393,8 +1432,89 @@ class PerunTelegramBridge:
             return
         self.work.put({"chat_id": chat_id, "text": text, "message_id": message_id})
 
+    # ---- durable update queue -------------------------------------------- #
+    def _enqueue_update(self, update: Dict[str, Any]) -> bool:
+        """Queue one Telegram update. Returns False only on an enqueue error.
+
+        A duplicate (same ``update_id``) is *not* an error: it means the update
+        was already accepted before a reconnect, which is exactly what the queue
+        is for.
+        """
+        try:
+            if update.get("callback_query"):
+                cq = update["callback_query"]
+                chat_id = str((cq.get("message", {}).get("chat") or {}).get("id") or "")
+                kind = "callback"
+            else:
+                msg = (update.get("message") or update.get("edited_message")
+                       or update.get("channel_post") or {})
+                if (msg.get("from") or {}).get("is_bot"):
+                    return True
+                chat_id = str((msg.get("chat") or {}).get("id") or "")
+                kind = "message"
+            if not chat_id:
+                return True
+            registry.enqueue_telegram_job(
+                chat_id, kind, {"update": update},
+                f"upd:{update.get('update_id')}",
+            )
+            return True
+        except Exception:
+            LOG.exception("could not enqueue update %s", update.get("update_id"))
+            return False
+
+    def _job_dispatcher(self) -> None:
+        """Claim queued updates and run them off the polling thread.
+
+        One job per chat at a time (enforced by ``claim_telegram_jobs``), several
+        chats in parallel. A crash leaves the row ``running``; the next start
+        re-queues it (``reset_telegram_jobs``) instead of dropping the update.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(max_workers=4,
+                                      thread_name_prefix="perun-tg-job")
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    jobs = registry.claim_telegram_jobs()
+                except Exception:  # pragma: no cover - DB hiccup
+                    LOG.exception("could not claim telegram jobs")
+                    jobs = []
+                for job in jobs:
+                    executor.submit(self._run_job, job)
+                self.stop_event.wait(0.5)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _run_job(self, job: Dict[str, Any]) -> None:
+        update = (job.get("payload") or {}).get("update") or {}
+        try:
+            self._handle_update(update)
+        except Exception as exc:
+            LOG.exception("telegram job %s failed", job.get("id"))
+            state = registry.fail_telegram_job(job["id"], str(exc))
+            if state == "failed":
+                registry.log_activity(
+                    None, "telegram_failed",
+                    f"telegram update {job.get('dedupe_key')} gave up after retries",
+                    {"job_id": job["id"], "chat_id": job.get("chat_id"),
+                     "error": str(exc)[:300]},
+                )
+            return
+        registry.finish_telegram_job(job["id"])
+
     def run(self) -> None:
         threading.Thread(target=self.worker, daemon=True).start()
+        try:
+            recovered = registry.reset_telegram_jobs()
+            if recovered:
+                LOG.info("re-queued %d interrupted telegram update(s)", recovered)
+            registry.prune_telegram_jobs()
+        except Exception:  # pragma: no cover - startup must not depend on this
+            LOG.exception("could not recover the telegram job queue")
+        threading.Thread(target=self._job_dispatcher, daemon=True,
+                         name="perun-tg-dispatcher").start()
         boot = self.api("getUpdates", timeout=0, offset=-1)
         if boot.get("error_code") == 409:
             self._log_conflict(first=True)
@@ -1434,11 +1554,11 @@ class PerunTelegramBridge:
                     break
                 continue
             for update in data.get("result") or []:
+                # Enqueue before advancing: a crash between the two re-delivers
+                # the same update_id, which the unique dedupe key absorbs.
+                if not self._enqueue_update(update):
+                    break
                 self.offset = update["update_id"] + 1
-                try:
-                    self._handle_update(update)
-                except Exception:
-                    LOG.exception("failed to handle update %s", update.get("update_id"))
 
     def _log_conflict(self, *, first: bool = False) -> None:
         """Emit one actionable 409 message (then at most once per minute)."""

@@ -2557,3 +2557,22 @@ def test_always_from_the_dashboard_requires_confirmation(client, tmp_path, inbox
                      json={"option": "always", "confirm": True})
     assert ok.status_code == 200, ok.text
     assert inbox_api.calls == [("permission", "ses_api", "per_confirm", "always")]
+
+
+def test_telegram_jobs_dead_letter_is_inspectable_and_retryable(client):
+    from perun import registry
+
+    registry.enqueue_telegram_job("1", "message", {"update": {"update_id": 5}}, "upd:5")
+    job = registry.claim_telegram_jobs()[0]
+    for _ in range(5):
+        registry.fail_telegram_job(job["id"], "boom")
+
+    body = client.get("/api/telegram/jobs?state=failed").json()
+    assert [i["dedupe_key"] for i in body["items"]] == ["upd:5"]
+
+    retry = client.post(f"/api/telegram/jobs/{job['id']}/retry", json={})
+    assert retry.status_code == 200, retry.text
+    assert registry.list_telegram_jobs("queued")[0]["attempts"] == 0
+
+    assert client.post("/api/telegram/jobs/999999/retry", json={}).status_code == 404
+    assert client.get("/api/telegram/jobs?state=bogus").status_code == 400

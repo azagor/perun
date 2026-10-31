@@ -31,7 +31,8 @@ def _fresh_db():
                       "secret_store", "project_chats", "action_proposals",
                       "pending_room_deletions", "hitl_nonces", "project_dependencies",
                       "package_transfers", "attention_requests",
-                      "attention_deliveries", "attention_outbox", "attention_mutes"):
+                      "attention_deliveries", "attention_outbox", "attention_mutes",
+                      "telegram_jobs"):
             conn.execute(f"DELETE FROM {table}")
     yield
 

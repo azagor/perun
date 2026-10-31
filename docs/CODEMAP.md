@@ -86,7 +86,8 @@ SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 search), `secret_store` (encrypted secret values), plus the operator-inbox
 tables `attention_requests` (typed target + `dedupe_key` unique among open rows),
 `attention_deliveries` (chat → message id), `attention_outbox` (undelivered room
-replies) and `attention_mutes` (per-chat `/mute`).
+replies) and `attention_mutes` (per-chat `/mute`), and `telegram_jobs` (the durable update
+queue: dedupe key, state, attempts, backoff).
 * `SCHEMA`, `SCHEMA_VERSION` (the `PRAGMA user_version` migration gate),
   `_ADDED_COLUMNS` (idempotent column additions: `projects.manifest`,
   `projects.manifest_path`, `projects.manifest_loaded_at`, `projects.git_*`,
@@ -131,6 +132,10 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `recent_interrupted_runs()` / `chats_for_session()` / `interrupt_notice_sent()`
   for the restart notice.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
+* Telegram jobs: `enqueue_telegram_job()` (idempotent by `dedupe_key`),
+  `claim_telegram_jobs()` (atomic, one per chat), `finish_telegram_job()`,
+  `fail_telegram_job()` (backoff → dead letter), `reset_telegram_jobs()`,
+  `list_telegram_jobs()`, `retry_telegram_job()`, `prune_telegram_jobs()`.
 * Operator inbox: `add_attention()` (returns `_new`, deduped by the unique
   partial index), `get_attention()`, `open_attention()`, `open_attention_for_chat()`,
   `attention_by_message()` (reply-to → item), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
@@ -645,7 +650,11 @@ Shared Telegram ⇄ Perun bridge.
   `_handle_callback()` (inline-keyboard project selection; falls back to numeric
   ids for slugs that exceed Telegram's 64-byte `callback_data` limit),
   `_current_project()` (single-user-project auto-select, else the control plane),
-  `_handle_update()` (deduplicates redelivered messages by chat + message id),
+  `_enqueue_update()` / `_job_dispatcher()` / `_run_job()` (durable
+  `telegram_jobs` queue: the poller only enqueues and advances the offset after
+  the commit; one job per chat at a time, four workers, dead-letter + retry),
+  `_handle_update()` (deduplicates redelivered messages by chat + message id,
+  runs on a job worker),
   `run_message()`, `worker()`, `authorised()` (strict: an empty allow-list grants
   nobody), `_handle_pair()` (`/pair <code>`, `hmac.compare_digest`, dispatched
   *before* the auth gate), `pair_code()`, `active_runs()`, `run_for()`, `run()`.
@@ -663,7 +672,8 @@ Shared Telegram ⇄ Perun bridge.
   (a reply-to on a card), `_maybe_attention_text()` (one-tap "Send to att_N?"
   instead of silently treating plain text as an answer),
   `_handle_attention_callback()` (`att:<id>:<choice>`, with a second tap for
-  `always`), and `_handle_attention_command()` (`/pending`, `/answer`, `/cancel`,
+  `always`, an immediate `answerCallbackQuery`, and in-place `editMessageText`
+  results via `_clear_buttons()` / `_edit_card()` / `_finish_card()`), and `_handle_attention_command()` (`/pending`, `/answer`, `/cancel`,
   `/mute`, `/unmute`).
   Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
   With the routing setting enabled, `run_message()` first calls `_route_message()`
@@ -969,7 +979,9 @@ FastAPI app + SSE + static dashboard.
   (`/api/routing/decisions` summary + panel rows, `POST
   /api/routing/decisions/{id}/misroute`), the operator inbox
   (`/api/attention` list, `/{id}`, `/{id}/reply`, `/{id}/choose`,
-  `/{id}/delivery` for ⚡, `DELETE` to cancel, `/outbox` + `/outbox/{id}/retry` for queued room replies), `DELETE /api/sessions/{pk}`; `DELETE` refuses
+  `/{id}/delivery` for ⚡, `DELETE` to cancel, `/outbox` + `/outbox/{id}/retry` for queued room replies;
+  `/api/telegram/jobs` + `/api/telegram/jobs/{id}/retry` for the dead-lettered
+  update queue), `DELETE /api/sessions/{pk}`; `DELETE` refuses
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
