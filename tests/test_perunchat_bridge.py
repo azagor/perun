@@ -3711,3 +3711,45 @@ def test_a_room_joined_later_still_gets_the_notice(settings, tmp_path, monkeypat
     assert len(posted) == 1
     assert registry.activity_exists(
         "project_room_welcome", f"operator contact posted in {room}")
+
+def test_the_dashboard_operator_is_not_mistaken_for_perun_itself(settings):
+    """The dashboard posts as our agent id but labels the frame as the operator."""
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "room_id": "priv:abc",
+        "sender": {"agent_id": "perun-local", "runtime": "perun-local-operator"},
+        "payload": "siema",
+    }
+
+    decision = bridge._should_reply_to(frame)
+    assert decision.should_reply is True, decision.reason
+    assert decision.reason == "private room"
+
+
+def test_a_message_perun_actually_wrote_is_still_ignored(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "room_id": "priv:abc",
+        "sender": {"agent_id": "perun-local", "runtime": "perun"},
+        "payload": "is anyone there?",
+    }
+
+    decision = bridge._should_reply_to(frame)
+    assert decision.should_reply is False
+    assert decision.reason == "own message"
+
+
+def test_an_operator_message_in_a_group_still_needs_to_address_perun(settings):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    frame = {
+        "room_id": "grp:perun:ai-playground:chat",
+        "sender": {"agent_id": "perun-local", "runtime": "perun-local-operator"},
+        "payload": "@perun what is the status?",
+    }
+
+    decision = bridge._should_reply_to(frame)
+    assert decision.should_reply is True
+    assert "addressed by" in decision.reason

@@ -508,3 +508,22 @@ def test_the_reply_drainer_reports_an_empty_run_before_marking_it(bridge, projec
     assert bridge._deliver_pending_replies() == 1
     assert "failed" in bridge.sent[-1]["text"].lower()
     assert "boom" in bridge.sent[-1]["text"]
+
+def test_the_poll_becomes_the_reconciliation_net_when_events_are_on():
+    """A stored 5 s value (the old default) must not keep polling every 5 s."""
+    from types import SimpleNamespace
+
+    from perun.telegram import PerunTelegramBridge
+
+    five = SimpleNamespace(attention_poll_seconds=5)
+    assert PerunTelegramBridge.attention_interval(five, True) == 60
+    # Without events, detection is the poll: keep the old fast cadence.
+    assert PerunTelegramBridge.attention_interval(five, False) == 5
+    # A slower explicit value is honoured in event mode.
+    slow = SimpleNamespace(attention_poll_seconds=300)
+    assert PerunTelegramBridge.attention_interval(slow, True) == 300
+    assert PerunTelegramBridge.attention_interval(slow, False) == 5
+    # Nonsense values never disable the timer or spin it.
+    assert PerunTelegramBridge.attention_interval(SimpleNamespace(), True) == 60
+    assert PerunTelegramBridge.attention_interval(
+        SimpleNamespace(attention_poll_seconds=0), False) == 5

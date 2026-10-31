@@ -1347,8 +1347,10 @@ arrive for a session nobody admitted yet — and a `permission.asked` /
 debounce, runs the same `poll_once()`. A burst therefore costs one poll and a
 card appears in about a second. `attention_poll_seconds` (60) is now the
 reconciliation cadence: it closes what vanished and still covers everything when
-the stream is unavailable, in which case the loop drops back to a 5 s poll. One
-`_poll_lock` serializes polls, so the two paths never race on a dedupe key.
+the stream is unavailable, in which case the loop drops back to a 5 s poll. An
+explicit setting is honoured in both directions — never polled faster than 60 s
+while events flow, never slower than 5 s when they do not. One `_poll_lock`
+serializes polls, so the two paths never race on a dedupe key.
 Agents can ask explicitly with the MCP tool `perun_ask_operator`; it reads its
 OpenCode session id from `CallToolRequest.params._meta["ai.opencode/sessionID"]`
 (FastMCP exposes it as `ctx.request_context.meta`) and returns the answer as the
@@ -1624,6 +1626,16 @@ joinedRoom)` (drop frames for another room, the same id, or the same
 runs through `tests/test_js_chat_core.py` (skipped when `node` is absent). If the
 module fails to load, `perun.js` logs one error and falls back to rendering
 everything, so a stale cache never blanks the log.
+
+**One identity, two voices.** A frame carries `sender.agent_id` (who) and
+`sender.runtime` (which voice). The bridge posts as `<agent>` with runtime
+`perun`; the dashboard posts as the same agent id with runtime `<agent>-operator`
+so the room list can show it as you. The reader used that distinction from the
+start, but `_should_reply_to` compared agent ids only, so anything typed in the
+dashboard was dismissed as Perun's own message and never answered. It now treats
+an `-operator` runtime as the human (private room → answer, group → the usual
+mention/question rules) and keeps ignoring a genuine `perun` runtime, which is
+what stops a reply from answering itself.
 
 **Portable MCP config and chat permissions.** The shared-project
 `opencode.json` writes `PERUN_HOME=~/.perun` for the default home instead of an

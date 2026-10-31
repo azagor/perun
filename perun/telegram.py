@@ -895,6 +895,19 @@ class PerunTelegramBridge:
 
     # A stream outage falls back to this cadence, which matches the old poller.
     FAST_POLL_SECONDS = 5
+    # With events driving detection, the timer is only the safety net — a stored
+    # 5 s value (the old default) must not keep polling five times a minute.
+    RECONCILE_SECONDS = 60
+
+    @classmethod
+    def attention_interval(cls, settings: Any, ingest_active: bool) -> int:
+        """Seconds between detection passes for the current mode."""
+        configured = int(getattr(settings, "attention_poll_seconds",
+                                 cls.RECONCILE_SECONDS) or cls.RECONCILE_SECONDS)
+        configured = max(2, configured)
+        if ingest_active:
+            return max(configured, cls.RECONCILE_SECONDS)
+        return min(configured, cls.FAST_POLL_SECONDS)
 
     def _attention_loop(self) -> None:
         settings = self._attention_settings()
@@ -922,14 +935,14 @@ class PerunTelegramBridge:
                 LOG.debug("attention: event ingestion unavailable", exc_info=True)
         LOG.info("operator inbox online (chats=%s, poll=%ss, events=%s)",
                  self.allowed or "<no paired chat>",
-                 max(2, int(getattr(settings, "attention_poll_seconds", 60) or 60)),
+                 self.attention_interval(settings, ingest),
                  "on" if ingest else "off")
         try:
             while not self.stop_event.is_set():
                 current = self._attention_settings() or settings
-                interval = max(2, int(getattr(current, "attention_poll_seconds", 60) or 60))
-                if not (attention_watcher and attention_watcher.event_ingest_active()):
-                    interval = min(interval, self.FAST_POLL_SECONDS)
+                live = bool(attention_watcher
+                            and attention_watcher.event_ingest_active())
+                interval = self.attention_interval(current, live)
                 if self.stop_event.wait(interval):
                     break
                 try:

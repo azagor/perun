@@ -4,7 +4,26 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### A message typed in the dashboard chat is answered
+
+* The dashboard posts under this instance's agent id but labels the frame as the
+  human operator (`<agent>-operator`), which is how the room list tells "Perun"
+  from "you". The reader path always honoured that distinction, but the reply
+  decision only compared agent ids, so a message typed in the dashboard was
+  classified as Perun's own and silently ignored. `_should_reply_to` now treats an
+  `<agent>-operator` frame as the human: a private room is answered, a group room
+  follows the usual mention/question rules, and a genuine `runtime: "perun"` post
+  is still ignored so nothing can answer itself in a loop.
+
+### The reconciliation timer respects that events are doing the work
+
+* An install that stored the old 5 s default kept polling five times a minute
+  after event-driven detection shipped, because the stored value overrode the
+  new default. The effective interval is now chosen per mode
+  (`PerunTelegramBridge.attention_interval`): floored at 60 s while the event
+  worker is running, and capped at the old 5 s when it is not, so detection still
+  works on a service that does not stream. An explicit slower value (e.g. 300 s)
+  is never sped up.
 
 ## v0.10.10
 
@@ -19,10 +38,10 @@ _No unreleased changes yet._
   yet) and, on `permission.asked`, `form.created` or `form.replied`, runs one
   detection pass after a 1 s debounce. A burst of requests costs one poll, and a
   card appears in about a second instead of up to five.
-* Polling stays as the reconciliation path: `attention_poll_seconds` now means
-  the safety-net cadence (60 s). It still closes requests that vanished, and it
-  is the only path when the stream is unavailable — the loop drops back to a 5 s
-  poll in that case, and `attention_ingest_events: false` restores the old
+* Polling stays as the reconciliation path: `attention_poll_seconds` is the
+  safety-net cadence. It still closes requests that vanished, and it is the only
+  path when the stream is unavailable — the loop drops back to the old 5 s poll
+  in that case, and `attention_ingest_events: false` restores the previous
   behaviour exactly.
 * `poll_once()` is serialized by a module-level lock, so the event worker and the
   reconciliation loop can never race on the same dedupe key.

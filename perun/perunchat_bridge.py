@@ -2901,9 +2901,18 @@ class PerunChatBridge:
         # Never answer our own messages. The gateway echoes what we post, and a
         # notice that happens to be phrased as a question would otherwise be
         # answered by another notice — a self-sustaining loop.
-        sender = str((frame.get("sender") or {}).get("agent_id") or "").strip().lower()
+        sender_info = frame.get("sender") or {}
+        sender = str(sender_info.get("agent_id") or "").strip().lower()
+        sender_runtime = str(sender_info.get("runtime") or "").strip().lower()
         own_id = str(self._agent_id or "").strip().lower()
-        if sender and own_id and sender == own_id:
+        # The dashboard posts under this instance's agent id but labels the frame
+        # as the human operator ("<agent>-operator"). Only a plain "perun" runtime
+        # is a message Perun wrote itself; anything else from our id is the human
+        # typing in the dashboard, and must be answered like any other person.
+        operator_frame = bool(sender_runtime) and (
+            sender_runtime.endswith("-operator") or sender_runtime.endswith("operator")
+        ) and sender_runtime != "perun"
+        if sender and own_id and sender == own_id and not operator_frame:
             return _ReplyDecision(False, "own message")
 
         # Always reply in private 1:1 rooms.
