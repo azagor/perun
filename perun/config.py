@@ -174,8 +174,16 @@ class Settings:
     attention_operator_names: list[str] = field(default_factory=list)
     # How long an unanswered item stays open before it expires (minutes).
     attention_ttl_minutes: int = 240
-    # How often the OpenCode watcher polls for permission/form requests (seconds).
-    attention_poll_seconds: int = 5
+    # How often the OpenCode watcher reconciles by polling (seconds). Requests
+    # are normally picked up from the service's event stream within a second
+    # (see ``attention_ingest_events``); this poll closes what vanished and
+    # covers the case where the stream is unavailable.
+    attention_poll_seconds: int = 60
+    # Turn on event-driven ingestion: subscribe to ``permission.asked`` /
+    # ``form.created`` / ``form.replied`` on the shared event hub and poll once
+    # per burst. When off (or the service does not stream), detection is the
+    # periodic poll alone.
+    attention_ingest_events: bool = True
     # On startup, re-send only open items that were never delivered and are
     # younger than this (minutes). Older ones stay in /pending and the dashboard.
     attention_replay_open_minutes: int = 15

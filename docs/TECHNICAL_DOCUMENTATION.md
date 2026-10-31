@@ -1340,6 +1340,15 @@ so the existing bot-token `PidLock` makes it a singleton) polls
 `GET /api/session/active`, then permissions/forms per active location, plus a
 five-minute `/api/debug/location` sweep, and creates one item per request id.
 `_reconcile()` closes an item whose request vanished (answered in the TUI).
+Detection is **event-driven by default** (`attention_ingest_events`): the watcher
+subscribes to the shared `EventHub` as a global subscriber — a permission can
+arrive for a session nobody admitted yet — and a `permission.asked` /
+`form.created` / `form.replied` event wakes one worker that, after a 1 s
+debounce, runs the same `poll_once()`. A burst therefore costs one poll and a
+card appears in about a second. `attention_poll_seconds` (60) is now the
+reconciliation cadence: it closes what vanished and still covers everything when
+the stream is unavailable, in which case the loop drops back to a 5 s poll. One
+`_poll_lock` serializes polls, so the two paths never race on a dedupe key.
 Agents can ask explicitly with the MCP tool `perun_ask_operator`; it reads its
 OpenCode session id from `CallToolRequest.params._meta["ai.opencode/sessionID"]`
 (FastMCP exposes it as `ctx.request_context.meta`) and returns the answer as the
@@ -1413,8 +1422,9 @@ answering.
 
 **Settings** (all opt-in; the master switch is off by default):
 `attention_enabled`, `attention_shadow`, `attention_projects`,
-`attention_operator_names`, `attention_ttl_minutes`, `attention_poll_seconds`,
-`attention_replay_open_minutes`, `attention_max_per_hour`,
+`attention_operator_names`, `attention_ttl_minutes`, `attention_poll_seconds`
+(reconciliation cadence, 60), `attention_ingest_events` (event-driven detection,
+on), `attention_replay_open_minutes`, `attention_max_per_hour`,
 `attention_quiet_hours`, `attention_show_paths`, `attention_plain_text_confirm`,
 `attention_default_delivery`.
 

@@ -3119,7 +3119,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
         "routing_enabled", "routing_shadow",
         "attention_enabled", "attention_shadow", "attention_show_paths",
-        "attention_plain_text_confirm", "session_runner_enabled",
+        "attention_plain_text_confirm", "attention_ingest_events",
+        "session_runner_enabled",
     }
     list_fields = {
         "roots", "telegram_allowed_chats", "perunchat_auto_join",

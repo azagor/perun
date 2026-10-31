@@ -4,7 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Attention is picked up from the event stream
+
+* The operator inbox no longer waits for a poll to notice a blocked session. The
+  watcher subscribes to the OpenCode event stream through the shared `EventHub`
+  (a new global subscriber, `EventHub.GLOBAL_SESSION`, receives every event
+  regardless of session — a permission can arrive for a session nobody admitted
+  yet) and, on `permission.asked`, `form.created` or `form.replied`, runs one
+  detection pass after a 1 s debounce. A burst of requests costs one poll, and a
+  card appears in about a second instead of up to five.
+* Polling stays as the reconciliation path: `attention_poll_seconds` now means
+  the safety-net cadence (60 s). It still closes requests that vanished, and it
+  is the only path when the stream is unavailable — the loop drops back to a 5 s
+  poll in that case, and `attention_ingest_events: false` restores the old
+  behaviour exactly.
+* `poll_once()` is serialized by a module-level lock, so the event worker and the
+  reconciliation loop can never race on the same dedupe key.
 
 ## v0.10.9
 

@@ -893,6 +893,9 @@ class PerunTelegramBridge:
             LOG.debug("attention outbox drain failed", exc_info=True)
         return self._attention_deliver(registry.undelivered_attention(), settings)
 
+    # A stream outage falls back to this cadence, which matches the old poller.
+    FAST_POLL_SECONDS = 5
+
     def _attention_loop(self) -> None:
         settings = self._attention_settings()
         if settings is None or not settings.attention_enabled:
@@ -907,18 +910,39 @@ class PerunTelegramBridge:
             self.attention_tick(replay=True)
         except Exception:  # pragma: no cover - never kill the poller
             LOG.exception("attention replay failed")
-        LOG.info("operator inbox online (chats=%s, poll=%ss)",
-                 self.allowed or "<no paired chat>",
-                 max(2, int(getattr(settings, "attention_poll_seconds", 5) or 5)))
-        while not self.stop_event.is_set():
-            current = self._attention_settings() or settings
-            interval = max(2, int(getattr(current, "attention_poll_seconds", 5) or 5))
-            if self.stop_event.wait(interval):
-                break
+        # Prefer the service's event stream; polling stays as the safety net.
+        attention_watcher = None
+        ingest = False
+        if getattr(settings, "attention_ingest_events", True):
             try:
-                self.attention_tick()
-            except Exception:  # pragma: no cover - keep the loop alive
-                LOG.exception("attention tick failed")
+                from . import attention_watcher as _watcher
+                attention_watcher = _watcher
+                ingest = attention_watcher.start_event_ingest()
+            except Exception:  # pragma: no cover - never kill the poller
+                LOG.debug("attention: event ingestion unavailable", exc_info=True)
+        LOG.info("operator inbox online (chats=%s, poll=%ss, events=%s)",
+                 self.allowed or "<no paired chat>",
+                 max(2, int(getattr(settings, "attention_poll_seconds", 60) or 60)),
+                 "on" if ingest else "off")
+        try:
+            while not self.stop_event.is_set():
+                current = self._attention_settings() or settings
+                interval = max(2, int(getattr(current, "attention_poll_seconds", 60) or 60))
+                if not (attention_watcher and attention_watcher.event_ingest_active()):
+                    interval = min(interval, self.FAST_POLL_SECONDS)
+                if self.stop_event.wait(interval):
+                    break
+                try:
+                    self.attention_tick()
+                except Exception:  # pragma: no cover - keep the loop alive
+                    LOG.exception("attention tick failed")
+        finally:
+            if attention_watcher is not None:
+                try:
+                    attention_watcher.stop_event_ingest()
+                except Exception:  # pragma: no cover - shutdown must not raise
+                    LOG.debug("attention: could not stop event ingestion",
+                              exc_info=True)
 
     def _chat_open_items(self, chat_id: str) -> List[Dict[str, Any]]:
         return registry.open_attention_for_chat(chat_id)

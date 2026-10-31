@@ -658,6 +658,16 @@ and `pending_forms()` per location, and creates one item per request id via
 `_reconcile()` closes items whose request vanished (answered in the TUI).
 `poll_once()` returns `{created, closed, locations}` and never raises into the
 bridge; it only ever writes rows, never sends.
+Event-driven ingestion: `start_event_ingest(hub)` subscribes to the shared
+`opencode_api.EventHub` with `opencode_api.EventHub.GLOBAL_SESSION` (a permission
+can arrive for a session nobody has admitted yet, so there is no id to subscribe
+to in advance), starts one daemon worker, and on `permission.asked` /
+`form.created` / `form.replied` waits `INGEST_DEBOUNCE_SECONDS` (1 s) and then
+runs one `poll_once()` — a burst costs one poll, not one per event. `stop_event_ingest()`, `event_ingest_active()`
+and `ingest_stats()` are the lifecycle and observability surface; when the
+subscription fails the caller keeps polling every few seconds instead. A
+module-level `_poll_lock` serializes `poll_once()` so the event worker and the
+reconciliation loop never race on the same dedupe keys.
 
 ### `perun/telegram.py`
 Shared Telegram ⇄ Perun bridge.
@@ -1394,6 +1404,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `test_attention_watcher.py` - detection: one item per request id, forms with
   their field list, reconciliation when a request is answered in the TUI,
   active-location polling plus the five-minute sweep, disabled flag.
+* `test_attention_events.py` - event-driven ingestion: a global subscription,
+  one poll per burst, unrelated events ignored, a failing subscription falling
+  back to polling, idempotent start, hub dispatch to global vs session
+  subscribers, and `poll_once()` serialization.
 * `test_telegram_attention.py` - the Telegram side: cards, reply-to routing,
   `always` confirmation, `/pending`, `/answer` ambiguity, `/mute`, the plain-text
   "Send to att_N?" guard, ⚡/↩ callbacks, startup replay, stale cards.

@@ -13,11 +13,19 @@ The watcher never sends anything.  It creates attention items; the Telegram
 bridge (the process that owns the poller) turns them into cards.  That keeps a
 Telegram outage from stopping detection, and a missing OpenCode service from
 stopping room/proposal notices.
+
+Detection is event-driven when the local service streams events (see
+``start_event_ingest``): a ``permission.asked`` / ``form.created`` event wakes a
+worker that runs one :func:`poll_once` after a short debounce, so a card appears
+in about a second instead of on the next poll. The periodic poll stays as the
+reconciliation path — it still closes requests that vanished, and it is the
+only path when the stream is unavailable.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -26,6 +34,12 @@ from . import attention, config, opencode_api, registry
 LOG = logging.getLogger("perun.attention.watcher")
 
 SWEEP_SECONDS = 300.0
+
+# Events that mean "a human is now blocking a session". ``form.replied`` is
+# included because a reply elsewhere may close a form this instance is showing.
+INGEST_EVENT_TYPES = ("permission.asked", "form.created", "form.replied")
+# A burst (one turn asking for three files) must produce one poll, not three.
+INGEST_DEBOUNCE_SECONDS = 1.0
 
 # Module state is process-local: the watcher only ever runs inside the Telegram
 # bridge process, which is a singleton thanks to the bot-token PidLock.
@@ -36,6 +50,17 @@ _session_cache: Dict[str, Dict[str, Any]] = {}
 # that still blocks a session; two in a row is treated as "resolved elsewhere".
 _misses: Dict[tuple, int] = {}
 
+# One poll at a time: the reconciliation loop and the event worker run in the
+# same process and must not race on the same dedupe keys.
+_poll_lock = threading.Lock()
+
+# Event ingestion state (guarded by ``_ingest_lock``).
+_ingest_lock = threading.Lock()
+_ingest: Dict[str, Any] = {
+    "thread": None, "stop": None, "wake": None, "token": None, "hub": None,
+    "events": 0, "polls": 0,
+}
+
 
 def reset_cache() -> None:
     """Drop cached session metadata (tests, or after a service restart)."""
@@ -43,6 +68,96 @@ def reset_cache() -> None:
     _last_sweep = 0.0
     _session_cache.clear()
     _misses.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Event-driven ingestion
+# --------------------------------------------------------------------------- #
+def event_ingest_active() -> bool:
+    """True while the SSE worker is running and will poll on events."""
+    thread = _ingest.get("thread")
+    return bool(thread is not None and thread.is_alive())
+
+
+def ingest_stats() -> Dict[str, int]:
+    """Events seen and polls they triggered (observability, tests)."""
+    return {"events": int(_ingest.get("events") or 0),
+            "polls": int(_ingest.get("polls") or 0)}
+
+
+def _on_event(event: Dict[str, Any]) -> None:
+    """Hub callback: wake the worker for an event that needs a human."""
+    try:
+        if str(event.get("type") or "") not in INGEST_EVENT_TYPES:
+            return
+    except AttributeError:  # a malformed frame must never break the stream
+        return
+    _ingest["events"] = int(_ingest.get("events") or 0) + 1
+    wake = _ingest.get("wake")
+    if wake is not None:
+        wake.set()
+
+
+def _ingest_loop(stop: threading.Event, wake: threading.Event) -> None:
+    while not stop.is_set():
+        if not wake.wait(1.0):
+            continue
+        # Coalesce a burst: everything that arrives in the window is covered by
+        # one poll, because a poll reads the live state rather than the events.
+        wake.clear()
+        stop.wait(INGEST_DEBOUNCE_SECONDS)
+        wake.clear()
+        try:
+            poll_once()
+            _ingest["polls"] = int(_ingest.get("polls") or 0) + 1
+        except Exception:  # pragma: no cover - keep the worker alive
+            LOG.debug("attention event poll failed", exc_info=True)
+
+
+def start_event_ingest(hub: Optional["opencode_api.EventHub"] = None) -> bool:
+    """Subscribe to the service's event stream and poll on relevant events.
+
+    Returns True when the worker is running. Any failure (no service, no hub)
+    returns False without raising: the caller then falls back to polling.
+    """
+    with _ingest_lock:
+        if event_ingest_active():
+            return True
+        try:
+            hub = hub or opencode_api.default_hub()
+            token = hub.subscribe(opencode_api.EventHub.GLOBAL_SESSION, _on_event)
+            hub.start()
+        except Exception:  # pragma: no cover - depends on the local service
+            LOG.debug("attention: could not subscribe to the event stream",
+                      exc_info=True)
+            return False
+        stop = threading.Event()
+        wake = threading.Event()
+        thread = threading.Thread(
+            target=_ingest_loop, args=(stop, wake), daemon=True,
+            name="perun-attention-ingest",
+        )
+        _ingest.update(thread=thread, stop=stop, wake=wake, token=token, hub=hub)
+        thread.start()
+    LOG.info("attention: event-driven ingestion on (%s)",
+             ", ".join(INGEST_EVENT_TYPES))
+    return True
+
+
+def stop_event_ingest() -> None:
+    with _ingest_lock:
+        stop = _ingest.get("stop")
+        token = _ingest.get("token")
+        hub = _ingest.get("hub")
+        _ingest.update(thread=None, stop=None, wake=None, token=None, hub=None)
+    if stop is not None:
+        stop.set()
+    if token and hub is not None:
+        try:
+            hub.unsubscribe(token)
+        except Exception:  # pragma: no cover - stopping must not raise
+            LOG.debug("attention: unsubscribe failed", exc_info=True)
+
 
 
 def _session_info(api: "opencode_api.OpenCodeAPI", session_id: str) -> Dict[str, Any]:
@@ -178,6 +293,11 @@ def _reconcile(polled: Set[str], live_permissions: Set[str],
 
 def poll_once(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[str, int]:
     """One detection pass. Returns counts for logging/tests."""
+    with _poll_lock:
+        return _poll_once_locked(api)
+
+
+def _poll_once_locked(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[str, int]:
     global _last_sweep
 
     settings = config.Settings.load()

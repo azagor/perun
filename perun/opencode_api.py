@@ -432,7 +432,14 @@ class EventHub:
     A single reader thread keeps the number of HTTP connections independent of
     how many runs are active. Subscribers receive the raw event dict; a failing
     subscriber never takes the stream down.
+
+    Subscribing with :data:`GLOBAL_SESSION` receives every event, whatever its
+    session. That is what the attention watcher needs: a permission request can
+    appear for a session nobody has admitted yet, so there is no id to subscribe
+    to in advance.
     """
+
+    GLOBAL_SESSION = "*"
 
     def __init__(self, *, api: Optional["OpenCodeAPI"] = None,
                  source: Optional[Any] = None,
@@ -479,10 +486,10 @@ class EventHub:
     def _dispatch(self, event: Dict[str, Any]) -> None:
         data = event.get("data") or {}
         session_id = data.get("sessionID") or event.get("sessionID")
-        if not session_id:
-            return
         with self._lock:
-            handlers = list(self._subs.get(str(session_id), {}).values())
+            handlers = list(self._subs.get(self.GLOBAL_SESSION, {}).values())
+            if session_id:
+                handlers.extend(self._subs.get(str(session_id), {}).values())
         for handler in handlers:
             try:
                 handler(event)

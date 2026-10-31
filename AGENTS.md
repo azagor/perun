@@ -127,6 +127,11 @@ with `python -m perun project-roots --add <name> <path>`.
   project or the newest session. Producers only write rows — the process that owns
   the Telegram poller is the only sender, and every reply runs its adapter before
   the item is closed.
+* **Detection is event-driven, polling is the net.** The watcher subscribes to the
+  shared `EventHub` as a global subscriber and polls once per debounced burst; the
+  `attention_poll_seconds` timer only reconciles. Keep both paths — events make a
+  card appear in a second, but the poll is what closes a request answered in the
+  TUI and what still works when the stream is down. One `poll_once()` at a time.
 * **Never restart Perun under an active run.** `perun stop`/`perun restart` now
   refuse when `/api/runs/active` reports a run (pass `--force` to override); a
   forced restart marks runs `interrupted` and the bridge posts a notice on its
