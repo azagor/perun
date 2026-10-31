@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.11
+
+*Released 2026-10-31.*
+
 ### A message typed in the dashboard chat is answered
 
 * The dashboard posts under this instance's agent id but labels the frame as the
