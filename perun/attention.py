@@ -229,6 +229,11 @@ def _redact(text: str) -> str:
     return text
 
 
+def redact(text: str) -> str:
+    """Public entry point: anything Perun composes for a human goes through this."""
+    return _redact(text)
+
+
 def _clip(text: str, limit: int) -> str:
     text = " ".join(str(text or "").split())
     return text if len(text) <= limit else text[: limit - 1] + "…"

@@ -642,7 +642,9 @@ dispatched by that target, never by inference from "the current project".
 * Producers: `request()` (deduped by `dedupe_key`), `project_for_location()`.
 * Policy: `eligible()` (flag, project allow-list, quiet hours, hourly cap, TTL),
   `recipients()` (every statically paired chat minus per-chat mutes),
-  `render()`, `keyboard()`, `confirmation()`, `followup_keyboard()`.
+  `render()`, `keyboard()`, `confirmation()`, `followup_keyboard()`,
+  `redact()` (the public wrapper every outgoing text must go through — headers,
+  URL credentials, bearer tokens, `sk-…` keys and `--token` flags).
 * Replies: `answer()` (text → adapter, then a conditional close, so a failed
   delivery leaves the item open), `choose()` (permission `once`/`always`/`reject`,
   proposal `approve`/`reject`; `reject` also closes the session's other pending

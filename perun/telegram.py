@@ -920,7 +920,10 @@ class PerunTelegramBridge:
             more = len(items) - len(head)
             lines = [f"🗂 <b>{len(head) + more} waiting in {label}</b>"]
             for item in head:
-                question = " ".join(str(item.get("question") or "").split())
+                # Same redaction a single card would get: a room message can quote
+                # a token or an Authorization header, and a digest must not be the
+                # one path that lets it through.
+                question = " ".join(attention.redact(item.get("question") or "").split())
                 if len(question) > 90:
                     question = question[:87] + "…"
                 lines.append(f"• att_{item['id']} — {_esc(question)}")

@@ -642,3 +642,19 @@ def test_shadow_mode_logs_the_digest_without_sending(bridge, project, monkeypatc
     clock["now"] += 31
     assert bridge.attention_tick() == 0
     assert bridge.sent == []
+
+def test_a_digest_redacts_credentials_like_a_single_card(bridge, project, monkeypatch):
+    clock = {"now": 20_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    _room_item(project, "msg_secret",
+               "please check api_key=sk-live-abcdef123456 in the log")
+
+    bridge.attention_tick()
+    clock["now"] += 31
+    bridge.attention_tick()
+
+    text = bridge.sent[0]["text"]
+    assert "sk-live-abcdef123456" not in text
+    assert "[redacted]" in text

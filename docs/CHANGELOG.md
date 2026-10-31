@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### A digest card redacts like a normal card
+
+* The coalesced card printed each item's raw question, so a room message quoting
+  an API key or an `Authorization:` header reached Telegram unredacted — the one
+  notice path that skipped `attention._redact()`. The line now goes through the
+  same redaction (`attention.redact()`, now public) before it is escaped and
+  clipped, covered by a test that asserts the secret does not appear.
+* The dashboard's fallback when `chat_core.js` fails to load still refuses to send
+  empty text; the permissive fallback had dropped that guard along with the
+  debounce.
 
 ## v0.10.13
 
