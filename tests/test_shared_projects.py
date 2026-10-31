@@ -12,6 +12,15 @@ def _make_project(tmp_path, name="test-project"):
     return project
 
 
+def _servers(cfg):
+    """The server map of a config, whichever ``mcp`` shape it uses."""
+    mcp = cfg.get("mcp") or {}
+    servers = mcp.get("servers")
+    if isinstance(servers, dict):
+        return servers
+    return {k: v for k, v in mcp.items() if k not in ("servers", "timeout")}
+
+
 def _enable_shared(project, participants=None):
     data = manifest.from_project(project)
     data["shared"] = True
@@ -254,39 +263,43 @@ def _expected_proposals_entry():
     }
 
 
-def test_sync_opencode_config_adds_guard_mcp_for_shared_project(tmp_path):
+def test_sync_opencode_config_adds_guard_mcp_for_shared_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v1")
     project = _make_project(tmp_path, "shared-guard")
     _enable_shared(project)
     projects.sync_opencode_config(project)
     cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
-    assert "perun-guard" in cfg.get("mcp", {})
-    assert cfg["mcp"]["perun-guard"] == _expected_guard_entry()
-    assert cfg["mcp"]["perun-proposals"] == _expected_proposals_entry()
+    assert "perun-guard" in _servers(cfg)
+    assert _servers(cfg)["perun-guard"] == _expected_guard_entry()
+    assert _servers(cfg)["perun-proposals"] == _expected_proposals_entry()
 
 
 def test_sync_opencode_config_uses_portable_default_home(tmp_path, monkeypatch):
     """The default PERUN_HOME must not embed the user's absolute home path."""
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v1")
     project = _make_project(tmp_path, "portable-home")
     _enable_shared(project)
     monkeypatch.setattr(projects.config, "HOME", (Path.home() / ".perun").resolve())
     projects.sync_opencode_config(project)
     cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
-    assert cfg["mcp"]["perun-guard"]["environment"]["PERUN_HOME"] == "~/.perun"
-    assert cfg["mcp"]["perun-proposals"]["environment"]["PERUN_HOME"] == "~/.perun"
+    assert _servers(cfg)["perun-guard"]["environment"]["PERUN_HOME"] == "~/.perun"
+    assert _servers(cfg)["perun-proposals"]["environment"]["PERUN_HOME"] == "~/.perun"
 
 
-def test_sync_manifest_adds_guard_mcp_for_shared_project(tmp_path):
+def test_sync_manifest_adds_guard_mcp_for_shared_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v1")
     project = _make_project(tmp_path, "shared-manifest-sync")
     _enable_shared(project)
     # sync_manifest re-reads the manifest and should mirror shared state into
     # the project's opencode.json even when sync_chat is True.
     projects.sync_manifest(project)
     cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
-    assert "perun-guard" in cfg.get("mcp", {})
-    assert "perun-proposals" in cfg.get("mcp", {})
+    assert "perun-guard" in _servers(cfg)
+    assert "perun-proposals" in _servers(cfg)
 
 
-def test_shared_mcp_config_status_flags_stale_entries(tmp_path):
+def test_shared_mcp_config_status_flags_stale_entries(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v1")
     project = _make_project(tmp_path, "stale-mcp")
     _enable_shared(project)
     projects.sync_opencode_config(project)
@@ -295,7 +308,7 @@ def test_shared_mcp_config_status_flags_stale_entries(tmp_path):
 
     cfg_path = Path(project["path"]) / "opencode.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    del cfg["mcp"]["perun-proposals"]["environment"]["PERUN_PROJECT_PATH"]
+    del _servers(cfg)["perun-proposals"]["environment"]["PERUN_PROJECT_PATH"]
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
     status = projects.shared_mcp_config_status(registry.get_project(project["slug"]))
@@ -317,7 +330,8 @@ def test_shared_mcp_config_status_non_shared_is_clean(tmp_path):
     assert status["stale"] is False
 
 
-def test_sync_opencode_config_removes_guard_mcp_for_non_shared_project(tmp_path):
+def test_sync_opencode_config_removes_guard_mcp_for_non_shared_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v1")
     project = _make_project(tmp_path, "plain-guard")
     (Path(project["path"]) / "opencode.json").write_text(
         json.dumps({"mcp": {"perun-guard": {"command": "x"}}}), encoding="utf-8"
@@ -344,9 +358,13 @@ def test_sync_rewrites_old_shape_mcp_entries(tmp_path):
         encoding="utf-8",
     )
     projects.sync_opencode_config(project)
-    mcp = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))["mcp"]
-    assert mcp["perun-guard"] == _expected_guard_entry()
-    assert mcp["perun-proposals"] == _expected_proposals_entry()
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    mcp = _servers(cfg)
+    # The rewritten entries carry the field the detected CLI shape uses.
+    from perun import mcp_servers
+    style = mcp_servers.mcp_style()
+    assert mcp["perun-guard"] == mcp_servers.entry_for_style(_expected_guard_entry(), style)
+    assert mcp["perun-proposals"] == mcp_servers.entry_for_style(_expected_proposals_entry(), style)
     assert mcp["user-tool"]["command"] == ["x"]
 
 
@@ -355,14 +373,19 @@ def test_sync_unshare_removes_entries_keeps_user_mcp(tmp_path):
     _enable_shared(project)
     projects.sync_opencode_config(project)
     cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
-    cfg["mcp"]["user-tool"] = {"type": "local", "command": ["x"], "enabled": True}
+    servers = _servers(cfg)
+    servers["user-tool"] = {"type": "local", "command": ["x"], "enabled": True}
+    if isinstance((cfg.get("mcp") or {}).get("servers"), dict):
+        cfg["mcp"]["servers"] = servers
+    else:
+        cfg["mcp"] = servers
     (Path(project["path"]) / "opencode.json").write_text(json.dumps(cfg), encoding="utf-8")
     data = manifest.from_project(project)
     data["shared"] = False
     manifest.save(project["path"], data, body="# unshare")
     projects.sync_opencode_config(project)
-    mcp = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8")).get("mcp", {})
-    assert set(mcp) == {"user-tool"}
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    assert set(_servers(cfg)) == {"user-tool"}
 
 
 def test_sync_is_idempotent_for_shared_project(tmp_path):
@@ -409,7 +432,8 @@ def test_sync_non_shared_with_user_mcp_keeps_user_mcp(tmp_path):
         encoding="utf-8",
     )
     projects.sync_opencode_config(project)
-    mcp = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8")).get("mcp", {})
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+    mcp = _servers(cfg)
     assert "perun-guard" not in mcp
     assert "user-tool" in mcp
 
@@ -504,3 +528,80 @@ def test_is_policy_auto_approve_falls_back_to_global_default(tmp_path, monkeypat
     data["policy_auto_approve"] = False
     manifest.save(project["path"], data, body="# test")
     assert shared_projects.is_policy_auto_approve(project["path"]) is False
+
+# --- OpenCode V2 ``mcp.servers`` shape ------------------------------------- #
+
+def test_sync_opencode_config_writes_the_v2_shape_on_a_v2_cli(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    project = _make_project(tmp_path, "v2-mcp")
+    _enable_shared(project)
+
+    projects.sync_opencode_config(project)
+    cfg = json.loads((Path(project["path"]) / "opencode.json").read_text(encoding="utf-8"))
+
+    assert "servers" in cfg["mcp"]
+    assert "perun-guard" not in cfg["mcp"]          # no flat V1 leftovers
+    entry = cfg["mcp"]["servers"]["perun-guard"]
+    assert entry["type"] == "local"
+    assert entry["environment"]["PERUN_PROJECT_PATH"] == "."
+    assert "enabled" not in entry                  # V2 uses ``disabled``
+    assert "disabled" not in entry
+
+
+def test_sync_opencode_config_migrates_a_v1_file_once_and_keeps_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    project = _make_project(tmp_path, "v1-to-v2")
+    _enable_shared(project)
+    cfg_path = Path(project["path"]) / "opencode.json"
+    cfg_path.write_text(json.dumps({
+        "instructions": ["AGENTS.md"],
+        "mcp": {
+            "context7": {"type": "remote", "url": "https://mcp.example/mcp"},
+            "perun-guard": {"type": "local", "command": ["python", "-m", "old"],
+                            "enabled": True, "environment": {}},
+        },
+    }), encoding="utf-8")
+
+    projects.sync_opencode_config(project)
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    assert cfg["instructions"] == ["AGENTS.md"]
+    assert "context7" not in cfg["mcp"]                       # moved, not lost
+    assert cfg["mcp"]["servers"]["context7"]["url"] == "https://mcp.example/mcp"
+    assert cfg["mcp"]["servers"]["perun-guard"]["environment"]["PERUN_PROJECT_PATH"] == "."
+    assert cfg_path.with_name("opencode.json.bak").is_file()
+
+    # Second sync is a no-op: the file is already in the target shape.
+    assert projects.sync_opencode_config(project)["action"] == "unchanged"
+
+
+def test_mcp_style_detection_is_conservative(monkeypatch):
+    from perun import mcp_servers
+
+    monkeypatch.delenv("PERUN_OPENCODE_MCP_STYLE", raising=False)
+    monkeypatch.setattr(mcp_servers, "opencode_version", lambda timeout=5.0: "2.2.0")
+    mcp_servers.reset_style_cache()
+    assert mcp_servers.mcp_style() == mcp_servers.STYLE_V2
+
+    monkeypatch.setattr(mcp_servers, "opencode_version", lambda timeout=5.0: "1.9.4")
+    mcp_servers.reset_style_cache()
+    assert mcp_servers.mcp_style() == mcp_servers.STYLE_V1
+
+    # Unparseable or missing CLI: never write a shape an old CLI cannot read.
+    monkeypatch.setattr(mcp_servers, "opencode_version", lambda timeout=5.0: "")
+    mcp_servers.reset_style_cache()
+    assert mcp_servers.mcp_style() == mcp_servers.STYLE_V1
+    mcp_servers.reset_style_cache()
+
+
+def test_entry_for_style_translates_enabled_and_disabled():
+    from perun import mcp_servers
+
+    entry = {"type": "local", "command": ["x"], "enabled": True}
+    v2 = mcp_servers.entry_for_style(entry, mcp_servers.STYLE_V2)
+    assert "enabled" not in v2 and "disabled" not in v2
+    off = mcp_servers.entry_for_style({"type": "local", "enabled": False},
+                                      mcp_servers.STYLE_V2)
+    assert off["disabled"] is True
+    back = mcp_servers.entry_for_style(off, mcp_servers.STYLE_V1)
+    assert back["enabled"] is True

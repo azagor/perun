@@ -4,7 +4,33 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The MCP block follows the installed CLI
+
+* OpenCode V2 puts MCP servers under `mcp.servers.<name>` and disables one with
+  `disabled`; V1 put the names directly under `mcp` and used `enabled`. Perun's
+  shared-project writer used to hard-code the V1 shape, which V2 reads but no
+  longer documents. It now detects the installed CLI (`opencode --version`) and
+  writes the matching shape, translating `enabled`/`disabled`, preserving every
+  unrelated server, keeping `mcp.timeout`, and backing the file up to
+  `opencode.json.bak` before it rewrites the block. Detection is conservative:
+  a missing or unparseable version writes the legacy shape, which both versions
+  still read, and `PERUN_OPENCODE_MCP_STYLE=v1|v2` overrides it.
+* Reading is shape-agnostic (`mcp_servers.server_entries`), so the dashboard MCP
+  view, `shared_mcp_config_status` and the proposal-execution guard check all
+  understand a config written by either version. A V1 file is migrated in place,
+  flat entries included, and the second sync is a no-op.
+
+### Informational notices are coalesced
+
+* `attention_digest_seconds` (30, `0` disables): a room message that needs the
+  operator waits for a short window, and a burst for the same project becomes one
+  card listing up to five items, each with an **Open att_N** button. A lone item
+  still arrives when the window closes. Permissions, forms, proposals, handoffs
+  and `perun_ask_operator` are never delayed — a decision always goes out
+  immediately.
+* Opening an item from a digest posts a fresh, replyable card and records that
+  delivery, so a reply-to resolves to that item instead of an ambiguous list;
+  an item whose own card is tapped is still edited in place.
 
 ## v0.10.11
 

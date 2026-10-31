@@ -266,6 +266,11 @@ class PerunTelegramBridge:
         # treated as an answer).
         self._pending_answers: Dict[str, str] = {}
         self._attention_logged: set[int] = set()
+        # Informational notices wait for a short window so a burst becomes one
+        # card: ``{attention_id: first_seen}``. Items already listed on a digest
+        # card are remembered so the next tick does not resend them as cards.
+        self._digest_pending: Dict[int, float] = {}
+        self._digested: set[int] = set()
 
     def update_token(self, token: str) -> None:
         """Update the bot token used by this bridge instance."""
@@ -778,13 +783,27 @@ class PerunTelegramBridge:
         except Exception:  # pragma: no cover - defensive
             return None
 
+    # Only these target kinds are informational enough to coalesce. A decision
+    # (permission, form, proposal, handoff, perun_ask_operator) must never wait.
+    DIGEST_KINDS = ("room",)
+
+    def _attention_digest_seconds(self, settings: "config.Settings") -> int:
+        try:
+            return max(0, int(getattr(settings, "attention_digest_seconds", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
     def _attention_deliver(self, items: List[Dict[str, Any]],
                            settings: "config.Settings") -> int:
         """Send cards for never-delivered items; returns how many went out."""
         from . import attention
 
+        digest = self._attention_digest_seconds(settings)
         sent = 0
         for item in items:
+            if item["id"] in self._digested:
+                # Already listed on a digest card; its buttons open the real one.
+                continue
             ok, reason = attention.eligible(item, settings)
             if not ok:
                 # Log once per item per process; do not mark it delivered, so a
@@ -809,6 +828,11 @@ class PerunTelegramBridge:
                         f"att_{item['id']} not sent: no paired chat",
                         {"attention_id": item["id"], "reason": "no chat"},
                     )
+                continue
+            if digest and str(item.get("target_kind") or "") in self.DIGEST_KINDS:
+                # Hold informational notices for the window; the flush sends one
+                # card per project instead of one message per item.
+                self._digest_pending.setdefault(item["id"], time.time())
                 continue
             text = attention.render(
                 item, show_paths=bool(getattr(settings, "attention_show_paths", False))
@@ -842,6 +866,87 @@ class PerunTelegramBridge:
                         self._attention_logged.add(item["id"])
                         LOG.warning("could not send att_%s to %s; will retry",
                                     item["id"], chat_id)
+        return sent
+
+    def _flush_digest(self, settings: "config.Settings") -> int:
+        """Send one card per project for the informational items whose window elapsed."""
+        from . import attention
+
+        seconds = self._attention_digest_seconds(settings)
+        if not seconds:
+            self._digest_pending.clear()
+            return 0
+        now = time.time()
+        due = [aid for aid, seen in list(self._digest_pending.items())
+               if now - seen >= seconds]
+        if not due:
+            return 0
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for attention_id in due:
+            first_seen = self._digest_pending.pop(attention_id, None)
+            item = registry.get_attention(attention_id)
+            if not item or item.get("state") != "open":
+                self._digested.discard(attention_id)
+                continue
+            key = str(item.get("project_id") or 0)
+            grouped.setdefault(key, []).append(item)
+            if first_seen is not None:
+                self._digested.add(attention_id)
+
+        sent = 0
+        for items in grouped.values():
+            items.sort(key=lambda it: it["id"])
+            head = items[:5]
+            chats = attention.recipients(
+                head[0], allowed=list(self.allowed),
+                muted=registry.attention_muted_projects,
+            )
+            if not chats:
+                for item in head:
+                    self._digested.discard(item["id"])
+                continue
+            label = attention.project_label(head[0])
+            eligible: List[Dict[str, Any]] = []
+            for item in head:
+                ok, _reason = attention.eligible(item, settings)
+                if ok:
+                    eligible.append(item)
+                else:
+                    # Quiet hours or the hourly cap started while it waited.
+                    self._digested.discard(item["id"])
+            if not eligible:
+                continue
+            head = eligible
+            more = len(items) - len(head)
+            lines = [f"🗂 <b>{len(head) + more} waiting in {label}</b>"]
+            for item in head:
+                question = " ".join(str(item.get("question") or "").split())
+                if len(question) > 90:
+                    question = question[:87] + "…"
+                lines.append(f"• att_{item['id']} — {_esc(question)}")
+            if more:
+                lines.append(f"＋{more} more — /pending")
+            text = "\n".join(lines)
+            markup = {"inline_keyboard": [
+                [{"text": f"Open att_{item['id']}", "callback_data": f"att:{item['id']}:show"}]
+                for item in head
+            ]}
+            if getattr(settings, "attention_shadow", True):
+                LOG.info("[shadow] digest of %d item(s) would go to %s", len(head), chats)
+                continue
+            for chat_id in chats:
+                message_id = self.send(chat_id, text, reply_markup=markup)
+                if message_id:
+                    sent += 1
+                else:
+                    LOG.warning("could not send a digest to %s; will retry", chat_id)
+                    for item in head:
+                        self._digested.discard(item["id"])
+                        self._digest_pending.setdefault(item["id"], now)
+        if len(self._digested) > 200:
+            # Ids only grow; a closed item never comes back through the delivery
+            # path, so the oldest half can be forgotten.
+            self._digested = set(sorted(self._digested)[-100:])
         return sent
 
     def _attention_startup_replay(self, settings: "config.Settings") -> None:
@@ -891,7 +996,12 @@ class PerunTelegramBridge:
                 LOG.info("attention: posted queued operator answers")
         except Exception:  # pragma: no cover - delivery retries on the next tick
             LOG.debug("attention outbox drain failed", exc_info=True)
-        return self._attention_deliver(registry.undelivered_attention(), settings)
+        sent = self._attention_deliver(registry.undelivered_attention(), settings)
+        try:
+            sent += self._flush_digest(settings)
+        except Exception:  # pragma: no cover - a digest must never stop delivery
+            LOG.debug("attention digest flush failed", exc_info=True)
+        return sent
 
     # A stream outage falls back to this cadence, which matches the old poller.
     FAST_POLL_SECONDS = 5
@@ -1118,8 +1228,19 @@ class PerunTelegramBridge:
 
         if action == "show":
             ack("Here it is")
-            self._edit_card(chat_id, message_id, attention.render(item),
-                            reply_markup=attention.keyboard(item))
+            # A digest card lists several items behind one message: editing it
+            # would replace the list, so open a fresh, replyable card and record
+            # that delivery (a reply-to must resolve to this item, not the list).
+            own_card = registry.attention_delivered_message(item["id"], chat_id)
+            if own_card and message_id and int(own_card) == int(message_id):
+                self._edit_card(chat_id, message_id, attention.render(item),
+                                reply_markup=attention.keyboard(item))
+            else:
+                text = attention.render(item)
+                sent_id = self.send(chat_id, text,
+                                    reply_markup=attention.keyboard(item))
+                if sent_id:
+                    registry.record_attention_delivery(item["id"], chat_id, sent_id)
             return
 
         # Acknowledge immediately, then edit the card in place: the spinner is

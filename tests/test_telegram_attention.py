@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from perun import attention, config, opencode_api, registry
+from perun import attention, config, opencode_api, registry, telegram
 from perun.telegram import PerunTelegramBridge
 
 
@@ -527,3 +527,118 @@ def test_the_poll_becomes_the_reconciliation_net_when_events_are_on():
     assert PerunTelegramBridge.attention_interval(SimpleNamespace(), True) == 60
     assert PerunTelegramBridge.attention_interval(
         SimpleNamespace(attention_poll_seconds=0), False) == 5
+
+# --- Digest: informational notices are coalesced --------------------------- #
+
+def _room_item(project, message_id, text="can someone explain the totals?"):
+    from perun import attention as _attention
+
+    return _attention.request(
+        project, "room", message_id, "room", text,
+        ref={"room_id": "grp:perun:tg-proj:chat", "message_id": message_id,
+             "session_title": "tg-proj", "location": str(project["path"])},
+        dedupe_key=f"room|grp:perun:tg-proj:chat|{message_id}",
+    )
+
+
+def test_a_burst_of_room_messages_waits_and_then_grows_one_card(bridge, project, monkeypatch):
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    first = _room_item(project, "msg_1", "what is the status of the deploy?")
+    second = _room_item(project, "msg_2", "and the totals?")
+
+    # Inside the window nothing goes out, but the items are held, not lost.
+    assert bridge.attention_tick() == 0
+    assert bridge.sent == []
+    assert first["id"] in bridge._digest_pending
+    assert second["id"] in bridge._digest_pending
+
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1
+    assert len(bridge.sent) == 1
+    card = bridge.sent[0]
+    assert "2 waiting" in card["text"]
+    assert f"att_{first['id']}" in card["text"] and f"att_{second['id']}" in card["text"]
+    buttons = [row[0]["callback_data"] for row in card["markup"]["inline_keyboard"]]
+    assert buttons == [f"att:{first['id']}:show", f"att:{second['id']}:show"]
+
+    # Neither item is re-sent as its own card afterwards.
+    bridge.sent.clear()
+    clock["now"] += 60
+    assert bridge.attention_tick() == 0
+    assert bridge.sent == []
+
+
+def test_a_lone_room_message_still_arrives_after_the_window(bridge, project, monkeypatch):
+    clock = {"now": 5_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    _room_item(project, "msg_lone")
+
+    assert bridge.attention_tick() == 0
+    clock["now"] += 30
+    assert bridge.attention_tick() == 1
+    assert len(bridge.sent) == 1
+    assert "1 waiting" in bridge.sent[0]["text"]
+
+
+def test_a_permission_is_never_digested(bridge, project, monkeypatch):
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    _permission(project)
+
+    assert bridge.attention_tick() == 1
+    assert len(bridge.sent) == 1
+    assert bridge.sent[0]["markup"]["inline_keyboard"][0][0]["text"] == "Allow once"
+
+
+def test_digest_zero_sends_room_messages_immediately(bridge, project, monkeypatch):
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=0)))
+    _room_item(project, "msg_now")
+
+    assert bridge.attention_tick() == 1
+    assert len(bridge.sent) == 1
+    assert "att_" in bridge.sent[0]["text"]
+
+
+def test_opening_an_item_from_a_digest_posts_a_replyable_card(bridge, project, monkeypatch):
+    clock = {"now": 9_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    item = _room_item(project, "msg_open")
+    bridge.attention_tick()
+    clock["now"] += 31
+    bridge.attention_tick()
+    digest_message_id = bridge._next_id
+    bridge.sent.clear()
+
+    bridge._handle_update({"update_id": 11, "callback_query": {
+        "id": "cb-show", "data": f"att:{item['id']}:show",
+        "message": {"message_id": digest_message_id, "chat": {"id": "1"}},
+    }})
+
+    # A new card (not an edit of the list), recorded so a reply-to maps to it.
+    assert len(bridge.sent) == 1
+    new_id = bridge.sent[0]
+    assert "att_" in new_id["text"]
+    assert registry.attention_delivered_message(item["id"], "1") == bridge._next_id
+    assert registry.attention_by_message("1", bridge._next_id)["id"] == item["id"]
+
+
+def test_shadow_mode_logs_the_digest_without_sending(bridge, project, monkeypatch):
+    clock = {"now": 12_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30,
+                                                       attention_shadow=True)))
+    _room_item(project, "msg_shadow")
+
+    bridge.attention_tick()
+    clock["now"] += 31
+    assert bridge.attention_tick() == 0
+    assert bridge.sent == []

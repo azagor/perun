@@ -196,6 +196,11 @@ class Settings:
     # When exactly one item is open, offer a one-tap "send to att_N" instead of
     # silently treating plain text as the answer.
     attention_plain_text_confirm: bool = True
+    # Coalesce *informational* notices (a room message that asks the operator,
+    # an idle question) into one card per project per window, in seconds. 0
+    # disables coalescing. Decisions — permissions, forms, proposals, handoffs,
+    # perun_ask_operator — are never delayed.
+    attention_digest_seconds: int = 30
     # Default delivery for session answers: "queue" (after the current turn) or
     # "steer" (interrupt now).
     attention_default_delivery: str = "queue"

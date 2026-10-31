@@ -674,6 +674,15 @@ def test_delete_proposal_removes_it(client, tmp_path, monkeypatch):
     assert client.get(f"/api/projects/{slug}/proposals").json()["proposals"] == []
 
 
+def _mcp_servers(cfg):
+    """The server map of a config, whichever ``mcp`` shape it uses."""
+    mcp = cfg.get("mcp") or {}
+    servers = mcp.get("servers")
+    if isinstance(servers, dict):
+        return servers
+    return {k: v for k, v in mcp.items() if k not in ("servers", "timeout")}
+
+
 def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     """Enabling/disabling shared mode mirrors the perun-guard MCP entry in opencode.json."""
     from perun import config as _config, server
@@ -702,25 +711,35 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
                         "PERUN_PROJECT_PATH": "."},
     }
 
+    from perun import mcp_servers
+    style = mcp_servers.mcp_style()
+    expected_guard = mcp_servers.entry_for_style(expected_guard, style)
+    expected_proposals = mcp_servers.entry_for_style(expected_proposals, style)
+
     cfg_path = target / "opencode.json"
     assert cfg_path.exists()
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert "perun-guard" in cfg.get("mcp", {})
-    assert cfg["mcp"]["perun-guard"] == expected_guard
+    assert "perun-guard" in _mcp_servers(cfg)
+    assert _mcp_servers(cfg)["perun-guard"] == expected_guard
 
     # Remove the guard entry manually to simulate a stale opencode.json, then
     # call the manual sync endpoint; it should restore the shared MCP servers.
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    cfg["mcp"] = {k: v for k, v in cfg.get("mcp", {}).items()
-                  if k not in ("perun-guard", "perun-proposals")}
+    servers = _mcp_servers(cfg)
+    for key in ("perun-guard", "perun-proposals"):
+        servers.pop(key, None)
+    if isinstance((cfg.get("mcp") or {}).get("servers"), dict):
+        cfg["mcp"]["servers"] = servers
+    else:
+        cfg["mcp"] = servers
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
     r = client.post(f"/api/projects/{slug}/shared/sync")
     assert r.status_code == 200, r.text
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert "perun-guard" in cfg.get("mcp", {})
-    assert "perun-proposals" in cfg.get("mcp", {})
-    assert cfg["mcp"]["perun-guard"] == expected_guard
-    assert cfg["mcp"]["perun-proposals"] == expected_proposals
+    assert "perun-guard" in _mcp_servers(cfg)
+    assert "perun-proposals" in _mcp_servers(cfg)
+    assert _mcp_servers(cfg)["perun-guard"] == expected_guard
+    assert _mcp_servers(cfg)["perun-proposals"] == expected_proposals
 
     # Disabling shared mode removes the guard entry.
     r = client.put(f"/api/projects/{slug}/shared", json={
@@ -728,7 +747,7 @@ def test_shared_project_registers_guard_mcp(client, tmp_path, monkeypatch):
     })
     assert r.status_code == 200, r.text
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert "perun-guard" not in cfg.get("mcp", {})
+    assert "perun-guard" not in _mcp_servers(cfg)
 
 
 def test_shared_config_status_hint(client, tmp_path, monkeypatch):
@@ -749,7 +768,7 @@ def test_shared_config_status_hint(client, tmp_path, monkeypatch):
 
     cfg_path = target / "opencode.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    cfg["mcp"]["perun-proposals"]["environment"].pop("PERUN_PROJECT_PATH", None)
+    _mcp_servers(cfg)["perun-proposals"]["environment"].pop("PERUN_PROJECT_PATH", None)
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
     r = client.get(f"/api/projects/{slug}/shared")
@@ -773,7 +792,7 @@ def test_health_check_repairs_stale_shared_config(client, tmp_path, monkeypatch)
 
     cfg_path = target / "opencode.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    cfg["mcp"]["perun-proposals"]["environment"].pop("PERUN_PROJECT_PATH", None)
+    _mcp_servers(cfg)["perun-proposals"]["environment"].pop("PERUN_PROJECT_PATH", None)
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
     r = client.post("/api/health/check")
@@ -783,7 +802,7 @@ def test_health_check_repairs_stale_shared_config(client, tmp_path, monkeypatch)
     assert any(f.get("name") == "shared_mcp_config"
                and f.get("project") == slug for f in body["fixes"])
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert cfg["mcp"]["perun-proposals"]["environment"]["PERUN_PROJECT_PATH"] == "."
+    assert _mcp_servers(cfg)["perun-proposals"]["environment"]["PERUN_PROJECT_PATH"] == "."
 
 
 def test_global_instruction_file_apis(client, tmp_path, monkeypatch):

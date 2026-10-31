@@ -1359,8 +1359,7 @@ tool result, so nothing has to be injected while the session waits.
 `_start_download_transfer()` raises one when a package is missing an approved
 target, and a room message that names an operator alias raises a `room` item.
 
-**Delivery.** The notifier runs in the process that owns the Telegram poller and
-sends every notice to **every statically paired chat** (`telegram_allowed_chats`
+**Delivery.** The notifier runs in the process that owns the Telegram poller andsends every notice to **every statically paired chat** (`telegram_allowed_chats`
 / `TELEGRAM_CHAT_ID`) regardless of which project that chat last selected, minus
 per-chat mutes (`/mute`); a card also says "＋N more waiting" when other items are open. Runtime-paired chats never receive notices. Each card
 stores its `message_id` in `attention_deliveries`, which is what makes a
@@ -1370,6 +1369,17 @@ reply-to resolve to exactly one item even with several blocked sessions.
 that are younger than `attention_replay_open_minutes` (15); older undelivered
 items are marked `attention_replay_skipped` and stay in `/pending` + the
 dashboard, so a restart cannot flood the chat.
+
+**Digest (burst coalescing).** `attention_digest_seconds` (30, `0` disables) makes
+*informational* notices wait: a `room` item is held for the window, and everything
+for the same project that arrives meanwhile becomes one card — "🗂 N waiting in
+<project>" with up to five `• att_N — question` lines, each behind an **Open
+att_N** button. A lone item still arrives when the window closes; the wait is a
+coalescing window, not a delay schedule. Decisions are never digested: a
+permission, form, proposal, handoff or `perun_ask_operator` goes out immediately,
+because those block work. Opening an item from a digest posts a **new** card and
+records that delivery, so a reply-to maps to one item; a tap on an item's own card
+still edits it in place.
 
 **What a card shows.** Permission resources are not only paths: a shell
 permission carries the command, a webfetch a URL, a skill its id. A shell command
@@ -1428,7 +1438,8 @@ answering.
 (reconciliation cadence, 60), `attention_ingest_events` (event-driven detection,
 on), `attention_replay_open_minutes`, `attention_max_per_hour`,
 `attention_quiet_hours`, `attention_show_paths`, `attention_plain_text_confirm`,
-`attention_default_delivery`.
+`attention_default_delivery`, `attention_digest_seconds` (30; 0 = every card
+immediately).
 
 Not covered in this release: detecting a Perun-owned run that merely *ends* with
 a question (the agent must call `perun_ask_operator`), SSE/plugin event ingestion
@@ -1654,6 +1665,16 @@ stale authorization path or impersonating the requester. The dedicated
 V2 guard action names (`<server>_guard_write_file` / `<server>_guard_edit_file`)
 and allows `perun_perunchat_room_memory` for older room context, keeping chat
 sessions read-only apart from explicit proposals.
+
+**MCP config shape.** Because OpenCode V2 moved servers to `mcp.servers.<name>` and
+replaced `enabled` with `disabled` (V1 kept names directly under `mcp`), the writer
+detects the installed CLI once (`opencode --version`) and writes the shape it
+understands. Reading is shape-agnostic, so the dashboard's MCP view, the "stale
+config" hint and the guard check before an approved proposal executes all work on
+either file. Detection is deliberately conservative — an unparseable version
+writes the legacy shape, which both versions still read — and rewriting the block
+leaves `opencode.json.bak` behind, preserves unrelated servers and `mcp.timeout`,
+and is idempotent, so the migration runs exactly once.
 
 Lifecycle chat notifications keep project participants informed without
 requiring the dashboard: a plain-text "Proposal … is now executing" notice is

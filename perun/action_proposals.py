@@ -1065,12 +1065,14 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         cfg_data, cfg_error, _cfg_lossy = read_opencode_config(cfg_path)
         if cfg_error:
             raise RuntimeError(f"guard MCP config unreadable: {cfg_error}")
-        mcp_cfg = cfg_data.get("mcp") if isinstance(cfg_data.get("mcp"), dict) else {}
-        guard_entry = mcp_cfg.get("perun-guard")
-        if not isinstance(guard_entry, dict) or not guard_entry.get("enabled", True):
-            raise RuntimeError("guard MCP not registered in opencode.json")
         from . import mcp_servers
 
+        mcp_cfg = mcp_servers.server_entries(cfg_data)
+        guard_entry = mcp_cfg.get("perun-guard")
+        if (not isinstance(guard_entry, dict)
+                or guard_entry.get("disabled") is True
+                or guard_entry.get("enabled", True) is False):
+            raise RuntimeError("guard MCP not registered in opencode.json")
         try:
             probe = mcp_servers.probe(
                 "perun-guard", scope="project", projects=[project],

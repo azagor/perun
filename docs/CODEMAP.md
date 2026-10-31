@@ -148,7 +148,8 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `list_telegram_jobs()`, `retry_telegram_job()`, `prune_telegram_jobs()`.
 * Operator inbox: `add_attention()` (returns `_new`, deduped by the unique
   partial index), `get_attention()`, `open_attention()`, `open_attention_for_chat()`,
-  `attention_by_message()` (reply-to → item), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
+  `attention_by_message()` (reply-to → item), `attention_delivered_message()` (the
+  message id that last carried an item to a chat), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
   `attention_deliveries()`, `undelivered_attention(within_minutes=…)`,
   `close_attention()` (conditional on `state='open'`), `update_attention_ref()`,
   `set_attention_delivery()`, `touch_attention_waiter()`, `expire_attention()`,
@@ -548,6 +549,13 @@ entry); probing never happens automatically.
   requests; `_probe_stdio()` bounds its stderr buffer and reaps children it kills.
 * `windows_launch_argv()` — pure helper that routes ``.cmd``/``.bat``/``.ps1``
   shims through `cmd` / PowerShell so CreateProcess can launch them.
+* Config shape: `server_entries()` reads the server map of either version (V2
+  nests it under `mcp.servers`), `mcp_style()` / `opencode_version()` detect the
+  installed CLI (V2 for major ≥ 2, legacy otherwise or when the version cannot be
+  parsed), `entry_for_style()` translates `enabled` ↔ `disabled`,
+  `set_server_entries()` writes the map back in the detected shape (migrating flat
+  V1 names and keeping `mcp.timeout`), and `reset_style_cache()` forgets the
+  detection. `PERUN_OPENCODE_MCP_STYLE=v1|v2` overrides it.
 * Backs `GET /api/mcp/servers` and `POST /api/mcp/servers/probe`.
 
 ### `perun/process_tracker.py`
@@ -702,7 +710,10 @@ Shared Telegram ⇄ Perun bridge.
   never-delivered items (eligibility, recipients, `attention_deliveries`),
   `_attention_startup_replay()` re-sends only open + undelivered items younger
   than `attention_replay_open_minutes` and marks older ones as skipped,
-  `_attention_loop()` runs detection (`attention_watcher.poll_once()`) and
+  `_flush_digest()` coalesces informational (`room`) items per project after
+  `attention_digest_seconds` into one card of up to five `Open att_N` buttons —
+  decisions are never digested — and `_attention_loop()` runs detection
+  (`attention_watcher.poll_once()`) and
   delivery on a daemon thread when `attention_enabled`. `_handle_attention_reply()`
   (a reply-to on a card), `_maybe_attention_text()` (one-tap "Send to att_N?"
   instead of silently treating plain text as an answer),

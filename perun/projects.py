@@ -121,12 +121,19 @@ def sync_opencode_config(project: dict[str, Any],
 
     # Register the shared-project filesystem guard and proposal-coordination
     # MCP servers for shared projects.
-    mcp_servers = data.get("mcp")
-    if not isinstance(mcp_servers, dict):
-        mcp_servers = {}
+    # Which shape the installed CLI understands: ``mcp.servers.<name>`` (V2) or
+    # ``mcp.<name>`` (V1). Writing the wrong one silently hides every server, so
+    # the shape is detected, never assumed, and a config written by the other
+    # version is migrated once (with a backup) rather than left half-converted.
+    from . import mcp_servers as _mcp
+
+    style = _mcp.mcp_style()
+    servers = dict(_mcp.server_entries(data))
     shared_cfg = shared_projects.load(project["path"])
     guard_key = "perun-guard"
     proposals_key = "perun-proposals"
+    mcp_changed = False
+
     # Project ``opencode.json`` files are often committed. Never embed the
     # user's absolute home path for the default home; ``~/.perun`` expands in the
     # MCP child process and keeps the config portable. A custom PERUN_HOME is
@@ -136,36 +143,31 @@ def sync_opencode_config(project: dict[str, Any],
         _perun_home = "~/.perun"
     else:
         _perun_home = str(config.HOME)
-    guard_entry = {
+    guard_entry = _mcp.entry_for_style({
         "type": "local",
         "command": [sys.executable, "-m", "perun.guard_mcp"],
         "enabled": True,
         "environment": {"PERUN_HOME": _perun_home, "PERUN_PROJECT_PATH": "."},
-    }
-    proposals_entry = {
+    }, style)
+    proposals_entry = _mcp.entry_for_style({
         "type": "local",
         "command": [sys.executable, "-m", "perun.proposals_mcp"],
         "enabled": True,
         "environment": {"PERUN_HOME": _perun_home, "PERUN_PROJECT_PATH": "."},
-    }
+    }, style)
     if shared_cfg.get("shared"):
-        if mcp_servers.get(guard_key) != guard_entry:
-            mcp_servers[guard_key] = guard_entry
-            data["mcp"] = mcp_servers
-            changed = True
-        if mcp_servers.get(proposals_key) != proposals_entry:
-            mcp_servers[proposals_key] = proposals_entry
-            data["mcp"] = mcp_servers
-            changed = True
-    else:
-        mcp_changed = False
-        for key in (guard_key, proposals_key):
-            if key in mcp_servers:
-                del mcp_servers[key]
+        for key, entry in ((guard_key, guard_entry), (proposals_key, proposals_entry)):
+            if servers.get(key) != entry:
+                servers[key] = entry
                 mcp_changed = True
-        if mcp_changed:
-            data["mcp"] = mcp_servers
-            changed = True
+    else:
+        for key in (guard_key, proposals_key):
+            if key in servers:
+                del servers[key]
+                mcp_changed = True
+    if mcp_changed:
+        _mcp.set_server_entries(data, servers, style)
+        changed = True
 
     if not changed:
         return {"action": "unchanged", "path": str(target)} if target.is_file() else {"action": "unchanged"}
@@ -177,6 +179,13 @@ def sync_opencode_config(project: dict[str, Any],
             del data[key]
 
     existed_before = target.is_file()
+    if mcp_changed and existed_before:
+        # The MCP block is the part a hand edit is most likely to have customised
+        # (extra servers, environment tweaks); keep a copy before rewriting it.
+        try:
+            target.with_name(target.name + ".bak").write_bytes(target.read_bytes())
+        except OSError:
+            pass
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp_name = ""
     try:
@@ -231,9 +240,9 @@ def shared_mcp_config_status(project: dict[str, Any]) -> dict[str, Any]:
             "missing": [target.name],
         }
 
-    mcp = data.get("mcp")
-    if not isinstance(mcp, dict):
-        mcp = {}
+    from . import mcp_servers as _mcp
+
+    mcp = _mcp.server_entries(data)
     missing: list[str] = []
     for key in ("perun-guard", "perun-proposals"):
         entry = mcp.get(key)
@@ -245,6 +254,11 @@ def shared_mcp_config_status(project: dict[str, Any]) -> dict[str, Any]:
             env = entry.get("env")
         if not isinstance(env, dict) or not str(env.get("PERUN_PROJECT_PATH") or "").strip():
             missing.append(f"{key}.PERUN_PROJECT_PATH")
+    if not missing and _mcp.mcp_style() == _mcp.STYLE_V2 and not isinstance(
+            (data.get("mcp") or {}).get("servers"), dict):
+        # Readable by V2 only through ``mcp.servers``; a flat file is the shape
+        # an older Perun wrote and should be migrated.
+        missing.append("mcp.servers")
 
     if not missing:
         return {"stale": False, "path": str(target), "warning": "", "missing": []}

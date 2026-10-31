@@ -1461,6 +1461,23 @@ def record_attention_delivery(attention_id: int, chat_id: str,
         )
 
 
+def attention_delivered_message(attention_id: int, chat_id: str) -> int | None:
+    """The message id that last carried this item to *chat_id* (None if never)."""
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT message_id FROM attention_deliveries WHERE attention_id=? AND chat_id=?",
+            (int(attention_id), str(chat_id)),
+        )
+    try:
+        if not row:
+            return None
+        value = row["message_id"]
+        return int(value) if value else None
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+
+
 def attention_by_message(chat_id: str, message_id: int) -> dict[str, Any] | None:
     """Resolve a Telegram reply-to message id back to its attention item."""
     with db.db() as conn:

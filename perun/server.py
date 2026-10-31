@@ -3113,6 +3113,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "telegram_interrupt_notice_minutes",
         "attention_ttl_minutes", "attention_poll_seconds",
         "attention_replay_open_minutes", "attention_max_per_hour",
+        "attention_digest_seconds",
         "run_resume_window_minutes", "tui_run_stale_hours",
     }
     bool_fields = {
@@ -3147,6 +3148,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
         if key == "attention_poll_seconds" and v < 2:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 2")
+        if key == "attention_digest_seconds" and v < 0:
+            raise HTTPException(status_code=400, detail=f"{key} must be 0 (off) or more")
         if key == "external_execution_package_ttl" and v < 60:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 60")
         if key == "embed_dim" and v < 1:

@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -172,8 +173,129 @@ def project_config_files(project_path: str | Path | None) -> list[Path]:
 
 
 def _server_entries(data: dict[str, Any]) -> dict[str, Any]:
+    """The server map of a config, whichever shape it uses.
+
+    OpenCode V2 nests servers under ``mcp.servers``; V1 put the names directly
+    under ``mcp``. The schema accepts both, and Preun keeps writing whichever the
+    installed CLI understands — but reading has to cope with either, including a
+    project file written by the other version.
+    """
     mcp = data.get("mcp")
-    return mcp if isinstance(mcp, dict) else {}
+    if not isinstance(mcp, dict):
+        return {}
+    servers = mcp.get("servers")
+    if isinstance(servers, dict):
+        return servers
+    # V1 shape: every dict-valued key is a server (``mcp.timeout`` does not exist
+    # there, but a V2 file's ``timeout`` must never be mistaken for one).
+    return {name: entry for name, entry in mcp.items()
+            if name not in ("servers", "timeout") and isinstance(entry, dict)}
+
+
+def server_entries(data: dict[str, Any]) -> dict[str, Any]:
+    """Public name for the shape-aware server map (see :func:`_server_entries`)."""
+    return _server_entries(data)
+
+
+# --------------------------------------------------------------------------- #
+# Config shape: ``mcp.<name>`` (V1) vs ``mcp.servers.<name>`` (V2)
+# --------------------------------------------------------------------------- #
+STYLE_V2 = "servers"
+STYLE_V1 = "legacy"
+
+_style_cache: str | None = None
+
+
+def opencode_version(timeout: float = 10.0) -> str:
+    """``opencode --version`` ("" when the CLI is missing or unhelpful).
+
+    On Windows the command is usually an npm shim (``opencode.cmd`` /
+    ``opencode.ps1``), which ``CreateProcess`` cannot launch directly — the same
+    problem :func:`windows_launch_argv` already solves for MCP probing.
+    """
+    resolved = shutil.which("opencode")
+    if not resolved:
+        return ""
+    argv = windows_launch_argv(["opencode", "--version"], resolved)
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    text = (result.stdout or result.stderr or "").strip()
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    return match.group(0) if match else ""
+
+
+def mcp_style(force: str | None = None) -> str:
+    """Which ``mcp`` shape to write for the installed CLI.
+
+    V1 CLIs reject nothing (they simply do not see ``mcp.servers``), so a wrong
+    guess would quietly disable every MCP server. Detection is therefore
+    conservative: anything unparseable or older than 2 writes the legacy shape,
+    which both versions still read.
+    """
+    global _style_cache
+    if force in (STYLE_V2, STYLE_V1):
+        return force
+    override = (os.environ.get("PERUN_OPENCODE_MCP_STYLE") or "").strip().lower()
+    if override in (STYLE_V2, STYLE_V1, "v2", "v1"):
+        return STYLE_V2 if override in (STYLE_V2, "v2") else STYLE_V1
+    if _style_cache is None:
+        version = opencode_version()
+        major = 0
+        if version:
+            try:
+                major = int(version.split(".")[0])
+            except ValueError:
+                major = 0
+        _style_cache = STYLE_V2 if major >= 2 else STYLE_V1
+    return _style_cache
+
+
+def reset_style_cache() -> None:
+    """Forget the detected shape (tests, or after upgrading OpenCode)."""
+    global _style_cache
+    _style_cache = None
+
+
+def entry_for_style(entry: dict[str, Any], style: str) -> dict[str, Any]:
+    """Translate ``enabled``/``disabled`` to the field the given shape uses."""
+    result = dict(entry)
+    enabled = result.pop("enabled", True) is not False
+    result.pop("disabled", None)
+    if style == STYLE_V2:
+        if not enabled:
+            result["disabled"] = True
+    else:
+        result["enabled"] = enabled
+    return result
+
+
+def set_server_entries(data: dict[str, Any], servers: dict[str, Any],
+                       style: str) -> None:
+    """Write the server map back into *data* in the requested shape."""
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+    if style == STYLE_V2:
+        if servers:
+            mcp["servers"] = servers
+        else:
+            mcp.pop("servers", None)
+        # Migrate: V2 has no server names directly under ``mcp``. A flat entry
+        # left there would be invisible to V2 and misleading to a human reader,
+        # and it is already carried in ``servers`` above.
+        for name in [k for k in mcp if k not in ("servers", "timeout")]:
+            del mcp[name]
+    else:
+        # V1: names live directly under ``mcp``; nothing else belongs there.
+        mcp = dict(servers)
+    if mcp:
+        data["mcp"] = mcp
+    else:
+        data.pop("mcp", None)
 
 
 def _resolve_command(command: Any, args: Any = None) -> tuple[list[str], str | None]:
@@ -231,7 +353,8 @@ def _normalize(name: str, raw: Any, *, scope: str, source: Path,
         "name": name,
         "scope": scope,
         "source": str(source),
-        "enabled": raw.get("enabled", True) is not False,
+        "enabled": (raw.get("disabled") is not True
+                    and raw.get("enabled", True) is not False),
         "type": server_type,
         "project": (project or {}).get("slug", ""),
         "project_name": (project or {}).get("name", ""),
