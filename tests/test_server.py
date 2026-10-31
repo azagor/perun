@@ -2513,3 +2513,47 @@ def test_attention_settings_are_validated(client):
     # Leave the machine-wide settings as the tests found them.
     client.patch("/api/settings", json={
         "attention_enabled": False, "attention_default_delivery": "queue"})
+
+
+def test_attention_outbox_can_be_listed_and_retried(client, tmp_path, inbox_api):
+    from perun import attention, registry
+
+    project = _inbox_project(tmp_path)
+    item = attention.request(project, "room", "grp:perun:inbox-api:chat", "mention", "look")
+    registry.attention_outbox_add(item["id"], "room", "grp:perun:inbox-api:chat",
+                                  {"text": "operator (via Telegram): on it"})
+    with registry.db.db() as conn:
+        conn.execute("UPDATE attention_outbox SET attempts=10, delivered_at='2020-01-01T00:00:00+00:00'")
+
+    body = client.get("/api/attention/outbox").json()
+    assert len(body["items"]) == 1
+    outbox_id = body["items"][0]["id"]
+    assert body["items"][0]["attempts"] == 10
+
+    retry = client.post(f"/api/attention/outbox/{outbox_id}/retry", json={})
+    assert retry.status_code == 200, retry.text
+    row = client.get("/api/attention/outbox").json()["items"][0]
+    assert row["attempts"] == 0 and row["delivered_at"] is None
+
+    assert client.post("/api/attention/outbox/999999/retry", json={}).status_code == 404
+
+
+def test_always_from_the_dashboard_requires_confirmation(client, tmp_path, inbox_api):
+    from perun import attention
+
+    project = _inbox_project(tmp_path)
+    item = attention.request(
+        project, "permission", "per_confirm", "permission", "read .env",
+        options=attention.PERMISSION_OPTIONS,
+        ref={"request_id": "per_confirm", "session_id": "ses_api", "action": "read"},
+    )
+
+    refused = client.post(f"/api/attention/{item['id']}/choose",
+                          json={"option": "always"})
+    assert refused.status_code == 400
+    assert inbox_api.calls == []
+
+    ok = client.post(f"/api/attention/{item['id']}/choose",
+                     json={"option": "always", "confirm": True})
+    assert ok.status_code == 200, ok.text
+    assert inbox_api.calls == [("permission", "ses_api", "per_confirm", "always")]

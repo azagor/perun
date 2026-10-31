@@ -1722,3 +1722,34 @@ def open_attention_of_kind(target_kind: str, limit: int = 2000) -> list[dict[str
             (str(target_kind), int(limit)),
         )
     return [item for item in (_attention_row(r) for r in rows) if item]
+
+
+def attention_outbox_list(limit: int = 20) -> list[dict[str, Any]]:
+    """Queued / exhausted operator replies, newest first (dashboard view)."""
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT * FROM attention_outbox ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        )
+    out = []
+    for row in rows:
+        entry = dict(row)
+        try:
+            entry["payload"] = json.loads(entry.get("payload") or "{}")
+        except Exception:
+            entry["payload"] = {}
+        out.append(entry)
+    return out
+
+
+def attention_outbox_retry(outbox_id: int) -> bool:
+    """Reset one queued reply so the drainer tries it again."""
+    with db.db() as conn:
+        cur = conn.execute(
+            """UPDATE attention_outbox
+               SET attempts=0, last_error='', delivered_at=NULL
+               WHERE id=?""",
+            (int(outbox_id),),
+        )
+        return bool(cur.rowcount)

@@ -5351,15 +5351,24 @@ async function loadAttentionPanel() {
             } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
         });
     });
+    const choose = async (btn, confirm) => {
+        btn.disabled = true;
+        try {
+            await api(`/api/attention/${btn.dataset.attChoose}/choose`,
+                { method: 'POST', body: { option: btn.dataset.attOption, confirm: !!confirm } });
+            toast('Recorded', 'ok');
+            refresh();
+        } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+    };
     host.querySelectorAll('[data-att-choose]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            try {
-                await api(`/api/attention/${btn.dataset.attChoose}/choose`,
-                    { method: 'POST', body: { option: btn.dataset.attOption } });
-                toast('Recorded', 'ok');
-                refresh();
-            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+        btn.addEventListener('click', () => {
+            if (btn.dataset.attOption === 'always') {
+                confirmDialog('Always allow',
+                    'This saves a persistent permission rule for the project, covering future requests too.',
+                    () => choose(btn, true), 'Always allow');
+            } else {
+                choose(btn, false);
+            }
         });
     });
     host.querySelectorAll('[data-att-steer]').forEach((btn) => {
@@ -5382,10 +5391,37 @@ async function loadAttentionPanel() {
             } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
         });
     });
+    loadAttentionOutbox(host);
     attentionTimer = setInterval(() => {
         if (!document.getElementById('attention-panel')) { clearInterval(attentionTimer); attentionTimer = null; return; }
         loadAttentionPanel();
     }, 30000);
+}
+
+async function loadAttentionOutbox(host) {
+    let res;
+    try { res = await api('/api/attention/outbox?limit=10'); } catch (_) { return; }
+    const rows = (res.items || []).filter((r) => !r.delivered_at);
+    if (!rows.length) return;
+    const section = document.createElement('div');
+    section.innerHTML = `<div class="meta" style="margin-top:10px">Queued room replies</div>` +
+        rows.map((r) => `<div class="list-row">
+            <span class="badge ${r.attempts >= 10 ? 'amber' : 'blue'}">${r.attempts >= 10 ? 'retired' : 'queued'}</span>
+            <span class="intent"><div class="msg truncate">${esc(r.target_id || '')}</div>
+            <div class="meta">${esc((r.payload && r.payload.text) || '')} · attempts ${r.attempts || 0}${r.last_error ? ' · ' + esc(r.last_error) : ''}</div></span>
+            <span class="row" style="gap:6px"><button class="btn sm ghost" data-outbox-retry="${r.id}">Retry</button></span>
+          </div>`).join('');
+    host.appendChild(section);
+    section.querySelectorAll('[data-outbox-retry]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+                await api(`/api/attention/outbox/${btn.dataset.outboxRetry}/retry`, { method: 'POST', body: {} });
+                toast('Queued for retry', 'ok');
+                loadAttentionPanel();
+            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
+        });
+    });
 }
 
 async function viewSettings() {

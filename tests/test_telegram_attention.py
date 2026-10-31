@@ -428,3 +428,30 @@ def test_project_buttons_still_work_after_the_attention_dispatch(bridge, project
 
     assert any(method == "answerCallbackQuery" for method, _ in bridge.api_calls)
     assert registry.get_bridge_link("1")["project_id"] == project["id"]
+
+
+def test_a_malformed_button_payload_is_acknowledged(bridge):
+    bridge._handle_update({"update_id": 9, "callback_query": {
+        "id": "cb-bad", "data": "att:not-an-id:once",
+        "message": {"message_id": 1, "chat": {"id": "1"}},
+    }})
+
+    assert bridge.api_calls[-1][0] == "answerCallbackQuery"
+    assert "not valid" in bridge.api_calls[-1][1]["text"].lower()
+
+
+def test_a_stale_tap_drops_the_cached_draft(bridge, project):
+    item = attention.request(project, "session", "ses_tg", "ask", "Ship it?")
+    bridge.attention_tick()
+    bridge._maybe_attention_text("1", "yes please", 20)
+    assert bridge._pending_answers
+
+    registry.close_attention(item["id"], "answered", answered_by="dashboard")
+    bridge._handle_update({"update_id": 10, "callback_query": {
+        "id": "cb-stale", "data": f"att:{item['id']}:send_text",
+        "message": {"message_id": 21, "chat": {"id": "1"}},
+    }})
+
+    assert bridge._pending_answers == {}
+    assert bridge.work.empty()
+    assert "already answered" in bridge.api_calls[-1][1]["text"].lower()

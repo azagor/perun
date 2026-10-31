@@ -288,6 +288,9 @@ class PerunTelegramBridge:
     def api(self, method: str, *, retries: int = 4, **params: Any) -> Dict[str, Any]:
         url = f"{self.api_base}/{method}"
         delay = 2.0
+        # Total time a single call may spend sleeping on rate limits, so a 429
+        # storm cannot stall the notifier for minutes.
+        budget = 30.0
         for attempt in range(1, retries + 1):
             try:
                 data = self.client.post(url, json=params).json()
@@ -304,11 +307,12 @@ class PerunTelegramBridge:
                         wait = float(retry_after or delay)
                     except (TypeError, ValueError):
                         wait = delay
-                    wait = min(max(wait, 1.0), 30.0)
+                    wait = min(max(wait, 1.0), 30.0, budget)
                     LOG.warning("telegram %s rate limited; retrying in %.0fs",
                                 method, wait)
-                    if attempt < retries:
+                    if attempt < retries and wait >= 1.0:
                         time.sleep(wait)
+                        budget -= wait
                     continue
                 LOG.warning("telegram %s error (%d/%d): %s", method, attempt, retries,
                             data.get("description"))
@@ -980,20 +984,24 @@ class PerunTelegramBridge:
     def _handle_attention_callback(self, cq: Dict[str, Any], data: str) -> None:
         from . import attention
 
-        parts = data.split(":", 2)
-        if len(parts) < 3:
-            return
-        try:
-            attention_id = int(parts[1])
-        except ValueError:
-            return
-        action = parts[2]
-        chat_id = str((cq.get("message", {}).get("chat") or {}).get("id"))
-        message_id = int(cq.get("message", {}).get("message_id") or 0)
         callback_id = cq.get("id")
 
         def ack(text: str) -> None:
             self.api("answerCallbackQuery", callback_query_id=callback_id, text=text[:190])
+
+        parts = data.split(":", 2)
+        try:
+            attention_id = int(parts[1]) if len(parts) >= 3 else 0
+        except ValueError:
+            attention_id = 0
+        if not attention_id:
+            # Malformed payload (old card, hand-edited data): acknowledge so the
+            # client does not spin forever.
+            ack("That button is not valid.")
+            return
+        action = parts[2]
+        chat_id = str((cq.get("message", {}).get("chat") or {}).get("id"))
+        message_id = int(cq.get("message", {}).get("message_id") or 0)
 
         if not chat_id:
             return
@@ -1007,6 +1015,7 @@ class PerunTelegramBridge:
         if item["state"] != "open" and action not in ("show", "steer", "undo"):
             # A tap on an old card must say so, not try to act again. ``steer``
             # and ``undo`` act on an *answered* item by design.
+            self._pending_answers.pop(f"{chat_id}:{attention_id}", None)
             ack(f"Already {item['state']}")
             return
 

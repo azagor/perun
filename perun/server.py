@@ -2725,6 +2725,21 @@ def api_attention_list(state: str = "open", limit: int = 50,
     return _ok(items=items, total=len(items))
 
 
+@app.get("/api/attention/outbox")
+def api_attention_outbox(limit: int = 20) -> dict[str, Any]:
+    """Operator replies still queued (or retired after repeated failures)."""
+    limit = max(1, min(int(limit), 100))
+    items = registry.attention_outbox_list(limit)
+    return _ok(items=items, total=len(items))
+
+
+@app.post("/api/attention/outbox/{outbox_id}/retry")
+def api_attention_outbox_retry(outbox_id: int) -> dict[str, Any]:
+    if not registry.attention_outbox_retry(outbox_id):
+        raise HTTPException(status_code=404, detail="queued reply not found")
+    return _ok(retried=outbox_id)
+
+
 @app.get("/api/attention/{attention_id}")
 def api_attention_get(attention_id: int) -> dict[str, Any]:
     item = registry.get_attention(attention_id)
@@ -2757,6 +2772,11 @@ def api_attention_choose(attention_id: int,
     option = str(payload.get("option") or "").strip().lower()
     if not option:
         raise HTTPException(status_code=400, detail="option is required")
+    # "Always" persists a rule for the project; the Telegram path requires a
+    # second tap, so the API requires an explicit confirm flag too.
+    if option == "always" and payload.get("confirm") is not True:
+        raise HTTPException(status_code=400,
+                            detail="always requires confirm=true")
     result = attention.choose(attention_id, option, by="dashboard")
     if not result.get("ok"):
         status = 404 if "not found" in str(result.get("error")) else 409

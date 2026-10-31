@@ -139,7 +139,7 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `set_attention_delivery()`, `touch_attention_waiter()`, `expire_attention()`,
   `reopen_attention()`, `attention_count_since()` (hourly cap),
   `attention_muted_projects()` / `mute_attention_project()` /
-  `unmute_attention_project()`, the `attention_outbox_*` queue, and
+  `unmute_attention_project()`, the `attention_outbox_*` queue (list/retry included), and
   `prune_attention(keep_days=30)` (open rows are never pruned; delivery/outbox children are deleted explicitly because SQLite foreign keys are off).
 
 ### `perun/control.py`
@@ -969,7 +969,7 @@ FastAPI app + SSE + static dashboard.
   (`/api/routing/decisions` summary + panel rows, `POST
   /api/routing/decisions/{id}/misroute`), the operator inbox
   (`/api/attention` list, `/{id}`, `/{id}/reply`, `/{id}/choose`,
-  `/{id}/delivery` for ⚡, `DELETE` to cancel), `DELETE /api/sessions/{pk}`; `DELETE` refuses
+  `/{id}/delivery` for ⚡, `DELETE` to cancel, `/outbox` + `/outbox/{id}/retry` for queued room replies), `DELETE /api/sessions/{pk}`; `DELETE` refuses
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,

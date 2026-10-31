@@ -1296,6 +1296,13 @@ one device cannot close a row another device just answered. `reject` on a
 permission also rejects the session's other pending requests, so the watcher
 cancels the sibling cards.
 
+**Queued replies and `always`.** `GET /api/attention/outbox` lists room replies
+that are still queued (or were retired after ten failures) and
+`POST /api/attention/outbox/{id}/retry` resets one; the dashboard shows them under
+the inbox with a Retry button. Choosing `always` persists a project rule, so both
+surfaces require a second step: the Telegram card a confirmation tap, the API
+`{"option":"always","confirm":true}`.
+
 **Dead targets and rate limits.** A 404 from OpenCode closes the item
 (`undeliverable` for a session/form prompt, `cancelled` when a permission or
 proposal was already resolved elsewhere) and the card says why — a tap is never
