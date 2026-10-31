@@ -23,6 +23,18 @@ const safeUrl = (u) => {
     return /^(https?:|mailto:|vscode:\/\/file\/|\/|#|\.)/i.test(s) ? s : '#';
 };
 
+// Pure chat-log decisions live in js/chat_core.js (loaded just before this
+// file) so they can be unit-tested without a DOM. If that script is missing —
+// a stale cache or a truncated deploy — fall back to the permissive behaviour
+// so the log still renders, and say so once in the console.
+const ChatCore = window.ChatCore || {
+    shouldRender: () => true,
+    shouldSend: () => true,
+};
+if (!window.ChatCore) {
+    console.error('perun: chat_core.js did not load; chat dedupe is disabled');
+}
+
 const state = {
     projects: [],
     settings: null,
@@ -4696,17 +4708,9 @@ async function viewPerunChat() {
     }
 
     function renderMessage(msg, opts = {}) {
-        if (!msg.id) return;
-        // The gateway broadcasts every room's frames to every socket; the log is
-        // per room, so a frame for another room must not appear here.
-        if (msg.room_id && joinedRoom && msg.room_id !== joinedRoom) return;
-        if (messageHistory.some((m) => m.id === msg.id)) return;
-        // The same message can come back with a fresh id after a reconnect or a
-        // replay; collapse it by identity rather than by id alone.
-        if (messageHistory.some((m) =>
-                (m.sender && m.sender.agent_id) === (msg.sender && msg.sender.agent_id)
-                && m.timestamp === msg.timestamp
-                && String(m.payload) === String(msg.payload))) return;
+        // Dedupe/room filtering live in chat_core.js so they can be tested
+        // without a DOM (node --test web/js/chat_core.test.js).
+        if (!ChatCore.shouldRender(messageHistory, msg, joinedRoom)) return;
         // Typing indicators are transient UI state, not chat history.
         if (msg.content_type === 'application/perun-typing') {
             showTypingIndicator(msg);
@@ -4913,12 +4917,11 @@ async function viewPerunChat() {
     function sendChatMessage() {
         if (!joinedRoom) { toast('Join a room first', 'err'); return; }
         const text = $('#pc-chat-msg').value;
-        if (!text.trim()) return;
         const now = Date.now();
         // A double click / double Enter used to send the same text twice (two
-        // ids, two rows). One send per second for identical text is enough.
-        if (text.trim() === _lastSentText && now - _lastSentAt < 1200) return;
-        _lastSentText = text.trim();
+        // ids, two rows). The guard lives in chat_core.js so it is testable.
+        if (!ChatCore.shouldSend(_lastSentText, _lastSentAt, text, now)) return;
+        _lastSentText = String(text).trim();
         _lastSentAt = now;
         seq += 1;
         try { localStorage.setItem('perunchat_seq', String(seq)); } catch (e) { /* ignore */ }

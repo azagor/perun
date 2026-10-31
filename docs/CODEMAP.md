@@ -1205,6 +1205,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `.card-pip`, `.perun-flash`), with a `prefers-reduced-motion` guard.
 * `web/js/prompt_chain.js` — `buildPromptChain()` (Agent Console prompt/task
   composition, unit-testable).
+* `web/js/chat_core.js` — pure dashboard-chat decisions, moved out of
+  `perun.js` so `node --test` can cover them: `shouldRender(existing, msg,
+  joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames) and
+  `shouldSend(lastText, lastAt, text, now, windowMs)` (double Enter/click
+  guard). Exposed as `window.ChatCore` and as a CommonJS module.
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
   `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `multiSelect()`,
   `terminalId()`,
@@ -1431,6 +1436,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `web/js/prompt_chain.js`.
 * `test_prompt_chain.js` — the Node.js unit test itself (run by
   `test_js_prompt_chain.py`); skips when `node` is unavailable.
+* `test_js_chat_core.py` — runs `node --test web/js/chat_core.test.js`, and
+  asserts the dashboard loads `chat_core.js` before `perun.js` and keeps no
+  private copy of the guards; skips when `node` is unavailable.
+* `web/js/chat_core.test.js` — the `node --test` suite for `chat_core.js`
+  (room filter, id and identity dedupe, debounce inside/outside the window).
 * `conftest.py` — shared fixtures: `_fresh_db` (autouse per-test database),
   `workdir`, `control_repo`, and `_api_token_header` (autouse: teaches
   `TestClient` to send `X-Perun-Token`, since state-changing `/api/*` calls now

@@ -1603,6 +1603,18 @@ by the system, recording the `auto` policy identity. When both flags are enabled
 policy auto-approve takes precedence. Humans always retain the ability to
 approve, execute, retry, or delete proposals manually.
 
+**Dashboard chat log decisions.** The dashboard log used to duplicate a message
+or show a frame from another room because the filtering, the dedupe and the
+send debounce lived inline in `web/js/perun.js` with no test. They now sit in
+`web/js/chat_core.js` as two pure predicates — `shouldRender(existing, msg,
+joinedRoom)` (drop frames for another room, the same id, or the same
+`(sender.agent_id, timestamp, payload)` replayed under a fresh id) and
+`shouldSend(lastText, lastAt, text, now, windowMs = 1200)` — loaded before
+`perun.js` and covered by `node --test web/js/chat_core.test.js`, which pytest
+runs through `tests/test_js_chat_core.py` (skipped when `node` is absent). If the
+module fails to load, `perun.js` logs one error and falls back to rendering
+everything, so a stale cache never blanks the log.
+
 **Portable MCP config and chat permissions.** The shared-project
 `opencode.json` writes `PERUN_HOME=~/.perun` for the default home instead of an
 absolute user path, so a committed project config never leaks the OS username.

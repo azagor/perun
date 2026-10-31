@@ -4,7 +4,24 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The dashboard chat has a regression net
+
+* The three decisions that produced real duplicates in the dashboard chat — the
+  room filter, the id/identity dedupe of replayed frames and the double
+  Enter/click guard — moved verbatim out of `web/js/perun.js` into
+  `web/js/chat_core.js` (`shouldRender`, `shouldSend`), loaded before the SPA.
+  `perun.js` now calls the module instead of keeping a private copy; if the
+  module is missing it logs once and renders everything rather than going
+  blank.
+* `web/js/chat_core.test.js` covers them with Node's built-in runner (no jsdom):
+  another room's frame, a frame without an id, the same id twice, a replay with
+  a fresh id, the same text from another sender or at a later time, empty input,
+  a double Enter inside the 1.2 s window, a deliberate repeat after it, and
+  whitespace-padded duplicates.
+* `tests/test_js_chat_core.py` runs that suite from pytest (skipped when `node`
+  is absent) and asserts the dashboard loads `chat_core.js` before `perun.js`
+  and keeps no second copy of the guards, so the release check now covers the
+  chat as well.
 
 ## v0.10.8
 
