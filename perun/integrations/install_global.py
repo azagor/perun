@@ -263,7 +263,12 @@ def install(*, force: bool = False, index: bool = True) -> int:
         shutil.copy2(tpl, commands_dir / name)
         installed_commands.append(name[:-3])
 
-    # 2. Merge into opencode.json.
+    # 2. Merge into opencode.json. The MCP block is written in the shape the
+    # installed CLI understands (V2 nests servers under ``mcp.servers`` and uses
+    # ``disabled``); reading is shape-agnostic, so a config written by an older
+    # Perun is migrated once instead of being left with a dead flat entry.
+    from .. import mcp_servers as _mcp
+
     path = opencode_json()
     try:
         data = _read_json(path)
@@ -273,11 +278,9 @@ def install(*, force: bool = False, index: bool = True) -> int:
     original = path.read_text(encoding="utf-8") if path.is_file() else None
     backup = None
 
-    mcp = data.setdefault("mcp", {})
-    if not isinstance(mcp, dict):
-        mcp = {}
-        data["mcp"] = mcp
-    mcp[MCP_NAME] = {
+    style = _mcp.mcp_style()
+    servers = dict(_mcp.server_entries(data))
+    servers[MCP_NAME] = _mcp.entry_for_style({
         "type": "local",
         "command": _python_cmd(),
         "enabled": True,
@@ -285,7 +288,8 @@ def install(*, force: bool = False, index: bool = True) -> int:
         # different one in its environment) would otherwise talk to whichever
         # database the MCP process happened to pick up, not the running server's.
         "environment": {"PERUN_HOME": str(config.HOME)},
-    }
+    }, style)
+    _mcp.set_server_entries(data, servers, style)
 
     instruction_ref = _relative_to_config(instructions_target())
     instructions = data.get("instructions")
@@ -390,11 +394,14 @@ def uninstall() -> int:
         return 2
     changed = False
 
-    mcp = data.get("mcp")
-    if isinstance(mcp, dict) and MCP_NAME in mcp:
-        mcp.pop(MCP_NAME, None)
-        if not mcp:
-            data.pop("mcp", None)
+    from .. import mcp_servers as _mcp
+
+    servers = _mcp.server_entries(data)
+    if MCP_NAME in servers:
+        _mcp.set_server_entries(
+            data, {k: v for k, v in servers.items() if k != MCP_NAME},
+            _mcp.mcp_style(),
+        )
         changed = True
 
     instr = data.get("instructions")
@@ -454,7 +461,9 @@ def status() -> dict[str, Any]:
         config_error = ""
     except ConfigParseError as exc:
         data, config_error = {}, str(exc)
-    mcp = (data.get("mcp") or {}).get(MCP_NAME)
+    from .. import mcp_servers as _mcp
+
+    mcp = _mcp.server_entries(data).get(MCP_NAME)
     agents_path = agents_target()
     agents_block = False
     if agents_path.is_file():

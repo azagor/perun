@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The global install follows the CLI too
+
+* `perun install --machine` wrote Perun's own MCP server in the V1 shape
+  (`mcp.perun` + `enabled`), so a machine could have a V2 project config and a V1
+  global one. `install_global.install()` now uses the same detection and writers
+  as the project path: `mcp.servers.perun` on a V2 CLI, the legacy flat entry on
+  V1, an existing flat entry migrated once (unrelated servers and the rest of the
+  config preserved, a timestamped backup kept), and `uninstall()`/`status()`
+  understand either shape.
 
 ## v0.10.12
 

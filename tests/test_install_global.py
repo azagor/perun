@@ -17,12 +17,22 @@ def fake_xdg(monkeypatch, tmp_path):
     return tmp_path / "opencode"
 
 
+def _servers(cfg):
+    """The server map of a config, whichever ``mcp`` shape it uses."""
+    mcp = cfg.get("mcp") or {}
+    servers = mcp.get("servers")
+    if isinstance(servers, dict):
+        return servers
+    return {k: v for k, v in mcp.items() if k not in ("servers", "timeout")}
+
+
 def test_install_creates_mcp_and_instructions(fake_xdg):
     assert install_global.install(index=False) == 0
     cfg = json.loads(install_global.opencode_json().read_text(encoding="utf-8"))
-    assert "perun" in cfg["mcp"]
-    assert cfg["mcp"]["perun"]["type"] == "local"
-    assert cfg["mcp"]["perun"]["command"][-1].endswith("perun_mcp.py")
+    servers = _servers(cfg)
+    assert "perun" in servers
+    assert servers["perun"]["type"] == "local"
+    assert servers["perun"]["command"][-1].endswith("perun_mcp.py")
     assert any("perun/INSTRUCTIONS.md" in i for i in cfg["instructions"])
     assert install_global.instructions_target().is_file()
     # templates were copied into commands/
@@ -48,8 +58,8 @@ def test_install_preserves_unrelated_keys(fake_xdg):
     install_global.install(index=False)
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert cfg["model"] == "opencode/big-pickle"
-    assert "other" in cfg["mcp"]
-    assert "perun" in cfg["mcp"]
+    assert "other" in _servers(cfg)
+    assert "perun" in _servers(cfg)
 
 
 def test_install_backs_up_existing(fake_xdg):
@@ -66,7 +76,7 @@ def test_install_is_idempotent(fake_xdg):
     install_global.install(index=False)
     cfg = json.loads(install_global.opencode_json().read_text(encoding="utf-8"))
     assert cfg["instructions"].count("perun/INSTRUCTIONS.md") == 1
-    assert list(cfg["mcp"]).count("perun") == 1
+    assert list(_servers(cfg)).count("perun") == 1
 
 
 def test_uninstall_removes_only_perun(fake_xdg):
@@ -83,8 +93,8 @@ def test_uninstall_removes_only_perun(fake_xdg):
 
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert cfg["model"] == "opencode/big-pickle"
-    assert "other" in cfg["mcp"]
-    assert "perun" not in cfg["mcp"]
+    assert "other" in _servers(cfg)
+    assert "perun" not in _servers(cfg)
     assert cfg["instructions"] == ["some/existing.md"]
     assert not install_global.instructions_target().exists()
 
@@ -143,7 +153,7 @@ def test_install_pins_perun_home_in_mcp_entry(fake_xdg):
 
     install_global.install(index=False)
     cfg = json.loads(install_global.opencode_json().read_text(encoding="utf-8"))
-    env = cfg["mcp"]["perun"].get("environment") or {}
+    env = _servers(cfg)["perun"].get("environment") or {}
     assert env.get("PERUN_HOME") == str(config.HOME)
 
 
@@ -161,8 +171,8 @@ def test_install_tolerates_jsonc_and_keeps_comments_keys(fake_xdg):
     assert install_global.install(index=False) == 0
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert cfg["model"] == "opencode/big-pickle"
-    assert "other" in cfg["mcp"]
-    assert "perun" in cfg["mcp"]
+    assert "other" in _servers(cfg)
+    assert "perun" in _servers(cfg)
 
 
 def test_install_aborts_on_unparseable_config(fake_xdg):
@@ -185,7 +195,7 @@ def test_install_honours_opencode_config_env(fake_xdg, monkeypatch, tmp_path):
     assert install_global.opencode_json() == target
     assert install_global.install(index=False) == 0
     cfg = json.loads(target.read_text(encoding="utf-8"))
-    assert "perun" in cfg["mcp"]
+    assert "perun" in _servers(cfg)
 
 
 def test_reinstall_does_not_pile_up_backups(fake_xdg):
@@ -229,3 +239,43 @@ def test_uninstall_removes_instructions_pointer(fake_xdg):
     assert pointer.is_file()
     install_global.uninstall()
     assert not pointer.exists()
+
+def test_install_writes_the_v2_shape_and_migrates_a_v1_entry(fake_xdg, monkeypatch):
+    """On a V2 CLI the global config gets ``mcp.servers``, not a flat ``mcp.perun``."""
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    cfg_path = install_global.opencode_json()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps({
+        "instructions": ["keep-me.md"],
+        "mcp": {
+            "perun": {"type": "local", "command": ["python", "old.py"], "enabled": True},
+            "other": {"type": "remote", "url": "https://mcp.example/mcp"},
+        },
+    }), encoding="utf-8")
+
+    assert install_global.install(index=False) == 0
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    assert list(cfg["mcp"]) == ["servers"]
+    assert cfg["mcp"]["servers"]["perun"]["command"][-1].endswith("perun_mcp.py")
+    assert "enabled" not in cfg["mcp"]["servers"]["perun"]
+    assert cfg["mcp"]["servers"]["other"]["url"] == "https://mcp.example/mcp"
+    assert "keep-me.md" in cfg["instructions"]
+
+
+def test_uninstall_removes_perun_from_either_shape(fake_xdg, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    install_global.install(index=False)
+    cfg_path = install_global.opencode_json()
+
+    assert install_global.uninstall() == 0
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "perun" not in _servers(cfg)
+
+
+def test_status_understands_the_v2_shape(fake_xdg, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    install_global.install(index=False)
+    info = install_global.status()
+    assert info["installed"] is True
+    assert info["mcp"]["environment"]["PERUN_HOME"]

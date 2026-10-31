@@ -1144,7 +1144,11 @@ Idempotent, additive global install into `~/.config/opencode` (honours
   within a second), `_python_cmd()`, `_relative_to_config()`, `ConfigParseError`.
 * `install()`, `uninstall()`, `status()`. The Perun MCP entry pins
   `environment.PERUN_HOME`, and `opencode.json` is rewritten (with a backup) only
-  when its content actually changes. `install()` also calls
+  when its content actually changes. The entry is written in the shape the
+  installed CLI understands (`mcp.servers.perun` on V2, flat `mcp.perun` on V1)
+  through `mcp_servers.mcp_style()` / `entry_for_style()` / `set_server_entries()`,
+  so a flat entry is migrated once; `uninstall()` and `status()` read either
+  shape via `mcp_servers.server_entries()`. `install()` also calls
   `handbook.ensure_indexed()` so the reference material is retrievable
   immediately.
 * Templates under `perun/integrations/templates/`:
