@@ -287,6 +287,9 @@ class OpenCodeAPI:
             "GET", self._url("/api/event"), params=params or None,
             headers=headers, timeout=timeout,
         ) as response:
+            if response.status_code == 401:
+                # A rotated credential: reload it so the next reconnect works.
+                self._password = _service_password()
             if response.status_code >= 400:
                 detail = ""
                 try:

@@ -149,3 +149,82 @@ def test_an_empty_base_url_and_no_credential_is_unavailable(monkeypatch):
 
     with pytest.raises(opencode_api.OpenCodeUnavailable):
         api.locations()
+
+
+class StreamResponse:
+    status_code = 200
+
+    def iter_lines(self):
+        yield ""
+        yield "data: {\"type\": \"session.idle\", \"data\": {\"sessionID\": \"ses_1\"}}"
+        yield ": heartbeat"
+
+    def read(self):
+        return b""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+
+class StreamClient:
+    def __init__(self):
+        self.calls = []
+
+    def stream(self, method, url, **kw):
+        self.calls.append({"method": method, "url": url, **kw})
+        return StreamResponse()
+
+    def close(self):
+        pass
+
+
+def test_iter_events_decodes_sse_data_lines_and_filters_types():
+    api = _api([])
+    api._client = StreamClient()
+
+    events = list(api.iter_events(types=["session.idle"]))
+
+    assert [e["type"] for e in events] == ["session.idle"]
+    call = api._client.calls[0]
+    assert call["params"] == [("types", "session.idle")]
+    assert "Authorization" in call["headers"]
+
+
+def test_create_session_sends_location_model_and_agent():
+    api = _api([StubResponse(payload={"data": {"id": "ses_new"}})])
+
+    created = api.create_session(r"C:\proj", model="ollama/qwen3.5:latest",
+                                 agent="build", title="hello")
+
+    assert created["id"] == "ses_new"
+    body = api._client.calls[0]["json"]
+    assert body["location"] == {"directory": r"C:\proj"}
+    assert body["model"] == {"providerID": "ollama", "id": "qwen3.5:latest"}
+    assert body["agent"] == "build"
+    assert body["title"] == "hello"
+
+
+def test_event_hub_dispatches_by_session_and_isolates_a_failing_subscriber():
+    import threading
+    import time
+
+    def source():
+        yield {"type": "session.text.delta", "data": {"sessionID": "s1", "n": 1}}
+        yield {"type": "session.text.delta", "data": {"sessionID": "s2", "n": 2}}
+        time.sleep(0.2)
+
+    seen = []
+    hub = opencode_api.EventHub(source=source)
+    hub.subscribe("s1", lambda event: seen.append(event["data"]["n"]))
+    hub.subscribe("s1", lambda event: (_ for _ in ()).throw(RuntimeError("boom")))
+    hub.start()
+    for _ in range(100):
+        if seen:
+            break
+        time.sleep(0.02)
+    hub.stop()
+
+    assert seen == [1]

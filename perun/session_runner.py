@@ -71,12 +71,20 @@ class SessionRunner:
         sid = str(run.get("opencode_session_id") or "").strip()
         if sid:
             return sid
-        info = api.create_session(
-            project["path"],
-            model=str(run.get("model") or ""),
-            agent=str(run.get("agent") or ""),
-            title=prompt[:80],
-        )
+        try:
+            info = api.create_session(
+                project["path"],
+                model=str(run.get("model") or ""),
+                agent=str(run.get("agent") or ""),
+                title=prompt[:80],
+            )
+        except opencode_api.OpenCodeHTTPError as exc:
+            if exc.status in (404, 405):
+                # A service without the session routes (older OpenCode): degrade
+                # to the legacy CLI runner instead of failing every run.
+                raise opencode_api.OpenCodeUnavailable(
+                    "the OpenCode session API is not available") from exc
+            raise
         sid = str(info.get("id") or "")
         if sid:
             registry.update_run(run["run_uid"], opencode_session_id=sid)
@@ -260,6 +268,10 @@ class SessionRunner:
                 break
             elif etype == "session.idle":
                 # Fallback: some paths end the turn without an execution event.
+                # Idle can also fire between steps while the turn continues, so
+                # only trust it when the session is no longer running.
+                if api.session_active(sid):
+                    continue
                 reply = self._reply_from(parts, order)
                 if reply:
                     status, error = "done", ""
@@ -295,6 +307,11 @@ class SessionRunner:
     # ---- finishing --------------------------------------------------- #
     def _finish(self, run_uid: str, status: str, error: str, reply: str,
                 lease: int, sid: str) -> None:
+        # Fencing: a zombie observer whose lease was taken over must not write,
+        # or it would mark a live run "interrupted" under the new owner.
+        if not registry.run_lease_owned(run_uid, self.owner, lease):
+            LOG.warning("run %s: lease no longer ours; not finalizing", run_uid)
+            return
         try:
             registry.release_run_lease(run_uid, self.owner)
         except Exception:  # pragma: no cover - defensive

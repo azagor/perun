@@ -300,3 +300,59 @@ def test_a_dead_owner_lease_is_taken_over_immediately():
 
     assert registry.claim_run_lease("r_live", f"{host}:{os.getpid()}") == 1
     assert registry.claim_run_lease("r_live", "newcomer") is None
+
+
+def test_a_lost_lease_never_finalizes_the_run(orch, hub, api, project):
+    """Fencing: the old observer must not overwrite the new owner's run."""
+    run = _run(project, uid="run_fenced")
+    registry.update_run(run["run_uid"], status="running",
+                        admitted_at=registry.now_iso(), opencode_session_id="ses_x")
+    assert registry.claim_run_lease(run["run_uid"], "old-owner") == 1
+    # A restart takes the lease over (its pid is dead).
+    with registry.db.db() as conn:
+        conn.execute("UPDATE run_leases SET beat_epoch=? WHERE run_uid='run_fenced'",
+                     (time.time() - 120,))
+    assert registry.claim_run_lease(run["run_uid"], "new-owner") == 2
+
+    SessionRunner(orch, api=api, hub=hub, owner="old-owner")._finish(
+        run["run_uid"], "interrupted", "stale", "", lease=1, sid="ses_x")
+
+    assert registry.get_run(run["run_uid"])["status"] == "running"
+    assert registry.run_lease_owned(run["run_uid"], "new-owner", 2) is True
+
+
+def test_an_older_service_without_the_session_api_falls_back(orch, hub, api, project, monkeypatch):
+    from perun import opencode_api as real_api
+
+    run = _run(project, uid="run_old_service")
+
+    def no_route(*_a, **_k):
+        raise real_api.OpenCodeHTTPError(404, "not found", "/api/session")
+
+    monkeypatch.setattr(api, "create_session", no_route)
+    monkeypatch.setenv("PERUN_SESSION_RUNNER", "1")
+    calls: list[str] = []
+    monkeypatch.setattr(orch, "_execute", lambda uid, *a, **k: calls.append(uid))
+
+    orch._worker(run["run_uid"], project, run["prompt"], run)
+
+    assert calls == [run["run_uid"]]
+
+
+def test_idle_while_the_session_is_active_does_not_end_the_turn(orch, hub, api, project):
+    run = _run(project, uid="run_idle")
+    runner = SessionRunner(orch, api=api, hub=hub, owner="test")
+    thread = threading.Thread(target=runner.execute,
+                              args=(run["run_uid"], project, run["prompt"], run))
+    thread.start()
+    assert _wait(lambda: bool(api.prompts))
+    sid = api.prompts[0]["session_id"]
+
+    hub.emit(_event("session.idle", sid))          # between steps: ignored
+    hub.emit(_event("session.text.delta", sid, assistantMessageID="m1", delta="done"))
+    hub.emit(_event("session.execution.succeeded", sid))
+    thread.join(timeout=5)
+
+    final = registry.get_run(run["run_uid"])
+    assert final["status"] == "done"
+    assert final["output"] == "done"
