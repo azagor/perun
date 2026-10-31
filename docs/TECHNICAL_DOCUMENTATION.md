@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.3 (see §15). Keep standalone TUI runs (and their project-card activity markers) alive across a restart.
+**Latest release:** v0.10.4 (see §15). An open TUI session no longer forces a forced restart; the guard reads blocking runs only.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2002,6 +2002,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.4: An open TUI session no longer forces a forced restart; the guard reads blocking runs only.
+
 ### 2026-10-31 — v0.10.3: Keep standalone TUI runs (and their project-card activity markers) alive across a restart.
 
 ### 2026-10-31 — v0.10.2: Fence run finalization on lease ownership, degrade to the CLI when the session API is missing, guard mid-turn idle, and refresh SSE auth.
