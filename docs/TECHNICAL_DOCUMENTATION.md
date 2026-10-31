@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.9.6 (see §15). Redact cookie headers and URL credentials on cards, and close proposal cards whose state changed.
+**Latest release:** v0.9.7 (see §15). Expose and retry queued room replies, confirm Always in the dashboard, acknowledge malformed taps, and budget 429 waits.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1928,6 +1928,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.9.7: Expose and retry queued room replies, confirm Always in the dashboard, acknowledge malformed taps, and budget 429 waits.
+
 ### 2026-10-31 — v0.9.6: Redact cookie headers and URL credentials on cards, and close proposal cards whose state changed.
 
 ### 2026-10-31 — v0.9.5: Dispatch operator-inbox button taps (Allow once/Always/Reject) and report taps on closed cards.
