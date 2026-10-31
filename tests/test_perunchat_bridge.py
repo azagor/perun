@@ -3687,3 +3687,27 @@ def test_a_failed_notice_is_retried_instead_of_marked_as_sent(settings, tmp_path
     assert registry.activity_exists(
         "project_room_welcome", f"operator contact posted in {room}") is True
     assert len(posted) == 2
+
+
+def test_a_room_joined_later_still_gets_the_notice(settings, tmp_path, monkeypatch):
+    """A room created while the bridge is connected must not wait for a reconnect."""
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(
+                            attention_operator_names=[], perun_owner_name="Szczepan")))
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    bridge._ws = MagicMock()
+    posted: list[tuple[str, str]] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append((rid, text)) or True  # type: ignore[assignment]
+
+    assert bridge._welcome_room(room) is True
+    assert bridge._welcome_room(room) is False          # once
+    assert bridge._welcome_room("pub:global:general") is False
+    assert len(posted) == 1
+    assert registry.activity_exists(
+        "project_room_welcome", f"operator contact posted in {room}")

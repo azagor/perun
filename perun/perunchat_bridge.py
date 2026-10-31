@@ -1494,6 +1494,11 @@ class PerunChatBridge:
             if key not in self._acked_rooms:
                 self._acked_rooms.add(key)
                 logger.info("PerunChat bridge joined room %s", room_id)
+                try:
+                    self._welcome_room(str(room_id))
+                except Exception:  # pragma: no cover - never break the receive loop
+                    logger.debug("could not post the operator-contact notice",
+                                 exc_info=True)
             return
         if frame_type == "ERROR" and room_id:
             self._acked_rooms.discard(str(room_id).lower())
@@ -2370,14 +2375,7 @@ class PerunChatBridge:
                 names = [owner]
         return names
 
-    def _welcome_project_rooms(self) -> None:
-        """Tell a project room once how to reach the human operator.
-
-        Remote agents cannot call Perun's MCP tools, so their only channel is a
-        mention: the bridge forwards it to the operator's Telegram and posts the
-        reply back here. That protocol has to be stated in the room, or nobody
-        knows it exists.
-        """
+    def _operator_notice_text(self) -> str:
         names = self._operator_names()
         if names:
             label = ", ".join(f"@{n}" for n in names)
@@ -2389,35 +2387,46 @@ class PerunChatBridge:
             # relay instead of telling agents to do something impossible.
             how = ("To reach them, ask Perun in this room to relay a question; Perun "
                    "forwards it to their Telegram and posts their reply back here.")
+        return (f"[Perun] Human operator for this project: {label}. {how} "
+                "This is the project's operator - agents that answer to a different "
+                "human reach that person through their own system. A mention is a "
+                "request, not an approval.")
+
+    def _welcome_room(self, room_id: str) -> bool:
+        """Post the operator-contact notice once for one project room."""
+        if not room_id or not room_id.startswith("grp:"):
+            return False
+        binding = self._project_binding(room_id)
+        if not binding:
+            return False
+        project, _cfg = binding
+        marker = f"operator contact posted in {room_id}"
+        try:
+            if registry.activity_exists("project_room_welcome", marker):
+                return False
+            if not self.post_to_room(room_id, self._operator_notice_text()):
+                # Not joined yet (or the socket just dropped): retry next time.
+                return False
+            registry.log_activity(
+                project["id"], "project_room_welcome", marker,
+                {"room_id": room_id, "names": self._operator_names()},
+            )
+            return True
+        except Exception:  # pragma: no cover - a notice must never break a join
+            logger.debug("could not post the operator-contact notice to %s",
+                         room_id, exc_info=True)
+            return False
+
+    def _welcome_project_rooms(self) -> None:
+        """Tell every project room how to reach the human operator.
+
+        Remote agents cannot call Perun's MCP tools, so their only channel is a
+        mention: the bridge forwards it to the operator's Telegram and posts the
+        reply back here. That protocol has to be stated in the room, or nobody
+        knows it exists. Posted once per room, and retried until it lands.
+        """
         for room_id in self._rooms():
-            if not room_id.startswith("grp:"):
-                continue
-            binding = self._project_binding(room_id)
-            if not binding:
-                continue
-            project, _cfg = binding
-            marker = f"operator contact posted in {room_id}"
-            try:
-                if registry.activity_exists("project_room_welcome", marker):
-                    continue
-                posted = self.post_to_room(
-                    room_id,
-                    f"[Perun] Human operator for this project: {label}. {how} "
-                    "This is the project's operator - agents that answer to a different "
-                    "human reach that person through their own system. A mention is a "
-                    "request, not an approval.",
-                )
-                if not posted:
-                    # The room is not joined yet (or the socket just dropped): do not
-                    # record the marker, so the notice is retried on the next connect.
-                    continue
-                registry.log_activity(
-                    project["id"], "project_room_welcome", marker,
-                    {"room_id": room_id, "names": names},
-                )
-            except Exception:  # pragma: no cover - a notice must never break a join
-                logger.debug("could not post the operator-contact notice to %s",
-                             room_id, exc_info=True)
+            self._welcome_room(room_id)
 
     def _raise_operator_mention(self, frame: Dict[str, Any], room_id: str,
                                 decision: _ReplyDecision) -> None:
