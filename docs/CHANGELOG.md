@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.9
+
+*Released 2026-10-31.*
+
 ### The dashboard chat has a regression net
 
 * The three decisions that produced real duplicates in the dashboard chat — the
