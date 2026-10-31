@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.9.7 (see §15). Expose and retry queued room replies, confirm Always in the dashboard, acknowledge malformed taps, and budget 429 waits.
+**Latest release:** v0.9.8 (see §15). Durable Telegram update queue (per-chat ordering, dead-letter + retry), in-place card edits, and a 2 s reply timeout.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1954,6 +1954,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.9.8: Durable Telegram update queue (per-chat ordering, dead-letter + retry), in-place card edits, and a 2 s reply timeout.
+
 ### 2026-10-31 — v0.9.7: Expose and retry queued room replies, confirm Always in the dashboard, acknowledge malformed taps, and budget 429 waits.
 
 ### 2026-10-31 — v0.9.6: Redact cookie headers and URL credentials on cards, and close proposal cards whose state changed.
