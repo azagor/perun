@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.10.12"`).
+Package docstring + `__version__` (`"0.10.13"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.13
+
+*Released 2026-10-31.*
+
 ### The global install follows the CLI too
 
 * `perun install --machine` wrote Perun's own MCP server in the V1 shape
