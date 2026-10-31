@@ -2379,7 +2379,16 @@ class PerunChatBridge:
         knows it exists.
         """
         names = self._operator_names()
-        label = ", ".join(f"@{n}" for n in names) if names else "the operator"
+        if names:
+            label = ", ".join(f"@{n}" for n in names)
+            how = ("To reach them, mention them by name in a message; Perun "
+                   "forwards it to their Telegram and posts their reply back here.")
+        else:
+            label = "the operator"
+            # Without a configured name there is nothing to mention: point at the
+            # relay instead of telling agents to do something impossible.
+            how = ("To reach them, ask Perun in this room to relay a question; Perun "
+                   "forwards it to their Telegram and posts their reply back here.")
         for room_id in self._rooms():
             if not room_id.startswith("grp:"):
                 continue
@@ -2391,15 +2400,17 @@ class PerunChatBridge:
             try:
                 if registry.activity_exists("project_room_welcome", marker):
                     continue
-                self.post_to_room(
+                posted = self.post_to_room(
                     room_id,
-                    f"[Perun] Human operator for this project: {label}. "
-                    "To reach them, mention them by name in a message; Perun forwards "
-                    "it to their Telegram and posts their reply back here. This is the "
-                    "project's operator - agents that answer to a different human reach "
-                    "that person through their own system. A mention is a request, not "
-                    "an approval.",
+                    f"[Perun] Human operator for this project: {label}. {how} "
+                    "This is the project's operator - agents that answer to a different "
+                    "human reach that person through their own system. A mention is a "
+                    "request, not an approval.",
                 )
+                if not posted:
+                    # The room is not joined yet (or the socket just dropped): do not
+                    # record the marker, so the notice is retried on the next connect.
+                    continue
                 registry.log_activity(
                     project["id"], "project_room_welcome", marker,
                     {"room_id": room_id, "names": names},

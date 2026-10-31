@@ -3642,3 +3642,48 @@ def test_the_contact_notice_names_this_projects_operator(settings, tmp_path, mon
     assert "Szczepan" in posted[0][1]
     assert "for this project" in posted[0][1]
     assert "own system" in posted[0][1]
+
+
+def test_without_an_operator_name_the_notice_points_at_the_relay(settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(
+                            attention_operator_names=[], perun_owner_name="")))
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text) or True  # type: ignore[assignment]
+    monkeypatch.setattr(bridge, "_rooms", lambda: [room])
+
+    bridge._welcome_project_rooms()
+
+    assert "ask Perun in this room to relay" in posted[0]
+    assert "@" not in posted[0]
+
+
+def test_a_failed_notice_is_retried_instead_of_marked_as_sent(settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(
+                            attention_operator_names=["Szczepan"], perun_owner_name="")))
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(bridge, "_rooms", lambda: [room])
+    results = [False, True]
+    posted: list[str] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append(text) or results.pop(0)  # type: ignore[assignment]
+
+    bridge._welcome_project_rooms()
+    assert registry.activity_exists(
+        "project_room_welcome", f"operator contact posted in {room}") is False
+
+    bridge._welcome_project_rooms()
+    assert registry.activity_exists(
+        "project_room_welcome", f"operator contact posted in {room}") is True
+    assert len(posted) == 2
