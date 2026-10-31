@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.19 (see §15). Keep the post-execution changelog write inside the project, and stop losing a docs step when another update holds the slot.
+**Latest release:** v0.10.20 (see §15). Harden the docs step (no resurrected project, no lost busy proposal) and expose its toggle in Settings.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2102,6 +2102,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.20: Harden the docs step (no resurrected project, no lost busy proposal) and expose its toggle in Settings.
+
 ### 2026-10-31 — v0.10.19: Keep the post-execution changelog write inside the project, and stop losing a docs step when another update holds the slot.
 
 ### 2026-10-31 — v0.10.18: Run the installed /update-docs command after a shared-project proposal executes; the sandboxed executor could never write docs itself.

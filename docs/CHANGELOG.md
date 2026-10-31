@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.20
+
+*Released 2026-10-31.*
+
 ### The docs step survives awkward edges
 
 * `append_changelog()` no longer recreates a project directory that disappeared
