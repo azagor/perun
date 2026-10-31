@@ -16,7 +16,6 @@ room adapter, because the bridge itself imports this module for its producers).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -54,10 +53,25 @@ _STATE_LABELS = {
 }
 
 # Anything that looks like a credential must never leave the machine in a card.
-_SECRETISH = re.compile(
-    r"(?i)\b(api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*\S+"
+# Shell commands are the risky case: a card shows the command it is asking about,
+# and `curl -H "Authorization: Bearer …"` or `mysql --password …` would otherwise
+# send the secret to Telegram. Order matters: the broader header rule runs first
+# so the narrower ones cannot leave a fragment behind.
+_AUTH_HEADER = re.compile(
+    r"(?i)\b(authorization|proxy-authorization)\s*:\s*[^\s\"']+(?:\s+[^\s\"']+)?"
 )
-_ABSOLUTE_PATH = re.compile(r"(?<![\w.-])(?:[A-Za-z]:[\\/]|/)[^\s'\"]+")
+_BEARER = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-+/=]{6,}")
+_PREFIXED_KEY = re.compile(
+    r"(?i)\b(?:sk|ghp|gho|ghu|ghs|ghr|xox[abprs])[-_][A-Za-z0-9_\-]{8,}"
+)
+_SECRETISH = re.compile(
+    r"(?i)\b(api[_-]?key|token|secret|password|passwd|authorization)\b"
+    r"\s*[:=]\s*[\"']?[^\s\"'\[][^\s\"']*[\"']?"
+)
+_FLAG_SECRET = re.compile(
+    r"(?i)(--?[a-z0-9_-]*(?:key|token|secret|password|passwd|auth)[a-z0-9_-]*\s+)"
+    r"[\"']?[^\s\"'\[][^\s\"']*[\"']?"
+)
 
 
 class DeliveryError(RuntimeError):
@@ -204,7 +218,12 @@ def recipients(item: Dict[str, Any], *, allowed: List[str],
 
 
 def _redact(text: str) -> str:
-    return _SECRETISH.sub(lambda m: f"{m.group(1)}=[redacted]", text or "")
+    text = _AUTH_HEADER.sub(lambda m: f"{m.group(1)}: [redacted]", text or "")
+    text = _BEARER.sub(lambda m: f"{m.group(1)} [redacted]", text)
+    text = _PREFIXED_KEY.sub("[redacted]", text)
+    text = _SECRETISH.sub(lambda m: f"{m.group(1)}=[redacted]", text)
+    text = _FLAG_SECRET.sub(lambda m: f"{m.group(1)}[redacted]", text)
+    return text
 
 
 def _clip(text: str, limit: int) -> str:
@@ -213,13 +232,19 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _display_resource(resource: str, show_paths: bool) -> str:
+    """Shorten a *file path* to its basename; leave commands, URLs and globs alone.
+
+    Permission resources are not only paths: a shell permission carries the whole
+    command, a webfetch carries a URL, a skill carries its id. Collapsing those to
+    a basename would hide exactly what the operator has to judge.
+    """
     resource = str(resource or "")
-    if show_paths:
+    if show_paths or "://" in resource:
         return resource
-    if _ABSOLUTE_PATH.search(resource):
-        tail = re.split(r"[\\/]", resource.rstrip("\\/"))[-1]
-        return f"…/{tail}" if tail else "[path]"
-    return resource
+    if not re.match(r"^(?:[A-Za-z]:[\\/]|~?/)", resource):
+        return resource
+    tail = re.split(r"[\\/]", resource.rstrip("\\/"))[-1]
+    return f"…/{tail}" if tail else "[path]"
 
 
 def _session_label(item: Dict[str, Any]) -> str:
@@ -249,7 +274,14 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
     if kind == "permission":
         action = _clip(ref.get("action") or "use a tool", 40)
         resources = ref.get("resources") or []
-        shown = ", ".join(_display_resource(r, show_paths) for r in resources[:3])
+        if str(ref.get("action") or "") == "shell":
+            # A shell permission's resource *is* the command: show it (redacted),
+            # never a basename.
+            shown = ", ".join(_redact(_clip(r, 200)) for r in resources[:3])
+        else:
+            shown = ", ".join(
+                _redact(_display_resource(r, show_paths)) for r in resources[:3]
+            )
         if len(resources) > 3:
             shown += f" (+{len(resources) - 3} more)"
         lines = [
@@ -259,7 +291,7 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
         ]
         save = ref.get("save") or []
         if save:
-            saved = ", ".join(str(s) for s in save[:3])
+            saved = ", ".join(_redact(str(s)) for s in save[:3])
             lines.append(f"⚙️ _Always allow_ would save: `{saved}`")
         lines.append("Choose, or reply with feedback to reject.")
         return "\n".join(lines)
@@ -464,7 +496,11 @@ def answer(attention_id: int, text: str, *, by: str) -> Dict[str, Any]:
     if not text:
         return {"ok": False, "error": "empty answer", "item": item}
     try:
-        delivery = _deliver_text(item, _redact(text), by)
+        # The answer is the operator's own text and must reach the target
+        # verbatim (a credential typed into the reply is intentional). Only the
+        # *notification* is redacted, because that is what Perun composes and
+        # sends to a cloud chat.
+        delivery = _deliver_text(item, text, by)
     except DeliveryError as exc:
         registry.log_activity(
             item.get("project_id"), "attention_failed",

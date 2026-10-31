@@ -1281,6 +1281,15 @@ that are younger than `attention_replay_open_minutes` (15); older undelivered
 items are marked `attention_replay_skipped` and stay in `/pending` + the
 dashboard, so a restart cannot flood the chat.
 
+**What a card shows.** Permission resources are not only paths: a shell
+permission carries the command, a webfetch a URL, a skill its id. A shell command
+is shown (clipped at 200 chars) with `Authorization:`, `Bearer`, `sk-…`-style keys
+and `--password`/`--token` values replaced by `[redacted]`; file paths outside the
+project are shortened to their basename unless `attention_show_paths` is on.
+URLs and globs are never collapsed. The answer the operator types is relayed to
+the target **verbatim** (redaction is for what Perun composes, not for the
+human's own words).
+
 **Reply ordering.** The adapter runs first and the item is closed with
 `UPDATE … WHERE state='open'` afterwards, so a failed delivery leaves it open and
 one device cannot close a row another device just answered. `reject` on a

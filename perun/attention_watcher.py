@@ -31,6 +31,10 @@ SWEEP_SECONDS = 300.0
 # bridge process, which is a singleton thanks to the bot-token PidLock.
 _last_sweep = 0.0
 _session_cache: Dict[str, Dict[str, Any]] = {}
+# ``(target_kind, request_id) -> consecutive polls where it was missing``.
+# A single empty response (service restart, load blip) must not close a card
+# that still blocks a session; two in a row is treated as "resolved elsewhere".
+_misses: Dict[tuple, int] = {}
 
 
 def reset_cache() -> None:
@@ -38,6 +42,7 @@ def reset_cache() -> None:
     global _last_sweep
     _last_sweep = 0.0
     _session_cache.clear()
+    _misses.clear()
 
 
 def _session_info(api: "opencode_api.OpenCodeAPI", session_id: str) -> Dict[str, Any]:
@@ -152,8 +157,16 @@ def _reconcile(polled: Set[str], live_permissions: Set[str],
             if str(ref.get("location") or "") not in polled:
                 continue
             key = str(ref.get("request_id") if kind == "permission" else ref.get("form_id"))
-            if not key or key in live:
+            if not key:
                 continue
+            if key in live:
+                _misses.pop((kind, key), None)
+                continue
+            misses = _misses.get((kind, key), 0) + 1
+            _misses[(kind, key)] = misses
+            if misses < 2:
+                continue
+            _misses.pop((kind, key), None)
             if registry.close_attention(
                 item["id"], "cancelled",
                 answer="resolved outside Perun",

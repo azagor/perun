@@ -140,7 +140,7 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `reopen_attention()`, `attention_count_since()` (hourly cap),
   `attention_muted_projects()` / `mute_attention_project()` /
   `unmute_attention_project()`, the `attention_outbox_*` queue, and
-  `prune_attention(keep_days=30)` (open rows are never pruned).
+  `prune_attention(keep_days=30)` (open rows are never pruned; delivery/outbox children are deleted explicitly because SQLite foreign keys are off).
 
 ### `perun/control.py`
 The **control plane** — Perun as an always-present, undeletable orchestrator

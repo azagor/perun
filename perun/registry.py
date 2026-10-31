@@ -374,6 +374,16 @@ def delete_project(slug: str) -> bool:
         conn.execute("DELETE FROM sessions WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM project_chats WHERE project_id=?", (pid,))
         conn.execute("UPDATE bridge_links SET project_id=NULL, session_pk=NULL WHERE project_id=?", (pid,))
+        # Operator-inbox rows for this project (children first: cascades are off).
+        conn.execute("DELETE FROM attention_requests WHERE project_id=?", (pid,))
+        conn.execute(
+            "DELETE FROM attention_deliveries "
+            "WHERE attention_id NOT IN (SELECT id FROM attention_requests)"
+        )
+        conn.execute(
+            "DELETE FROM attention_outbox "
+            "WHERE attention_id NOT IN (SELECT id FROM attention_requests)"
+        )
         cur = conn.execute("DELETE FROM projects WHERE id=?", (pid,))
         return cur.rowcount > 0
 
@@ -1574,13 +1584,24 @@ def unmute_attention_project(chat_id: str, slug: str) -> int:
 
 
 def prune_attention(keep_days: int = 30) -> int:
-    """Drop closed attention rows (and their deliveries) past the window."""
+    """Drop closed attention rows (and their children) past the window."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=max(1, int(keep_days)))).isoformat()
     with db.db() as conn:
         cur = conn.execute(
             "DELETE FROM attention_requests WHERE state!='open' AND created_at < ?",
             (cutoff,),
+        )
+        # ``PRAGMA foreign_keys`` is not enabled (see delete_project), so
+        # ON DELETE CASCADE never fires: clear the children explicitly or a
+        # pruned item would leave delivery rows and a retrying outbox behind.
+        conn.execute(
+            "DELETE FROM attention_deliveries "
+            "WHERE attention_id NOT IN (SELECT id FROM attention_requests)"
+        )
+        conn.execute(
+            "DELETE FROM attention_outbox "
+            "WHERE attention_id NOT IN (SELECT id FROM attention_requests)"
         )
         return int(cur.rowcount or 0)
 

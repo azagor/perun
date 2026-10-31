@@ -390,3 +390,65 @@ def test_drain_outbox_keeps_a_rejected_reply_for_a_retry(project, monkeypatch):
     pending = registry.attention_outbox_pending()
     assert len(pending) == 1
     assert pending[0]["attempts"] == 1
+
+
+def test_cards_never_show_credentials_from_a_shell_command(project):
+    item = attention.request(
+        project, "permission", "per_secret", "permission", "shell",
+        options=attention.PERMISSION_OPTIONS,
+        ref={
+            "request_id": "per_secret", "session_id": "ses_x", "action": "shell",
+            "resources": [
+                'curl -H "Authorization: Bearer sk-live_abcdef1234567890" https://api.example.com',
+                'mysql --password hunter2 -e "select 1"',
+                "export API_KEY=abc123456",
+            ],
+            "save": ["curl *"],
+        },
+    )
+
+    text = attention.render(item)
+
+    for secret in ("sk-live_abcdef1234567890", "hunter2", "abc123456"):
+        assert secret not in text, text
+    assert "Authorization: [redacted]" in text
+    # Over-redaction is acceptable, losing the URL is not: the operator needs to
+    # see what the command will touch.
+    assert "https://api.example.com" in text
+
+
+def test_the_operator_answer_is_delivered_verbatim(project, api):
+    item = attention.request(project, "session", "ses_live", "ask", "which key?")
+
+    result = attention.answer(item["id"], "use sk-test-123456", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[0][2] == "use sk-test-123456"
+
+
+def test_pruning_removes_children_even_without_fk_cascades(project):
+    item = _permission(project)
+    registry.record_attention_delivery(item["id"], "1", 42)
+    registry.attention_outbox_add(item["id"], "room", "grp:x", {"text": "x"})
+    registry.close_attention(item["id"], "cancelled")
+    with registry.db.db() as conn:
+        conn.execute(
+            "UPDATE attention_requests SET created_at='2020-01-01T00:00:00+00:00' "
+            "WHERE id=?", (item["id"],))
+
+    assert registry.prune_attention() == 1
+
+    with registry.db.db() as conn:
+        assert registry.db.rows(conn, "SELECT 1 FROM attention_deliveries") == []
+        assert registry.db.rows(conn, "SELECT 1 FROM attention_outbox") == []
+
+
+def test_deleting_a_project_removes_its_attention_rows(project):
+    item = _permission(project)
+    registry.record_attention_delivery(item["id"], "1", 7)
+
+    assert registry.delete_project(project["slug"]) is True
+
+    assert registry.get_attention(item["id"]) is None
+    with registry.db.db() as conn:
+        assert registry.db.rows(conn, "SELECT 1 FROM attention_deliveries") == []

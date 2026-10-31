@@ -105,6 +105,9 @@ def test_a_request_answered_in_the_tui_closes_its_item(api, project, monkeypatch
     assert created == 1
 
     api.permissions = {project["path"]: []}
+    # One empty response can be a load blip on the service; two in a row means
+    # the request really is gone.
+    assert attention_watcher.poll_once(api)["closed"] == 0
     result = attention_watcher.poll_once(api)
 
     assert result["closed"] == 1
@@ -174,3 +177,21 @@ def test_unknown_directories_are_ignored(api, tmp_path):
     api.permissions = {str(tmp_path / "nowhere"): [_permission(1, "ses_x", "per_x")]}
 
     assert attention_watcher.poll_once(api)["created"] == 0
+
+
+def test_a_single_empty_poll_does_not_cancel_a_blocking_card(api, project):
+    api.active = {"ses_watch": {"type": "running"}}
+    api.sessions = {"ses_watch": {"location": {"directory": project["path"]}}}
+    api.permissions = {project["path"]: [_permission(project["id"], request_id="per_keep")]}
+    attention_watcher.poll_once(api)
+    item = registry.open_attention()[0]
+
+    api.permissions = {project["path"]: []}
+    assert attention_watcher.poll_once(api)["closed"] == 0
+    assert registry.get_attention(item["id"])["state"] == "open"
+
+    # Seen again: the miss counter resets, so a flapping list never cancels it.
+    api.permissions = {project["path"]: [_permission(project["id"], request_id="per_keep")]}
+    attention_watcher.poll_once(api)
+    api.permissions = {project["path"]: []}
+    assert attention_watcher.poll_once(api)["closed"] == 0
