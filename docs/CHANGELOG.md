@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.14
+
+*Released 2026-10-31.*
+
 ### A digest card redacts like a normal card
 
 * The coalesced card printed each item's raw question, so a room message quoting

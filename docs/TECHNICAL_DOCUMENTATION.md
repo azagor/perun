@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.13 (see §15). Write the global MCP entry in the shape the installed CLI uses, migrating a V1 entry once with a backup.
+**Latest release:** v0.10.14 (see §15). Redact coalesced notices like ordinary cards; keep the dashboard's empty-message guard in the no-module fallback.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2074,6 +2074,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.14: Redact coalesced notices like ordinary cards; keep the dashboard's empty-message guard in the no-module fallback.
+
 ### 2026-10-31 — v0.10.13: Write the global MCP entry in the shape the installed CLI uses, migrating a V1 entry once with a backup.
 
 ### 2026-10-31 — v0.10.12: Write mcp.servers on a V2 CLI (migrating V1 files once, with a backup) and coalesce informational notices into one card per burst.
