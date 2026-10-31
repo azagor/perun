@@ -1484,6 +1484,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   private copy of the guards; skips when `node` is unavailable.
 * `web/js/chat_core.test.js` — the `node --test` suite for `chat_core.js`
   (room filter, id and identity dedupe, debounce inside/outside the window).
+* `test_backups.py` — the config-copy helper: label sanitisation (a `.` or `..`
+  label cannot escape the tree), second-resolution stamps never overwrite, a
+  failed copy is swallowed, pruning keeps the newest N per stem and never touches
+  another file's copies, `keep=0` is a no-op.
 * `conftest.py` — shared fixtures: `_fresh_db` (autouse per-test database),
   `workdir`, `control_repo`, and `_api_token_header` (autouse: teaches
   `TestClient` to send `X-Perun-Token`, since state-changing `/api/*` calls now

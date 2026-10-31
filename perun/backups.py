@@ -29,8 +29,11 @@ DEFAULT_KEEP = 5
 
 def backup_dir(label: str) -> Path:
     """Where copies for one label (a project slug, or ``opencode``) live."""
-    safe = "".join(c if (c.isalnum() or c in "-_.") else "-"
-                   for c in (label or "misc").strip()) or "misc"
+    raw = (label or "").strip()
+    safe = "".join(c if (c.isalnum() or c in "-_.") else "-" for c in raw)
+    # Dots are legal inside a name but never as the whole segment: a label of
+    # "." or ".." would escape the backup tree, and "---" is a useless directory.
+    safe = safe.strip(".-") or "misc"
     return (config.BACKUPS_DIR / safe).resolve()
 
 

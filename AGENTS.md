@@ -78,8 +78,10 @@ with `python -m perun project-roots --add <name> <path>`.
 * **Keep the layers separate.** `registry.py`/`db.py` = persistence;
   `memory.py` = facts + docs; `context.py` = keyed reference docs;
   `docaudit.py` = CODEMAP traceability; `secret_store.py` = encrypted named
-  secrets; `orchestrator.py` = process/streaming; `server.py` = HTTP only (no
-  business logic); `web/` = presentation only.
+  secrets; `backups.py` = pre-change config copies under `PERUN_HOME/backups/`
+  (never beside a config, which may live in a git repo); `orchestrator.py` =
+  process/streaming; `server.py` = HTTP only (no business logic); `web/` =
+  presentation only.
 * **SQLite access is per-operation.** Always use the `db.db()` context manager;
   never hold a connection across a network call. WAL mode is required.
 * **Never block the event loop.** Synchronous FastAPI endpoints run in the

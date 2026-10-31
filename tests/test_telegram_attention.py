@@ -694,3 +694,70 @@ def test_the_poll_interval_survives_a_hand_edited_value():
         SimpleNamespace(attention_poll_seconds="not-a-number"), False) == 5
     assert PerunTelegramBridge.attention_interval(
         SimpleNamespace(attention_poll_seconds=None), True) == 60
+
+def _two_chat_bridge(failing):
+    """A bridge paired with two chats; ``failing`` is the chat id that errors."""
+    from perun.telegram import PerunTelegramBridge
+
+    bridge = PerunTelegramBridge(FakeOrch(), token="test-token", allowed=["1", "2"])
+    bridge.sent = []
+
+    def _send(chat_id, text, reply_to=None, reply_markup=None):
+        if str(chat_id) == failing:
+            return 0
+        bridge.sent.append({"chat_id": str(chat_id), "text": text})
+        return 700 + len(bridge.sent)
+
+    bridge.send = _send
+    bridge.api = lambda method, **kw: {"ok": True, "result": {}}
+    return bridge
+
+
+def test_a_partial_digest_failure_does_not_relist_the_items(project, monkeypatch):
+    """One chat getting the card is enough; a failed chat must not cause a repeat."""
+    clock = {"now": 40_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    bridge = _two_chat_bridge(failing="2")
+    item = _room_item(project, "msg_partial")
+
+    bridge.attention_tick()
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1
+    assert [m["chat_id"] for m in bridge.sent] == ["1"]
+    assert registry.activity_exists(
+        "attention_digest", f"att_{item['id']} listed in a digest")
+
+    # The card is not listed again, on either chat.
+    clock["now"] += 60
+    assert bridge.attention_tick() == 0
+    assert [m["chat_id"] for m in bridge.sent] == ["1"]
+
+
+def test_a_digest_no_chat_received_is_retried(project, monkeypatch):
+    """Total failure must keep the items and leave no "shown" marker."""
+    clock = {"now": 50_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    bridge = _two_chat_bridge(failing="1")
+    bridge.send = lambda *a, **k: 0          # every chat refuses
+    item = _room_item(project, "msg_none")
+
+    bridge.attention_tick()
+    clock["now"] += 31
+    assert bridge.attention_tick() == 0
+    assert not registry.activity_exists(
+        "attention_digest", f"att_{item['id']} listed in a digest")
+    assert item["id"] in bridge._digest_pending
+
+    # A working send in the next window delivers it.
+    def _send(chat_id, text, reply_to=None, reply_markup=None):
+        bridge.sent.append({"chat_id": str(chat_id), "text": text})
+        return 800
+
+    bridge.send = _send
+    clock["now"] += 31
+    assert bridge.attention_tick() == 2     # both chats
+    assert {m["chat_id"] for m in bridge.sent} == {"1", "2"}

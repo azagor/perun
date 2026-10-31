@@ -4,6 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### A partially delivered digest is not repeated
+
+* When one paired chat refused a digest card, the items were both re-queued and
+  marked as shown: the healthy chat got the same card again in the next window,
+  while the marker kept it out of the restart replay. The flush now re-queues only
+  when **no** chat accepted the card; a partial failure is logged with the chat
+  ids that missed it and the items are treated as shown.
+* `backup_dir()` refuses a label that is only dots (`..` would have resolved to
+  `PERUN_HOME`; unreachable through `slugify()`, but the helper takes caller
+  strings) and strips leading/trailing dots, so every copy stays under
+  `PERUN_HOME/backups/`.
+* `tests/test_backups.py` covers the location, stamp collisions, a copy that
+  fails mid-write, pruning per stem, and `keep=0`.
+
 ### Every MCP block on this machine is V2 now
 
 * The two remaining V1-flat configs were converted: `ai_playground` (guard and

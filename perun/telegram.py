@@ -938,26 +938,36 @@ class PerunTelegramBridge:
                 LOG.info("[shadow] digest of %d item(s) would go to %s", len(head), chats)
                 continue
             delivered = 0
+            failed: List[str] = []
             for chat_id in chats:
                 message_id = self.send(chat_id, text, reply_markup=markup)
                 if message_id:
                     delivered += 1
                 else:
-                    LOG.warning("could not send a digest to %s; will retry", chat_id)
-                    for item in head:
-                        self._digested.discard(item["id"])
-                        self._digest_pending.setdefault(item["id"], now)
-            if delivered:
-                # Remember on disk that these were shown: the in-memory set dies
-                # with the process, and an undelivered item would otherwise be
-                # listed again after every restart.
+                    failed.append(str(chat_id))
+            if not delivered:
+                # Nothing reached the operator: hold the items for the next
+                # window instead of losing them. Re-queue only when *no* chat
+                # accepted the card — a partial failure must not re-list the items
+                # on the chat that already showed them.
+                LOG.warning("could not send a digest to %s; will retry", ", ".join(failed))
                 for item in head:
-                    registry.log_activity(
-                        item.get("project_id"), "attention_digest",
-                        f"att_{item['id']} listed in a digest",
-                        {"attention_id": item["id"], "chats": chats},
-                    )
-                sent += delivered
+                    self._digested.discard(item["id"])
+                    self._digest_pending.setdefault(item["id"], now)
+                continue
+            if failed:
+                LOG.warning("digest reached %d/%d chat(s); %s will miss this card",
+                            delivered, len(chats), ", ".join(failed))
+            # Remember on disk that these were shown: the in-memory set dies
+            # with the process, and an undelivered item would otherwise be
+            # listed again after every restart.
+            for item in head:
+                registry.log_activity(
+                    item.get("project_id"), "attention_digest",
+                    f"att_{item['id']} listed in a digest",
+                    {"attention_id": item["id"], "chats": chats},
+                )
+            sent += delivered
         if len(self._digested) > 200:
             # Ids only grow; a closed item never comes back through the delivery
             # path, so the oldest half can be forgotten.
