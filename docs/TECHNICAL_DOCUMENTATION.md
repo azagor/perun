@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.1 (see §15). Record run reattach/finalize decisions in the activity feed.
+**Latest release:** v0.10.2 (see §15). Fence run finalization on lease ownership, degrade to the CLI when the session API is missing, guard mid-turn idle, and refresh SSE auth.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1994,6 +1994,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.2: Fence run finalization on lease ownership, degrade to the CLI when the session API is missing, guard mid-turn idle, and refresh SSE auth.
+
 ### 2026-10-31 — v0.10.1: Record run reattach/finalize decisions in the activity feed.
 
 ### 2026-10-31 — v0.10.0: Durable runs: prompts are admitted to durable OpenCode sessions, observed via events, reattached or finalized after a restart, with leases and exactly-once reply delivery.
