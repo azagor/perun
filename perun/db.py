@@ -76,7 +76,13 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at           TEXT,
     ended_at             TEXT,
     output               TEXT DEFAULT '',
-    error                TEXT DEFAULT ''
+    error                TEXT DEFAULT '',
+    created_at           TEXT DEFAULT '',
+    admitted_at          TEXT DEFAULT '',
+    reply_sent_at        TEXT DEFAULT '',
+    lease_epoch          INTEGER DEFAULT 0,
+    standalone           INTEGER DEFAULT 0,
+    pid                  INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
@@ -578,7 +584,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 def init_db() -> None:

@@ -790,7 +790,7 @@ class Orchestrator:
                   use_prompt_file: bool = False,
                   extra_env: dict[str, str] | None = None,
                   run_uid: str = "",
-                  standalone: bool = False) -> dict[str, Any]:
+                  opencode_standalone: bool = False) -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
@@ -857,7 +857,7 @@ class Orchestrator:
         run["skip_instructions"] = skip_instructions
         run["use_prompt_file"] = use_prompt_file
         run["extra_env"] = extra_env or {}
-        run["standalone"] = standalone
+        run["opencode_standalone"] = opencode_standalone
         registry.log_activity(project["id"], "run",
                               f"Started agent run ({run_uid})",
                               {"prompt": prompt[:200]})
@@ -1034,7 +1034,7 @@ class Orchestrator:
         resolved_model, auth_env = providers.resolve_run_model(run.get("model") or "")
         if resolved_model:
             argv += ["--model", resolved_model]
-        if run.get("standalone") and not oc_sid:
+        if run.get("opencode_standalone") and not oc_sid:
             argv += ["--standalone"]
         if run.get("agent"):
             argv += ["--agent", run["agent"]]

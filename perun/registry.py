@@ -2057,3 +2057,14 @@ def mark_reply_sent(run_uid: str) -> None:
     with db.db() as conn:
         conn.execute("UPDATE runs SET reply_sent_at=? WHERE run_uid=?",
                      (now_iso(), run_uid))
+
+
+def activity_exists(kind: str, message: str) -> bool:
+    """Whether an activity row with this exact kind+message already exists."""
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT 1 FROM activity WHERE kind=? AND message=? LIMIT 1",
+            (str(kind), str(message)),
+        )
+    return bool(row)

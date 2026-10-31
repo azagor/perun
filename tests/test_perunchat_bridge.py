@@ -3567,3 +3567,78 @@ def test_a_mention_without_the_operator_name_is_silent(settings, tmp_path, monke
     bridge._raise_operator_mention(frame, room, SimpleNamespace(reason="no trigger matched"))
 
     assert registry.open_attention() == []
+
+
+def test_the_operator_contact_notice_is_posted_once_per_project_room(
+        settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(attention_operator_names=["piotr"],
+                                             perun_owner_name="")))
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[tuple[str, str]] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append((rid, text)) or True  # type: ignore[assignment]
+    monkeypatch.setattr(bridge, "_rooms",
+                        lambda: [room, "pub:global:general"])
+
+    bridge._welcome_project_rooms()
+
+    assert [r for r, _ in posted] == [room]
+    assert "@piotr" in posted[0][1]
+    assert "not an approval" in posted[0][1]
+    assert registry.activity_exists(
+        "project_room_welcome", f"operator contact posted in {room}")
+
+    bridge._welcome_project_rooms()          # already recorded: silent
+    assert len(posted) == 1
+
+
+def test_the_room_persona_explains_how_to_reach_the_operator():
+    from perun.perunchat_bridge import CHAT_SYSTEM_PROMPT, _OPENCODE_AGENT_MD
+
+    assert "Reaching the human operator" in CHAT_SYSTEM_PROMPT
+    assert "mention" in CHAT_SYSTEM_PROMPT.lower()
+    assert "perun_perun_ask_operator" in _OPENCODE_AGENT_MD
+
+
+def test_operator_names_fall_back_to_the_owner_and_override_wins(settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(
+                            attention_operator_names=[], perun_owner_name="Szczepan")))
+    assert bridge._operator_names() == ["Szczepan"]
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(
+                            attention_operator_names=["operator"], perun_owner_name="Szczepan")))
+    assert bridge._operator_names() == ["operator"]
+
+
+def test_the_contact_notice_names_this_projects_operator(settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(
+                            attention_operator_names=[], perun_owner_name="Szczepan")))
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    posted: list[tuple[str, str]] = []
+    bridge.post_to_room = lambda rid, text, *a, **k: posted.append((rid, text)) or True  # type: ignore[assignment]
+    monkeypatch.setattr(bridge, "_rooms", lambda: [room])
+
+    bridge._welcome_project_rooms()
+
+    assert "Szczepan" in posted[0][1]
+    assert "for this project" in posted[0][1]
+    assert "own system" in posted[0][1]

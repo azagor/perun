@@ -1130,7 +1130,7 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             # (perun-guard/perun-proposals) are loaded from opencode.json. A
             # private --standalone server has been observed to start without
             # those servers, leaving the restricted executor with only `skill`.
-            standalone=False,
+            opencode_standalone=False,
         )
         run = result.get("run") or {}
         run_uid = run.get("run_uid") or proposal_id

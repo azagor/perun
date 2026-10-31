@@ -103,7 +103,7 @@ class ProcessTracker:
         self.finalize(run_uid)
         return True
 
-    def terminate_all(self) -> int:
+    def kill_all_explicit(self) -> int:
         """Kill every tracked terminal process (explicit teardown only).
 
         Deliberately **not** called on server shutdown: those terminals belong to

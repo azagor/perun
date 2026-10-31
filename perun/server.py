@@ -235,13 +235,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (their runs are standalone, see orchestrator.reconcile_startup). Run the
     # blocking cleanup in a thread so the event loop is not stalled.
     def _shutdown_sync() -> None:
-        try:
-            for uid in ORCH.active():
-                ORCH.cancel(uid)
-        except Exception:  # pragma: no cover - best effort
-            pass
+        _shutdown_runs(ORCH)
     try:
         await asyncio.to_thread(_shutdown_sync)
+    except Exception:  # pragma: no cover - best effort
+        pass
+
+
+def _shutdown_runs(orch: Any) -> None:
+    """Cancel the agent runs Perun owns; never touch user TUI terminals.
+
+    Tracked terminals are external, user-owned sessions: killing them on shutdown
+    is what made a restart close the operator's OpenCode windows. Their runs are
+    standalone and survive (see ``orchestrator.reconcile_startup``).
+    """
+    try:
+        for uid in orch.active():
+            orch.cancel(uid)
     except Exception:  # pragma: no cover - best effort
         pass
 

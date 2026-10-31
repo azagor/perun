@@ -2604,3 +2604,37 @@ def test_tui_runs_do_not_block_a_restart(client, tmp_path):
     active = client.get("/api/runs/active").json()
     assert active["count"] == 1
     assert active["blocking"] == 0
+
+
+def test_shutdown_cancels_runs_but_never_kills_tui_terminals(monkeypatch):
+    from perun import process_tracker, server
+
+    cancelled: list[str] = []
+
+    class Orch:
+        def active(self):
+            return ["run_a", "run_b"]
+
+        def cancel(self, uid):
+            cancelled.append(uid)
+            return True
+
+    def must_not_kill():
+        raise AssertionError("shutdown must not kill user TUI terminals")
+
+    monkeypatch.setattr(process_tracker.TRACKER, "kill_all_explicit", must_not_kill)
+
+    server._shutdown_runs(Orch())
+
+    assert cancelled == ["run_a", "run_b"]
+
+
+def test_opencode_standalone_is_not_confused_with_a_tui_run():
+    """``start_run(standalone=)`` is the opencode flag; the DB flag is separate."""
+    import inspect
+
+    from perun.orchestrator import Orchestrator
+
+    signature = inspect.signature(Orchestrator.start_run)
+    assert "opencode_standalone" in signature.parameters
+    assert "standalone" not in signature.parameters

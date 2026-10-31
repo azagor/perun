@@ -128,6 +128,8 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   behind the dashboard storm layer).
 * Tasks: `create_task()`, `update_task()`, `get_task()`, `list_tasks()`,
   `delete_task()` (reusable project tasks queued into the TUI prompt chain).
+* `activity_exists(kind, message)` — idempotency marker (e.g. the once-per-room
+  operator-contact notice).
 * Run leases: `claim_run_lease()` (heartbeat + epoch, dead-owner takeover),
   `touch_run_lease()`, `run_lease_owned()`, `release_run_lease()`,
   `runs_awaiting_reply()`, `claim_reply_delivery()` / `clear_reply_sent()`.
@@ -729,6 +731,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `_warn_cross_project()`: a mutating request for a different project is answered
   with one `[Routing]` notice (and a `routing_decision` activity row) instead of
   replying from the room's own project. `_frame_text()` normalises the payload.
+  Operator contact: `_operator_names()` (explicit list, else `perun_owner_name`)
+  and `_welcome_project_rooms()` (one idempotent notice per project room stating
+  who the project's human is and that a mention is relayed to their Telegram),
+  plus `_raise_operator_mention()` for the trigger.
   Loop guards: `_should_reply_to()` ignores frames whose sender is Perun's own
   agent id, and `_warn_cross_project()` ignores its own `[Routing] …` text, any
   message with no actionable intent (`routing.detect_action() == "unknown"`), and

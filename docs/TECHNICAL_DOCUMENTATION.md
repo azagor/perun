@@ -1394,6 +1394,18 @@ is honoured by the bridge's send path.
 still queued, ↩ calls `DELETE …/inbox/{id}` and reopens the item; ⚡ calls
 `PATCH …/inbox/{id}` with `delivery: "steer"` in place.
 
+**How a room learns to reach the operator.** A remote agent cannot call Perun's
+MCP tools, so its only channel is a mention. The bridge publishes the protocol
+once per project room (idempotent via a `project_room_welcome` activity row):
+the project's operator is `perun_owner_name` (or the explicit
+`attention_operator_names` override), a mention of that name is forwarded to
+their Telegram, and the reply is posted back into the room. The same derivation
+drives `_raise_operator_mention`, so there is no per-project configuration. The
+notice names *this project's* operator and says that an agent answering to a
+different human reaches that person through its own system. Perun's own room
+agent can also call `perun_ask_operator` (allowed in the `perunchat` agent) and
+answer with the operator's reply.
+
 **Surfaces.** Telegram (`/pending`, `/answer`, `/cancel`, `/mute`, `/unmute`,
 reply-to, inline buttons), the REST API (`/api/attention…`), and the dashboard's
 "Needs you" card all use the same store, so a Telegram outage never blocks

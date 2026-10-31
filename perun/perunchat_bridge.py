@@ -348,6 +348,14 @@ permissions:
   - action: "perun_perunchat_room_memory"
     resource: "*"
     effect: allow
+  # Escalating a question to the human operator (perun MCP server, tool
+  # ``perun_ask_operator`` -> OpenCode action ``perun_perun_ask_operator``).
+  - action: "perun_perun_ask_operator"
+    resource: "*"
+    effect: allow
+  - action: "perun-perun_ask_operator"
+    resource: "*"
+    effect: allow
   - action: "perun-perunchat_room_memory"
     resource: "*"
     effect: allow
@@ -1361,6 +1369,12 @@ class PerunChatBridge:
                     attention.drain_outbox()
                 except Exception:  # pragma: no cover - never block the connection
                     logger.debug("could not drain queued operator answers", exc_info=True)
+                # State the operator-contact protocol once per project room.
+                try:
+                    self._welcome_project_rooms()
+                except Exception:  # pragma: no cover - never block the connection
+                    logger.debug("could not post the operator-contact notice",
+                                 exc_info=True)
                 # Retry any project-chat deletions that failed while offline.
                 try:
                     shared_project_sync.retry_pending_room_deletions()
@@ -2336,6 +2350,64 @@ class PerunChatBridge:
         self.post_to_room(room_id, notice)
         return True
 
+    def _operator_names(self) -> List[str]:
+        """Names that identify this instance's human operator.
+
+        One source of truth: the explicit ``attention_operator_names`` list when
+        set, otherwise ``perun_owner_name``. Every project room of this instance
+        is managed by that same human, so nothing is configured per project.
+        """
+        try:
+            settings = config.Settings.load()
+        except Exception:  # pragma: no cover - defensive
+            settings = self.settings
+        names = [str(n).strip()
+                 for n in (getattr(settings, "attention_operator_names", None) or [])
+                 if str(n).strip()]
+        if not names:
+            owner = str(getattr(settings, "perun_owner_name", "") or "").strip()
+            if owner:
+                names = [owner]
+        return names
+
+    def _welcome_project_rooms(self) -> None:
+        """Tell a project room once how to reach the human operator.
+
+        Remote agents cannot call Perun's MCP tools, so their only channel is a
+        mention: the bridge forwards it to the operator's Telegram and posts the
+        reply back here. That protocol has to be stated in the room, or nobody
+        knows it exists.
+        """
+        names = self._operator_names()
+        label = ", ".join(f"@{n}" for n in names) if names else "the operator"
+        for room_id in self._rooms():
+            if not room_id.startswith("grp:"):
+                continue
+            binding = self._project_binding(room_id)
+            if not binding:
+                continue
+            project, _cfg = binding
+            marker = f"operator contact posted in {room_id}"
+            try:
+                if registry.activity_exists("project_room_welcome", marker):
+                    continue
+                self.post_to_room(
+                    room_id,
+                    f"[Perun] Human operator for this project: {label}. "
+                    "To reach them, mention them by name in a message; Perun forwards "
+                    "it to their Telegram and posts their reply back here. This is the "
+                    "project's operator - agents that answer to a different human reach "
+                    "that person through their own system. A mention is a request, not "
+                    "an approval.",
+                )
+                registry.log_activity(
+                    project["id"], "project_room_welcome", marker,
+                    {"room_id": room_id, "names": names},
+                )
+            except Exception:  # pragma: no cover - a notice must never break a join
+                logger.debug("could not post the operator-contact notice to %s",
+                             room_id, exc_info=True)
+
     def _raise_operator_mention(self, frame: Dict[str, Any], room_id: str,
                                 decision: _ReplyDecision) -> None:
         """Notify the operator when a room message asks *them*, not Perun.
@@ -2352,8 +2424,7 @@ class PerunChatBridge:
             return
         if not getattr(settings, "attention_enabled", False):
             return
-        names = [str(n).strip().lower()
-                 for n in (settings.attention_operator_names or []) if str(n).strip()]
+        names = [n.lower() for n in self._operator_names()]
         if not names:
             return
         text = frame.get("payload")
@@ -3262,7 +3333,7 @@ class PerunChatBridge:
                 skip_instructions=False,
                 use_prompt_file=True,
                 extra_env=extra_env,
-                standalone=False,
+                opencode_standalone=False,
             )
             reply = (result.get("reply") or "").strip()
             if reply:

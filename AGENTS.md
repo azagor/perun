@@ -105,6 +105,10 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
+* **Every project room publishes its operator contact.** Derive the human from
+  `perun_owner_name` (or `attention_operator_names`); never add per-project
+  operator configuration. The notice is idempotent (a `project_room_welcome`
+  activity row) and names *this project's* operator, not another agent's.
 * **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
   project or a command, but it must never be the only check on a mutating action:
   the guard allowlist, proposal approval and post-run audit stay in force.
