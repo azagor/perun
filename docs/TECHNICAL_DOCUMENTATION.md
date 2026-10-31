@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.6 (see §15). Each project room learns who its human is and how to reach them, derived from perun_owner_name.
+**Latest release:** v0.10.7 (see §15). No duplicated messages in the dashboard chat; retry the operator-contact notice when a room is not joined yet.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2019,6 +2019,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.7: No duplicated messages in the dashboard chat; retry the operator-contact notice when a room is not joined yet.
+
 ### 2026-10-31 — v0.10.6: Each project room learns who its human is and how to reach them, derived from perun_owner_name.
 
 ### 2026-10-31 — v0.10.5: Never close user TUI terminals on restart; keep project-card activity markers while the terminal is alive.
