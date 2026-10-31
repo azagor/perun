@@ -937,15 +937,27 @@ class PerunTelegramBridge:
             if getattr(settings, "attention_shadow", True):
                 LOG.info("[shadow] digest of %d item(s) would go to %s", len(head), chats)
                 continue
+            delivered = 0
             for chat_id in chats:
                 message_id = self.send(chat_id, text, reply_markup=markup)
                 if message_id:
-                    sent += 1
+                    delivered += 1
                 else:
                     LOG.warning("could not send a digest to %s; will retry", chat_id)
                     for item in head:
                         self._digested.discard(item["id"])
                         self._digest_pending.setdefault(item["id"], now)
+            if delivered:
+                # Remember on disk that these were shown: the in-memory set dies
+                # with the process, and an undelivered item would otherwise be
+                # listed again after every restart.
+                for item in head:
+                    registry.log_activity(
+                        item.get("project_id"), "attention_digest",
+                        f"att_{item['id']} listed in a digest",
+                        {"attention_id": item["id"], "chats": chats},
+                    )
+                sent += delivered
         if len(self._digested) > 200:
             # Ids only grow; a closed item never comes back through the delivery
             # path, so the oldest half can be forgotten.
@@ -960,10 +972,17 @@ class PerunTelegramBridge:
             window = int(getattr(settings, "attention_replay_open_minutes", 15))
         except (TypeError, ValueError):
             window = 15
-        fresh = {item["id"] for item in registry.undelivered_attention(
-            within_minutes=max(1, window))}
+        recent = [item for item in registry.undelivered_attention(
+            within_minutes=max(1, window))]
+        recent_ids = {item["id"] for item in recent}
+        # A restart loses the in-memory digest set, but those items were already
+        # shown in a coalesced card: the activity marker is what keeps them from
+        # being listed again on every boot.
+        fresh = [item for item in recent
+                 if not registry.activity_exists(
+                     "attention_digest", f"att_{item['id']} listed in a digest")]
         for item in registry.undelivered_attention():
-            if item["id"] in fresh:
+            if item["id"] in recent_ids:
                 continue
             registry.log_activity(
                 item.get("project_id"), "attention_replay_skipped",
@@ -973,11 +992,7 @@ class PerunTelegramBridge:
             for chat_id in list(self.allowed):
                 registry.record_attention_delivery(item["id"], chat_id, None)
         if fresh:
-            self._attention_deliver(
-                [item for item in registry.undelivered_attention(
-                    within_minutes=max(1, window)) if item["id"] in fresh],
-                settings,
-            )
+            self._attention_deliver(fresh, settings)
         attention.expire_stale()
 
     def attention_tick(self, *, replay: bool = False) -> int:
@@ -1015,8 +1030,12 @@ class PerunTelegramBridge:
     @classmethod
     def attention_interval(cls, settings: Any, ingest_active: bool) -> int:
         """Seconds between detection passes for the current mode."""
-        configured = int(getattr(settings, "attention_poll_seconds",
-                                 cls.RECONCILE_SECONDS) or cls.RECONCILE_SECONDS)
+        try:
+            configured = int(getattr(settings, "attention_poll_seconds",
+                                     cls.RECONCILE_SECONDS) or cls.RECONCILE_SECONDS)
+        except (TypeError, ValueError):
+            # A hand-edited config must never take the poller down with it.
+            configured = cls.RECONCILE_SECONDS
         configured = max(2, configured)
         if ingest_active:
             return max(configured, cls.RECONCILE_SECONDS)
@@ -1056,6 +1075,10 @@ class PerunTelegramBridge:
                 live = bool(attention_watcher
                             and attention_watcher.event_ingest_active())
                 interval = self.attention_interval(current, live)
+                if self._digest_pending:
+                    # Something is waiting out its digest window: wake often enough
+                    # that the window closes on time, not on the next 60 s tick.
+                    interval = min(interval, self.FAST_POLL_SECONDS)
                 if self.stop_event.wait(interval):
                     break
                 try:

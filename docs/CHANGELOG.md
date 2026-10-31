@@ -4,7 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Audit follow-ups
+
+* A digested item is no longer listed again after a restart: the flush writes an
+  `attention_digest` activity marker and the startup replay skips items that have
+  one (`_digested` itself is memory-only, so it could not carry that fact).
+* `attention_interval()` survives a hand-edited `attention_poll_seconds` instead
+  of raising before the poller loop starts; a non-numeric value falls back to the
+  60 s reconciliation cadence.
+* The poller wakes every 5 s while a digest is waiting, so a window that closes
+  shortly after boot or after a replay does not wait for the next 60 s tick.
+* `opencode.json.bak` keeps the **first** pre-migration copy; a later MCP rewrite
+  no longer overwrites the only snapshot that predates the change. (V2 keeps
+  `mcp.timeout`; writing the V1 shape drops it deliberately, because V1 would read
+  `timeout` as a server — documented on `set_server_entries()`.)
+* The `opencode --version` probe is serialized, so a burst of first saves starts
+  one subprocess, not one per request.
 
 ## v0.10.14
 

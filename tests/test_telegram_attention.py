@@ -658,3 +658,39 @@ def test_a_digest_redacts_credentials_like_a_single_card(bridge, project, monkey
     text = bridge.sent[0]["text"]
     assert "sk-live-abcdef123456" not in text
     assert "[redacted]" in text
+
+def test_a_digested_item_is_not_replayed_after_a_restart(bridge, project, monkeypatch):
+    """The in-memory set dies with the process; the activity marker must not."""
+    clock = {"now": 30_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    item = _room_item(project, "msg_restart")
+    bridge.attention_tick()
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1
+    assert registry.activity_exists(
+        "attention_digest", f"att_{item['id']} listed in a digest")
+
+    # A fresh process: no memory of the digest, the item still has no delivery row.
+    fresh = PerunTelegramBridge(FakeOrch(), token="test-token", allowed=["1"])
+    fresh.sent = []
+    fresh.send = lambda chat_id, text, reply_to=None, reply_markup=None: fresh.sent.append(
+        {"chat_id": chat_id, "text": text}) or 900
+    fresh.api = lambda method, **kw: {"ok": True, "result": {}}
+    fresh.attention_tick(replay=True)
+
+    assert fresh.sent == []
+
+
+def test_the_poll_interval_survives_a_hand_edited_value():
+    from types import SimpleNamespace
+
+    from perun.telegram import PerunTelegramBridge
+
+    assert PerunTelegramBridge.attention_interval(
+        SimpleNamespace(attention_poll_seconds="not-a-number"), True) == 60
+    assert PerunTelegramBridge.attention_interval(
+        SimpleNamespace(attention_poll_seconds="not-a-number"), False) == 5
+    assert PerunTelegramBridge.attention_interval(
+        SimpleNamespace(attention_poll_seconds=None), True) == 60

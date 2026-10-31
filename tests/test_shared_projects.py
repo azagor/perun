@@ -605,3 +605,64 @@ def test_entry_for_style_translates_enabled_and_disabled():
     assert off["disabled"] is True
     back = mcp_servers.entry_for_style(off, mcp_servers.STYLE_V1)
     assert back["enabled"] is True
+
+def test_the_backup_keeps_the_first_pre_migration_copy(tmp_path, monkeypatch):
+    """A second MCP change must not overwrite the only pre-migration snapshot."""
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    project = _make_project(tmp_path, "backup-once")
+    _enable_shared(project)
+    cfg_path = Path(project["path"]) / "opencode.json"
+    cfg_path.write_text(json.dumps({
+        "mcp": {"perun-guard": {"type": "local", "command": ["python", "old.py"],
+                                "enabled": True}},
+    }), encoding="utf-8")
+
+    projects.sync_opencode_config(project)
+    backup = cfg_path.with_name("opencode.json.bak")
+    assert backup.is_file()
+    first = backup.read_text(encoding="utf-8")
+
+    # Change the block again: the snapshot must stay at the pre-migration state.
+    projects.sync_opencode_config(project)
+    assert backup.read_text(encoding="utf-8") == first
+    assert json.loads(first)["mcp"]["perun-guard"]["command"] == ["python", "old.py"]
+
+
+def test_v2_keeps_mcp_timeout_when_rewriting(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERUN_OPENCODE_MCP_STYLE", "v2")
+    project = _make_project(tmp_path, "keep-timeout")
+    _enable_shared(project)
+    cfg_path = Path(project["path"]) / "opencode.json"
+    cfg_path.write_text(json.dumps({
+        "mcp": {"timeout": {"startup": 45000},
+                "servers": {"other": {"type": "remote", "url": "https://x/mcp"}}},
+    }), encoding="utf-8")
+
+    projects.sync_opencode_config(project)
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg["mcp"]["timeout"] == {"startup": 45000}
+    assert "other" in cfg["mcp"]["servers"]
+    assert "perun-guard" in cfg["mcp"]["servers"]
+
+
+def test_the_style_probe_runs_once_for_concurrent_callers(monkeypatch):
+    from perun import mcp_servers
+
+    monkeypatch.delenv("PERUN_OPENCODE_MCP_STYLE", raising=False)
+    calls = {"n": 0}
+
+    def slow_version(timeout=10.0):
+        calls["n"] += 1
+        return "2.2.0"
+
+    monkeypatch.setattr(mcp_servers, "opencode_version", slow_version)
+    mcp_servers.reset_style_cache()
+    threads = [__import__("threading").Thread(target=mcp_servers.mcp_style)
+               for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert mcp_servers.mcp_style() == mcp_servers.STYLE_V2
+    assert calls["n"] == 1
+    mcp_servers.reset_style_cache()

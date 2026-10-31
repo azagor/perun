@@ -1379,7 +1379,11 @@ coalescing window, not a delay schedule. Decisions are never digested: a
 permission, form, proposal, handoff or `perun_ask_operator` goes out immediately,
 because those block work. Opening an item from a digest posts a **new** card and
 records that delivery, so a reply-to maps to one item; a tap on an item's own card
-still edits it in place.
+still edits it in place. A flush also writes an `attention_digest` activity row, so
+a restart does not list the same item again (the in-memory set does not survive
+one), and the poller wakes every 5 s while something is waiting out its window
+instead of sleeping the full reconciliation interval. A digest lists at most five
+items; the rest stay buffered and follow in the next window ("＋N more").
 
 **What a card shows.** Permission resources are not only paths: a shell
 permission carries the command, a webfetch a URL, a skill its id. A shell command
@@ -1646,7 +1650,8 @@ start, but `_should_reply_to` compared agent ids only, so anything typed in the
 dashboard was dismissed as Perun's own message and never answered. It now treats
 an `-operator` runtime as the human (private room → answer, group → the usual
 mention/question rules) and keeps ignoring a genuine `perun` runtime, which is
-what stops a reply from answering itself.
+what stops a reply from answering itself. The distinction relies on the gateway
+assigning `sender.agent_id`: an agent cannot present itself as *this* instance.
 
 **Portable MCP config and chat permissions.** The shared-project
 `opencode.json` writes `PERUN_HOME=~/.perun` for the default home instead of an

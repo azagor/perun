@@ -92,8 +92,9 @@ def _on_event(event: Dict[str, Any]) -> None:
             return
     except AttributeError:  # a malformed frame must never break the stream
         return
-    _ingest["events"] = int(_ingest.get("events") or 0) + 1
-    wake = _ingest.get("wake")
+    with _ingest_lock:
+        _ingest["events"] = int(_ingest.get("events") or 0) + 1
+        wake = _ingest.get("wake")
     if wake is not None:
         wake.set()
 

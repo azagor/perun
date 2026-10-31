@@ -204,6 +204,7 @@ STYLE_V2 = "servers"
 STYLE_V1 = "legacy"
 
 _style_cache: str | None = None
+_style_lock = threading.Lock()
 
 
 def opencode_version(timeout: float = 10.0) -> str:
@@ -243,14 +244,18 @@ def mcp_style(force: str | None = None) -> str:
     if override in (STYLE_V2, STYLE_V1, "v2", "v1"):
         return STYLE_V2 if override in (STYLE_V2, "v2") else STYLE_V1
     if _style_cache is None:
-        version = opencode_version()
-        major = 0
-        if version:
-            try:
-                major = int(version.split(".")[0])
-            except ValueError:
+        # One probe per process even when several requests start at once: the
+        # command is a shell wrapper on Windows and costs ~0.5 s.
+        with _style_lock:
+            if _style_cache is None:
+                version = opencode_version()
                 major = 0
-        _style_cache = STYLE_V2 if major >= 2 else STYLE_V1
+                if version:
+                    try:
+                        major = int(version.split(".")[0])
+                    except ValueError:
+                        major = 0
+                _style_cache = STYLE_V2 if major >= 2 else STYLE_V1
     return _style_cache
 
 
@@ -275,7 +280,13 @@ def entry_for_style(entry: dict[str, Any], style: str) -> dict[str, Any]:
 
 def set_server_entries(data: dict[str, Any], servers: dict[str, Any],
                        style: str) -> None:
-    """Write the server map back into *data* in the requested shape."""
+    """Write the server map back into *data* in the requested shape.
+
+    ``mcp.timeout`` is V2-only: it is kept in the V2 shape and dropped when
+    writing V1, where OpenCode would read ``timeout`` as a server called
+    "timeout" and refuse the whole block. Callers keep the pre-write file as a
+    backup, so nothing is lost silently.
+    """
     mcp = data.get("mcp")
     if not isinstance(mcp, dict):
         mcp = {}

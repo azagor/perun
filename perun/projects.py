@@ -181,11 +181,15 @@ def sync_opencode_config(project: dict[str, Any],
     existed_before = target.is_file()
     if mcp_changed and existed_before:
         # The MCP block is the part a hand edit is most likely to have customised
-        # (extra servers, environment tweaks); keep a copy before rewriting it.
-        try:
-            target.with_name(target.name + ".bak").write_bytes(target.read_bytes())
-        except OSError:
-            pass
+        # (extra servers, environment tweaks). Keep the *first* pre-Perun copy:
+        # overwriting it on every later change would destroy the only recovery
+        # point that predates the migration.
+        backup = target.with_name(target.name + ".bak")
+        if not backup.exists():
+            try:
+                backup.write_bytes(target.read_bytes())
+            except OSError:
+                pass
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp_name = ""
     try:
