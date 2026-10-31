@@ -296,6 +296,20 @@ class PerunTelegramBridge:
                 if data.get("error_code") == 409:
                     # Handled (and de-spammed) by the polling loop.
                     return data
+                if data.get("error_code") == 429:
+                    # Respect Telegram's own backoff instead of doubling blindly:
+                    # a burst of attention cards is exactly when this happens.
+                    retry_after = (data.get("parameters") or {}).get("retry_after")
+                    try:
+                        wait = float(retry_after or delay)
+                    except (TypeError, ValueError):
+                        wait = delay
+                    wait = min(max(wait, 1.0), 30.0)
+                    LOG.warning("telegram %s rate limited; retrying in %.0fs",
+                                method, wait)
+                    if attempt < retries:
+                        time.sleep(wait)
+                    continue
                 LOG.warning("telegram %s error (%d/%d): %s", method, attempt, retries,
                             data.get("description"))
             except Exception as exc:

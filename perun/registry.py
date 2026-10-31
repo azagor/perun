@@ -1706,3 +1706,19 @@ def open_attention_for_chat(chat_id: str, limit: int = 20) -> list[dict[str, Any
             (str(chat_id), int(limit)),
         )
     return [item for item in (_attention_row(r) for r in rows) if item]
+
+
+def open_attention_of_kind(target_kind: str, limit: int = 2000) -> list[dict[str, Any]]:
+    """Open items of one target kind (used by the watcher's reconcile).
+
+    A dedicated helper instead of ``open_attention(limit=…)`` so reconciliation is
+    not silently capped by the dashboard's page size.
+    """
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT * FROM attention_requests
+               WHERE state='open' AND target_kind=? ORDER BY id ASC LIMIT ?""",
+            (str(target_kind), int(limit)),
+        )
+    return [item for item in (_attention_row(r) for r in rows) if item]

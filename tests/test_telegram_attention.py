@@ -351,3 +351,34 @@ def test_each_card_says_how_many_others_are_waiting(bridge, project):
     assert len(bridge.sent) == 2
     assert all("1 more waiting" in m["text"] for m in bridge.sent)
     assert all("/pending" in m["text"] for m in bridge.sent)
+
+
+def test_telegram_429_waits_as_instructed_then_retries(bridge, monkeypatch):
+    sleeps: list[float] = []
+    responses = [
+        {"ok": False, "error_code": 429, "parameters": {"retry_after": 3}},
+        {"ok": True, "result": {"message_id": 9}},
+    ]
+
+    class Resp:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    class Client:
+        def post(self, url, json=None):  # noqa: A002
+            return Resp(responses.pop(0))
+
+        def close(self):
+            pass
+
+    bridge.client = Client()
+    monkeypatch.setattr("perun.telegram.time.sleep", lambda s: sleeps.append(s))
+    bridge.api = PerunTelegramBridge.api.__get__(bridge)
+
+    result = bridge.api("sendMessage", chat_id="1", text="hi")
+
+    assert result["ok"] is True
+    assert sleeps == [3.0]

@@ -416,6 +416,16 @@ def _coerce_form_answer(item: Dict[str, Any], text: str) -> Dict[str, Any]:
         ftype = str(field.get("type") or "string")
         if ftype == "boolean" and not isinstance(value, bool):
             value = str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+        elif ftype == "multiselect":
+            if isinstance(value, str):
+                value = [v.strip() for v in value.split(",") if v.strip()]
+            elif not isinstance(value, list):
+                raise DeliveryError(f"{key} must be a list of choices")
+            value = [str(v) for v in value]
+            allowed = {str(o) for o in (field.get("options") or [])}
+            unknown = [v for v in value if allowed and v not in allowed]
+            if unknown:
+                raise DeliveryError(f"{key}: unknown choice(s) " + ", ".join(unknown))
         elif ftype in ("number", "integer"):
             try:
                 value = float(value) if ftype == "number" else int(value)
@@ -509,6 +519,22 @@ def answer(attention_id: int, text: str, *, by: str) -> Dict[str, Any]:
         )
         return {"ok": False, "error": str(exc), "item": item}
     except opencode_api.OpenCodeError as exc:
+        status = getattr(exc, "status", 0)
+        if status == 404 and item["target_kind"] in ("session", "form"):
+            # The session/form is gone; the answer can never land. Close it so
+            # the operator is not left tapping a dead card until the TTL.
+            registry.close_attention(item["id"], "undeliverable",
+                                     answer=text, answered_by=by)
+            registry.log_activity(
+                item.get("project_id"), "attention_failed",
+                f"att_{item['id']} undeliverable: the {item['target_kind']} target is gone",
+                {"attention_id": item["id"], "target_kind": item["target_kind"]},
+            )
+            return {
+                "ok": False,
+                "error": "the target is gone (session closed?) — the answer was not delivered",
+                "item": registry.get_attention(item["id"]),
+            }
         return {"ok": False, "error": f"opencode unavailable: {exc}", "item": item}
     if not registry.close_attention(item["id"], "answered", answer=text,
                                     answered_by=by):
@@ -576,9 +602,26 @@ def choose(attention_id: int, option: str, *, by: str) -> Dict[str, Any]:
         else:
             raise DeliveryError("this one needs a text reply")
     except (DeliveryError, opencode_api.OpenCodeError) as exc:
+        status = getattr(exc, "status", 0)
+        if status == 404:
+            # The request was resolved elsewhere (TUI, another device).
+            registry.close_attention(item["id"], "cancelled",
+                                     answer="resolved elsewhere",
+                                     answered_by=by)
+            return {"ok": False,
+                    "error": "that request was already resolved elsewhere",
+                    "item": registry.get_attention(item["id"])}
         return {"ok": False, "error": str(exc), "item": item}
     except ValueError as exc:
-        return {"ok": False, "error": str(exc), "item": item}
+        # A proposal that changed state under the card ("proposal is approved")
+        # can never accept this tap; close it instead of leaving a dead card.
+        message = str(exc)
+        if "proposal is " in message or "not found" in message:
+            registry.close_attention(item["id"], "cancelled", answer=message,
+                                     answered_by=by)
+            return {"ok": False, "error": message,
+                    "item": registry.get_attention(item["id"])}
+        return {"ok": False, "error": message, "item": item}
 
     if not registry.close_attention(item["id"], state, answer=option, answered_by=by):
         return {"ok": False, "error": "already handled", "item": item}
@@ -696,6 +739,16 @@ def drain_outbox(limit: int = 20) -> int:
     sent = 0
     for row in registry.attention_outbox_pending(limit=limit):
         if int(row.get("attempts") or 0) >= 10:
+            # Give up visibly instead of retrying forever (and after the parent
+            # item is pruned, pointing at a row that no longer exists).
+            registry.attention_outbox_done(row["id"])
+            registry.log_activity(
+                None, "attention_failed",
+                f"queued operator answer {row['id']} abandoned after 10 attempts",
+                {"outbox_id": row["id"], "attention_id": row.get("attention_id"),
+                 "room_id": row.get("target_id"),
+                 "error": row.get("last_error") or ""},
+            )
             continue
         payload = row.get("payload") or {}
         room_id = str(row.get("target_id") or "")

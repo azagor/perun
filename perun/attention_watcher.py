@@ -71,7 +71,8 @@ def _session_directory(info: Dict[str, Any]) -> str:
 
 
 def _permission_item(api: "opencode_api.OpenCodeAPI", perm: Dict[str, Any],
-                     project: Dict[str, Any], directory: str) -> Optional[Dict[str, Any]]:
+                     project: Dict[str, Any], directory: str,
+                     ttl_minutes: int = attention.DEFAULT_TTL_MINUTES) -> Optional[Dict[str, Any]]:
     request_id = str(perm.get("id") or "")
     session_id = str(perm.get("sessionID") or "")
     if not request_id or not session_id:
@@ -96,13 +97,14 @@ def _permission_item(api: "opencode_api.OpenCodeAPI", perm: Dict[str, Any],
             "save": [str(s) for s in (perm.get("save") or [])],
             "message_id": str((perm.get("source") or {}).get("messageID") or ""),
         },
-        ttl_minutes=_ttl_minutes(),
+        ttl_minutes=ttl_minutes,
         dedupe_key=f"permission|{request_id}",
     )
 
 
 def _form_item(api: "opencode_api.OpenCodeAPI", form: Dict[str, Any],
-               project: Dict[str, Any], directory: str) -> Optional[Dict[str, Any]]:
+               project: Dict[str, Any], directory: str,
+               ttl_minutes: int = attention.DEFAULT_TTL_MINUTES) -> Optional[Dict[str, Any]]:
     form_id = str(form.get("id") or "")
     session_id = str(form.get("sessionID") or "")
     if not form_id or not session_id:
@@ -133,16 +135,9 @@ def _form_item(api: "opencode_api.OpenCodeAPI", form: Dict[str, Any],
             "location": directory,
             "fields": fields,
         },
-        ttl_minutes=_ttl_minutes(),
+        ttl_minutes=ttl_minutes,
         dedupe_key=f"form|{form_id}",
     )
-
-
-def _ttl_minutes() -> int:
-    try:
-        return int(config.Settings.load().attention_ttl_minutes)
-    except Exception:  # pragma: no cover - defensive
-        return attention.DEFAULT_TTL_MINUTES
 
 
 def _reconcile(polled: Set[str], live_permissions: Set[str],
@@ -150,7 +145,7 @@ def _reconcile(polled: Set[str], live_permissions: Set[str],
     """Close items whose permission/form disappeared (answered in the TUI)."""
     closed = 0
     for kind, live in (("permission", live_permissions), ("form", live_forms)):
-        for item in registry.open_attention(state="open", limit=200):
+        for item in registry.open_attention_of_kind(kind):
             if item["target_kind"] != kind:
                 continue
             ref = item.get("ref") or {}
@@ -209,6 +204,13 @@ def poll_once(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[str, int
             pass
         _last_sweep = time.time()
 
+    try:
+        ttl_minutes = int(getattr(settings, "attention_ttl_minutes",
+                                  attention.DEFAULT_TTL_MINUTES)
+                          or attention.DEFAULT_TTL_MINUTES)
+    except (TypeError, ValueError):
+        ttl_minutes = attention.DEFAULT_TTL_MINUTES
+
     polled = {loc for loc in {str(l) for l in locations} if loc}
     created = 0
     live_permissions: Set[str] = set()
@@ -224,7 +226,7 @@ def poll_once(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[str, int
             permissions = []
         for perm in permissions:
             live_permissions.add(str(perm.get("id") or ""))
-            item = _permission_item(client, perm, project, directory)
+            item = _permission_item(client, perm, project, directory, ttl_minutes)
             if item and item.get("is_new"):
                 created += 1
         try:
@@ -233,7 +235,7 @@ def poll_once(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[str, int
             forms = []
         for form in forms:
             live_forms.add(str(form.get("id") or ""))
-            item = _form_item(client, form, project, directory)
+            item = _form_item(client, form, project, directory, ttl_minutes)
             if item and item.get("is_new"):
                 created += 1
 

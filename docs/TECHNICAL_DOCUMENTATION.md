@@ -1296,6 +1296,13 @@ one device cannot close a row another device just answered. `reject` on a
 permission also rejects the session's other pending requests, so the watcher
 cancels the sibling cards.
 
+**Dead targets and rate limits.** A 404 from OpenCode closes the item
+(`undeliverable` for a session/form prompt, `cancelled` when a permission or
+proposal was already resolved elsewhere) and the card says why — a tap is never
+left pointing at a request that no longer exists. A queued room reply that fails
+ten times is retired with an `attention_failed` row. Telegram's `429 retry_after`
+is honoured by the bridge's send path.
+
 **Undo.** A session answer is admitted with a deterministic id
 (`msg_att_<attention_id>`), which makes a retried relay idempotent. While it is
 still queued, ↩ calls `DELETE …/inbox/{id}` and reopens the item; ⚡ calls

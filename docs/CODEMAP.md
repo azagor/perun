@@ -133,7 +133,7 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 * Operator inbox: `add_attention()` (returns `_new`, deduped by the unique
   partial index), `get_attention()`, `open_attention()`, `open_attention_for_chat()`,
-  `attention_by_message()` (reply-to → item), `record_attention_delivery()`,
+  `attention_by_message()` (reply-to → item), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
   `attention_deliveries()`, `undelivered_attention(within_minutes=…)`,
   `close_attention()` (conditional on `state='open'`), `update_attention_ref()`,
   `set_attention_delivery()`, `touch_attention_waiter()`, `expire_attention()`,
@@ -624,7 +624,7 @@ dispatched by that target, never by inference from "the current project".
 Detection loop, run inside the Telegram-bridge process (the poller is already a
 singleton). Polls `active_sessions()` for locations, then `pending_permissions()`
 and `pending_forms()` per location, and creates one item per request id via
-`dedupe_key`; a full `/api/debug/location` sweep runs every five minutes.
+`dedupe_key`; a full `/api/debug/location` sweep runs every five minutes, the TTL is read once per poll, and a card is only closed after two consecutive misses.
 `_reconcile()` closes items whose request vanished (answered in the TUI).
 `poll_once()` returns `{created, closed, locations}` and never raises into the
 bridge; it only ever writes rows, never sends.

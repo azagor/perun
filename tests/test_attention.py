@@ -22,6 +22,7 @@ class FakeAPI:
         self.locations_list: list[str] = []
         self.sessions: dict[str, dict] = {}
         self.fail: Exception | None = None
+        self.permission_error: Exception | None = None
 
     # transport surface used by the watcher
     def session(self, session_id: str) -> dict:
@@ -41,6 +42,8 @@ class FakeAPI:
 
     # write surface used by the adapters
     def reply_permission(self, session_id, request_id, decision, message=""):
+        if self.permission_error:
+            raise self.permission_error
         self.calls.append(("permission", session_id, request_id, decision, message))
 
     def reply_form(self, session_id, form_id, answer):
@@ -452,3 +455,96 @@ def test_deleting_a_project_removes_its_attention_rows(project):
     assert registry.get_attention(item["id"]) is None
     with registry.db.db() as conn:
         assert registry.db.rows(conn, "SELECT 1 FROM attention_deliveries") == []
+
+
+def test_a_deleted_session_marks_the_answer_undeliverable(project, api):
+    item = attention.request(project, "session", "ses_gone", "ask", "Ship it?")
+    api.fail = opencode_api.OpenCodeHTTPError(404, "SessionNotFoundError", "/prompt")
+
+    result = attention.answer(item["id"], "yes", by="telegram:1")
+
+    assert result["ok"] is False
+    assert "target is gone" in result["error"]
+    assert registry.get_attention(item["id"])["state"] == "undeliverable"
+
+
+def test_a_request_resolved_elsewhere_closes_the_card(project, api):
+    item = _permission(project)
+    api.permission_error = opencode_api.OpenCodeHTTPError(404, "PermissionNotFoundError", "/reply")
+
+    result = attention.choose(item["id"], "once", by="telegram:1")
+
+    assert result["ok"] is False
+    assert "already resolved" in result["error"]
+    assert registry.get_attention(item["id"])["state"] == "cancelled"
+
+
+def test_an_undeliverable_outbox_row_is_abandoned_visibly(project, monkeypatch):
+    from perun import perunchat_bridge
+
+    item = attention.request(project, "room", "grp:perun:inbox-proj:chat", "mention", "look")
+    monkeypatch.setattr(perunchat_bridge, "get_bridge", lambda: None)
+    attention.answer(item["id"], "on it", by="telegram:1")
+    with registry.db.db() as conn:
+        conn.execute("UPDATE attention_outbox SET attempts=10")
+
+    class Bridge:
+        def is_connected(self):
+            return True
+
+        def post_to_room(self, room_id, text, **kw):
+            raise AssertionError("a row that hit the attempt cap must not be posted")
+
+    monkeypatch.setattr(perunchat_bridge, "get_bridge", lambda: Bridge())
+
+    assert attention.drain_outbox() == 0
+    assert registry.attention_outbox_pending() == []
+    kinds = [(row["kind"], row["message"]) for row in registry.list_activity(limit=10)]
+    assert any(k == "attention_failed" and "abandoned" in m for k, m in kinds)
+
+
+def test_multiselect_form_answers_split_and_validate_choices(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Pick targets",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "envs", "type": "multiselect",
+                         "options": ["dev", "prod", "staging"]}]},
+    )
+
+    bad = attention.answer(item["id"], '{"envs": "dev, nope"}', by="telegram:1")
+    assert bad["ok"] is False
+    assert "nope" in bad["error"]
+
+    good = attention.answer(item["id"], '{"envs": "dev, staging"}', by="telegram:1")
+    assert good["ok"], good
+    assert api.calls[-1] == ("form", "ses_form", "frm_1", {"envs": ["dev", "staging"]})
+
+
+def test_quiet_hours_wrap_across_midnight():
+    from datetime import datetime
+
+    window = "22:00-07:00"
+    assert attention._quiet_now(window, datetime(2026, 10, 31, 23, 30)) is True
+    assert attention._quiet_now(window, datetime(2026, 10, 31, 6, 30)) is True
+    assert attention._quiet_now(window, datetime(2026, 10, 31, 12, 0)) is False
+    assert attention._quiet_now("", datetime(2026, 10, 31, 12, 0)) is False
+    assert attention._quiet_now("garbage", datetime(2026, 10, 31, 12, 0)) is False
+
+
+def test_two_devices_answering_at_once_only_one_wins(project, api):
+    import threading
+
+    item = attention.request(project, "session", "ses_live", "ask", "Ship it?")
+    results: list[dict] = []
+
+    def reply(text: str) -> None:
+        results.append(attention.answer(item["id"], text, by="telegram:1"))
+
+    threads = [threading.Thread(target=reply, args=(text,)) for text in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert sum(1 for r in results if r.get("ok")) == 1
+    assert registry.get_attention(item["id"])["state"] == "answered"
