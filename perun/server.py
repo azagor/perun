@@ -151,14 +151,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _control_project()
     # Seed the default global guidance file once on startup.
     orchestrator._seed_default_instructions()
-    # After a restart we lose all in-memory process tracking; any run still
-    # marked running/queued is effectively dead. Mark it ``interrupted`` — NOT
-    # ``done``: OpenCode may have been killed mid-write, and a finished status
-    # would make the history claim the run succeeded.
-    for run in registry.list_active_runs():
-        registry.update_run(run["run_uid"], status="interrupted",
-                            ended_at=registry.now_iso(),
-                            error=run.get("error") or "interrupted by a Perun restart")
+    # Runs are durable: a prompt admitted to an OpenCode session keeps running
+    # in the service even if Perun restarts. Adopt what survived instead of
+    # blindly marking everything interrupted; only runs that never reached the
+    # session (or expired) are closed, and the periodic reconciler retries while
+    # the service is coming up.
+    try:
+        recovered = ORCH.reconcile_startup()
+        if recovered["resumed"] or recovered["interrupted"]:
+            logging.getLogger("perun.server").info(
+                "run recovery: %d resumed, %d interrupted",
+                len(recovered["resumed"]), len(recovered["interrupted"]))
+        ORCH.reconcile_runs()
+    except Exception:  # pragma: no cover - startup must not depend on this
+        logging.getLogger("perun.server").exception("could not reconcile runs")
+    reconcile_stop = threading.Event()
+
+    def _reconcile_loop() -> None:
+        while not reconcile_stop.wait(15.0):
+            try:
+                ORCH.reconcile_runs()
+            except Exception:  # pragma: no cover - keep the loop alive
+                logging.getLogger("perun.server").debug(
+                    "run reconcile failed", exc_info=True)
+
+    threading.Thread(target=_reconcile_loop, daemon=True,
+                     name="perun-run-reconcile").start()
     # A proposal whose run was just marked interrupted can never finish; leaving
     # it in "executing" would make it permanently un-actionable. Mark it failed
     # now and notify its project room once the bridge is up.
@@ -207,6 +225,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        reconcile_stop.set()
         if reembed_stop is not None:
             reembed_stop.set()
         if PERUNCHAT_BRIDGE is not None:
@@ -3084,12 +3103,13 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "telegram_interrupt_notice_minutes",
         "attention_ttl_minutes", "attention_poll_seconds",
         "attention_replay_open_minutes", "attention_max_per_hour",
+        "run_resume_window_minutes",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
         "routing_enabled", "routing_shadow",
         "attention_enabled", "attention_shadow", "attention_show_paths",
-        "attention_plain_text_confirm",
+        "attention_plain_text_confirm", "session_runner_enabled",
     }
     list_fields = {
         "roots", "telegram_allowed_chats", "perunchat_auto_join",
@@ -3111,7 +3131,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400, detail=f"{key} must be between 1 and 65535")
         if key in ("max_concurrent_runs", "run_timeout", "external_execution_claim_ttl",
                    "telegram_interrupt_notice_minutes", "attention_ttl_minutes",
-                   "attention_replay_open_minutes", "attention_max_per_hour") and v < 1:
+                   "attention_replay_open_minutes", "attention_max_per_hour",
+                   "run_resume_window_minutes") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
         if key == "attention_poll_seconds" and v < 2:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 2")

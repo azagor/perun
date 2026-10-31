@@ -191,6 +191,15 @@ class Settings:
     # Default delivery for session answers: "queue" (after the current turn) or
     # "steer" (interrupt now).
     attention_default_delivery: str = "queue"
+
+    # --- Durable runs ------------------------------------------------------ #
+    # A run is an idempotent prompt admitted to an OpenCode session, observed via
+    # the service's event stream, so it survives a Perun restart. Set false to
+    # fall back to the legacy `opencode run` child process.
+    session_runner_enabled: bool = True
+    # On startup, re-admit a run that never reached the session if it is younger
+    # than this (minutes); older ones are marked interrupted.
+    run_resume_window_minutes: int = 30
     # PerunChat federation credentials. The API key is obtained from the company
     # website at peruninthemachine.com; the endpoint is the WebSocket ingress URL.
     perunchat_api_key: str = ""

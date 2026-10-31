@@ -30,6 +30,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -241,6 +242,71 @@ class OpenCodeAPI:
                 out.append(entry.strip())
         return out
 
+    def create_session(self, directory: str, *, model: str = "",
+                       agent: str = "", title: str = "") -> Dict[str, Any]:
+        """Create a session in *directory* (the location is explicit)."""
+        body: Dict[str, Any] = {
+            "title": (title or "Perun run")[:120],
+            "location": {"directory": str(directory)},
+        }
+        model = (model or "").strip()
+        if model and "/" in model:
+            provider, model_id = model.split("/", 1)
+            body["model"] = {"providerID": provider, "id": model_id}
+        agent = (agent or "").strip()
+        if agent:
+            body["agent"] = agent
+        payload = self._request("POST", "/api/session", body=body)
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, dict) else {}
+
+    def messages(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        payload = self._request(
+            "GET", f"/api/session/{session_id}/message?limit={int(limit)}",
+            allow_404=True,
+        )
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict):
+            rows = data.get("messages") or data.get("items") or []
+        else:
+            rows = data or []
+        return [r for r in rows if isinstance(r, dict)]
+
+    def iter_events(self, types: Optional[List[str]] = None,
+                    stop: Optional[threading.Event] = None) -> Any:
+        """Yield decoded events from ``/api/event`` (SSE) until *stop* is set.
+
+        The read timeout is relaxed for the stream; the client's normal 2 s
+        timeout must not kill an idle subscription.
+        """
+        self._ensure_ready()
+        params = [("types", t) for t in (types or [])]
+        headers = {"Authorization": _auth_header(self._password)}
+        timeout = httpx.Timeout(self._timeout, connect=3.0, read=60.0)
+        with self._client.stream(
+            "GET", self._url("/api/event"), params=params or None,
+            headers=headers, timeout=timeout,
+        ) as response:
+            if response.status_code >= 400:
+                detail = ""
+                try:
+                    detail = response.read().decode("utf-8", "replace")[:200]
+                except Exception:
+                    pass
+                raise OpenCodeHTTPError(response.status_code, detail, "/api/event")
+            for line in response.iter_lines():
+                if stop is not None and stop.is_set():
+                    return
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    yield json.loads(line[6:])
+                except ValueError:
+                    continue
+
+    def session_active(self, session_id: str) -> bool:
+        return str(session_id) in self.active_sessions()
+
     def session(self, session_id: str) -> Optional[Dict[str, Any]]:
         payload = self._request(
             "GET", f"/api/session/{session_id}", allow_404=True
@@ -352,3 +418,106 @@ def ping(api: Optional[OpenCodeAPI] = None, *, timeout: float = 3.0) -> bool:
         return (time.perf_counter() - started) < max(timeout, 1.0)
     except OpenCodeError:
         return False
+
+
+# --------------------------------------------------------------------------- #
+# Shared event stream
+# --------------------------------------------------------------------------- #
+class EventHub:
+    """One SSE connection, demultiplexed by session id.
+
+    A single reader thread keeps the number of HTTP connections independent of
+    how many runs are active. Subscribers receive the raw event dict; a failing
+    subscriber never takes the stream down.
+    """
+
+    def __init__(self, *, api: Optional["OpenCodeAPI"] = None,
+                 source: Optional[Any] = None,
+                 name: str = "perun-events"):
+        self._api = api
+        self._source = source
+        self._name = name
+        self._subs: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def _iter(self):
+        if self._source is not None:
+            return self._source()
+        api = self._api or default_api()
+        return api.iter_events(stop=self._stop)
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=self._name)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def subscribe(self, session_id: str, handler: Any) -> str:
+        token = uuid.uuid4().hex
+        with self._lock:
+            self._subs.setdefault(str(session_id), {})[token] = handler
+        return token
+
+    def unsubscribe(self, token: str) -> None:
+        with self._lock:
+            for session_id, handlers in list(self._subs.items()):
+                if token in handlers:
+                    handlers.pop(token, None)
+                if not handlers:
+                    self._subs.pop(session_id, None)
+
+    def _dispatch(self, event: Dict[str, Any]) -> None:
+        data = event.get("data") or {}
+        session_id = data.get("sessionID") or event.get("sessionID")
+        if not session_id:
+            return
+        with self._lock:
+            handlers = list(self._subs.get(str(session_id), {}).values())
+        for handler in handlers:
+            try:
+                handler(event)
+            except Exception:  # pragma: no cover - one subscriber must not kill it
+                LOG.debug("event subscriber failed", exc_info=True)
+
+    def _run(self) -> None:
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                for event in self._iter():
+                    if self._stop.is_set():
+                        return
+                    self._dispatch(event)
+                    backoff = 1.0
+                # The service closed the stream (restart/shutdown): reconnect.
+                self._stop.wait(backoff)
+            except Exception as exc:  # pragma: no cover - depends on the service
+                LOG.debug("event stream error: %s", exc)
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, 15.0)
+
+
+_HUB: Optional[EventHub] = None
+_HUB_LOCK = threading.Lock()
+
+
+def default_hub() -> EventHub:
+    global _HUB
+    with _HUB_LOCK:
+        if _HUB is None:
+            _HUB = EventHub()
+        return _HUB
+
+
+def set_default_hub(hub: Optional[EventHub]) -> None:
+    global _HUB
+    with _HUB_LOCK:
+        if _HUB is not None:
+            _HUB.stop()
+        _HUB = hub

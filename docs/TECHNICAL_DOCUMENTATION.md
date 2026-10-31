@@ -701,6 +701,46 @@ instruction file cannot close the envelope early.
 
 ---
 
+### Durable runs (session runner)
+
+A run is no longer "a child process Perun watches". It is an **idempotent prompt
+admitted to a durable OpenCode session**, which is what makes it survive a Perun
+restart: OpenCode's background service owns the turn, so killing Perun does not
+kill the work.
+
+```
+start_run → create/reuse session → record admitted_at + msg_<run_uid>
+          → POST /api/session/{sid}/prompt {text, id: msg_<run_uid>, delivery: queue}
+          → observe GET /api/event (one shared stream, demultiplexed by sessionID)
+          → session.execution.succeeded/failed/interrupted → _finalize
+```
+
+- **Admission is idempotent.** Re-admitting the same `msg_<run_uid>` after a crash
+  is a no-op; the id is recorded before the request, so the window between
+  "record" and "admit" cannot duplicate a turn.
+- **Ownership is a lease, not a pid.** `run_leases(run_uid, owner, beat_epoch,
+  epoch)`; the observer heartbeats every 5 s, a lease is stale after 30 s, and a
+  lease whose owner pid is gone is taken over immediately. The epoch is checked
+  before finalizing, so a zombie observer cannot overwrite a newer one.
+- **Reconciliation replaces the process watchdog.** At startup and every 15 s the
+  server calls `reconcile_runs()`: a row that is `running` + `admitted_at` with a
+  live session is **reattached**; with an inactive session it is finalized from
+  the session's messages (`done` when there is assistant text, `interrupted`
+  otherwise); a row with no session id is interrupted. `reconcile_startup()`
+  handles rows that never admitted: younger than `run_resume_window_minutes`
+  (default 30) → re-dispatched, older → interrupted.
+- **Replies are exactly-once.** A run adopted after a restart has no waiting
+  caller, so `_reply_drainer()` in the Telegram bridge sends `output` to the chats
+  bound to the run's session and stamps `runs.reply_sent_at`; the live
+  `run_message` path claims the same flag first, so only one of them sends.
+- **Fallback.** If the OpenCode service is unreachable *before* admission, the
+  worker falls back to the legacy `opencode run` child; `PERUN_SESSION_RUNNER=0`
+  forces the legacy path for tests or an emergency rollback.
+- **Limits (honest):** step-level checkpointing would require Perun to own the
+  model loop; it does not. Durability here is admission + session resume +
+  observation, which covers process crashes but cannot replay a half-finished
+  model turn.
+
 ## 8. HTTP API
 
 All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.

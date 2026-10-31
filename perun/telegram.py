@@ -1299,6 +1299,10 @@ class PerunTelegramBridge:
         new_session_pk = final.get("session_pk")
         if new_session_pk:
             registry.set_bridge_link(chat_id, proj["id"], new_session_pk)
+        # Claim the delivery: the reply drainer may race us after a restart, and
+        # exactly one of the two is allowed to send.
+        if not registry.claim_reply_delivery(uid):
+            return
         if final.get("status") == "cancelled":
             self.send(chat_id, "🛑 Run cancelled.", reply_to=message_id)
             return
@@ -1307,6 +1311,51 @@ class PerunTelegramBridge:
             self.send(chat_id, f"❌ Agent {final.get('status')}.\n\n{err}", reply_to=message_id)
             return
         self.send(chat_id, reply, reply_to=message_id)
+
+    # ---- reply delivery ------------------------------------------------ #
+    def _deliver_pending_replies(self, limit: int = 10) -> int:
+        """One drain pass. Returns how many runs were delivered."""
+        sent = 0
+        for run in registry.runs_awaiting_reply(limit=limit):
+            uid = run["run_uid"]
+            chats = registry.chats_for_session(run.get("session_pk"))
+            if not chats:
+                registry.claim_reply_delivery(uid)
+                continue
+            if not registry.claim_reply_delivery(uid):
+                continue
+            text = (run.get("output") or "").strip()
+            if not text:
+                text = (f"⚠️ Run {run.get('status')}: "
+                        f"{(run.get('error') or 'no output')[:1500]}")
+            try:
+                for chat_id in chats:
+                    self.send(chat_id, text)
+            except Exception:
+                registry.clear_reply_sent(uid)
+                LOG.exception("could not deliver run %s", uid)
+                continue
+            registry.log_activity(
+                run.get("project_id"), "run_reply_delivered",
+                f"Run {uid} reply delivered to {len(chats)} chat(s)",
+                {"run_uid": uid, "chats": chats},
+            )
+            sent += 1
+        return sent
+
+    def _reply_drainer(self) -> None:
+        """Deliver replies of runs that finished without a waiting caller.
+
+        A run adopted after a restart (or dispatched by the reconciler) has no
+        Telegram worker waiting on it, so its output would otherwise be stored and
+        never sent. The conditional claim makes delivery exactly-once relative to
+        ``run_message``.
+        """
+        while not self.stop_event.wait(5.0):
+            try:
+                self._deliver_pending_replies()
+            except Exception:  # pragma: no cover - keep the loop alive
+                LOG.exception("reply drainer failed")
 
     # ---- worker + poll ---- #
     def worker(self) -> None:
@@ -1515,6 +1564,8 @@ class PerunTelegramBridge:
             LOG.exception("could not recover the telegram job queue")
         threading.Thread(target=self._job_dispatcher, daemon=True,
                          name="perun-tg-dispatcher").start()
+        threading.Thread(target=self._reply_drainer, daemon=True,
+                         name="perun-run-replies").start()
         boot = self.api("getUpdates", timeout=0, offset=-1)
         if boot.get("error_code") == 409:
             self._log_conflict(first=True)

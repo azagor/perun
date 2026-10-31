@@ -108,6 +108,11 @@ with `python -m perun project-roots --add <name> <path>`.
 * **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
   project or a command, but it must never be the only check on a mutating action:
   the guard allowlist, proposal approval and post-run audit stay in force.
+* **Runs are durable at the session layer.** A run is an idempotent prompt
+  (`msg_<run_uid>`) admitted to an OpenCode session, owned by a lease and observed
+  through the event stream; never make "a run" mean "a child process" again, never
+  re-admit without checking `admitted_at`, and keep the reply exactly-once
+  (`runs.reply_sent_at`).
 * **Notifications carry a typed target.** `attention_requests.target_kind` +
   `target_id` decide where a reply goes; never infer the context from the current
   project or the newest session. Producers only write rows — the process that owns

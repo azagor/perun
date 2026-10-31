@@ -87,7 +87,9 @@ search), `secret_store` (encrypted secret values), plus the operator-inbox
 tables `attention_requests` (typed target + `dedupe_key` unique among open rows),
 `attention_deliveries` (chat → message id), `attention_outbox` (undelivered room
 replies) and `attention_mutes` (per-chat `/mute`), and `telegram_jobs` (the durable update
-queue: dedupe key, state, attempts, backoff).
+queue: dedupe key, state, attempts, backoff) and `run_leases` (run ownership with
+heartbeat + epoch). `runs` carries `admitted_at`, `created_at` and
+`reply_sent_at` for durable runs.
 * `SCHEMA`, `SCHEMA_VERSION` (the `PRAGMA user_version` migration gate),
   `_ADDED_COLUMNS` (idempotent column additions: `projects.manifest`,
   `projects.manifest_path`, `projects.manifest_loaded_at`, `projects.git_*`,
@@ -123,6 +125,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   behind the dashboard storm layer).
 * Tasks: `create_task()`, `update_task()`, `get_task()`, `list_tasks()`,
   `delete_task()` (reusable project tasks queued into the TUI prompt chain).
+* Run leases: `claim_run_lease()` (heartbeat + epoch, dead-owner takeover),
+  `touch_run_lease()`, `run_lease_owned()`, `release_run_lease()`,
+  `runs_awaiting_reply()`, `claim_reply_delivery()` / `clear_reply_sent()`.
 * Activity: `log_activity()`, `list_activity()`, `get_activity()` (one row with
   `meta` parsed), `routing_decisions(hours, limit)` (the `routing_decision`
   window used by the dashboard panel), `misroute_reported(decision_id)` /
@@ -551,6 +556,21 @@ Lifecycle tracking for externally-launched TUI/terminal sessions.
   already exited.
 * `TRACKER` — module-level singleton used by `/api/run-in-terminal`,
   `/api/runs/{uid}/cancel`, and `/api/runs/{uid}/kill`.
+
+### `perun/session_runner.py`
+Durable run execution: the prompt is admitted to an OpenCode session and observed
+through the event stream.
+* `SessionRunner.execute()` — claim the lease, create/reuse the session, record
+  `admitted_at`, subscribe to the session's events, admit with
+  `msg_<run_uid>`, then observe until a terminal event; `attach()` does the same
+  without admitting (a reattach after a restart, seeded from the session's
+  messages).
+* `_observe()` — maps `session.text.*` to bus `text` events, `session.tool.*` to
+  `tool`, and `session.execution.succeeded/failed/interrupted` (or `session.idle`)
+  to the run's status; checks the lease, cancellation and `run_timeout` each
+  second; interrupts the session on cancel/timeout.
+* Falls back to the CLI runner (raises `opencode_api.OpenCodeUnavailable` before admission) and
+  never double-admits.
 
 ### `perun/routing.py`
 Deterministic message router (rules tier, no model, no I/O). Turns one message

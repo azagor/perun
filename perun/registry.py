@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import time
 import unicodedata
@@ -989,10 +990,10 @@ def create_run(run_uid: str, project_id: int, prompt: str, *,
         conn.execute(
             """INSERT INTO runs
                (run_uid,project_id,session_pk,opencode_session_id,prompt,
-                model,model_explicit,agent,status)
-               VALUES (?,?,?,?,?,?,?,?, 'queued')""",
+                model,model_explicit,agent,status,created_at)
+               VALUES (?,?,?,?,?,?,?,?, 'queued', ?)""",
             (run_uid, project_id, session_pk, opencode_session_id, prompt,
-             model, int(bool(model_explicit)), agent),
+             model, int(bool(model_explicit)), agent, now_iso()),
         )
         row = db.one(conn, "SELECT * FROM runs WHERE run_uid=?", (run_uid,))
         return dict(row)
@@ -1000,7 +1001,8 @@ def create_run(run_uid: str, project_id: int, prompt: str, *,
 
 def update_run(run_uid: str, **fields: Any) -> None:
     allowed = {"session_pk", "opencode_session_id", "status", "exit_code",
-               "started_at", "ended_at", "output", "error"}
+               "started_at", "ended_at", "output", "error",
+               "admitted_at", "reply_sent_at", "lease_epoch"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
@@ -1039,10 +1041,10 @@ def list_active_runs() -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(
             conn,
-            """SELECT r.run_uid, r.status, r.prompt, r.model, r.model_explicit,
-                      r.agent,
+            """SELECT r.id, r.run_uid, r.project_id, r.status, r.prompt,
+                      r.model, r.model_explicit, r.agent,
                       r.session_pk, r.opencode_session_id,
-                      r.started_at,
+                      r.started_at, r.admitted_at, r.reply_sent_at,
                       p.slug AS project_slug, p.name AS project_name,
                       p.path AS project_path
                FROM runs r JOIN projects p ON p.id = r.project_id
@@ -1907,3 +1909,144 @@ def prune_telegram_jobs(keep_days: int = 7) -> int:
             (cutoff,),
         )
         return int(cur.rowcount or 0)
+
+
+# --------------------------------------------------------------------------- #
+# Run leases + reply delivery
+# --------------------------------------------------------------------------- #
+RUN_LEASE_TTL_SECONDS = 30.0
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a local pid is still running (best effort, cross-platform)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:  # pragma: no cover - defensive
+            return True
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:  # pragma: no cover - defensive
+        return True
+
+
+def _lease_owner_dead(owner: str) -> bool:
+    """True when the lease names this host and that pid no longer exists.
+
+    The heartbeat is the authority; the pid only lets a restart take over
+    immediately instead of waiting out the TTL.
+    """
+    host, _, pid = str(owner or "").rpartition(":")
+    try:
+        pid_num = int(pid)
+    except ValueError:
+        return False
+    if host and host != socket.gethostname():
+        return False
+    return not _pid_alive(pid_num)
+
+
+def claim_run_lease(run_uid: str, owner: str,
+                    ttl: float = RUN_LEASE_TTL_SECONDS) -> int | None:
+    """Claim or take over a run lease; returns the epoch, or None if held.
+
+    A lease is stale when its heartbeat is older than *ttl*; taking it over bumps
+    ``epoch`` so the previous owner's :func:`run_lease_owned` check fails and it
+    stops writing.
+    """
+    now = time.time()
+    with db.db() as conn:
+        row = db.one(conn, "SELECT owner, epoch, beat_epoch FROM run_leases WHERE run_uid=?",
+                     (run_uid,))
+        if row and (now - float(row["beat_epoch"])) <= ttl:
+            if str(row["owner"]) == owner:
+                return int(row["epoch"])
+            if not _lease_owner_dead(str(row["owner"])):
+                return None
+        epoch = int((row or {"epoch": 0})["epoch"] or 0) + 1
+        conn.execute(
+            """INSERT INTO run_leases (run_uid,owner,beat_epoch,epoch)
+               VALUES (?,?,?,?)
+               ON CONFLICT(run_uid) DO UPDATE SET
+                 owner=excluded.owner, beat_epoch=excluded.beat_epoch,
+                 epoch=excluded.epoch""",
+            (run_uid, owner, now, epoch),
+        )
+        return epoch
+
+
+def touch_run_lease(run_uid: str, owner: str, epoch: int) -> bool:
+    with db.db() as conn:
+        cur = conn.execute(
+            "UPDATE run_leases SET beat_epoch=? WHERE run_uid=? AND owner=? AND epoch=?",
+            (time.time(), run_uid, owner, int(epoch)),
+        )
+        return bool(cur.rowcount)
+
+
+def run_lease_owned(run_uid: str, owner: str, epoch: int) -> bool:
+    with db.db() as conn:
+        row = db.one(conn, "SELECT owner, epoch FROM run_leases WHERE run_uid=?",
+                     (run_uid,))
+    return bool(row and str(row["owner"]) == owner and int(row["epoch"]) == int(epoch))
+
+
+def release_run_lease(run_uid: str, owner: str) -> None:
+    with db.db() as conn:
+        conn.execute("DELETE FROM run_leases WHERE run_uid=? AND owner=?",
+                     (run_uid, str(owner)))
+
+
+def runs_awaiting_reply(limit: int = 10, within_hours: int = 24) -> list[dict[str, Any]]:
+    """Finished runs whose output has not been delivered to a bound chat yet."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=max(1, int(within_hours)))).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT * FROM runs
+               WHERE status IN ('done','failed','timeout','provider_error')
+                 AND ended_at IS NOT NULL AND ended_at >= ?
+                 AND COALESCE(reply_sent_at,'')=''
+                 AND session_pk IS NOT NULL
+               ORDER BY id ASC LIMIT ?""",
+            (cutoff, int(limit)),
+        )
+    return [dict(r) for r in rows]
+
+
+def claim_reply_delivery(run_uid: str) -> bool:
+    """Claim the one delivery of a run's reply (first caller wins)."""
+    with db.db() as conn:
+        cur = conn.execute(
+            "UPDATE runs SET reply_sent_at=? "
+            "WHERE run_uid=? AND COALESCE(reply_sent_at,'')=''",
+            (now_iso(), run_uid),
+        )
+        return bool(cur.rowcount)
+
+
+def clear_reply_sent(run_uid: str) -> None:
+    """Release a delivery claim after a failed send so it can be retried."""
+    with db.db() as conn:
+        conn.execute("UPDATE runs SET reply_sent_at='' WHERE run_uid=?",
+                     (run_uid,))
+
+
+def mark_reply_sent(run_uid: str) -> None:
+    with db.db() as conn:
+        conn.execute("UPDATE runs SET reply_sent_at=? WHERE run_uid=?",
+                     (now_iso(), run_uid))

@@ -90,6 +90,16 @@ def control_repo(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _legacy_runner_for_tests(monkeypatch):
+    """Never talk to a live OpenCode service from the test suite.
+
+    The session runner is the production default; tests exercise the CLI path
+    (with fake binaries) unless a test opts in explicitly.
+    """
+    monkeypatch.setenv("PERUN_SESSION_RUNNER", "0")
+
+
+@pytest.fixture(autouse=True)
 def _api_token_header(monkeypatch):
     """Send the local API token on every ``TestClient`` request.
 

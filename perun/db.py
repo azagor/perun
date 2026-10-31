@@ -82,6 +82,17 @@ CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_project_id_desc ON runs(project_id, id DESC);
 
+-- One owner per run (the process observing the OpenCode session). A stale lease
+-- (no heartbeat for 30 s) is taken over by the reconciler; the owner token is
+-- checked before finalizing so a zombie cannot overwrite a newer observation.
+CREATE TABLE IF NOT EXISTS run_leases (
+    run_uid    TEXT PRIMARY KEY,
+    owner      TEXT NOT NULL,
+    beat_epoch REAL NOT NULL,
+    epoch      INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_run_leases_beat ON run_leases(beat_epoch);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -431,6 +442,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "runs": [
         ("model_explicit", "INTEGER DEFAULT 0"),
+        # Session-centric runner (v0.10.0): the prompt is admitted to an OpenCode
+        # session by idempotent id, and the reply is delivered exactly once.
+        ("admitted_at", "TEXT DEFAULT ''"),
+        ("reply_sent_at", "TEXT DEFAULT ''"),
+        ("lease_epoch", "INTEGER DEFAULT 0"),
+        ("created_at", "TEXT DEFAULT ''"),
     ],
     # ``embedded_hash`` records which content the stored vector was computed
     # from, so a chunk whose content changed while Ollama was down can be
@@ -556,7 +573,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def init_db() -> None:

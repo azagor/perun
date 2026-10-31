@@ -475,3 +475,36 @@ def test_a_stale_tap_drops_the_cached_draft(bridge, project):
     assert bridge._pending_answers == {}
     assert bridge.work.empty()
     assert "already answered" in bridge.api_calls[-1][1]["text"].lower()
+
+
+def test_the_reply_drainer_delivers_a_finished_run_once(bridge, project):
+    from perun import registry
+
+    session = registry.create_session(project["id"], "ses_reply", title="reply test")
+    registry.set_bridge_link("1", project["id"], session["id"])
+    run = registry.create_run("run_reply", project["id"], "hi", session_pk=session["id"])
+    registry.update_run("run_reply", status="done", ended_at=registry.now_iso(),
+                        output="the delivered reply", opencode_session_id="ses_reply")
+    bridge.sent.clear()
+
+    assert bridge._deliver_pending_replies() == 1
+    assert [m["text"] for m in bridge.sent] == ["the delivered reply"]
+    assert registry.get_run("run_reply")["reply_sent_at"]
+
+    assert bridge._deliver_pending_replies() == 0
+    assert len(bridge.sent) == 1
+
+
+def test_the_reply_drainer_reports_an_empty_run_before_marking_it(bridge, project):
+    from perun import registry
+
+    session = registry.create_session(project["id"], "ses_empty", title="empty")
+    registry.set_bridge_link("1", project["id"], session["id"])
+    registry.create_run("run_empty", project["id"], "hi", session_pk=session["id"])
+    registry.update_run("run_empty", status="failed", ended_at=registry.now_iso(),
+                        output="", error="boom", opencode_session_id="ses_empty")
+    bridge.sent.clear()
+
+    assert bridge._deliver_pending_replies() == 1
+    assert "failed" in bridge.sent[-1]["text"].lower()
+    assert "boom" in bridge.sent[-1]["text"]

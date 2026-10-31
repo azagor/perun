@@ -13,6 +13,7 @@ allowing independent projects to run concurrently.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
@@ -20,12 +21,15 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 import uuid
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any, Iterator
 
-from . import config, control, providers, registry
+from . import config, control, opencode_api, providers, registry
+
+LOG = logging.getLogger(__name__)
 
 MAX_STORED_OUTPUT = 200_000
 HISTORY_LIMIT = 4000
@@ -745,6 +749,9 @@ class Orchestrator:
         self.settings = settings or config.Settings.load()
         self.bus = EventBus()
         self._procs: dict[str, subprocess.Popen] = {}
+        # Runs currently observed in this process (session runner), so the
+        # reconciler never attaches a second observer to a live run.
+        self._observers: set[str] = set()
         self._cancelled: set[str] = set()
         self._done: dict[str, threading.Event] = {}
         self._replies: dict[str, str] = {}
@@ -899,6 +906,16 @@ class Orchestrator:
             self._cancelled.add(run_uid)
         if proc and proc.poll() is None:
             terminate_tree(proc)
+        elif run.get("admitted_at"):
+            # Session-based run: ask the service to stop the turn.
+            sid = str(run.get("opencode_session_id") or "")
+            if sid:
+                try:
+                    from . import opencode_api
+
+                    opencode_api.default_api().interrupt(sid)
+                except Exception:  # pragma: no cover - best effort
+                    self._publish_text(run_uid, "\n[perun] could not interrupt the session\n")
         # Even if the process already exited, force the run to a final state so
         # the dashboard never shows a zombie run. The worker's _finalize may run
         # later for a run that was still queued; _emit_end keeps "end"
@@ -907,6 +924,10 @@ class Orchestrator:
                             error="cancelled by user")
         self._emit_end(run_uid, {"type": "end", "run": run_uid, "status": "cancelled"})
         return True
+
+    def is_cancelled(self, run_uid: str) -> bool:
+        with self._lock:
+            return run_uid in self._cancelled
 
     def _emit_end(self, run_uid: str, event: dict[str, Any]) -> None:
         """Publish a terminal event at most once per run."""
@@ -942,6 +963,26 @@ class Orchestrator:
                                cancelled=True)
                 return
             use_prompt_file = run.get("use_prompt_file", False)
+            # Tests (and emergency rollback) can force the legacy CLI runner with
+            # PERUN_SESSION_RUNNER=0, independently of the stored setting.
+            use_session = (getattr(self.settings, "session_runner_enabled", False)
+                           and os.environ.get("PERUN_SESSION_RUNNER", "1") != "0")
+            if use_session:
+                from .session_runner import SessionRunner
+
+                with self._lock:
+                    self._observers.add(run_uid)
+                try:
+                    SessionRunner(self).execute(run_uid, project, prompt, run)
+                    return
+                except opencode_api.OpenCodeUnavailable as exc:
+                    # The service is not reachable at all: fall back to the CLI
+                    # runner rather than failing a run the user asked for.
+                    LOG.warning("session runner unavailable (%s); using CLI", exc)
+                    registry.update_run(run_uid, admitted_at="")
+                finally:
+                    with self._lock:
+                        self._observers.discard(run_uid)
             self._execute(
                 run_uid, project, prompt, run,
                 use_prompt_file=use_prompt_file,
@@ -1240,6 +1281,155 @@ class Orchestrator:
     # -- helpers ----------------------------------------------------------- #
     def _publish_text(self, run_uid: str, text: str) -> None:
         self.bus.publish(run_uid, {"type": "text", "run": run_uid, "text": text})
+
+    # ---- session reconciliation --------------------------------------- #
+    def observers_snapshot(self) -> set[str]:
+        with self._lock:
+            return set(self._observers)
+
+    def reconcile_startup(self) -> dict[str, list[str]]:
+        """Adopt what survived a restart instead of blindly interrupting it.
+
+        A run that never reached the session (``admitted_at`` empty) has no side
+        effects yet: if it is younger than ``run_resume_window_minutes`` it is
+        re-dispatched, otherwise it is interrupted. A run that was admitted is
+        left to :meth:`reconcile_runs`, which reattaches or finalizes it from the
+        session itself.
+        """
+        resumed: list[str] = []
+        interrupted: list[str] = []
+        try:
+            window = max(1, int(getattr(self.settings, "run_resume_window_minutes", 30)))
+        except (TypeError, ValueError):
+            window = 30
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=window)
+
+        for run in registry.list_active_runs():
+            uid = run["run_uid"]
+            row = registry.get_run(uid) or run
+            if row.get("admitted_at"):
+                continue
+            if row.get("status") == "queued":
+                stamp = row.get("created_at") or row.get("started_at") or ""
+                young = False
+                try:
+                    young = datetime.fromisoformat(stamp) >= cutoff
+                except (TypeError, ValueError):
+                    young = False
+                if young:
+                    self._resume_run(row)
+                    resumed.append(uid)
+                else:
+                    self._mark_interrupted(uid, "queued run expired across a restart")
+                    interrupted.append(uid)
+                continue
+            # Legacy process-based run: only interrupt when nothing is alive.
+            if uid not in self.active():
+                self._mark_interrupted(uid, "interrupted by a Perun restart")
+                interrupted.append(uid)
+        return {"resumed": resumed, "interrupted": interrupted}
+
+    def reconcile_runs(self) -> dict[str, list[str]]:
+        """Reattach to running sessions, finalize finished ones, close orphans."""
+        from . import opencode_api
+
+        result: dict[str, list[str]] = {"reattached": [], "finalized": [],
+                                        "interrupted": []}
+        api = opencode_api.default_api()
+        live = self.observers_snapshot()
+        for run in registry.list_active_runs():
+            uid = run["run_uid"]
+            if uid in live:
+                continue
+            if run["status"] != "running" or not run.get("admitted_at"):
+                continue
+            sid = str(run.get("opencode_session_id") or "")
+            if not sid:
+                self._mark_interrupted(uid, "admitted run has no session id")
+                result["interrupted"].append(uid)
+                continue
+            try:
+                active = api.session_active(sid)
+            except opencode_api.OpenCodeError:
+                # Service down: leave the row alone; the next pass retries.
+                continue
+            if active:
+                if self.attach_session_run(run):
+                    LOG.info("reattached run %s to session %s", uid, sid)
+                    result["reattached"].append(uid)
+                continue
+            reply = self._session_reply_from_messages(api, sid)
+            status = "done" if reply else "interrupted"
+            LOG.info("finalized run %s from session %s as %s", uid, sid, status)
+            self._finalize(
+                uid, status, None,
+                "" if reply else "session ended while Perun was down",
+                cancelled=False, reply=reply, opencode_session_id=sid,
+            )
+            result["finalized"].append(uid)
+        return result
+
+    def attach_session_run(self, run: dict[str, Any]) -> bool:
+        uid = run["run_uid"]
+        with self._lock:
+            if uid in self._observers:
+                return False
+            self._observers.add(uid)
+            self._done.setdefault(uid, threading.Event())
+        project = registry.get_project(run["project_id"])
+        if not project:
+            with self._lock:
+                self._observers.discard(uid)
+            self._mark_interrupted(uid, "run project no longer exists")
+            return False
+
+        def observe() -> None:
+            from .session_runner import SessionRunner
+
+            try:
+                SessionRunner(self).attach(uid, project, run)
+            except Exception:  # pragma: no cover - defensive
+                LOG.exception("could not reattach run %s", uid)
+            finally:
+                with self._lock:
+                    self._observers.discard(uid)
+
+        threading.Thread(target=observe, daemon=True,
+                         name=f"perun-reattach-{uid[:8]}").start()
+        return True
+
+    def _resume_run(self, run: dict[str, Any]) -> None:
+        """Re-dispatch a run that never reached the session (no side effects)."""
+        uid = run["run_uid"]
+        project = registry.get_project(run["project_id"])
+        if not project:
+            self._mark_interrupted(uid, "run project no longer exists")
+            return
+        with self._lock:
+            self._done[uid] = threading.Event()
+            self._cancelled.discard(uid)
+        self.bus.publish(uid, {"type": "queued", "run": uid,
+                               "project": project["slug"]})
+        threading.Thread(
+            target=self._worker,
+            args=(uid, project, run.get("prompt") or "", run),
+            daemon=True, name=f"perun-resume-{uid[:8]}",
+        ).start()
+
+    def _mark_interrupted(self, run_uid: str, reason: str) -> None:
+        registry.update_run(run_uid, status="interrupted",
+                            ended_at=registry.now_iso(), error=reason)
+        run = registry.get_run(run_uid) or {}
+        registry.log_activity(run.get("project_id"), "run",
+                              f"Run {run_uid} interrupted: {reason}",
+                              {"status": "interrupted", "reason": reason})
+        self._emit_end(run_uid, {"type": "end", "run": run_uid,
+                                 "status": "interrupted"})
+
+    def _session_reply_from_messages(self, api: Any, session_id: str) -> str:
+        from .session_runner import SessionRunner
+
+        return SessionRunner(self)._existing_reply(api, session_id)
 
     def _finalize(self, run_uid: str, status: str, exit_code: int | None,
                   error: str, *, cancelled: bool, reply: str = "",
