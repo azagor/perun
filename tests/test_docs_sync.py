@@ -184,21 +184,56 @@ def test_a_declared_changelog_outside_the_project_is_ignored(tmp_path):
 
 
 def test_a_busy_docs_runner_gives_the_proposal_back(tmp_path, monkeypatch):
-    """Two projects executing at once: the second must not be marked as handled."""
+    """A held slot must not make the proposal disappear: the worker waits, then
+    hands the id back so a later attempt can still run its docs step."""
+    project = _project(tmp_path)
+    monkeypatch.setattr(docs_sync, "enabled", lambda settings=None: True)
+    monkeypatch.setattr(docs_sync, "SLOT_TIMEOUT", 0.05)
+    monkeypatch.setattr(docs_sync, "_semaphore", threading.BoundedSemaphore(1))
+    assert docs_sync._semaphore.acquire()          # another update holds the slot
+    try:
+        proposal = _proposal(project, proposal_id="prop_docs_busy")
+        api = FakeAPI()
+        assert docs_sync.after_execution(project, proposal, api=api) is True
+        assert _wait(lambda: docs_sync._running == set(), timeout=3)
+        # Waited out the timeout, did nothing, and did not keep the id.
+        assert api.sessions == [] and api.commands_run == []
+        assert "prop_docs_busy" not in docs_sync._seen
+    finally:
+        docs_sync._semaphore.release()
+
+    # With the slot free the same proposal is handled normally.
+    assert docs_sync.after_execution(project, proposal, api=api) is True
+    assert _wait(lambda: api.commands_run, timeout=3)
+
+
+def test_a_deleted_project_is_not_recreated(tmp_path):
+    """A vanished project directory must not come back as an empty shell."""
+    import shutil
+
+    project = _project(tmp_path)
+    proposal = _proposal(project, proposal_id="prop_docs_deleted")
+    shutil.rmtree(project["path"])
+
+    assert docs_sync.append_changelog(project, proposal) is None
+    assert not Path(project["path"]).exists()
+
+
+def test_a_thread_that_cannot_start_does_not_mark_the_proposal(tmp_path, monkeypatch):
     project = _project(tmp_path)
     monkeypatch.setattr(docs_sync, "enabled", lambda settings=None: True)
 
-    class Busy:
-        def acquire(self, timeout=None):
-            return False
+    class NoThreads:
+        def __init__(self, *args, **kwargs):
+            pass
 
-        def release(self):  # pragma: no cover - never acquired
-            raise AssertionError("released without acquiring")
+        def start(self):
+            raise RuntimeError("can't start new thread")
 
-    monkeypatch.setattr(docs_sync, "_semaphore", Busy())
-    proposal = _proposal(project, proposal_id="prop_docs_busy")
+    monkeypatch.setattr(docs_sync.threading, "Thread", NoThreads)
 
-    assert docs_sync.after_execution(project, proposal, api=FakeAPI()) is True
-    assert _wait(lambda: docs_sync._running == set(), timeout=3)
-    # Not marked handled: a later callback may still run its docs step.
-    assert "prop_docs_busy" not in docs_sync._seen
+    assert docs_sync.after_execution(
+        project, _proposal(project, proposal_id="prop_docs_nothread"),
+        api=FakeAPI()) is False
+    assert "prop_docs_nothread" not in docs_sync._seen
+    assert docs_sync._running == set()

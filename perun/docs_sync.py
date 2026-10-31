@@ -33,6 +33,9 @@ LOG = logging.getLogger("perun.docs")
 
 DOCS_COMMAND = "update-docs"
 DEFAULT_CHANGELOG = "docs/CHANGELOG.md"
+# How long a docs step waits for the machine-wide slot before giving the
+# proposal back (seconds). Short: starting a docs run is two HTTP calls.
+SLOT_TIMEOUT = 30.0
 
 _lock = threading.Lock()
 _running: set[int] = set()
@@ -109,6 +112,12 @@ def append_changelog(project: Dict[str, Any], proposal: Dict[str, Any]) -> Optio
     """
     target = changelog_path(project)
     proposal_id = str(proposal.get("id") or "")
+    root = Path(str(project.get("path") or ""))
+    if not root.is_dir():
+        # Never recreate a project directory: a deleted project must not come
+        # back as an empty shell with a changelog in it.
+        LOG.debug("skipping the changelog entry: %s is not a directory", root)
+        return None
     try:
         if target.is_file():
             text = target.read_text(encoding="utf-8")
@@ -164,7 +173,7 @@ def _work(project: Dict[str, Any], proposal: Dict[str, Any],
     try:
         # A short wait absorbs a burst of executions; past that, give the
         # proposal back so a later attempt can still run its docs step.
-        if not _semaphore.acquire(timeout=30):
+        if not _semaphore.acquire(timeout=SLOT_TIMEOUT):
             with _lock:
                 _seen.discard(proposal_id)
             LOG.info("docs: another update is running; leaving proposal %s for later",
@@ -239,8 +248,18 @@ def after_execution(project: Dict[str, Any], proposal: Dict[str, Any],
                 # Bounded: old ids can never come back.
                 _seen.difference_update(sorted(_seen)[:250])
         _running.add(project_id)
-    threading.Thread(
-        target=_work, args=(project, proposal, api), daemon=True,
-        name=f"docs-update-{project.get('slug') or project_id}",
-    ).start()
+    try:
+        threading.Thread(
+            target=_work, args=(project, proposal, api), daemon=True,
+            name=f"docs-update-{project.get('slug') or project_id}",
+        ).start()
+    except RuntimeError:  # pragma: no cover - thread exhaustion is rare
+        # Nothing was started: do not pretend the proposal was handled.
+        with _lock:
+            _running.discard(project_id)
+            if proposal_id:
+                _seen.discard(proposal_id)
+        LOG.warning("could not start the docs update for %s", project.get("slug"),
+                    exc_info=True)
+        return False
     return True

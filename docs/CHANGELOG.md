@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The docs step survives awkward edges
+
+* `append_changelog()` no longer recreates a project directory that disappeared
+  mid-run (it used to `mkdir(parents=True)`, which would resurrect a deleted
+  project as an empty shell holding one changelog line).
+* A docs step whose thread cannot start no longer marks the proposal as handled:
+  the id and the project's running flag are released, so a later attempt can run.
+* The machine-wide slot wait is now a named constant (`SLOT_TIMEOUT`, 30 s),
+  covered by a test that holds the slot, observes the give-back, and then verifies
+  the same proposal is handled once the slot is free.
+* Settings gained a **docs: run /update-docs after an executed proposal** checkbox
+  (the flag was API/file-only), so the pipeline can be switched off without
+  editing `config.json`.
 
 ## v0.10.19
 

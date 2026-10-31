@@ -5499,6 +5499,7 @@ async function viewSettings() {
             <label class="row" style="gap:6px" title="Push anything that needs a human decision (permission requests, forms, agent questions, proposals) to your paired Telegram chats, and deliver the reply back to that exact session."><input type="checkbox" id="s-attention" ${s.attention_enabled ? 'checked' : ''}> operator inbox (Telegram)</label>
             <label class="row" style="gap:6px" title="Log what would be sent, send nothing. Turn this off once the cards look right."><input type="checkbox" id="s-attention-shadow" ${s.attention_shadow ? 'checked' : ''}> inbox: log only (shadow)</label>
             <label class="row" style="gap:6px" title="A room message that needs you waits this long, so a burst becomes one card per project (up to five items). 0 = send every card immediately. Permissions, forms, proposals and agent questions are never delayed.">inbox: group a burst for <input type="number" min="0" id="s-digest" style="width:5.5em" value="${esc(s.attention_digest_seconds ?? 0)}"> s</label>
+            <label class="row" style="gap:6px" title="After an approved proposal is executed, Perun runs the installed /update-docs command in that project so CHANGELOG, CODEMAP and TECHNICAL follow the code. The executor is sandboxed to its targets and cannot write docs itself."><input type="checkbox" id="s-docs" ${s.docs_update_after_execution !== false ? 'checked' : ''}> docs: run /update-docs after an executed proposal</label>
          </div>
          <div class="form-actions">
             <button class="btn primary" id="s-save">Save settings</button>
@@ -5677,6 +5678,7 @@ async function viewSettings() {
             routing_shadow: $('#s-routing-shadow').checked,
             attention_enabled: $('#s-attention').checked,
             attention_shadow: $('#s-attention-shadow').checked,
+            docs_update_after_execution: $('#s-docs').checked,
         };
         // An empty field means "leave it as it is"; 0 is a real value (send every
         // card immediately), so it must not be confused with "unset".

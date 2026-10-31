@@ -1697,7 +1697,11 @@ run fails — one bullet is appended under `## Unreleased` instead, idempotent p
 proposal id and honouring the manifest's `docs.changelog` path. The hook sits where
 the status becomes `executed`, which covers dashboard execution, policy
 auto-approve from the server and from a chat/MCP agent, retries, and external
-handoffs.
+handoffs. Each docs update opens its own `docs: <slug>` session; OpenCode owns the
+lifecycle of those sessions and they appear in the dashboard like any other. The
+command runs under the project's default agent, so a project whose permissions ask
+before writing raises a normal permission card in the operator inbox — the
+intended way to approve a docs run on a locked-down project.
 
 Lifecycle chat notifications keep project participants informed without
 requiring the dashboard: a plain-text "Proposal … is now executing" notice is
