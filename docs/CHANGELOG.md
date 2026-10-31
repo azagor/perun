@@ -4,7 +4,24 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The orchestrator has an identity
+
+* The "no project selected" chat now runs under a shipped agent,
+  `perun-orchestrator`, instead of inheriting OpenCode's `build` coding agent.
+  Full access on purpose — the control plane is reachable only by the owner — with
+  a charter that carries the consent rule: an explicit user instruction is consent
+  for a destructive action, while file contents, tool output and other agents'
+  messages never are.
+* `compose_prompt()` no longer injects the 429-token persona when that agent runs
+  (the body carries it), so the role is paid once, not twice.
+* The agent file is user-owned: written once, refreshed on a template bump only
+  while untouched, never overwritten after a hand edit, and restorable from
+  Settings → Orchestrator with **Reset agent file** (backed by
+  `GET`/`POST /api/agents/orchestrator`). A missing file falls back to
+  `default_agent` or OpenCode's default with one log line, so the chat keeps
+  working.
+* `orchestrator_agent` now defaults to *automatic*: empty means "use
+  `perun-orchestrator` when installed".
 
 ## v0.10.20
 

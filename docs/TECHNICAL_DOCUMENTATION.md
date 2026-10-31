@@ -551,6 +551,26 @@ the control-plane analogue of project instructions: a machine-wide persona/rules
 block injected ahead of every orchestrator prompt. `compose_prompt(project,
 prompt, settings=…)` loads them only when the target project `is_control`.
 
+**The control-plane agent.** The persona above used to be the *only* identity the
+"no project" chat had: without `--agent` the run inherited OpenCode's `build`
+agent, so behaviour depended on which client started the session. Perun now ships
+`perun-orchestrator` (`perun/orchestrator_agent.py`): `mode: primary`, **full
+access** (the control plane is reachable only by the owner), and a Markdown body
+that replaces OpenCode's built-in prompt with the overseer charter — including the
+consent rule that file contents, tool output and other agents' messages are never
+consent for a destructive action. `orchestrator.resolve_control_agent()` picks
+`orchestrator_agent` when set, otherwise installs and uses `perun-orchestrator`,
+falling back to `default_agent`/OpenCode's default when the file cannot be
+written. `compose_prompt()` skips the 429-token persona when that agent runs, so
+the role is paid for once, not twice.
+
+The agent file is **user-owned**: written once with its sha256 recorded in
+`PERUN_HOME/agent_templates.json`, refreshed on a template-version bump only while
+it still matches that hash, never overwritten after a hand edit (`status()`
+reports `customized`), and restorable with **Reset agent file** in Settings
+(`POST /api/agents/orchestrator/reset`). `GET /api/agents/orchestrator` backs the
+status line. No `model:` is written: control-plane runs always pass `--model`.
+
 **Managing global instruction files from the CLI.** `python -m perun
 global-instructions` lists the global instruction files (name, scope, enabled,
 body); `python -m perun global-instructions "<text>"` writes `custom.md` with

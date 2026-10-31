@@ -5537,14 +5537,46 @@ async function viewSettings() {
             <label class="field"><span class="lab">Orchestrator model</span><span id="s-orch-model-host"></span></label>
             <label class="field"><span class="lab">Orchestrator agent</span><span id="s-orch-agent-host"></span></label>
          </div>
+         <p class="meta" id="s-orch-agent-status">checking the agent file…</p>
          <div class="form-actions">
             <button class="btn primary" id="s-orch-save">Save orchestrator</button>
             <button class="btn ghost" id="s-orch-open">▶ Open orchestrator chat</button>
+            <button class="btn ghost" id="s-orch-reset" title="Restore Perun's shipped orchestrator agent template. Any edits you made to the agent file are replaced.">↺ Reset agent file</button>
          </div>`);
     v.appendChild(orchCard);
     const msOrch = modelSelect({ value: s.orchestrator_model || '', placeholder: 'inherit default model' });
     orchCard.querySelector('#s-orch-model-host').appendChild(msOrch);
     orchCard.querySelector('#s-orch-agent-host').appendChild(sOrchAgent);
+
+    async function loadOrchestratorAgentStatus() {
+        const line = orchCard.querySelector('#s-orch-agent-status');
+        try {
+            const info = await api('/api/agents/orchestrator');
+            const id = info.agent_id || 'perun-orchestrator';
+            if (!info.installed) {
+                line.innerHTML = `<b>${esc(id)}</b> is not installed yet — created on the next orchestrator run or <span class="mono">python -m perun install</span>.`;
+            } else if (info.customized) {
+                line.innerHTML = `<b>${esc(id)}</b> is <b>customized</b> — your edits are kept. <span class="mono">${esc(info.path || '')}</span>`;
+            } else {
+                line.innerHTML = `<b>${esc(id)}</b> installed (template v${esc(String(info.installed_version || info.template_version || 1))}).`;
+            }
+        } catch (e) {
+            line.textContent = 'could not read the agent file state';
+        }
+    }
+    loadOrchestratorAgentStatus();
+
+    orchCard.querySelector('#s-orch-reset').addEventListener('click', () => confirmDialog(
+        'Reset orchestrator agent',
+        'Replace the orchestrator agent file with Perun\'s shipped template? Any edits you made to it are lost.',
+        async () => {
+            try {
+                await api('/api/agents/orchestrator/reset', { method: 'POST', body: {} });
+                await api('/api/agents?refresh=true');
+                toast('Orchestrator agent reset', 'ok');
+                await loadOrchestratorAgentStatus();
+            } catch (e) { toast(e.message, 'err'); }
+        }, 'Reset'));
 
     orchCard.querySelector('#s-orch-save').addEventListener('click', async () => {
         try {

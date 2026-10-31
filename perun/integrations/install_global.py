@@ -330,6 +330,14 @@ def install(*, force: bool = False, index: bool = True) -> int:
     #     `instructions[]` entry above is inert under V2, kept for V1).
     agents_path = _sync_agents_block()
 
+    # 2c. The control-plane agent, so the "no project" chat has an identity.
+    try:
+        from .. import orchestrator_agent as _orchestrator_agent
+
+        _orchestrator_agent.ensure()
+    except Exception:  # pragma: no cover - installing the agent is best effort
+        LOG.debug("could not install the orchestrator agent", exc_info=True)
+
     print(f"[perun] config:      {path}")
     if backup:
         print(f"[perun] backed up:   {backup}")

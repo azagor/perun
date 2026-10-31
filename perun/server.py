@@ -3245,6 +3245,25 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Agents installed by Perun (the control-plane identity)
+# --------------------------------------------------------------------------- #
+@app.get("/api/agents/orchestrator")
+def api_orchestrator_agent() -> dict[str, Any]:
+    """State of the ``perun-orchestrator`` agent (installed / customized)."""
+    from . import orchestrator_agent
+
+    return _ok(**orchestrator_agent.status())
+
+
+@app.post("/api/agents/orchestrator/reset")
+def api_orchestrator_agent_reset() -> dict[str, Any]:
+    """Restore the shipped agent template, discarding local edits."""
+    from . import orchestrator_agent
+
+    return _ok(**orchestrator_agent.reset())
+
+
+# --------------------------------------------------------------------------- #
 # Telegram (lightweight passthrough for the dashboard)
 # --------------------------------------------------------------------------- #
 def _telegram_api(method: str, **params: Any) -> dict[str, Any]:

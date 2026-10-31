@@ -113,6 +113,10 @@ with `python -m perun project-roots --add <name> <path>`.
   the proposal reaches `executed` (falling back to one changelog bullet when the
   command is missing). Keep it fire-and-forget: a docs run must never change or
   delay an execution result.
+* **Agent files are user-owned.** `perun-orchestrator` (and any agent Perun
+  installs) is written once and refreshed only while its bytes still match the
+  sha256 Perun recorded; a hand-edited file is never overwritten. `reset()` is the
+  only way back, and it is always an explicit user action.
 * **Every project room publishes its operator contact.** Derive the human from
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`

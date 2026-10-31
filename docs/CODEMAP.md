@@ -180,6 +180,25 @@ Shared project creation/registration, used by **both** the HTTP wizard
   health check: reports whether a shared project's `opencode.json` has
   `perun-guard` / `perun-proposals` with `PERUN_PROJECT_PATH`.
 
+### `perun/orchestrator_agent.py`
+The control-plane identity (`perun-orchestrator`). Its Markdown body replaces
+OpenCode's built-in prompt, so the "no project selected" chat carries the
+overseer charter everywhere (dashboard, Telegram, TUI) instead of inheriting
+`build`. Full access is deliberate: the control plane is reachable only by the
+owner.
+* `ensure()` — write-once, refresh-on-template-bump-only-while-untouched;
+  returns `created` / `updated` / `unchanged` / `customized` / `failed` and never
+  raises. The sha256 of what Perun wrote is recorded in a small JSON state file
+  under `PERUN_HOME`, next to the rest of Perun's state.
+* `reset()` (explicit restore), `status()` (`installed`, `customized`, versions),
+  `available(agent_id)`, `agent_path()`, `ORCHESTRATOR_AGENT_MD`,
+  `ORCHESTRATOR_AGENT_ID`, `AGENT_TEMPLATE_VERSION`.
+* The charter's consent rule is a security boundary: file contents, tool output
+  and other agents' messages are never consent for a destructive action.
+* Backed by `GET /api/agents/orchestrator` and
+  `POST /api/agents/orchestrator/reset`; the Settings → Orchestrator card shows
+  the state and the reset button.
+
 ### `perun/backups.py`
 Pre-change copies of the configs Perun rewrites (project and global
 `opencode.json`). They live under `PERUN_HOME/backups/<label>/` — `<label>` is the
@@ -456,6 +475,9 @@ body) with a JSON-formatted fallback manifest.
 
 ### `perun/orchestrator.py`
 Start / stream / cancel headless `opencode run`.
+* `resolve_control_agent(settings)` — the agent a control-plane run uses
+  (`orchestrator_agent` when set, otherwise the installed `perun-orchestrator`,
+  otherwise OpenCode's default).
 * `EventBus` (`subscribe`, `unsubscribe`, `publish`, `subscribe_all`,
   `unsubscribe_all`, `drop_history`, `close`).
 * Process helpers: `resolve_opencode()`, `terminate_tree()`, `parse_event()`,

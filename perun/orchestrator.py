@@ -374,8 +374,35 @@ def _prefetch_blocks(project: dict[str, Any], prompt: str) -> list[str]:
     ]
 
 
+def resolve_control_agent(settings: config.Settings | None = None) -> str:
+    """The agent a control-plane run should use ("" = OpenCode's default).
+
+    ``orchestrator_agent`` wins when set. Empty means "automatic": Perun installs
+    and uses its own ``perun-orchestrator`` agent, falling back to nothing (the
+    caller then tries ``default_agent``) when the file cannot be written.
+    """
+    from . import orchestrator_agent as _agents
+
+    configured = (getattr(settings, "orchestrator_agent", "") or "").strip()
+    if configured:
+        wanted = configured
+    else:
+        # An explicit ``default_agent`` keeps working exactly as it used to for the
+        # control plane; only a machine with neither setting gets Perun's agent.
+        wanted = ((getattr(settings, "default_agent", "") or "").strip()
+                  or _agents.ORCHESTRATOR_AGENT_ID)
+    if wanted == _agents.ORCHESTRATOR_AGENT_ID:
+        _agents.ensure()
+    if _agents.available(wanted):
+        return wanted
+    LOG.warning("orchestrator agent %s is not installed; using the default agent "
+                "for the control plane", wanted)
+    return ""
+
+
 def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
-                   settings: config.Settings | None = None) -> str:
+                   settings: config.Settings | None = None,
+                   agent: str = "") -> str:
     """Prepend per-session instructions to a fresh session's prompt.
 
     Layers ride along, in order:
@@ -399,7 +426,12 @@ def compose_prompt(project: dict[str, Any], prompt: str, *, new_session: bool,
         return prompt
     blocks: list[str] = []
     if control.is_control(project):
-        blocks.append(control.ORCHESTRATOR_INSTRUCTIONS.strip())
+        from . import orchestrator_agent as _agents
+
+        # The control-plane agent carries the role in its own system prompt, so
+        # injecting the same text again would pay for it twice.
+        if (agent or "").strip() != _agents.ORCHESTRATOR_AGENT_ID:
+            blocks.append(control.ORCHESTRATOR_INSTRUCTIONS.strip())
         blocks.extend(instruction_blocks("orchestrator"))
     blocks.extend(instruction_blocks("all_projects"))
     if not control.is_control(project):
@@ -812,7 +844,8 @@ class Orchestrator:
         # Resolve the agent first because per-agent model defaults depend on it.
         agent = (agent or "").strip() or project.get("agent")
         if not agent and control.is_control(project):
-            agent = self.settings.orchestrator_agent
+            # The control plane has its own identity; see resolve_control_agent().
+            agent = resolve_control_agent(self.settings)
         if not agent and control.is_control(project):
             agent = self.settings.default_agent
 
@@ -1019,6 +1052,7 @@ class Orchestrator:
             project, prompt,
             new_session=not oc_sid and not skip_instructions,
             settings=self.settings,
+            agent=run.get("agent") or "",
         )
         argv = resolve_opencode("opencode") + ["run", "--format", "json", "--auto"]
         # Forward the resolved model whenever there is one — `start_run` resolves
