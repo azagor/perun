@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.9.2 (see §15). Show how many other items are waiting on each card and log the inbox coming online.
+**Latest release:** v0.9.3 (see §15). Redact credentials on permission cards, clean inbox rows explicitly, and stop a single empty poll from cancelling a blocking card.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1914,6 +1914,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.9.3: Redact credentials on permission cards, clean inbox rows explicitly, and stop a single empty poll from cancelling a blocking card.
+
 ### 2026-10-31 — v0.9.2: Show how many other items are waiting on each card and log the inbox coming online.
 
 ### 2026-10-31 — v0.9.1: Deliver operator answers queued while the PerunChat socket was down.
