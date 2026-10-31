@@ -170,3 +170,35 @@ def test_the_changelog_path_follows_the_manifest(tmp_path):
     manifest.save(project["path"], data, body="# demo")
 
     assert docs_sync.changelog_path(project) == project["path"] / "CHANGELOG.md"
+
+def test_a_declared_changelog_outside_the_project_is_ignored(tmp_path):
+    """A proposal can edit the manifest; it must not redirect the docs write."""
+    project = _project(tmp_path)
+    data = manifest.from_project(project)
+    data["docs"] = {"changelog": "../../outside.md"}
+    manifest.save(project["path"], data, body="# demo")
+
+    path = docs_sync.changelog_path(project)
+    assert path == project["path"] / "docs" / "CHANGELOG.md"
+    assert path.resolve().is_relative_to(project["path"].resolve())
+
+
+def test_a_busy_docs_runner_gives_the_proposal_back(tmp_path, monkeypatch):
+    """Two projects executing at once: the second must not be marked as handled."""
+    project = _project(tmp_path)
+    monkeypatch.setattr(docs_sync, "enabled", lambda settings=None: True)
+
+    class Busy:
+        def acquire(self, timeout=None):
+            return False
+
+        def release(self):  # pragma: no cover - never acquired
+            raise AssertionError("released without acquiring")
+
+    monkeypatch.setattr(docs_sync, "_semaphore", Busy())
+    proposal = _proposal(project, proposal_id="prop_docs_busy")
+
+    assert docs_sync.after_execution(project, proposal, api=FakeAPI()) is True
+    assert _wait(lambda: docs_sync._running == set(), timeout=3)
+    # Not marked handled: a later callback may still run its docs step.
+    assert "prop_docs_busy" not in docs_sync._seen

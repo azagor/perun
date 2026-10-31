@@ -62,7 +62,13 @@ def enabled(settings: Optional["config.Settings"] = None) -> bool:
 
 
 def changelog_path(project: Dict[str, Any]) -> Path:
-    """The changelog the project declares, or ``docs/CHANGELOG.md``."""
+    """The changelog the project declares, or ``docs/CHANGELOG.md``.
+
+    A declared path is honoured only when it stays inside the project: the
+    manifest is project content, and a proposal can edit it, so a
+    ``docs.changelog: ../../…`` must never turn the post-execution step into a
+    write outside the project.
+    """
     root = Path(str(project.get("path") or ""))
     declared = ""
     try:
@@ -71,7 +77,16 @@ def changelog_path(project: Dict[str, Any]) -> Path:
         declared = str(((data or {}).get("docs") or {}).get("changelog") or "").strip()
     except Exception:  # pragma: no cover - a broken manifest must not block docs
         declared = ""
-    return root / (declared or DEFAULT_CHANGELOG)
+    if declared:
+        try:
+            from . import path_guard
+
+            if path_guard.check(str(root), declared)[0]:
+                return root / declared
+        except Exception:  # pragma: no cover - a guard failure falls through
+            pass
+        LOG.warning("ignoring docs.changelog outside the project: %s", declared)
+    return root / DEFAULT_CHANGELOG
 
 
 def _entry(proposal: Dict[str, Any]) -> str:
@@ -145,8 +160,15 @@ def command_installed(api: "opencode_api.OpenCodeAPI", project: Dict[str, Any]) 
 def _work(project: Dict[str, Any], proposal: Dict[str, Any],
           api: Optional["opencode_api.OpenCodeAPI"]) -> None:
     project_id = int(project["id"])
+    proposal_id = str(proposal.get("id") or "")
     try:
-        if not _semaphore.acquire(timeout=0):
+        # A short wait absorbs a burst of executions; past that, give the
+        # proposal back so a later attempt can still run its docs step.
+        if not _semaphore.acquire(timeout=30):
+            with _lock:
+                _seen.discard(proposal_id)
+            LOG.info("docs: another update is running; leaving proposal %s for later",
+                     proposal_id)
             return
         try:
             client = api or opencode_api.default_api()

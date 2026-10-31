@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The docs step cannot be redirected outside the project
+
+* `docs.changelog` in a project manifest is project content, and a proposal can
+  edit it, so `../../outside.md` would have made the fallback changelog write
+  (and `mkdir`) outside the project root. The declared path is now honoured only
+  when `path_guard.check()` says it is inside the project; otherwise the default
+  `docs/CHANGELOG.md` is used and the ignored value is logged.
+* A proposal whose docs step hit the machine-wide slot while another update was
+  starting was marked as handled and silently lost its changelog entry. The
+  worker now waits up to 30 s for the slot and, if it is still busy, releases the
+  proposal id so a later attempt can run it.
 
 ## v0.10.18
 
