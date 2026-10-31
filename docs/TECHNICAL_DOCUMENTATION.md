@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.7 (see §15). No duplicated messages in the dashboard chat; retry the operator-contact notice when a room is not joined yet.
+**Latest release:** v0.10.8 (see §15). Publish the operator-contact notice as soon as a project room join is acknowledged.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2019,6 +2019,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.8: Publish the operator-contact notice as soon as a project room join is acknowledged.
+
 ### 2026-10-31 — v0.10.7: No duplicated messages in the dashboard chat; retry the operator-contact notice when a room is not joined yet.
 
 ### 2026-10-31 — v0.10.6: Each project room learns who its human is and how to reach them, derived from perun_owner_name.
