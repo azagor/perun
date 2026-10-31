@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.17
+
+*Released 2026-10-31.*
+
 ### A partially delivered digest is not repeated
 
 * When one paired chat refused a digest card, the items were both re-queued and
