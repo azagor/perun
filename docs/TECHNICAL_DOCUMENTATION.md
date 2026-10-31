@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.15 (see §15). Close the audit follow-ups: digested items survive restarts as shown, the poller tolerates a bad interval, backups keep the pre-migration copy, and the CLI probe runs once.
+**Latest release:** v0.10.16 (see §15). Keep config backups out of project repos under PERUN_HOME/backups, and let the dashboard adjust the digest window.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2083,6 +2083,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.16: Keep config backups out of project repos under PERUN_HOME/backups, and let the dashboard adjust the digest window.
+
 ### 2026-10-31 — v0.10.15: Close the audit follow-ups: digested items survive restarts as shown, the poller tolerates a bad interval, backups keep the pre-migration copy, and the CLI probe runs once.
 
 ### 2026-10-31 — v0.10.14: Redact coalesced notices like ordinary cards; keep the dashboard's empty-message guard in the no-module fallback.

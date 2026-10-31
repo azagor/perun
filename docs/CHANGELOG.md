@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.16
+
+*Released 2026-10-31.*
+
 ### Backups leave the repository
 
 * Config backups no longer sit next to the file they protect. `opencode.json.bak`
