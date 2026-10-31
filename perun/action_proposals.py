@@ -757,6 +757,14 @@ def complete_external_execution(
                 "executor_id": executor_id,
             },
         )
+        if proposal.get("status") == "executed":
+            try:
+                from . import docs_sync
+
+                docs_sync.after_execution(project, proposal)
+            except Exception:  # pragma: no cover - docs must not break execution
+                logger.debug("could not start the docs update for %s",
+                             proposal_id, exc_info=True)
     return proposal
 
 
@@ -1225,6 +1233,16 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             {"proposal_id": proposal_id, "status": proposal["status"],
              "result": proposal.get("result", "")[:200]},
         )
+        if proposal.get("status") == "executed":
+            # The executor is sandboxed to the approved targets, so it cannot
+            # update the docs itself: run the installed /update-docs command.
+            try:
+                from . import docs_sync
+
+                docs_sync.after_execution(project, proposal)
+            except Exception:  # pragma: no cover - docs must not break execution
+                logger.debug("could not start the docs update for %s",
+                             proposal_id, exc_info=True)
     return proposal
 
 

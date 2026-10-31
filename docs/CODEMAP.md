@@ -192,6 +192,21 @@ a project repository never gains an untracked `.bak` that could be committed.
 * Used by `projects.sync_opencode_config()` (which returns the path as `backup`)
   and `install_global._backup()`.
 
+### `perun/docs_sync.py`
+Documentation follows the code. The executor of a shared-project proposal is
+sandboxed to its approved targets (`PERUN_ALLOWLIST` + guard + post-run audit),
+so it can never write `docs/` — which is how projects ended up with code changes
+and an empty changelog. After a proposal reaches `executed`, this module opens a
+session in the project and runs the installed `/update-docs` command through
+`opencode_api.run_command()`; the command's own template decides what is written.
+* `after_execution(project, proposal, api=…, settings=…)` — fire-and-forget, once
+  per proposal id, one run per project (and one machine-wide), gated by
+  `docs_update_after_execution`; a failed run never breaks the execution result.
+* `append_changelog()` — deterministic fallback (command not installed, or the run
+  failed): one bullet under `## Unreleased`, idempotent per proposal id, honouring
+  the manifest's `docs.changelog` path.
+* `command_installed()`, `changelog_path()`, `reset_state()`.
+
 ### `perun/providers.py`
 LLM provider discovery, status and configuration. Perun never stores credentials
 itself; it edits OpenCode's own config so the CLI/server remain the source of truth.
@@ -633,7 +648,9 @@ cannot reach.
   (`/api/debug/location`), `session()`, `pending_permissions(location)`,
   `pending_forms(location)`, `reply_permission()`, `reply_form()`, `prompt()`
   (`delivery` `queue`/`steer`, `id` for idempotent admission), `set_inbox_delivery()`,
-  `cancel_inbox()`, `interrupt()`.
+  `cancel_inbox()`, `interrupt()`, `commands(directory)` (`GET /api/command`) and
+  `run_command(session_id, name, text)` (`POST /api/session/{id}/command` — the
+  same entry point the TUI uses for `/update-docs`).
 * Auth is HTTP Basic `opencode:<password>` using the password from OpenCode's
   own service file in the user's config directory (or
   `OPENCODE_SERVICE_PASSWORD`); it is kept in memory only — never logged,
@@ -1488,6 +1505,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   label cannot escape the tree), second-resolution stamps never overwrite, a
   failed copy is swallowed, pruning keeps the newest N per stem and never touches
   another file's copies, `keep=0` is a no-op.
+* `test_docs_sync.py` — the post-execution docs step: `/update-docs` is run through
+  the service command endpoint, a missing command falls back to one changelog
+  line, a failing command still records the change, only one run per project, and
+  the entry is idempotent and preserves existing sections.
 * `conftest.py` — shared fixtures: `_fresh_db` (autouse per-test database),
   `workdir`, `control_repo`, and `_api_token_header` (autouse: teaches
   `TestClient` to send `X-Perun-Token`, since state-changing `/api/*` calls now

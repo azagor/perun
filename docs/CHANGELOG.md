@@ -4,7 +4,25 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation follows the code
+
+* A shared-project proposal is executed by an agent that is **sandboxed to its
+  approved targets** (`PERUN_ALLOWLIST` + `perun-guard` + the post-run filesystem
+  audit), so it could never write `docs/`. That is why projects accumulated code
+  changes with an empty `docs/CHANGELOG.md`. After a proposal reaches `executed`,
+  Perun now opens a session in the project and runs the installed **`/update-docs`
+  command** through the service endpoint the TUI uses
+  (`POST /api/session/{id}/command`); the command's own template drives the work.
+* `perun/docs_sync.py`: once per proposal id, one run per project (and one
+  machine-wide), fire-and-forget so the execution result never waits on it,
+  gated by `docs_update_after_execution` (default on). When the command is not
+  installed — or the run fails — one bullet is appended under `## Unreleased`
+  instead, idempotent per proposal, honouring the manifest's `docs.changelog`.
+* Every production path is covered because the hook sits where the status becomes
+  `executed`: dashboard execute, policy auto-approve (server *and* chat/MCP),
+  retries, and external handoff completion.
+* `opencode_api` gained `commands(directory)` and `run_command(session_id, name,
+  text)`.
 
 ## v0.10.17
 

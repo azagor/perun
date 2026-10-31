@@ -100,6 +100,19 @@ def _legacy_runner_for_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_docs_runs_in_tests(monkeypatch):
+    """The post-execution /update-docs run must never start inside a test.
+
+    It opens a session against the live service, which would make an executing
+    proposal test depend on whatever OpenCode is installed. ``tests/test_docs_sync.py``
+    turns the gate back on and injects a fake client instead.
+    """
+    from perun import docs_sync
+
+    monkeypatch.setattr(docs_sync, "enabled", lambda settings=None: False)
+
+
+@pytest.fixture(autouse=True)
 def _api_token_header(monkeypatch):
     """Send the local API token on every ``TestClient`` request.
 

@@ -3121,6 +3121,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "routing_enabled", "routing_shadow",
         "attention_enabled", "attention_shadow", "attention_show_paths",
         "attention_plain_text_confirm", "attention_ingest_events",
+        "docs_update_after_execution",
         "session_runner_enabled",
     }
     list_fields = {

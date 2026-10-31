@@ -260,7 +260,32 @@ class OpenCodeAPI:
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         return data if isinstance(data, dict) else {}
 
+    def commands(self, directory: str) -> List[Dict[str, Any]]:
+        """Slash commands available in *directory* (``GET /api/command``)."""
+        payload = self._request("GET", "/api/command", location=str(directory),
+                                allow_404=True)
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict):
+            rows = data.get("commands") or data.get("items") or []
+        else:
+            rows = data or []
+        return [r for r in rows if isinstance(r, dict)]
+
+    def run_command(self, session_id: str, name: str, text: str = "") -> Dict[str, Any]:
+        """Run a slash command in a session (``POST /api/session/{id}/command``).
+
+        This is the same entry point the TUI uses for ``/update-docs``; the body
+        is the command's own template, so Perun never re-implements it.
+        """
+        body = {"name": str(name), "text": str(text or "")}
+        payload = self._request(
+            "POST", f"/api/session/{session_id}/command", body=body,
+        )
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, dict) else (payload if isinstance(payload, dict) else {})
+
     def messages(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return the most recent messages of one session."""
         payload = self._request(
             "GET", f"/api/session/{session_id}/message?limit={int(limit)}",
             allow_404=True,

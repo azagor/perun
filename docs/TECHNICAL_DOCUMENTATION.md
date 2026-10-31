@@ -1684,6 +1684,21 @@ runs exactly once. Before the rewrite the previous file is copied to
 never lands beside the config, because a project config lives in a repository and
 a sibling `.bak` would show up as an untracked file.
 
+**Docs follow the code.** The executor of a proposal is sandboxed to its approved
+targets (`PERUN_ALLOWLIST`, `perun-guard`, and a post-run filesystem audit), so it
+cannot write `docs/` — that is why projects used to accumulate code changes with an
+empty changelog. Once a proposal reaches `executed`, `docs_sync.after_execution()`
+opens a session in the project and runs the installed **`/update-docs` command**
+through `POST /api/session/{id}/command` (the endpoint the TUI uses), so the
+command's own template decides what is written. It runs once per proposal, at most
+one per project (one machine-wide), never blocks the execution result, and is
+gated by `docs_update_after_execution`. When the command is not installed — or the
+run fails — one bullet is appended under `## Unreleased` instead, idempotent per
+proposal id and honouring the manifest's `docs.changelog` path. The hook sits where
+the status becomes `executed`, which covers dashboard execution, policy
+auto-approve from the server and from a chat/MCP agent, retries, and external
+handoffs.
+
 Lifecycle chat notifications keep project participants informed without
 requiring the dashboard: a plain-text "Proposal … is now executing" notice is
 posted when a run starts, a State Digest is posted when it completes or fails,

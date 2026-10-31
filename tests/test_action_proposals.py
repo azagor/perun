@@ -1610,3 +1610,30 @@ def test_small_targets_use_a_content_hash(tmp_path):
     snapshot = json.loads(action_proposals.get(proposal["id"])["approval_snapshot"])
     assert snapshot[target]["kind"] == "file"
     assert len(snapshot[target]["sha256"]) == 64
+
+def test_execution_triggers_the_docs_step(tmp_path, monkeypatch):
+    """A successful execution asks for /update-docs; a failed one does not."""
+    from perun import docs_sync
+
+    calls = []
+    monkeypatch.setattr(
+        docs_sync, "after_execution",
+        lambda project, proposal, **kw: calls.append((project["slug"], proposal["status"])),
+    )
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = project["path"] / "api.py"
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "edit"}
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    orch = type("MockOrchestrator", (), {})()
+    orch.run_and_wait = lambda *a, **kw: (
+        target.write_text("x = 1\n", encoding="utf-8"),
+        {"run": {"status": "done"}, "reply": "done"},
+    )[1]
+
+    action_proposals.execute(proposal["id"], orchestrator_instance=orch)
+
+    assert calls == [(project["slug"], "executed")]

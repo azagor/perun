@@ -107,6 +107,12 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
+* **Docs are part of the proposal pipeline.** The executor is sandboxed to the
+  approved targets, so it cannot write `docs/`; never widen the allowlist to let
+  it. `docs_sync.after_execution()` runs the installed `/update-docs` command once
+  the proposal reaches `executed` (falling back to one changelog bullet when the
+  command is missing). Keep it fire-and-forget: a docs run must never change or
+  delay an execution result.
 * **Every project room publishes its operator contact.** Derive the human from
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`

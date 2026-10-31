@@ -205,6 +205,11 @@ class Settings:
     # disables coalescing. Decisions — permissions, forms, proposals, handoffs,
     # perun_ask_operator — are never delayed.
     attention_digest_seconds: int = 30
+    # After a shared-project proposal is executed, run the installed
+    # /update-docs command in that project so CHANGELOG/CODEMAP/TECHNICAL follow
+    # the code. The executor is sandboxed to its approved targets and cannot
+    # write docs itself.
+    docs_update_after_execution: bool = True
     # Default delivery for session answers: "queue" (after the current turn) or
     # "steer" (interrupt now).
     attention_default_delivery: str = "queue"
