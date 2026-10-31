@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.11 (see §15). Answer messages typed in the dashboard chat, and stop polling five times a minute once events drive detection.
+**Latest release:** v0.10.12 (see §15). Write mcp.servers on a V2 CLI (migrating V1 files once, with a backup) and coalesce informational notices into one card per burst.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2074,6 +2074,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.12: Write mcp.servers on a V2 CLI (migrating V1 files once, with a backup) and coalesce informational notices into one card per burst.
+
 ### 2026-10-31 — v0.10.11: Answer messages typed in the dashboard chat, and stop polling five times a minute once events drive detection.
 
 ### 2026-10-31 — v0.10.10: Pick up blocked sessions from the OpenCode event stream; polling becomes the reconciliation safety net.

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.12
+
+*Released 2026-10-31.*
+
 ### The MCP block follows the installed CLI
 
 * OpenCode V2 puts MCP servers under `mcp.servers.<name>` and disables one with
