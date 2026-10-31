@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.10
+
+*Released 2026-10-31.*
+
 ### Attention is picked up from the event stream
 
 * The operator inbox no longer waits for a poll to notice a blocked session. The

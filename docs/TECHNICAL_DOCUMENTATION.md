@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.9 (see §15). Give the dashboard chat a regression net: the chat log's room filter, replay dedupe and send guard move into a tested module.
+**Latest release:** v0.10.10 (see §15). Pick up blocked sessions from the OpenCode event stream; polling becomes the reconciliation safety net.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2041,6 +2041,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-10-31 — v0.10.10: Pick up blocked sessions from the OpenCode event stream; polling becomes the reconciliation safety net.
+
 ### 2026-10-31 — v0.10.9: Give the dashboard chat a regression net: the chat log's room filter, replay dedupe and send guard move into a tested module.
 
 ### 2026-10-31 — v0.10.8: Publish the operator-contact notice as soon as a project room join is acknowledged.
