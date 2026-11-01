@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.26
+
+*Released 2026-11-01.*
+
 ### `/resume` and `/diff`: the last two operator verbs
 
 * `/resume` (also "resume", "continue last", "kontynuuj") lists the project's last
