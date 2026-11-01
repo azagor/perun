@@ -535,6 +535,7 @@ class PerunChatBridge:
         self._outbox_lock = threading.RLock()
         self._agent_id: Optional[str] = None
         self._effective_key = ""
+        self._effective_endpoint = ""
         # Recently replied message ids. Persisted to disk so a bridge restart
         # cannot reply twice to messages the gateway replays on reconnect.
         self._recent_replied: Set[str] = set()
@@ -1420,6 +1421,7 @@ class PerunChatBridge:
             logger.debug("PerunChat: agent id lookup failed", exc_info=True)
             return False
         self._effective_key = key
+        self._effective_endpoint = endpoint
         if agent_id:
             self._agent_id = agent_id
         return bool(agent_id)
@@ -1438,8 +1440,11 @@ class PerunChatBridge:
                     break
                 backoff = min(backoff * 2, 60.0)
                 continue
-            key, endpoint = self.settings.perunchat()
-            key = getattr(self, "_effective_key", "") or key
+            # Read from the values _refresh_credentials already resolved: calling
+            # settings.perunchat() again here sat outside the try/except and could
+            # kill the thread on a bad encrypted secret.
+            key = str(getattr(self, "_effective_key", "") or "")
+            endpoint = str(getattr(self, "_effective_endpoint", "") or "")
             agent_id = str(self._agent_id or "")
             try:
                 # Refresh on every (re)connect so a room created while offline

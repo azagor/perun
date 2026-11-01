@@ -291,19 +291,30 @@ def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
     }
     # A directory that appeared or vanished next to the project is an escape; one
     # whose mtime changed is just a sibling doing its own work.
-    escaped |= set(before.get("parent_dirs") or []) ^ set(after.get("parent_dirs") or [])
+    if "parent_dirs" in before:
+        escaped |= set(before.get("parent_dirs") or []) ^ set(after.get("parent_dirs") or [])
+    else:
+        # A snapshot taken before directories were tracked separately: its
+        # ``parent_entries`` held *every* sibling (files and dirs), so anything
+        # already listed there is known. Flagging all of them would fail every
+        # in-flight execution at the upgrade.
+        escaped |= {p for p in (after.get("parent_dirs") or [])
+                    if p not in before_parent}
     escaped = sorted(escaped)
 
     violations: list[str] = []
-    # Sensitive subtrees are compared here, because the main walk skips them.
-    before_sensitive = before.get("sensitive") or {}
-    after_sensitive = after.get("sensitive") or {}
-    sensitive_changes = sorted(
-        str(p)
-        for p in set(before_sensitive) | set(after_sensitive)
-        if _key(before_sensitive.get(p)) != _key(after_sensitive.get(p))
-    )
-    violations.extend(sensitive_changes)
+    # Sensitive subtrees are compared here, because the main walk skips them. A
+    # snapshot from before this key existed cannot be compared - and treating
+    # every sensitive file as "changed" would fail the run at the upgrade.
+    if "sensitive" in before:
+        before_sensitive = before.get("sensitive") or {}
+        after_sensitive = after.get("sensitive") or {}
+        sensitive_changes = sorted(
+            str(p)
+            for p in set(before_sensitive) | set(after_sensitive)
+            if _key(before_sensitive.get(p)) != _key(after_sensitive.get(p))
+        )
+        violations.extend(sensitive_changes)
     cfg = shared_projects.load(project["path"])
     if cfg.get("shared"):
         allowlist_entries = path_guard.from_project(project)

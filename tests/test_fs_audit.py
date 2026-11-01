@@ -98,6 +98,30 @@ def test_a_directory_target_detects_changes_inside_it(tmp_path):
     assert fs_audit.drifted_targets(project, ["docs"], before) == ["docs"]
 
 
+def test_a_pre_upgrade_snapshot_does_not_fail_every_run(tmp_path):
+    """Snapshots written before dirs/sensitive were tracked must stay usable."""
+    project = _make_shared_project(tmp_path)
+    sibling = tmp_path / "other-project"
+    sibling.mkdir()
+    root = Path(project["path"])
+    (root / ".opencode").mkdir()
+    (root / ".opencode" / "plugin.ts").write_text("x")
+
+    before = fs_audit.snapshot(project)
+    legacy = {
+        "project_slug": before["project_slug"],
+        "files": before["files"],
+        # The previous version listed every sibling here, directories included.
+        "parent_entries": {**before["parent_entries"], str(sibling): None},
+        "targets": before["targets"],
+    }
+
+    result = fs_audit.diff(project, legacy)
+
+    assert result["escaped"] == []
+    assert result["violations"] == []
+
+
 def test_target_scope_flags_writes_outside_declared_targets(tmp_path):
     project = _make_shared_project(tmp_path)
     root = Path(project["path"])

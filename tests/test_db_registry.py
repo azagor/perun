@@ -18,6 +18,27 @@ def test_init_db_creates_tables():
         assert t in names
 
 
+def test_an_interrupted_run_is_not_delivered_by_the_drainer():
+    """The bridge announces a restart itself; a second message would duplicate."""
+    project = registry.add_project("interrupted-drain", r"C:\interrupted")
+    session = registry.create_session(project["id"], "ses_interrupted")
+    registry.create_run("int_run", project["id"], "hi", session_pk=session["id"])
+    registry.update_run("int_run", status="interrupted",
+                        ended_at=registry.now_iso())
+
+    assert all(r["run_uid"] != "int_run"
+               for r in registry.runs_awaiting_reply())
+
+
+def test_a_failed_run_is_still_delivered():
+    project = registry.add_project("failed-drain", r"C:\failed")
+    session = registry.create_session(project["id"], "ses_failed")
+    registry.create_run("fail_run", project["id"], "hi", session_pk=session["id"])
+    registry.update_run("fail_run", status="failed", ended_at=registry.now_iso())
+
+    assert any(r["run_uid"] == "fail_run" for r in registry.runs_awaiting_reply())
+
+
 def test_projects_table_has_no_instruction_columns():
     """Instruction text lives on disk, never in the projects table."""
     with db.db() as conn:

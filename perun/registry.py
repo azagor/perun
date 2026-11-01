@@ -2266,14 +2266,19 @@ def release_run_lease(run_uid: str, owner: str) -> None:
 
 
 def runs_awaiting_reply(limit: int = 10, within_hours: int = 24) -> list[dict[str, Any]]:
-    """Finished runs whose output has not been delivered to a bound chat yet."""
+    """Finished runs whose output has not been delivered to a bound chat yet.
+
+    ``interrupted`` is deliberately absent: the bridge announces those on startup
+    (``_notify_interrupted_runs``), and delivering them here too produced two
+    messages for one restart.
+    """
     cutoff = (datetime.now(timezone.utc)
               - timedelta(hours=max(1, int(within_hours)))).isoformat()
     with db.db() as conn:
         rows = db.rows(
             conn,
             """SELECT * FROM runs
-               WHERE status IN ('done','failed','timeout','provider_error','interrupted')
+               WHERE status IN ('done','failed','timeout','provider_error')
                  AND ended_at IS NOT NULL AND ended_at >= ?
                  AND COALESCE(reply_sent_at,'')=''
                  AND session_pk IS NOT NULL

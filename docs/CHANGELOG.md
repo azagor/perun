@@ -4,7 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Fixes found by auditing this session's own changes
+
+* **Upgrade safety.** A filesystem snapshot written before `parent_dirs` /
+  `sensitive` existed no longer turns every sibling directory (or every
+  `.opencode` file) into an "escape"/violation: with a legacy snapshot only a
+  genuinely new sibling name is reported, and the sensitive comparison is skipped
+  until a fresh snapshot exists. Without this, the first execution after the
+  upgrade failed with `[POLICY VIOLATION … escape(s)]`.
+* **PerunChat retry.** The reconnect loop read `settings.perunchat()` a second
+  time *outside* its guard; a bad encrypted secret could still kill the thread.
+  It now uses the key/endpoint `_refresh_credentials()` already resolved.
+* **No duplicate restart notice.** `runs_awaiting_reply()` no longer includes
+  `interrupted` runs: the bridge's `_notify_interrupted_runs()` already announces
+  them, and delivering them here too sent two messages for one restart. The
+  status is still final, so a waiting worker/stream stops correctly.
 
 ## v0.10.40
 

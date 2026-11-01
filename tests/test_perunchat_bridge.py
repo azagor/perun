@@ -1581,6 +1581,22 @@ def _chat_frame(msg_id="msg_in_1", room="pub:global:test", text="hello perun"):
     }
 
 
+def test_a_bad_credential_read_is_reported_not_fatal(settings, tmp_path, monkeypatch):
+    """``_run`` must not touch settings.perunchat() outside a guard."""
+    from perun import perunchat_bridge as pb
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    bridge = pb.PerunChatBridge(SimpleNamespace(settings=settings))
+
+    def boom():
+        raise RuntimeError("bad encrypted secret")
+
+    monkeypatch.setattr(settings, "perunchat", boom)
+    assert bridge._refresh_credentials() is False
+
+
 @pytest.fixture
 def bridge_env(settings, tmp_path, monkeypatch, control_repo):
     """Bridge with isolated state files and zero artificial delays."""
