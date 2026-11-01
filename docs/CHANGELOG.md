@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.28
+
+*Released 2026-11-01.*
+
 ### Open TUI sessions are priced as they run
 
 * `refresh_open_usage()` runs from the 15 s reconciler: once every five minutes
