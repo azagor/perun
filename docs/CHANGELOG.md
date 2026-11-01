@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Usage on the project page and the routing readout
+
+* (0.10.33, noted here because its release section reused the previous body) the
+  project page shows `Usage · last 24h` (cost, tokens, sessions) from
+  `/api/usage?project=<slug>`, and Settings gained a **Provider budgets** field
+  (`provider=USD per month`) so the Providers tab can show `budget N%` without a
+  provider-published quota.
+* `/routing` (also "coverage") answers "how much of what people type does the
+  router understand?": per source, the share of messages classified over seven
+  days, plus the definition (classified, not acted on). This is the readout that
+  turns the calendar wait into a one-message decision.
 
 ## v0.10.33
 

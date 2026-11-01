@@ -39,7 +39,7 @@ MUTATING = frozenset({"run", "stop", "remember"})
 
 ACTIONS = ("run", "ask", "status", "remember", "recall", "stop", "clarify", "unknown",
            "pending", "projects", "help", "runs", "now", "health", "usage",
-           "resume", "diff")
+           "resume", "diff", "routing")
 
 # Words that appear on many projects and therefore cannot identify one.
 _GENERIC_TAGS = frozenset(
@@ -107,6 +107,7 @@ _KEYWORDS: dict[str, frozenset[str]] = {
     "usage": frozenset({"usage", "cost", "koszt", "koszty", "zuzycie", "zużycie", "spend"}),
     "resume": frozenset({"resume", "continue", "kontynuuj", "wznow", "wznów"}),
     "diff": frozenset({"diff", "changes", "zmiany"}),
+    "routing": frozenset({"routing", "coverage"}),
     "run": frozenset(
         {
             "run",
@@ -605,12 +606,14 @@ def detect_action(text: str) -> str:
     for phrase in _RESUME_PHRASES:
         if f" {phrase} " in head_text:
             return "resume"
+    if head and len(head) <= 2 and head[0] in _KEYWORDS["routing"]:
+        return "routing"
     for phrase in _DIFF_PHRASES:
         if f" {phrase} " in head_text:
             return "diff"
     if head and len(head) <= 2:
         for action in ("pending", "projects", "help", "runs", "now", "health",
-                       "usage", "resume", "diff"):
+                       "usage", "resume", "diff", "routing"):
             if head[0] in _KEYWORDS[action]:
                 return action
 

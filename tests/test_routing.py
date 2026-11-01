@@ -389,3 +389,10 @@ def test_resume_and_diff_are_routed_without_a_run():
     for text in ("diff", "git diff", "show changes", "co się zmieniło w plikach"):
         assert detect_action(text) == "diff", text
     assert detect_action("what changed in the design") == "ask"
+
+
+def test_routing_readout_is_routed_without_a_run():
+    from perun.routing import detect_action
+    assert detect_action("routing") == "routing"
+    assert detect_action("coverage") == "routing"
+    assert detect_action("uruchom testy") == "run"

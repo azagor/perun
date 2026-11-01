@@ -521,6 +521,7 @@ class PerunTelegramBridge:
                       "`/usage` — tokens and cost in the last 24h\n"
                       "`/resume` — list recent runs and continue one\n"
                       "`/diff` — what changed in the working tree\n"
+                      "`/routing` — how much of the traffic the router understands\n"
                       "`/new` — fresh session\n"
                       "`/stop` — cancel *your* running reply\n"
                       "`/remember <fact>` — store to memory\n"
@@ -629,6 +630,27 @@ class PerunTelegramBridge:
             return True
         if root in ("/health", "/doctor"):
             self.send(chat_id, self._health_report(), reply_to=message_id)
+            return True
+        if root in ("/routing", "/coverage"):
+            rows = registry.routing_stats(days=7)
+            if not rows:
+                self.send(chat_id, "No routing traffic yet — the counter starts with the "
+                                   "first message after a restart.", reply_to=message_id)
+                return True
+            by_source: dict[str, dict[str, int]] = {}
+            for row in rows:
+                src = str(row.get("source") or "?")
+                bucket = by_source.setdefault(src, {"total": 0, "unknown": 0})
+                count = int(row.get("count") or 0)
+                bucket["total"] += count
+                if str(row.get("action")) == "unknown":
+                    bucket["unknown"] += count
+            lines = ["*Routing coverage — 7 days*"]
+            for src, b in sorted(by_source.items(), key=lambda kv: -kv[1]["total"]):
+                pct = round((1 - b["unknown"] / b["total"]) * 100) if b["total"] else 0
+                lines.append(f"• `{src}` — {pct}% of {b['total']} message(s)")
+            lines.append("Coverage = share the router could classify (not the share it acted on).")
+            self.send(chat_id, "\n".join(lines), reply_to=message_id)
             return True
         if root in ("/usage", "/cost"):
             hours = 24
@@ -876,7 +898,7 @@ class PerunTelegramBridge:
             )
 
         if decision.action in ("pending", "projects", "help", "runs", "now", "health",
-                              "usage", "resume", "diff"):
+                              "usage", "resume", "diff", "routing"):
             # Machine-wide, read-only: the existing slash commands answer these
             # exactly, so no agent run is spent. `/pending` is dispatched by the
             # inbox handler, the rest by the command handler.
