@@ -666,7 +666,7 @@ class PerunTelegramBridge:
                           reply_to=message_id)
                 return True
             lines = [
-                f"*Usage — last {hours}h*",
+                f"*Usage — captured in the last {hours}h*",
                 f"${float(totals.get('cost_usd') or 0):.4f} · "
                 f"{int(totals.get('tokens_in') or 0):,} in · "
                 f"{int(totals.get('tokens_out') or 0):,} out · "

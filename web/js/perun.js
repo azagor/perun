@@ -892,7 +892,7 @@ async function viewDashboard() {
 
     // Usage — tokens and cost in the last 24 h, machine-wide and per project
     const usageCard = el('div', { class: 'card', id: 'dash-usage' },
-        `<div class="card-head"><h4>Usage · last 24h</h4><span class="meta" id="dash-usage-head">loading…</span></div>
+        `<div class="card-head"><h4>Usage · captured in the last 24h</h4><span class="meta" id="dash-usage-head">loading…</span></div>
          <div id="dash-usage-body"><div class="meta">reading…</div></div>`);
     v.appendChild(usageCard);
     (async () => {
@@ -1579,7 +1579,7 @@ async function viewProject(slug, tab) {
             <button class="btn primary sm" id="pj-ask">▶ Agent Console</button>
          </div>`));
 
-    // Usage for this project (last 24h) — /api/usage already narrows by slug.
+    // Usage for this project (captured in the last 24h) — /api/usage already narrows by slug.
     const usageBox = el('div', { class: 'meta', id: 'pj-usage' }, 'usage…');
     v.appendChild(usageBox);
     (async () => {
@@ -1587,7 +1587,7 @@ async function viewProject(slug, tab) {
             const r = await api(`/api/usage?hours=24&project=${encodeURIComponent(slug)}`);
             const t = r.totals || {};
             const tok = Number(t.tokens_in || 0) + Number(t.tokens_out || 0);
-            usageBox.innerHTML = `Usage · last 24h — <b>$${Number(t.cost_usd || 0).toFixed(4)}</b>`
+            usageBox.innerHTML = `Usage · captured in the last 24h — <b>$${Number(t.cost_usd || 0).toFixed(4)}</b>`
                 + ` · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`;
         } catch (e) { usageBox.textContent = 'usage unavailable'; }
     })();

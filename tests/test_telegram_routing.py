@@ -394,7 +394,7 @@ def test_usage_lists_totals_and_projects(bridge) -> None:
     bridge.handle_command("1", "/usage", 1)
 
     report = bridge.sent[-1]
-    assert "Usage — last 24h" in report
+    assert "Usage — captured in the last 24h" in report
     assert "1,200 in" in report and "300 out" in report
     assert "$0.0042" in report
     assert "usage-demo" in report
