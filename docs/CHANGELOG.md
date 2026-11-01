@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.31
+
+*Released 2026-11-01.*
+
 ### The Providers tab shows usage
 
 * Each provider card now carries a usage line: **quota** when the service
