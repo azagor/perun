@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.48 (see §15). Stop only kills a process it can attribute to the run, and the run watcher survives a database hiccup.
+**Latest release:** v0.10.49 (see §15). Stop closes the TUI terminal again, including after a restart.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2300,6 +2300,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-02 — v0.10.49: Stop closes the TUI terminal again, including after a restart.
+
 ### 2026-11-01 — v0.10.48: Stop only kills a process it can attribute to the run, and the run watcher survives a database hiccup.
 
 ### 2026-11-01 — v0.10.47: A working project card shows Stop again; Stop still closes the TUI terminal it opened.

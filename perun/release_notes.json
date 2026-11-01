@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-01T22:57:20+00:00",
+  "generated": "2026-11-01T23:17:00+00:00",
   "releases": [
+    {
+      "version": "0.10.49",
+      "date": "2026-11-02",
+      "body": "### Stop now closes the TUI terminal, including after a restart\n\n* Pressing Stop on a card whose project had an open TUI terminal only marked the\n  run `cancelled`; the window stayed open. Two defects: `/api/runs/{uid}/cancel`\n  called `ProcessTracker.terminate()` only when the in-memory entry existed — after\n  a server restart it does not — so the persisted `runs.pid` + `PERUN_RUN_UID`\n  marker were never consulted; and the kill target was whatever the marker scan\n  returned first, usually the *agent* process inside the terminal.\n* The endpoint now always offers the run to the tracker (which no-ops to\n  `finalize()` when nothing is attributable). `terminate()` resolves the **shell\n  that owns the terminal** via `_terminal_owner()` — the outermost\n  `cmd`/`pwsh`/`sh` carrying the marker in its command line — because `cmd /k` and\n  `pwsh -NoExit` keep the window at a prompt after the agent exits. Liveness still\n  follows the agent process, so an agent that exits still ends its run.\n* Regression tests: the kill target is the shell, not its child; a stop after a\n  restart kills the shell around the persisted agent pid; `/cancel` reaches the\n  tracker with an empty in-memory map."
+    },
     {
       "version": "0.10.48",
       "date": "2026-11-01",
@@ -45,11 +50,6 @@
       "version": "0.10.40",
       "date": "2026-11-01",
       "body": "### The post-execution docs step has its own restricted agent, and is audited\n\n* `perun-docs` (new, managed like `perun-orchestrator`: write-once with sha256,\n  refresh only while untouched, reset on request) is the identity of the session\n  that runs `/update-docs`. It may read the project and write `docs/**`,\n  `AGENTS.md` and `perun.md`; the blanket deny covers shell and every other tool.\n  Before this, the docs run used the project's default agent, so approving two\n  source files quietly granted full-tool access to the repository.\n* The docs run is now accountable too: Perun snapshots the project before the\n  command, waits (bounded, 10 min) for the turn to go idle, diffs, and logs a\n  `docs_audit` activity row — `docs_audit_violation` with the paths when a write\n  landed outside the docs surface. The proposal's own result is never changed by\n  this, and a busy docs slot still writes the changelog bullet as before.\n* The global install creates both agents."
-    },
-    {
-      "version": "0.10.39",
-      "date": "2026-11-01",
-      "body": ""
     }
   ]
 }

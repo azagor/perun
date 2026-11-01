@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.49
+
+*Released 2026-11-02.*
+
 ### Stop now closes the TUI terminal, including after a restart
 
 * Pressing Stop on a card whose project had an open TUI terminal only marked the
