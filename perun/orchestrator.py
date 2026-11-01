@@ -1373,6 +1373,46 @@ class Orchestrator:
                 interrupted.append(uid)
         return {"resumed": resumed, "interrupted": interrupted}
 
+    def refresh_open_usage(self, *, max_age_seconds: float = 300.0) -> int:
+        """Refresh usage for open TUI sessions, at most once per *max_age_seconds*.
+
+        A TUI terminal can stay open for hours; without this its cost would only
+        appear when it closes. Bounded to five sessions per pass.
+        """
+        now = time.time()
+        if now - float(getattr(self, "_usage_refresh_at", 0.0)) < max_age_seconds:
+            return 0
+        self._usage_refresh_at = now
+        updated = 0
+        try:
+            for run in registry.list_active_runs()[:5]:
+                if run.get("standalone") and self.capture_usage(run["run_uid"]):
+                    updated += 1
+        except Exception:  # pragma: no cover - telemetry must not break reconcile
+            LOG.debug("could not refresh open usage", exc_info=True)
+        return updated
+
+    def backfill_usage(self, hours: int = 24, *, limit: int = 50) -> int:
+        """Capture usage for recently finished runs that never got a snapshot."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+        updated = 0
+        seen: set = set()
+        for run in registry.list_runs(limit=200):
+            if updated >= limit:
+                break
+            if (run.get("started_at") or "") < cutoff:
+                continue
+            session_pk = run.get("session_pk")
+            if not session_pk or session_pk in seen:
+                continue
+            seen.add(session_pk)
+            session = registry.get_session(session_pk) or {}
+            if session.get("usage_at"):
+                continue
+            if self.capture_usage(run["run_uid"]):
+                updated += 1
+        return updated
+
     def capture_usage(self, run_uid: str) -> bool:
         """Store the service's token/cost snapshot for a run's session.
 
@@ -1441,6 +1481,8 @@ class Orchestrator:
     def reconcile_runs(self) -> dict[str, list[str]]:
         """Reattach to running sessions, finalize finished ones, close orphans."""
         from . import opencode_api
+
+        self.refresh_open_usage()
 
         result: dict[str, list[str]] = {"reattached": [], "finalized": [],
                                         "interrupted": []}

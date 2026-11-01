@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Open TUI sessions are priced as they run
+
+* `refresh_open_usage()` runs from the 15 s reconciler: once every five minutes
+  it refreshes the token/cost snapshot for up to five open standalone runs, so a
+  TUI terminal left open for hours shows its cost while it works, not only when
+  it closes. The five-minute guard keeps the service call rate flat.
+* `backfill_usage(hours=24)` captures sessions that finished before usage
+  tracking existed (or while the service was down); run once on a live machine,
+  bounded to 50 sessions per pass.
 
 ## v0.10.27
 

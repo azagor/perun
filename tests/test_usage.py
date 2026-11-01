@@ -77,3 +77,24 @@ def test_capture_usage_is_false_without_a_session(monkeypatch):
     project = registry.add_project("usage-nosession", r"C:\usage-nosession")
     registry.create_run("tui_run_2", project["id"], "no session")
     assert orchestrator.Orchestrator().capture_usage("tui_run_2") is False
+
+def test_refresh_open_usage_captures_standalone_runs(monkeypatch):
+    from perun import orchestrator, registry
+
+    project = registry.add_project("usage-open", r"C:\usage-open")
+    session = registry.create_session(project["id"], "ses_open")
+    registry.create_run("tui_open_1", project["id"], "open tui",
+                        session_pk=session["id"],
+                        opencode_session_id="ses_open", standalone=1)
+    registry.update_run("tui_open_1", status="running")
+
+    class FakeAPI:
+        def usage(self, session_id, limit=100):
+            return {"tokens_in": 42, "tokens_out": 4, "cache_read": 0, "cost": 0.5}
+
+    monkeypatch.setattr(opencode_api, "default_api", lambda: FakeAPI())
+    orch = orchestrator.Orchestrator()
+    assert orch.refresh_open_usage() == 1
+    # Within the window: no second pass.
+    assert orch.refresh_open_usage() == 0
+    assert registry.usage_totals(project_id=project["id"])["tokens_in"] == 42
