@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.40
+
+*Released 2026-11-01.*
+
 ### The post-execution docs step has its own restricted agent, and is audited
 
 * `perun-docs` (new, managed like `perun-orchestrator`: write-once with sha256,

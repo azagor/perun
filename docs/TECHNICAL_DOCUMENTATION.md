@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.39 (see §15). Usage is labelled as captured-in-window, closing the last audit item.
+**Latest release:** v0.10.40 (see §15). The post-execution docs run has its own restricted agent and is audited.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2219,6 +2219,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.40: The post-execution docs run has its own restricted agent and is audited.
+
 ### 2026-11-01 — v0.10.39: Usage is labelled as captured-in-window, closing the last audit item.
 
 ### 2026-11-01 — v0.10.38: Two-day audit: routing, inbox, run lifecycle, proposal integrity, usage and PerunChat fixes.
