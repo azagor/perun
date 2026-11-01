@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.43
+
+*Released 2026-11-01.*
+
 ### The control plane is reachable only from its own checkout
 
 * The MCP project resolver now includes **hidden** projects when it matches the
