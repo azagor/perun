@@ -101,6 +101,8 @@ _KEYWORDS: dict[str, frozenset[str]] = {
     "projects": frozenset({"projects", "projekty"}),
     "help": frozenset({"help", "pomoc", "pomocy"}),
     "runs": frozenset({"runs", "uruchomienia"}),
+    "now": frozenset({"running", "aktywne", "now"}),
+    "health": frozenset({"health", "doctor", "zdrowie"}),
     "run": frozenset(
         {
             "run",
@@ -215,6 +217,36 @@ _RUNS_PHRASES = (
     "did it work",
     "jak poszlo",
     "jak poszło",
+)
+# "What is running right now?" — the overseer's most useful live answer.
+_NOW_PHRASES = (
+    "what s running",
+    "what is running",
+    "anything running",
+    "any runs",
+    "what is happening",
+    "what s happening",
+    "co sie dzieje",
+    "co się dzieje",
+    "co teraz robisz",
+    "co robisz teraz",
+    "co jest uruchomione",
+    "aktywne runy",
+    "aktywne uruchomienia",
+)
+_HEALTH_PHRASES = (
+    "health check",
+    "is opencode up",
+    "is it up",
+    "is perun up",
+    "is everything ok",
+    "is everything working",
+    "czy dziala",
+    "czy działa",
+    "czy wszystko dziala",
+    "czy wszystko działa",
+    "co z serwerem",
+    "stan systemu",
 )
 
 
@@ -523,8 +555,14 @@ def detect_action(text: str) -> str:
     for phrase in _RUNS_PHRASES:
         if f" {phrase} " in head_text:
             return "runs"
+    for phrase in _NOW_PHRASES:
+        if f" {phrase} " in head_text:
+            return "now"
+    for phrase in _HEALTH_PHRASES:
+        if f" {phrase} " in head_text:
+            return "health"
     if head and len(head) <= 2:
-        for action in ("pending", "projects", "help", "runs"):
+        for action in ("pending", "projects", "help", "runs", "now", "health"):
             if head[0] in _KEYWORDS[action]:
                 return action
 

@@ -322,3 +322,57 @@ def test_real_work_still_reaches_the_agent(bridge, monkeypatch):
 
     assert bridge._route_message("1", "uruchom testy w perunie", 9) is False
     assert called == []
+
+def test_now_reports_nothing_when_idle(bridge) -> None:
+    bridge.handle_command("1", "/now", 1)
+    assert bridge.sent and "Nothing is running" in bridge.sent[-1]
+
+
+def test_health_reports_the_bridge_and_services(bridge, monkeypatch) -> None:
+    from perun import opencode_api
+
+    class FakeAPI:
+        def info(self):
+            return {"version": "2.2.0"}
+
+    monkeypatch.setattr(opencode_api, "default_api", lambda: FakeAPI())
+    bridge.handle_command("1", "/health", 1)
+
+    report = bridge.sent[-1]
+    assert "Health" in report
+    assert "opencode service" in report and "2.2.0" in report
+    assert "bridge" in report
+
+
+def test_health_survives_an_unreachable_service(bridge, monkeypatch) -> None:
+    from perun import opencode_api
+
+    class DeadAPI:
+        def info(self):
+            raise opencode_api.OpenCodeUnavailable("no service")
+
+    monkeypatch.setattr(opencode_api, "default_api", lambda: DeadAPI())
+    bridge.handle_command("1", "/health", 1)
+
+    report = bridge.sent[-1]
+    assert "opencode service" in report
+    assert "bridge" in report          # the rest of the report still renders
+
+
+def test_a_whats_running_question_maps_to_the_command(bridge, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from perun import config
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(routing_enabled=True,
+                                                             routing_shadow=False)))
+    seen: list[str] = []
+    monkeypatch.setattr(bridge, "_handle_attention_command",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(bridge, "_handle_text_command",
+                        lambda chat_id, text, message_id, project_override=None:
+                        seen.append(text) or True)
+
+    assert bridge._route_message("1", "co się dzieje?", 11) is True
+    assert seen == ["/now"]

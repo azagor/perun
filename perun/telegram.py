@@ -454,6 +454,52 @@ class PerunTelegramBridge:
         self.send(chat_id, f"✅ Now talking to *{project['name']}* (`{project['slug']}`).",
                   reply_to=message_id if message_id else None)
 
+    def _health_report(self) -> str:
+        """One-screen machine health, answered from this process (no agent run).
+
+        A chat that cannot say whether the agent service is up is useless when
+        something breaks; every probe is short and degrades to ``✗``/``?``
+        instead of raising.
+        """
+        from . import opencode_api
+
+        lines = ["*Health*"]
+        try:
+            info = opencode_api.default_api().info() or {}
+        except Exception as exc:
+            lines.append(f"✗ opencode service — {type(exc).__name__}")
+        else:
+            version = str(info.get("version") or info.get("app") or "").strip()
+            lines.append("✓ opencode service" + (f" — {version}" if version else ""))
+        host = ""
+        try:
+            host = str(config.Settings.load().ollama_host or "").rstrip("/")
+        except Exception:  # pragma: no cover - settings unreadable
+            host = ""
+        if host:
+            try:
+                httpx.get(f"{host}/api/tags", timeout=2.0)
+            except Exception:
+                lines.append(f"✗ ollama — {host} not reachable")
+            else:
+                lines.append("✓ ollama")
+        up = int(time.time() - self.started_at)
+        lines.append(
+            f"✓ bridge — {up // 3600}h {(up % 3600) // 60}m · "
+            f"{self.work.qsize()} queued · {len(self.allowed)} paired chat(s)"
+        )
+        try:
+            lines.append(f"▶ {len(registry.list_active_runs())} run(s) active")
+        except Exception:  # pragma: no cover - a DB hiccup must not hide the rest
+            pass
+        try:
+            open_items = len(registry.open_attention(limit=100))
+            if open_items:
+                lines.append(f"❓ {open_items} item(s) waiting for you — /pending")
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return "\n".join(lines)
+
     def _handle_text_command(self, chat_id: str, text: str, message_id: int,
                              *, project_override: str | None = None) -> bool:
         parts = text.strip().split()
@@ -469,6 +515,8 @@ class PerunTelegramBridge:
                       "`/projects` — list projects\n"
                       "`/project <name|#>` — switch project\n"
                       "`/status` — current project + session\n"
+                      "`/now` — everything running right now\n"
+                      "`/health` — opencode, ollama and bridge state\n"
                       "`/runs` — the last few runs and how they ended\n"
                       "`/new` — fresh session\n"
                       "`/stop` — cancel *your* running reply\n"
@@ -552,6 +600,32 @@ class PerunTelegramBridge:
                       f"queue: {self.work.qsize()}\n"
                       f"uptime: {up // 3600}h {(up % 3600) // 60}m",
                       reply_to=message_id)
+            return True
+        if root in ("/now", "/running"):
+            active = registry.list_active_runs()
+            if not active:
+                self.send(chat_id, "Nothing is running right now.", reply_to=message_id)
+                return True
+            lines = [f"*Running now* — {len(active)}"]
+            for run in active[:8]:
+                started = str(run.get("started_at") or run.get("admitted_at") or "")
+                age = ""
+                try:
+                    from datetime import datetime as _dt
+                    delta = _dt.now() - _dt.fromisoformat(started)
+                    minutes = int(delta.total_seconds() // 60)
+                    age = f"{minutes}m" if minutes < 60 else f"{minutes // 60}h{minutes % 60:02d}"
+                except Exception:  # pragma: no cover - a malformed timestamp
+                    age = ""
+                tag = "⏸ queued" if run.get("status") == "queued" else "▶ running"
+                model = str(run.get("model") or "default model")
+                lines.append(f"• `{run.get('project_slug') or '?'}` · {tag} · {age} · {model}")
+            if len(active) > 8:
+                lines.append(f"＋{len(active) - 8} more — see the dashboard")
+            self.send(chat_id, "\n".join(lines), reply_to=message_id)
+            return True
+        if root in ("/health", "/doctor"):
+            self.send(chat_id, self._health_report(), reply_to=message_id)
             return True
         if root in ("/runs", "/last"):
             proj = (registry.get_project(project_override) if project_override else None) \
@@ -702,7 +776,7 @@ class PerunTelegramBridge:
                 project_override=decision.project,
             )
 
-        if decision.action in ("pending", "projects", "help", "runs"):
+        if decision.action in ("pending", "projects", "help", "runs", "now", "health"):
             # Machine-wide, read-only: the existing slash commands answer these
             # exactly, so no agent run is spent. `/pending` is dispatched by the
             # inbox handler, the rest by the command handler.

@@ -358,3 +358,16 @@ def test_machine_questions_do_not_swallow_real_work():
     assert detect_action("what is Perun the Trader?") == "ask"
     # No leading-window command: stays on the agent path on purpose.
     assert detect_action("help me run the tests in perun") == "unknown"
+
+def test_now_and_health_are_routed_without_a_run():
+    from perun.routing import detect_action
+
+    for text in ("what's running?", "co się dzieje?", "anything running",
+                 "co teraz robisz", "running", "now"):
+        assert detect_action(text) == "now", text
+    for text in ("health", "health check", "is opencode up?", "czy działa?",
+                 "co z serwerem", "stan systemu"):
+        assert detect_action(text) == "health", text
+    # A real imperative still wins.
+    assert detect_action("fix it now") == "run"
+    assert detect_action("uruchom testy") == "run"

@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### "What's running?" and "is it up?" are one message away
+
+* `/now` lists every active run across the machine (project, queued/running, age,
+  model) — the overseer's most useful live answer, straight from
+  `registry.list_active_runs()`.
+* `/health` gives a one-screen state: OpenCode service (with its version), Ollama,
+  the bridge itself (uptime, queue depth, paired chats), active runs and how many
+  items are waiting. Every probe has a short timeout and degrades to `✗` instead
+  of raising, so a broken service still produces a useful report.
+* Both are routed from natural language in English and Polish — "what's running?",
+  "co się dzieje?", "is opencode up?", "czy działa?", "stan systemu" — with the
+  same narrow triggers as the other read-only actions ("fix it now" is still a
+  run), so they cost no tokens.
 
 ## v0.10.23
 
