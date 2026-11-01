@@ -1522,6 +1522,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `test_release_script.py` — release-pipeline changelog promotion: populated and
   empty `## Unreleased` sections, and idempotence when the target version
   already exists.
+* `test_release_notes.py` — the Updates page notes: `## vX.Y.Z` parsing, bundled
+  notes winning over a checkout changelog, `unavailable` for an unknown version,
+  and the fresh-bundle guard for the running version.
 * `test_db_registry.py` — schema, projects/sessions/runs/activity CRUD.
 * `test_discovery.py` — detection, classify, register, scan, manifest merge.
 * `test_memory.py` — remember/sensitive/dedupe, CODEMAP-aware chunking,
@@ -1565,6 +1568,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `compose_prompt` instructions injection, model resolution/forwarding
   (`model_explicit`, the `--model` argv rule for every source), and end-to-end
   stdout-error capture.
+* `test_session_runner.py` — session-centric runs: admission (`msg_<run_uid>`),
+  observation, recovery after a restart, lease ownership, and reply delivery.
 * `test_process_tracker.py` - `ProcessTracker` registration, lifecycle, marker
   resolution, watcher auto-finalization, run-record cleanup, and kill attribution
   (marker or Perun's own handle, never the launch-time heuristic).
@@ -1573,6 +1578,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `is_another_perun_running()`, detached start, and `stop()`/`kill()`.
 * `test_project_roots.py` — the explicit cross-project path resolver:
   registration, lookup, removal, and rejection of paths outside the root.
+* `test_dependencies.py` — the cross-project dependency graph: manifest edges,
+  upstream/downstream traversal, cycle detection, impact ordering, deploy plans,
+  and the CLI/API surfaces.
 * `test_skills.py` — OpenCode skill/tool discovery (`perun/skills.py`).
 * `test_telegram_lock.py` — mutex namespacing, side-effect-free `is_held()`, and
   the second-acquire-is-refused guarantee (the bridge can never multiply).
@@ -1589,6 +1597,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `test_opencode_api.py` - the OpenCode HTTP client: Basic auth, location
   encoding, idempotent prompt bodies, 401 rediscovery, optional 404, error
   statuses, and degradation when the service is absent.
+* `test_usage.py` - token/cost capture: the service snapshot, the registry store,
+  provider attribution, and the `/api/usage` totals.
 * `test_attention.py` - the operator inbox: dedupe, permission/approval adapters,
   conditional close, queue→steer, undo, form coercion, room outbox, eligibility
   (flag, project allow-list, quiet hours), recipients, TTL expiry.
@@ -1604,6 +1614,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   "Send to att_N?" guard, ⚡/↩ callbacks, startup replay, stale cards.
 * `test_mcp_attention.py` - `perun_ask_operator` (session id from `_meta`,
   options, timeout handle), `perun_await_operator`, `perun_attention_list`.
+* `test_telegram_jobs.py` - the durable Telegram update queue: per-chat ordering,
+  retries, dead-letter handling.
 * `test_perunchat_bridge.py` — the autonomous PerunChat participant: start/stop
   lifecycle, room auto-join, reply dedupe, the write-ahead outbox and its
   reconnect flush, empty-reply retry, typing/reply sequence-number monotonicity,
@@ -1613,15 +1625,47 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   traversal/symlink/duplicate rejection, and target-scoped apply.
 * `test_action_proposals.py` — proposal lifecycle, claim/revoke, expiry, and
   external-execution claim guards.
+* `test_hitl.py` — HMAC-SHA256 approval tokens: issue/validate, expiry, replay
+  nonces (also across engine instances), tamper detection, secret binding, and
+  nested-key-order-insensitive action hashing.
+* `test_path_guard.py` — the project/target allowlist: relative resolution,
+  escapes, external and read-only dependencies, sensitive ancestors, and shell
+  expansions.
+* `test_guard_mcp.py` — the `perun-guard` filesystem MCP server: allowlist reads
+  and writes, target-scoped writes for an executing proposal, sensitive-path
+  denial, read-only dependencies, and a malformed allowlist falling back to cwd.
+* `test_fs_audit.py` — before/after filesystem snapshots: created/modified/deleted
+  files, escapes next to the root, sensitive subtrees, target-scope violations,
+  and the activity rows they log.
+* `test_proposals_mcp.py` — the `perun-proposals` coordination MCP server:
+  propose/approve/reject/claim, `execute=false` defaults, peer approval vs
+  self-approval, policy auto-approve, actor-file fallbacks, and tool-name scope.
+* `test_mcp_filesystem.py` — the MCP filesystem helpers
+  (`perun_file_exists` / `perun_list_directory` / `perun_read_file`): scope
+  rejection, offsets, clamping, and repo reads.
+* `test_shared_projects.py` — sharing: hidden and control-project rules, room
+  reconciliation, trust filtering, guard-MCP sync (v1/v2 shapes, migrations,
+  backups, pruning), and the auto-approve flags.
+* `test_shared_agent.py` — the `perun-shared` execution agent: the V2
+  permissions array, graceful failure when the config dir is not writable, and
+  prefixed guard tools in the execution prompt.
 * `test_perunchat_proxy.py` — the `/api/perunchat/*` proxy layer: status
   (`agent_id`), key reveal restricted to loopback, room discovery, the trusted
   list, and gateway-failure degradation.
 * `test_control.py` — control plane: `ensure()` / `is_control()` / `resolve()`,
   the delete guard, and "a run with no project targets the orchestrator".
+* `test_orchestrator_agent.py` — the control-plane `perun-orchestrator` agent:
+  managed file (write-once, template bump vs user edit), resolution, and the
+  charter's safety lines.
+* `test_docs_agent.py` — the restricted `perun-docs` agent: installed once, a user
+  edit is never overwritten, documentation-only write scope, and reset.
 * `test_server_security.py` — the origin/host guard (`_origin_guard`) on `/api/*`.
 * `test_cli.py` — UTF-8 stdio hardening, non-ASCII recall output, restart flag
   replay, context stats/verify/dedupe, docs-audit drift detection, and the
   owner check used to include hidden projects in `--all` maintenance commands.
+* `test_cli_restart_guard.py` — `perun stop`/`restart` refusing while runs are
+  active, `--force`, standalone runs not blocking, and an unreachable server
+  degrading to "unknown".
 * `test_secrets.py` — password precedence (env → DPAPI file) and
   `persist_password()` (no-op off Windows).
 * `test_providers.py` — provider discovery: `opencode auth list` parsing,

@@ -47,6 +47,9 @@ regardless of which folder this repository lives in:
 | `perun_ask` | Run a prompt in a project and wait for the reply. |
 | `perun_run_status` | Status / output of a previously started run. |
 | `perun_telegram_send` | Send a message to the configured Telegram chat (a `chat_id` outside the allow-list is refused). |
+| `perun_ask_operator` | Ask the operator (the human) and wait briefly: the question is pushed to Telegram and the dashboard, and the reply is returned into *this* session (`att_<id>` when nobody answered in `wait_seconds`). |
+| `perun_await_operator` | Wait again on a question already asked with `perun_ask_operator` (bounded to 600 s). |
+| `perun_attention_list` | List items waiting on the operator, or recent closed ones (`state="all"`). |
 
 When a tool takes a `project`, omit it to use the project of the **current
 working directory**; pass a slug (e.g. `my-project`) or an absolute path to

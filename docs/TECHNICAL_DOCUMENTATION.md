@@ -826,6 +826,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/update/notes` | changelog notes for the running version (`?version=` for another): `{version, date, body, source}` — `bundled` (shipped `perun/release_notes.json`), `changelog` (git checkout) or `unavailable` |
 | POST | `/api/update/apply` | start the update; requires `{}` and the API token; refuses if no update, unsupported install mode, or dirty git checkout |
 | POST | `/api/update/dismiss` | clear a finished (`done`/`failed`) update job from the dashboard |
+| POST | `/api/shutdown` | gracefully stop the running service (local API token required); the dashboard's **Shutdown Perun** button uses it |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
 | GET | `/api/providers` | LLM providers merged from `opencode auth list` and `opencode.json[c]`, each with `connected`/`configured`/`status`, plus a `catalog` of well-known providers, the `config_file` path, and `config_had_comments` (true when comments/trailing commas will be lost on rewrite) |
 | POST | `/api/providers/{provider_id}/logout` | disconnect a provider via `opencode auth logout`; returns `{ok, error}` |
@@ -902,6 +903,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/memory/search` | unified search |
 | GET | `/api/memory/stats` | counts + `ollama_ok` |
 | GET | `/api/memory/recent` | recent facts |
+| GET | `/api/memory/usage?project=&window=` | recall/search usage stats (`reads`, `writes`, `hits`, per-project or global) |
+| DELETE | `/api/memory/fact/{fact_id}` | forget one fact by id |
+| POST | `/api/memory/fact/{fact_id}/supersede` | replace a fact's content while keeping its id (`{content, topic?, kind?, meta?, valid_to?}`) |
+| POST | `/api/memory/fact/{fact_id}/touch` | bump a fact's recency without changing its content |
 | POST | `/api/memory/import-legacy` | migrate legacy facts |
 | POST | `/api/memory/prune` | drop old non-global facts |
 | POST | `/api/memory/reembed` | repair facts/doc chunks/**context docs** with missing or stale embeddings (also runs automatically in the background; docs that are deliberately vector-less — sensitive bodies — are never selected) |
@@ -913,6 +918,16 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/telegram/bridge/restart` | Reloads the in-process bridge token if the dashboard owns it; otherwise `schtasks /End` + `/Run` so the optional `PerunBridge` task re-reads the bot |
 | POST | `/api/telegram/unlock` | `{password,remember?}` — decrypt and unlock an encrypted stored token, set `PERUN_PASSWORD` for the running process, optionally persist it (Windows DPAPI-encrypted in `<PERUN_HOME>/secret`), then start/reload the bridge; if another process owns the bridge lock and `remember` is false, `bridge.reason` explains why |
 | POST | `/api/telegram/send` | send a message |
+| GET | `/api/telegram/jobs?state=failed&limit=` | inspect the durable Telegram update queue (queued/running/done/failed); unread updates are never lost on a crash |
+| POST | `/api/telegram/jobs/{job_id}/retry` | re-queue a failed (dead-lettered) update; 404 when it is not failed |
+| GET | `/api/attention?state=open\|closed\|all&limit=&project=` | operator-inbox items (open, a recent closed window, or both) with their delivery history |
+| GET | `/api/attention/{attention_id}` | one item plus every delivery attempt |
+| POST | `/api/attention/{attention_id}/reply` | answer with text `{text}` (404 unknown, 409 already closed); the reply is steered into the waiting session |
+| POST | `/api/attention/{attention_id}/choose` | answer a permission/approval `{option}`; `always` persists a per-project rule and requires `confirm=true` |
+| POST | `/api/attention/{attention_id}/delivery` | set delivery mode `{delivery:"steer"\|"queue"}` |
+| DELETE | `/api/attention/{attention_id}` | withdraw/close an item (an answered session item is undone first) |
+| GET | `/api/attention/outbox` | queued room replies not yet delivered |
+| POST | `/api/attention/outbox/{outbox_id}/retry` | reset one queued reply so the next flush re-sends it |
 | GET | `/api/perunchat/status` | `{configured, endpoint, rest_base, agent_id}` — reports whether a PerunChat API key is configured and, when the gateway is reachable, the agent id resolved from `GET /api/v1/me` (failures are swallowed) |
 | GET | `/api/perunchat/key` | loopback only — legacy endpoint that returns the configured PerunChat API key; the dashboard now uses `/api/perunchat/ws-ticket` instead |
 | POST | `/api/perunchat/ws-ticket` | loopback only — proxies `POST /api/v1/ws-ticket` to the gateway and returns a 30-second single-use WebSocket ticket, so the long-lived API key never appears in a URL |

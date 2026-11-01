@@ -268,7 +268,7 @@ for details.
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{run_uid}/stream`, `/api/stream` | Server-Sent Events |
 | **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
-| **MCP server** | stdio, tool namespace `perun` | 31 tools, installed globally |
+| **MCP server** | stdio, tool namespace `perun` | 34 tools, installed globally |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL or autonomous peer review for actions |
 | **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, `perun-guard` MCP + post-run audit, external ZIP handoff, configurable approver/HITL secret |
@@ -358,6 +358,7 @@ perun/                     the Python package
   proposals_mcp.py         the `perun-proposals` coordination MCP server
   perunchat_bridge.py      autonomous PerunChat bridge, review, and handoff
   updater.py               GitHub release check + self-update runner
+  release_notes.py         changelog notes bundled into the package for the Updates page
   __main__.py              CLI
   integrations/            global install into ~/.config/opencode
   installer.py             machine install: prerequisites, deps, optional PerunBridge task

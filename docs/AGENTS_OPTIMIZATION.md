@@ -471,7 +471,7 @@ AGENTS.md tool table can never disagree with the MCP schema.
   block is 1,832 B (was ≈6.1 KB), and the previous guide is retained verbatim
   as `handbook.global`.
 * `perun_context` and `perun_secret` MCP tools, plus the full current MCP
-  inventory (**31 tools**).
+  inventory (**34 tools**).
 * `perun context …` and `perun secret …` CLI groups.
 * `orchestrator.compose_prompt()` pre-fetch, injected as
   `--- PERUN CONTEXT START/END ---`.

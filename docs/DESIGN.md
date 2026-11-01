@@ -51,9 +51,9 @@ map, the memory, the orchestration, and a remote control.
 ```
         ┌──────────────┐        Perun is a "control room".
         │   PROJECTS   │        ─ each project is a card
-        │  ▤ ▤ ▤ ▤ ▤   │        ─ each card can Run / Stop / Open /
-        └──────┬───────┘          Index docs / Delete
-               │ select
+        │  ▤ ▤ ▤ ▤ ▤   │        ─ each card can Run, or Stop while
+        └──────┬───────┘          the project is working / Open /
+               │ select             Index docs / Delete
         ┌──────▼───────┐        A project has:
         │   PROJECT    │          Overview · Console · Sessions ·
         │  Overview    │          Memory · Activity · Config
