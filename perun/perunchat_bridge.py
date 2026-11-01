@@ -555,6 +555,10 @@ class PerunChatBridge:
         # Consecutive-reply budget per room: two autonomous agents whose replies
         # end in "?" otherwise answer each other forever (~3 model runs/min each).
         self._room_burst: Dict[str, Tuple[int, float]] = {}
+        # One warning per burst, not one per suppressed message.
+        self._burst_logged: Set[str] = set()
+        # Wall-clock of Perun's last reply per room (the rate budget's anchor).
+        self._last_reply_at: Dict[str, float] = {}
         self._seq = self._load_seq()
         # Wall-clock ms of the most recent successful gateway connect. Used to
         # detect messages that predate the connection (the gateway replays
@@ -2986,6 +2990,10 @@ class PerunChatBridge:
                     # generated and queued; we must not regenerate it on reconnect.
                     self._send_typing_indicator(frame, ws, typing=False)
                     return
+            # Marks an actual reply for the rate budget; a room where Perun only
+            # listens never accumulates a count.
+            room_key = str(frame.get("room_id") or "")
+            self._last_reply_at[room_key] = time.time()
             with self._rate_limit_lock:
                 self._reply_count_minute += 1
             self._last_reply_time[room_id] = time.time()
@@ -3044,18 +3052,28 @@ class PerunChatBridge:
         if sender and own_id and sender == own_id and not operator_frame:
             return _ReplyDecision(False, "own message")
 
-        # Burst budget: a rapid back-and-forth (the signature of two bots
-        # answering each other) stops after six exchanges; an operator message or
-        # ten quiet minutes resets it.
+        # Rate budget: a rapid back-and-forth (the signature of two bots
+        # answering each other) stops after eight replies in a minute. It only
+        # counts while Perun is actively replying (within 60 s of its last
+        # reply), so a busy room it is only reading never trips it; an operator
+        # message resets it. Every room participant is an agent, so this is a
+        # rate limit, not an identity check.
         now = time.time()
-        count, last = self._room_burst.get(room_id, (0, 0.0))
-        if operator_frame or now - last > 600:
+        last_reply = self._last_reply_at.get(room_id, 0.0)
+        count, _last = self._room_burst.get(room_id, (0, 0.0))
+        if operator_frame or now - last_reply > 60:
             count = 0
-        if now - last < 120:
+        if now - last_reply <= 60:
             count += 1
         self._room_burst[room_id] = (count, now)
-        if count > 6 and not operator_frame:
-            return _ReplyDecision(False, "consecutive-reply budget reached")
+        if count > 8 and not operator_frame:
+            if room_id not in self._burst_logged:
+                self._burst_logged.add(room_id)
+                logger.warning("PerunChat: reply budget reached in %s; staying quiet",
+                               room_id)
+            return _ReplyDecision(False, "reply-rate budget reached")
+        if count <= 1:
+            self._burst_logged.discard(room_id)
 
         # Always reply in private 1:1 rooms.
         if room_id.startswith("priv:") or room_id.startswith("private:"):

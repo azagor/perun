@@ -157,7 +157,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `list_telegram_jobs()`, `retry_telegram_job()`, `prune_telegram_jobs()`.
 * Operator inbox: `add_attention()` (returns `_new`, deduped by the unique
   partial index), `get_attention()`, `open_attention()`, `open_attention_for_chat()`,
-  `attention_by_message()` (reply-to → item), `attention_delivered_message()` (the
+  `attention_by_message()` (reply-to → item), `attention_delivered_to()` (has this
+  chat been shown the item at all - a NULL message id means "shown, not
+  replyable": a digest list), `attention_delivered_message()` (the
   message id that last carried an item to a chat), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
   `attention_deliveries()`, `undelivered_attention(within_minutes=…)`,
   `close_attention()` (conditional on `state='open'`), `update_attention_ref()`
@@ -898,7 +900,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * Credentials are resolved per attempt (`_refresh_credentials()`), preferring
   `PERUNCHAT_KEY_FILE`, and rooms that drop out of `_rooms()` get a `ROOM_LEAVE`;
   a project room whose binding cannot be read is never answered as the control
-  plane, and `_room_burst` stops an agent-to-agent exchange after six replies.
+  plane. `_room_burst` is a rate limit anchored on Perun's own last reply: eight
+  replies per room per minute (an operator message resets it). A room Perun only
+  reads never accumulates a count, and one warning is logged per burst.
 * No-loss reply delivery: every outbound reply frame is persisted in a
   write-ahead outbox under PERUN_HOME before sending and removed only
   after success; the load-modify-store runs under `_outbox_lock` over a unique

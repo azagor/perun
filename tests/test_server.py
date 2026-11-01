@@ -1110,6 +1110,22 @@ def test_a_rejected_settings_patch_applies_nothing(client):
     assert server.SETTINGS.default_model == before
 
 
+def test_a_rejected_settings_patch_does_not_encrypt_a_secret_in_place(client):
+    """The in-place re-encryption is staged too, not applied before validation."""
+    from perun import server
+
+    server.SETTINGS.perunchat_api_key = "plain-key"
+    try:
+        r = client.patch("/api/settings", json={
+            "perunchat_password": "test-password",
+            "max_concurrent_runs": "lots",              # invalid -> 400
+        })
+        assert r.status_code == 400
+        assert server.SETTINGS.perunchat_api_key == "plain-key"
+    finally:
+        server.SETTINGS.perunchat_api_key = ""
+
+
 def test_settings_patch_rejects_bad_types_and_leaks_no_token(client):
     from perun import server
 

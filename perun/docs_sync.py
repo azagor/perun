@@ -37,6 +37,10 @@ DEFAULT_CHANGELOG = "docs/CHANGELOG.md"
 # A docs run is bounded: a stuck turn must not hold the machine-wide slot forever.
 DOCS_RUN_TIMEOUT = 600.0
 AUDIT_POLL_SECONDS = 2.0
+# How long to wait for the command to actually start before assuming it already
+# finished (a queued command that starts late would otherwise be recorded as
+# "wrote nothing").
+DOCS_START_GRACE = 10.0
 #: Paths the docs agent may write. Used only to report a run that went outside
 #: them (the agent's permission block is the enforcement).
 _DOCS_PATHS = ("docs/", "AGENTS.md", "perun.md")
@@ -192,14 +196,17 @@ def _wait_for_docs_run(client: "opencode_api.OpenCodeAPI", session_id: str) -> b
         active = client.session_active(session_id)
     except Exception:  # noqa: BLE001 - an older service has no such probe
         return False
-    if not active:
-        # The command may not have started yet; one short grace, then accept that
-        # it either already finished or never ran.
-        time.sleep(min(1.0, AUDIT_POLL_SECONDS))
+    start_deadline = time.time() + DOCS_START_GRACE
+    while not active and time.time() < start_deadline:
+        # The command may be queued; give it time to start before concluding it
+        # finished instantly (which would audit an empty diff).
+        time.sleep(0.5)
         try:
-            return not client.session_active(session_id)
+            active = client.session_active(session_id)
         except Exception:  # noqa: BLE001
             return False
+    if not active:
+        return True                      # finished instantly, or never ran
     while time.time() < deadline:
         time.sleep(AUDIT_POLL_SECONDS)
         try:

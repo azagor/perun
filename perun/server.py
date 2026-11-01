@@ -3231,6 +3231,11 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     global SETTINGS, ORCH
     from . import secrets as _secrets
 
+    # Values this request would *re-encrypt in place* (an existing plaintext
+    # secret plus a newly supplied password). They are staged like every other
+    # field so a later validation error cannot leave the live settings half-applied.
+    staged_secrets: dict[str, str] = {}
+
     # Encrypt perunchat_api_key when a password is available, exactly like the
     # Telegram token path, so the key is not stored plaintext in config.json.
     pc_password = (payload.get("perunchat_password") or os.environ.get("PERUN_PASSWORD") or "").strip()
@@ -3248,7 +3253,8 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         current = SETTINGS.perunchat_api_key
         if not _secrets.is_encrypted(current):
             try:
-                SETTINGS.perunchat_api_key = _secrets.encrypt_value(current, pc_password)
+                staged_secrets["perunchat_api_key"] = _secrets.encrypt_value(
+                    current, pc_password)
             except _secrets.SecretError:
                 pass
 
@@ -3265,7 +3271,8 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         current = SETTINGS.perun_hitl_secret
         if not _secrets.is_encrypted(current):
             try:
-                SETTINGS.perun_hitl_secret = _secrets.encrypt_value(current, pc_password)
+                staged_secrets["perun_hitl_secret"] = _secrets.encrypt_value(
+                    current, pc_password)
             except _secrets.SecretError:
                 pass
 
@@ -3277,6 +3284,8 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     for key, value in payload.items():
         if key in allowed:
             staged[key] = _coerce_setting(key, value)
+    for key, value in staged_secrets.items():
+        staged.setdefault(key, value)
     previous = {key: getattr(SETTINGS, key) for key in staged}
     for key, value in staged.items():
         setattr(SETTINGS, key, value)

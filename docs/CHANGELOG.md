@@ -4,7 +4,28 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The remaining audit items
+
+* A reattached run no longer seeds from the session transcript (it concatenated
+  every earlier turn into this run's answer). The terminal fallback uses only the
+  final assistant message, so the result cannot replay history regardless of the
+  service's message ordering. `_admission_landed()` heartbeats the run lease.
+* A digest that reaches some chats but not others keeps its items queued, records
+  which chats it served, and retries only the ones still missing them. A digest
+  delivery is recorded without a message id, so **Open** still posts a fresh
+  replyable card instead of editing the list.
+* `usage()` retries with a 200-message page when the service rejects `limit=1000`,
+  instead of losing the snapshot.
+* The docs audit waits up to 10 s for the command to start; a queued command is no
+  longer recorded as "wrote nothing".
+* PerunChat's reply budget is a rate limit anchored on Perun's own replies
+  (eight per room per minute): a room it only reads never trips it, and an
+  operator message resets it.
+* `PATCH /api/settings` stages the in-place re-encryption of an existing secret
+  too, so a rejected request no longer leaves the live key encrypted-but-unsaved.
+* Documentation: the message-ordering assumption behind the reattach fallback is
+  stated where it matters, and the sensitive-subtree audit is documented as
+  security-first (OpenCode keeps its own state outside the project).
 
 ## v0.10.41
 

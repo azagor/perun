@@ -3496,6 +3496,48 @@ def test_should_reply_ignores_peruns_own_messages(settings):
     assert decision.reason == "own message"
 
 
+def test_the_rate_budget_stops_an_agent_loop(settings):
+    """Eight replies to one room in a minute is a loop, not a conversation."""
+    import time as _time
+
+    from perun.perunchat_bridge import PerunChatBridge
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "peruntheoverseer"
+    bridge._last_reply_at["grp:perun:room-proj:chat"] = _time.time()
+    frame = {
+        "room_id": "grp:perun:room-proj:chat",
+        "payload": "can you check that too?",
+        "sender": {"agent_id": "other-agent"},
+    }
+
+    decisions = [bridge._should_reply_to(frame) for _ in range(10)]
+
+    assert decisions[0].should_reply is True
+    assert decisions[-1].should_reply is False
+    assert "budget" in decisions[-1].reason
+
+
+def test_a_room_perun_only_reads_never_trips_the_budget(settings):
+    """A busy room with no replies from us must not silence a later question."""
+    from perun.perunchat_bridge import PerunChatBridge
+
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "peruntheoverseer"
+    frame = {
+        "room_id": "grp:perun:quiet-proj:chat",
+        "payload": "hello everyone",
+        "sender": {"agent_id": "other-agent"},
+    }
+
+    for _ in range(30):
+        bridge._should_reply_to(frame)
+
+    # No reply was ever recorded, so the last question is still answered.
+    assert bridge._should_reply_to({**frame, "payload": "what is the status?"}
+                                   ).should_reply is True
+
+
 # --------------------------------------------------------------------------- #
 # Operator inbox producers
 # --------------------------------------------------------------------------- #

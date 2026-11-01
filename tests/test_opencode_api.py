@@ -75,6 +75,26 @@ def test_discovery_returns_empty_without_the_cli(monkeypatch):
     assert opencode_api.discover_base_url() == ""
 
 
+def test_usage_falls_back_to_a_smaller_page_when_the_service_caps_it():
+    api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
+    calls: list[int] = []
+
+    def messages(session_id, limit=1000):
+        calls.append(limit)
+        if limit > 200:
+            raise opencode_api.OpenCodeHTTPError(
+                400, "limit too large", f"/api/session/{session_id}/message")
+        return [{"tokens": {"input": 7, "output": 3},
+                 "model": {"providerID": "p", "id": "m"}}]
+
+    api.messages = messages  # type: ignore[assignment]
+
+    usage = api.usage("ses_x")
+
+    assert calls == [1000, 200]
+    assert usage["tokens_in"] == 7 and usage["tokens_out"] == 3
+
+
 def test_usage_limits_unwraps_the_experimental_payload_or_degrades_to_none():
     budgets = {"budgets": [{"id": "ollama-cloud", "vendors": ["ollama-cloud"],
                             "spent": 18.0, "limit": 20.0,

@@ -1670,6 +1670,21 @@ def record_attention_delivery(attention_id: int, chat_id: str,
         )
 
 
+def attention_delivered_to(attention_id: int, chat_id: str) -> bool:
+    """Whether *chat_id* has already been shown this item (any message id).
+
+    Distinct from :func:`attention_delivered_message`: a row with a NULL message
+    id means "deliberately not sent" (replay skip), and still counts as handled.
+    """
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT 1 FROM attention_deliveries WHERE attention_id=? AND chat_id=?",
+            (int(attention_id), str(chat_id)),
+        )
+    return bool(row)
+
+
 def attention_delivered_message(attention_id: int, chat_id: str) -> int | None:
     """The message id that last carried this item to *chat_id* (None if never)."""
     with db.db() as conn:

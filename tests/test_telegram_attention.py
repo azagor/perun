@@ -655,6 +655,38 @@ def test_a_digest_keeps_the_items_past_the_fifth(bridge, project, monkeypatch):
     assert f"att_{rest[0]['id']}" in bridge.sent[0]["text"]
 
 
+def test_a_partial_digest_retries_only_the_chat_that_missed_it(bridge, project, monkeypatch):
+    clock = {"now": 70_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    item = _room_item(project, "msg_partial")
+    bridge.allowed = ["1", "2"]
+    real_send = bridge.send
+    failing = {"2"}
+
+    def send(chat_id, text, reply_to=None, reply_markup=None):  # noqa: ANN001
+        if chat_id in failing:
+            return None
+        return real_send(chat_id, text, reply_to=reply_to, reply_markup=reply_markup)
+
+    bridge.send = send
+
+    assert bridge.attention_tick() == 0
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1                 # only chat 1
+    assert registry.attention_delivered_to(item["id"], "1") is True
+    assert registry.attention_delivered_to(item["id"], "2") is False
+    # Still queued, so the chat that missed it can be served next window.
+    assert item["id"] not in bridge._digested
+
+    failing.clear()
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1
+    assert registry.attention_delivered_to(item["id"], "2") is True
+    assert item["id"] in bridge._digested
+
+
 def test_digest_zero_sends_room_messages_immediately(bridge, project, monkeypatch):
     monkeypatch.setattr(config.Settings, "load",
                         staticmethod(lambda: _settings(attention_digest_seconds=0)))

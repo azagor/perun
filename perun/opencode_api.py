@@ -292,7 +292,15 @@ class OpenCodeAPI:
         """
         total: Dict[str, Any] = {"tokens_in": 0, "tokens_out": 0,
                                  "cache_read": 0, "cost": 0.0, "models": {}}
-        for message in self.messages(session_id, limit=limit):
+        try:
+            messages = self.messages(session_id, limit=limit)
+        except OpenCodeHTTPError as exc:
+            # A service may cap ``limit``; a rejected request must not lose the
+            # snapshot entirely. 200 is the conservative, well-supported page.
+            if getattr(exc, "status", 0) != 400 or int(limit) <= 200:
+                raise
+            messages = self.messages(session_id, limit=200)
+        for message in messages:
             tokens = message.get("tokens") or {}
             if not isinstance(tokens, dict):
                 continue

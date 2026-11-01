@@ -61,8 +61,11 @@ def enabled(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_state():
+def _fresh_state(monkeypatch):
     """The handled-proposal set is process-wide; tests must not inherit it."""
+    # The fake service never reports an active session; keep the start grace
+    # short so the suite does not wait it out on every docs test.
+    monkeypatch.setattr(docs_sync, "DOCS_START_GRACE", 0.2)
     docs_sync.reset_state()
     yield
     docs_sync.reset_state()

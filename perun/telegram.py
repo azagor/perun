@@ -1053,10 +1053,15 @@ class PerunTelegramBridge:
                         {"attention_id": item["id"], "reason": reason},
                     )
                 continue
-            chats = attention.recipients(
-                item, allowed=list(self.allowed),
-                muted=registry.attention_muted_projects,
-            )
+            chats = [
+                chat_id for chat_id in attention.recipients(
+                    item, allowed=list(self.allowed),
+                    muted=registry.attention_muted_projects,
+                )
+                # A chat that already has this item (a digest that reached it, or
+                # a replay skip) must not get a second card.
+                if not registry.attention_delivered_to(item["id"], chat_id)
+            ]
             if not chats:
                 if item["id"] not in self._attention_logged:
                     self._attention_logged.add(item["id"])
@@ -1177,39 +1182,54 @@ class PerunTelegramBridge:
                 for item in eligible:
                     self._digest_pending.setdefault(item["id"], now)
                 continue
-            delivered = 0
+            # A previous attempt may already have reached some chats; only the
+            # ones still missing the listed items get the reminder.
+            chats = [chat_id for chat_id in chats
+                     if not all(registry.attention_delivered_to(item["id"], chat_id)
+                                for item in listed)]
+            if not chats:
+                for item in listed:
+                    self._digested.add(item["id"])
+                for item in rest:
+                    self._digest_pending.setdefault(item["id"], now)
+                continue
+            delivered: List[str] = []
             failed: List[str] = []
             for chat_id in chats:
                 message_id = self.send(chat_id, text, reply_markup=markup)
                 if message_id:
-                    delivered += 1
+                    delivered.append(chat_id)
                 else:
                     failed.append(str(chat_id))
             if not delivered:
-                # Nothing reached the operator: hold the items for the next
-                # window instead of losing them. Re-queue only when *no* chat
-                # accepted the card — a partial failure must not re-list the items
-                # on the chat that already showed them.
                 LOG.warning("could not send a digest to %s; will retry", ", ".join(failed))
                 for item in eligible:
                     self._digest_pending.setdefault(item["id"], now)
                 continue
             if failed:
-                LOG.warning("digest reached %d/%d chat(s); %s will miss this card",
-                            delivered, len(chats), ", ".join(failed))
-            # Remember on disk that these were shown: the in-memory set dies
-            # with the process, and an undelivered item would otherwise be
-            # listed again after every restart.
+                LOG.warning("digest reached %d/%d chat(s); %s will retry next window",
+                            len(delivered), len(chats), ", ".join(failed))
+            complete = not failed
+            # Per-chat records, not one global "shown": a reached chat keeps its
+            # copy even when another chat failed, and the next attempt skips it.
             for item in listed:
-                self._digested.add(item["id"])
+                for chat_id in delivered:
+                    # A digest is a list, not a replyable card: record the
+                    # chat as served but leave the message id empty, so "Open"
+                    # still posts a fresh card instead of editing the list.
+                    registry.record_attention_delivery(item["id"], chat_id, None)
+                if complete:
+                    self._digested.add(item["id"])
+                else:
+                    self._digest_pending.setdefault(item["id"], now)
                 registry.log_activity(
                     item.get("project_id"), "attention_digest",
                     f"att_{item['id']} listed in a digest",
-                    {"attention_id": item["id"], "chats": chats},
+                    {"attention_id": item["id"], "chats": delivered},
                 )
             for item in rest:
                 self._digest_pending.setdefault(item["id"], now)
-            sent += delivered
+            sent += len(delivered)
         if len(self._digested) > 200:
             # Ids only grow; a closed item never comes back through the delivery
             # path, so the oldest half can be forgotten.

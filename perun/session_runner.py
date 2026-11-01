@@ -22,7 +22,7 @@ import os
 import queue
 import socket
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import opencode_api, registry
 from .orchestrator import compose_prompt
@@ -145,7 +145,10 @@ class SessionRunner:
                     # Never fall back to the CLI runner once a session exists: that
                     # would run the same turn twice in the same session. Ask the
                     # session whether our admission message is there instead.
-                    if not self._admission_landed(api, sid, message_id):
+                    if not self._admission_landed(
+                            api, sid, message_id,
+                            beat=lambda: registry.touch_run_lease(
+                                run_uid, self.owner, lease)):
                         self._finish(
                             run_uid, "failed",
                             "the prompt could not be confirmed; it may have been "
@@ -154,10 +157,13 @@ class SessionRunner:
                         )
                         return
                     admitted = True
+                # No transcript seed: the seed concatenated every earlier turn
+                # into this run's answer, and slicing it by position assumes the
+                # service returns messages oldest-first. A reattached run starts
+                # from the events it sees; the terminal fallback below still
+                # recovers the final message.
                 status, error, reply = self._observe(
                     run_uid, project, sid, inbox, lease,
-                    seed=self._existing_reply(api, sid, after_id=message_id)
-                    if run.get("_reattach") else "",
                 )
             finally:
                 hub.unsubscribe(token)
@@ -327,15 +333,24 @@ class SessionRunner:
         ).strip()
 
     def _admission_landed(self, api: "opencode_api.OpenCodeAPI", sid: str,
-                          message_id: str, *, attempts: int = 10) -> bool:
+                          message_id: str, *, attempts: int = 10,
+                          beat: Optional[Callable[[], None]] = None) -> bool:
         """Whether ``message_id`` exists in the session (admission confirmed).
 
         A prompt POST that times out is ambiguous; re-reading the session is the
         only way to tell "never sent" from "sent, answer lost". Conservative on
         purpose: if the service stays unreachable we report ``False`` and the run
         ends as failed rather than risking a second turn.
+
+        ``beat`` keeps the run lease fresh: a slow service can make this loop run
+        longer than the 30 s lease TTL.
         """
         for attempt in range(max(1, attempts)):
+            if beat is not None:
+                try:
+                    beat()
+                except Exception:  # pragma: no cover - the lease is best effort
+                    pass
             try:
                 for message in api.messages(sid, limit=50):
                     if str(message.get("id") or "") == message_id:
@@ -361,7 +376,12 @@ class SessionRunner:
             messages = api.messages(sid, limit=100)
         except opencode_api.OpenCodeError:
             return ""
-        if after_id:
+        if not after_id:
+            # Only the final assistant message: the whole transcript used to be
+            # concatenated, so a reattached run replayed every earlier turn.
+            messages = [m for m in messages
+                        if str(m.get("type") or "") in ("assistant", "message")][-1:]
+        elif after_id:
             index = next(
                 (i for i, m in enumerate(messages) if str(m.get("id") or "") == after_id),
                 None,

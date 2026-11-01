@@ -772,6 +772,14 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
 - **A failed status probe is not a finished run.** `_observe()` treats
   `OpenCodeUnavailable` from `session_active()` as "cannot tell" for up to 30 s
   instead of finalizing a live run as `interrupted` during a service restart.
+- **A reattached run does not seed from history.** The seed used to concatenate
+  every earlier assistant turn, so a reattached run replayed the whole transcript
+  as its answer. It now starts from the events it sees; when the turn already
+  finished, the fallback uses only the **final** assistant message. That assumes
+  `GET /api/session/{id}/message` returns messages oldest-first (the codebase-wide
+  assumption); the fallback does not depend on the position of the admission
+  marker. `_admission_landed()` heartbeats the run lease while it confirms a
+  timed-out admission.
 - **Standalone TUI runs** (`POST /api/runs/tui`) are the one exception to
   "a run is a session": the terminal is external, so Perun has no process and no
   session to observe. `runs.standalone` marks them, restart reconciliation leaves
@@ -1071,7 +1079,11 @@ and also detects modified/deleted parent-directory *files* and any appearance or
 removal of a sibling directory — a sibling's mtime change is just another project
 writing its own files, not an escape. Because the walk skips `.opencode`/`.perun`/
 `.claude`, the audit snapshots those subtrees as metadata and reports any change as
-a violation (a planted plugin or command is exactly what it exists to catch). This is cooperative
+a violation (a planted plugin or command is exactly what it exists to catch). That
+is security-first by design: OpenCode keeps its own session state outside the
+project, so a write under `.opencode`/`.perun` during a run *is* suspicious; if a
+future service version starts writing there, the allowlist — not the audit — is the
+place to express it. This is cooperative
 enforcement backed by the audit, not an OS-level sandbox: review the audit output
 before treating a run as trusted. When the guard server is started by the
 OpenCode service (`standalone=False`), it lacks the per-run `PERUN_ALLOWLIST`;
@@ -1803,7 +1815,11 @@ through `POST /api/session/{id}/command` (the endpoint the TUI uses), so the
 command's own template decides what is written. `perun-docs` may read the project
 and write `docs/**`, `AGENTS.md` and `perun.md`; a blanket deny covers shell and
 every other tool. It is managed like `perun-orchestrator` (`perun/managed_agent.py`:
-write-once with sha256, refresh only while untouched, reset on request). Because
+write-once with sha256, refresh only while untouched, reset on request). The
+permission block has the same shape as the `perunchat` agent's and is asserted
+structurally by `tests/test_docs_agent.py`; the first live docs run is the check
+that OpenCode resolves the `docs/**` path globs (a refused write leaves the
+changelog fallback in place). Because
 the docs step is outside the approved targets by design, Perun also snapshots the
 project before the command, waits (bounded) for the turn to go idle, diffs, and
 logs `docs_audit` / `docs_audit_violation` with the paths — the docs run cannot

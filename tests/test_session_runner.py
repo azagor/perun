@@ -27,7 +27,9 @@ def test_a_reattached_reply_does_not_replay_earlier_turns():
 
     runner = SessionRunner.__new__(SessionRunner)
     assert runner._existing_reply(Api(), "ses", after_id="msg_run") == "turn two"
-    assert runner._existing_reply(Api(), "ses") == "turn one\n\nturn two"
+    # Without a marker only the final assistant message is used: concatenating
+    # the transcript replayed every earlier turn as this run's answer.
+    assert runner._existing_reply(Api(), "ses") == "turn two"
 
 
 class FakeAPI:
