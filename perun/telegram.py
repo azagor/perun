@@ -774,6 +774,16 @@ class PerunTelegramBridge:
         if root in ("/stop", "/cancel"):
             uid = self.run_for(chat_id)
             if uid and self.orch.cancel(uid):
+                # Same path as the dashboard's Stop: cancel the orchestrator run
+                # *and* close the terminal Perun opened for it. The tracker falls
+                # back to `runs.pid` + the PERUN_RUN_UID marker after a restart.
+                from . import process_tracker
+
+                try:
+                    process_tracker.TRACKER.terminate(uid)
+                except Exception:  # pragma: no cover - a stop must never fail the reply
+                    logging.getLogger("perun.telegram").exception(
+                        "could not close the terminal for run %s", uid)
                 self.send(chat_id, "🛑 Cancelling…", reply_to=message_id)
             else:
                 self.send(chat_id, "Nothing is running.", reply_to=message_id)

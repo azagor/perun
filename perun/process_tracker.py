@@ -230,13 +230,19 @@ class ProcessTracker:
         except Exception:  # pragma: no cover - defensive
             pass
         owner: int | None = None
+        # The marker as the launcher writes it: `set "PERUN_RUN_UID=…"` (cmd),
+        # `$env:PERUN_RUN_UID='…'` (pwsh) and `PERUN_RUN_UID='…'` (POSIX). Match
+        # the whole assignment, not the bare uid, so an unrelated command line that
+        # merely mentions the id can never become the kill target.
+        markers = (f"PERUN_RUN_UID={run_uid}", f"PERUN_RUN_UID='{run_uid}'",
+                   f'PERUN_RUN_UID="{run_uid}"')
         for candidate in chain:
             try:
                 name = (candidate.name() or "").lower()
                 cmd = " ".join(candidate.cmdline() or [])
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-            if name in _SHELL_NAMES and run_uid in cmd:
+            if name in _SHELL_NAMES and any(m in cmd for m in markers):
                 owner = candidate.pid  # keep walking: the last match is outermost
         return owner
 

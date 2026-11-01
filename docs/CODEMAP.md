@@ -1590,7 +1590,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `test_telegram_lock.py` — mutex namespacing, side-effect-free `is_held()`, and
   the second-acquire-is-refused guarantee (the bridge can never multiply).
 * `test_telegram_routing.py` - `_current_project` routing (single-project
-  auto-select, control-plane fallback, `/orchestrator`).
+  auto-select, control-plane fallback, `/orchestrator`), and `/stop` taking the
+  same cancel path as the dashboard (orchestrator + terminal), even when the
+  tracker fails.
 * `test_routing.py` - the deterministic router (`perun/routing.py`): slug/name/
   tag resolution, Polish inflection and palatalisation, prefix collisions
   (`perun` vs `perunchat` vs `perun-in-the-machine`), ambiguity, action

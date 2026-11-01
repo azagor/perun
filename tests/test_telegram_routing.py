@@ -498,3 +498,37 @@ def test_a_changes_question_maps_to_the_diff_command(bridge, monkeypatch) -> Non
 
     assert bridge._route_message("1", "git diff", 13) is True
     assert seen == ["/diff"]
+
+# ---- /stop closes the terminal, like the dashboard -------------------------- #
+
+def test_stop_also_closes_the_terminal(bridge, orch, monkeypatch) -> None:
+    """The bridge's /stop must take the same path as the dashboard's Stop."""
+    from perun import process_tracker
+
+    monkeypatch.setattr(bridge, "run_for", lambda chat_id: "run-42")  # noqa: ARG005
+    monkeypatch.setattr(orch, "cancel", lambda uid: True)
+    calls: list[str] = []
+    monkeypatch.setattr(process_tracker.TRACKER, "terminate",
+                        lambda uid: bool(calls.append(uid)) or True)
+
+    bridge.handle_command("1", "/stop", 1)
+
+    assert calls == ["run-42"]
+    assert "Cancelling" in bridge.sent[-1]
+
+
+def test_stop_still_replies_when_the_terminal_cannot_be_closed(bridge, orch, monkeypatch) -> None:
+    """A tracker failure must never swallow the reply to the operator."""
+    from perun import process_tracker
+
+    monkeypatch.setattr(bridge, "run_for", lambda chat_id: "run-43")  # noqa: ARG005
+    monkeypatch.setattr(orch, "cancel", lambda uid: True)
+
+    def boom(uid):
+        raise RuntimeError("tracker unavailable")
+
+    monkeypatch.setattr(process_tracker.TRACKER, "terminate", boom)
+
+    bridge.handle_command("1", "/stop", 1)
+
+    assert "Cancelling" in bridge.sent[-1]

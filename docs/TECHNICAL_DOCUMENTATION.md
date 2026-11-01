@@ -801,6 +801,11 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   window open after the agent exits. Attribution still gates it (marker-bearing pid
   or Perun's own live handle; never the launch-time Windows Terminal heuristic),
   and with nothing attributable Stop just finalizes the row and the card goes idle.
+  Closing the shell ends every process started in that window — identical to
+  closing it by hand, including a nested `opencode serve` that other sessions may
+  share. The Telegram bridge's `/stop` and `/cancel` call the same pair
+  (`ORCH.cancel` then `ProcessTracker.terminate`), so the phone path closes the
+  terminal too.
   Liveness keeps following the agent process, so an agent that exits ends its run
   even if the shell is still at a prompt.
   `POST /api/runs/{uid}/finish` remains the explicit "end tracking, keep the

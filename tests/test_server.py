@@ -1703,6 +1703,28 @@ def test_cancel_offers_an_untracked_run_to_the_tracker(client, monkeypatch):
     assert fresh.get("headless-only") is None
 
 
+def test_cancelling_a_running_headless_run_keeps_the_cancelled_status(client, tmp_path):
+    """ORCH.cancel marks the row before the tracker finalizes it, so a Stop must
+    never leave a cancelled run recorded as `done`."""
+    from perun import registry
+
+    r = client.post("/api/projects", json={
+        "method": "new", "name": "CancelStatus", "path": str(tmp_path / "cancel-status"),
+        "bootstrap": False,
+    })
+    assert r.status_code == 200
+    slug = r.json()["project"]["slug"]
+    project = registry.get_project(slug)
+    run = registry.create_run("cancel-status-run", project["id"], "hi")
+    registry.update_run(run["run_uid"], status="running",
+                        started_at=registry.now_iso())
+
+    r = client.post(f"/api/runs/{run['run_uid']}/cancel")
+    assert r.status_code == 200
+    assert r.json()["cancelled"] is True
+    assert registry.get_run(run["run_uid"])["status"] == "cancelled"
+
+
 def test_run_in_terminal_starts_tracked_process(client, tmp_path, monkeypatch):
     from perun import process_tracker
 

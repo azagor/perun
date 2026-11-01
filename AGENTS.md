@@ -160,7 +160,11 @@ with `python -m perun project-roots --add <name> <path>`.
   an "active" terminal behind. Attribution still gates it: a pid carrying the
   marker, or the live `Popen` handle Perun launched — never the launch-time Windows
   Terminal heuristic (liveness-only). With nothing attributable, Stop finalizes the
-  row. Sweep the run when the pid is gone (age window only as a fallback).
+  row. Closing that shell ends everything started in the window (the same as
+  closing it by hand), including a nested `opencode serve` shared with other
+  sessions. Telegram's `/stop` and `/cancel` take the same path (bridge →
+  `ORCH.cancel` + `ProcessTracker.terminate`). Sweep the run when the pid is gone
+  (age window only as a fallback).
 * **A working card never offers Run.** The first card action comes from
   `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for *any*
   active run (headless cancel, or closing the TUI terminal Perun opened). A

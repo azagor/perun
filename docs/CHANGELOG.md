@@ -4,7 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Stop is consistent everywhere, and its blast radius is documented
+
+* Telegram's `/stop` and `/cancel` now use the same path as the dashboard: after
+  `ORCH.cancel` they call `ProcessTracker.terminate(uid)`, so a phone-initiated
+  stop also closes the terminal Perun opened (or does nothing beyond finalizing the
+  row when nothing is attributable). A tracker failure is logged, never allowed to
+  swallow the reply.
+* `_terminal_owner()` matches the literal `PERUN_RUN_UID=<uid>` assignment (and its
+  quoted `cmd`/`pwsh`/POSIX forms) instead of the bare run id, so a command line
+  that merely mentions the uid can never become a kill target.
+* Tests: a running headless run cancelled over HTTP ends `cancelled` (never
+  `done`, which would mean `finalize()` ran before `ORCH.cancel`); the bridge's
+  `/stop` reaches the tracker and still replies when the tracker fails.
+* AGENTS and TECHNICAL now state the blast radius: closing the shell ends every
+  process started in that window — identical to closing it by hand, including a
+  nested `opencode serve` shared with other sessions.
 
 ## v0.10.49
 
