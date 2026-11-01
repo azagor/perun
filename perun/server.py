@@ -3159,6 +3159,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "telegram_bot_name", "terminal", "perunchat_api_key", "perunchat_api_endpoint",
         "perunchat_chat_model", "perunchat_chat_agent", "perun_owner_name",
         "perun_hitl_secret", "attention_quiet_hours", "attention_default_delivery",
+        "provider_budgets",
     }
     if key in int_fields:
         try:
@@ -3303,7 +3304,22 @@ def api_providers_usage() -> dict[str, Any]:
         limits = opencode_api.default_api().usage_limits()
     except Exception:  # pragma: no cover - the service may be down
         limits = None
-    return _ok(limits=limits, measured=registry.usage_by_provider(hours=24 * 30))
+    budgets: dict[str, float] = {}
+    for part in str(getattr(SETTINGS, "provider_budgets", "") or "").replace("\n", ",").split(","):
+        name, _, value = part.partition("=")
+        try:
+            amount = float(value)
+        except ValueError:
+            continue
+        if name.strip() and amount > 0:
+            budgets[name.strip().lower()] = amount
+    measured = registry.usage_by_provider(hours=24 * 30)
+    for row in measured:
+        limit = budgets.get(str(row.get("provider") or "").lower())
+        if limit:
+            row["budget"] = round(limit, 2)
+            row["budget_percent"] = round(min(1.0, float(row.get("cost") or 0) / limit), 3)
+    return _ok(limits=limits, measured=measured, budgets=budgets)
 
 
 @app.get("/api/usage")

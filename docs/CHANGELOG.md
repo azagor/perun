@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### A budget turns measured spend into a percentage
+
+* `provider_budgets` (e.g. `ollama-cloud=20,opencode=50`, USD/month) lets the
+  Providers tab show **budget N%** when the provider publishes no quota of its
+  own; the provider's reported budget still wins when both exist, and the two are
+  labelled differently. Parsing is tolerant (blank/NaN entries are ignored) and
+  clamped at 100%.
+* Editable via `PATCH /api/settings` (settings UI field still to come).
 
 ## v0.10.31
 

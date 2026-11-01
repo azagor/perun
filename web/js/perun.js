@@ -5175,6 +5175,10 @@ async function viewProviders(refresh = false) {
                         <span class="muted">$${Number(budget.spent || 0).toFixed(2)} of $${Number(budget.limit).toFixed(2)}${reset}</span>`);
         }
         if (measured) {
+            if (!budget && measured.budget) {
+                const pct = Math.round(Number(measured.budget_percent || 0) * 100);
+                parts.push(`<span class="badge ${pct >= 90 ? 'warn' : ''}" title="Perun's spend against the budget you set in settings">budget ${pct}%</span>`);
+            }
             parts.push(`<span class="muted" title="Measured by Perun from captured sessions (30d)">measured $${Number(measured.cost || 0).toFixed(4)} · ${Number(measured.tokens || 0).toLocaleString()} tok</span>`);
         }
         return parts.length ? `<div class="provider-meta">${parts.join(' ')}</div>` : '';

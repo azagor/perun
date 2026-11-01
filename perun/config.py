@@ -138,6 +138,10 @@ class Settings:
     default_agent: str = ""
     orchestrator_model: str = ""
     orchestrator_agent: str = ""
+    # Monthly budgets for providers that publish no quota, e.g.
+    # ``ollama-cloud=20,openai=50`` (USD). Used only to turn Perun's measured
+    # spend into a percentage; the provider's own numbers always win.
+    provider_budgets: str = ""
     max_concurrent_runs: int = 3
     run_timeout: int = 1800
     ollama_host: str = "http://127.0.0.1:11434"

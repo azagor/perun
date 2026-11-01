@@ -147,3 +147,25 @@ def test_spend_is_attributed_per_model_after_a_switch():
     assert rows["ollama-cloud"]["tokens"] == 110
     assert rows["opencode"]["tokens"] == 55
     assert round(rows["opencode"]["cost"], 4) == 0.02
+
+
+def test_provider_budgets_turn_measured_spend_into_a_percentage(monkeypatch):
+    """No provider quota: a configured monthly budget gives the percentage."""
+    from perun import server
+
+    project = registry.add_project("usage-budget", r"C:\usage-budget")
+    session = registry.create_session(project["id"], "ses_budget")
+    registry.create_run("budget_run", project["id"], "hi", session_pk=session["id"],
+                        model="ollama-cloud/deepseek")
+    registry.update_session_usage(session["id"], {"tokens_in": 100, "tokens_out": 10,
+                                                  "cost": 5.0,
+                                                  "models": {"ollama-cloud/deepseek":
+                                                             {"tokens_in": 100, "tokens_out": 10,
+                                                              "cost": 5.0}}})
+    monkeypatch.setattr(server.SETTINGS, "provider_budgets", "ollama-cloud=20")
+
+    body = server.api_providers_usage()
+
+    row = next(r for r in body["measured"] if r["provider"] == "ollama-cloud")
+    assert row["budget"] == 20.0
+    assert row["budget_percent"] == 0.25
