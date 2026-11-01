@@ -2295,7 +2295,14 @@ class PerunChatBridge:
         # actionable message (run/ask/status/remember/recall/stop).
         if text.lstrip().startswith("[Routing]"):
             return False
-        if routing.detect_action(text) == "unknown":
+        action = routing.detect_action(text)
+        # Coverage counter for rooms too: aggregated per day, never the text, so
+        # "how much of what people type does the router understand?" is answerable.
+        try:
+            registry.bump_routing_stat("perunchat", action)
+        except Exception:  # pragma: no cover - telemetry is best-effort
+            pass
+        if action == "unknown":
             return False
         try:
             projects = registry.list_projects(include_hidden=True)

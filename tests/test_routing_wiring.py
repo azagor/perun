@@ -328,3 +328,34 @@ def test_project_override_falls_back_when_the_slug_vanishes(bridge, routing_on, 
 
     assert handled is True
     assert "stillhere" in bridge.sent[-1]
+
+def test_enabled_runs_question_is_answered_without_a_run(bridge, orch, routing_on, tmp_path) -> None:
+    """'what did the last run do' must not spend a run to answer."""
+    project = _add(tmp_path, "perun")
+    registry.set_bridge_link("1", project["id"], None)
+
+    bridge.run_message("1", "last run?", 1)
+
+    assert orch.started == []
+    assert bridge.sent
+    # Either a list of runs or a clean "nothing yet" — never an agent run.
+    assert ("Recent runs" in bridge.sent[-1]) or ("No runs yet" in bridge.sent[-1])
+
+
+def test_enabled_pending_question_is_answered_without_a_run(bridge, orch, routing_on) -> None:
+    bridge.run_message("1", "co czeka?", 1)
+    assert orch.started == []
+    assert bridge.sent
+
+
+def test_coverage_counter_records_every_routed_message(bridge, routing_on) -> None:
+    """The counter must include ``unknown``: that is the coverage denominator."""
+    from perun import registry
+
+    bridge.run_message("1", "status", 1)
+    bridge.run_message("1", "cos zupelnie innego", 2)
+
+    rows = registry.routing_stats(days=1)
+    telegram = {(r["action"]): r["count"] for r in rows if r["source"] == "telegram"}
+    assert telegram.get("status") == 1
+    assert telegram.get("unknown") == 1

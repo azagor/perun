@@ -1320,6 +1320,35 @@ def routing_decisions(hours: int = 24, limit: int = 50) -> list[dict[str, Any]]:
     return out
 
 
+def bump_routing_stat(source: str, action: str, *, day: str = "") -> None:
+    """Count one routed message per day/source/action (coverage telemetry).
+
+    Aggregated on purpose: logging an activity row per room message would bury
+    the Activity view under ``routing: unknown``.
+    """
+    day = (day or "").strip() or datetime.now().date().isoformat()
+    with db.db() as conn:
+        conn.execute(
+            """INSERT INTO routing_stats(day,source,action,count) VALUES (?,?,?,1)
+               ON CONFLICT(day,source,action) DO UPDATE SET count=count+1""",
+            (day, str(source or "unknown"), str(action or "unknown")),
+        )
+
+
+def routing_stats(days: int = 1) -> list[dict[str, Any]]:
+    """``routing_stats`` rows for the last *days* days (dashboard coverage)."""
+    days = max(1, min(int(days), 90))
+    cutoff = (datetime.now().date() - timedelta(days=days - 1)).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT day, source, action, count FROM routing_stats "
+            "WHERE day>=? ORDER BY day DESC, source, action",
+            (cutoff,),
+        )
+    return [dict(r) for r in rows]
+
+
 # --------------------------------------------------------------------------- #
 # Telegram bridge links
 # --------------------------------------------------------------------------- #

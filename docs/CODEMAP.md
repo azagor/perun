@@ -135,7 +135,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `runs_awaiting_reply()`, `claim_reply_delivery()` / `clear_reply_sent()`.
 * Activity: `log_activity()`, `list_activity()`, `get_activity()` (one row with
   `meta` parsed), `routing_decisions(hours, limit)` (the `routing_decision`
-  window used by the dashboard panel), `misroute_reported(decision_id)` /
+  window used by the dashboard panel), `bump_routing_stat(source, action)` /
+  `routing_stats(days=1)` (per-day coverage counter, `unknown` included — an
+  aggregated row instead of one activity row per room message), `misroute_reported(decision_id)` /
   `misroute_ids()` / `clear_misroute(decision_id)` (dedupe, the panel's
   `reported` flag, and undo), `prune_activity(keep_days=90)` (routing telemetry
   only — run/proposal/audit rows are never pruned), plus
@@ -656,10 +658,11 @@ reason)`.
   `stop loss`/`stop limit` are domain terms, not commands.
 * Three read-only machine questions are answered without a model: `pending`
   ("what's waiting", "co czeka", "pending approvals"), `projects` ("list
-  projects", "pokaż projekty") and `help` ("pomoc"). Phrases must sit in the
-  leading window and single words only in messages of ≤2 tokens, so "help me run
-  the tests" stays on the agent path. The Telegram bridge maps them to the
-  existing `/pending`, `/projects` and `/help` commands.
+  projects", "pokaż projekty"), `help` ("pomoc") and `runs` ("last run", "why did
+  it fail", "dlaczego padło"). Phrases must sit in the leading window and single
+  words only in messages of ≤2 tokens, so "help me run the tests" stays on the
+  agent path. The Telegram bridge maps them to the existing `/pending`,
+  `/projects`, `/help` and `/runs` commands.
 * `is_addressed()` — `@mention`, `@perun`, slash command, or a direct message.
 * `route()` — applies the policy: ambiguity ⇒ `clarify`; a mutating action
   without a project mention stays on the bound project (today's behaviour);
@@ -783,14 +786,17 @@ Shared Telegram ⇄ Perun bridge.
   Per-chat in-flight runs live in `_runs` so `/stop` only cancels the caller's.
   With the routing setting enabled, `run_message()` first calls `_route_message()`
   (`_command_argument()`, `_log_routing_decision()`): `status`/`stop`/`remember`/
-  `recall` are answered without a run, ambiguity asks, and a `run`/`ask` naming another
+  `recall` are answered without a run, `pending`/`projects`/`help`/`runs` are
+  mapped to the existing commands (no model), ambiguity asks, and a `run`/`ask` naming another
   project rebinds `bridge_links` before starting. `status`/`remember`/`recall`
   pass the resolved slug as `project_override` so they act on the named project
   without moving the chat. `routing_shadow` logs the same
   decision (message prefixed `shadow:`) and then takes the previous path, for a
   log-only trial week. Decisions are logged as
-  `routing_decision` activity rows without the message text.
-  Commands include `/orchestrator` (`/perun`, `/overseer`) and `/pair`.
+  `routing_decision` activity rows without the message text, and every routed
+  message (including `unknown`) increments the per-day counter in
+  `routing_stats` so the panel can show coverage per source.
+  Commands include `/orchestrator` (`/perun`, `/overseer`), `/runs` and `/pair`.
 * Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
   are configured; cancels all active runs on shutdown), `_setup_logging()`.
 

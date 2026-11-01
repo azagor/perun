@@ -32,7 +32,7 @@ def _fresh_db():
                       "pending_room_deletions", "hitl_nonces", "project_dependencies",
                       "package_transfers", "attention_requests",
                       "attention_deliveries", "attention_outbox", "attention_mutes",
-                      "telegram_jobs"):
+                      "telegram_jobs", "routing_stats"):
             conn.execute(f"DELETE FROM {table}")
     yield
 

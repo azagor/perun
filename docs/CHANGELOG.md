@@ -4,7 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Coverage is measured, and "last run?" is free
+
+* `/runs` (Telegram, also reachable by asking **"last run?"**, "dlaczego padło?",
+  "why did it fail", "jak poszło?") lists the project's last five runs with status
+  and the first line of the result — no agent run, no tokens. It targets the
+  project named in the message (`project_override`) without moving the chat.
+* New `routing_stats` table (schema v16): one row per day/source/action instead of
+  an activity row per message, so room traffic does not bury the Activity view.
+  Every routed message is counted, `unknown` included — that is the coverage
+  denominator.
+* `GET /api/routing/decisions` now returns `coverage` per source
+  (`total`, `unknown`, `coverage`), and the Routing panel shows
+  "telegram 34% of 12 · perunchat 6% of 210". Rooms are conversational by nature:
+  the number to watch is whether it *drops* after a router change, not whether it
+  is low.
 
 ## v0.10.22
 

@@ -5261,9 +5261,20 @@ async function loadRoutingPanel() {
         .sort((a, b) => b[1] - a[1])
         .map(([k, v]) => `${esc(k)} ${v}`)
         .join(' · ');
+    // Coverage is per source: rooms are conversational by nature, so their
+    // "unknown" share is expected — the metric to watch is whether it drops
+    // after a router change, not whether it is low.
+    const coverage = Object.entries(res.coverage || {})
+        .sort((a, b) => b[1].total - a[1].total)
+        .map(([src, c]) => {
+            const pct = c.total ? Math.round((c.coverage || 0) * 100) : 0;
+            return `<span class="meta" title="${esc(src)}: ${c.total} message(s), ${c.unknown} unrecognised">${esc(src)} ${pct}% of ${c.total}</span>`;
+        })
+        .join(' · ');
     const head = `<div class="row wrap" style="gap:10px;align-items:center;margin:2px 0 8px">
         <strong>${res.total || 0}</strong> decision(s) in ${res.window_hours}h
         ${res.total ? `<span class="meta">unknown ${Math.round((res.unknown_share || 0) * 100)}%</span>` : ''}
+        ${coverage ? `<span class="meta">today: ${coverage}</span>` : ''}
         <span class="meta">${parts}</span>
         <button class="btn sm ghost" id="routing-refresh" title="Refresh">⟳</button>
       </div>`;

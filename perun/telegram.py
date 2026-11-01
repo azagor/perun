@@ -469,6 +469,7 @@ class PerunTelegramBridge:
                       "`/projects` — list projects\n"
                       "`/project <name|#>` — switch project\n"
                       "`/status` — current project + session\n"
+                      "`/runs` — the last few runs and how they ended\n"
                       "`/new` — fresh session\n"
                       "`/stop` — cancel *your* running reply\n"
                       "`/remember <fact>` — store to memory\n"
@@ -551,6 +552,26 @@ class PerunTelegramBridge:
                       f"queue: {self.work.qsize()}\n"
                       f"uptime: {up // 3600}h {(up % 3600) // 60}m",
                       reply_to=message_id)
+            return True
+        if root in ("/runs", "/last"):
+            proj = (registry.get_project(project_override) if project_override else None) \
+                or self._current_project(chat_id)
+            if not proj:
+                self.send(chat_id, "Pick a project first with `/project`.", reply_to=message_id)
+                return True
+            runs = registry.list_runs(project_id=proj["id"], limit=5)
+            if not runs:
+                self.send(chat_id, f"No runs yet in `{proj['slug']}`.", reply_to=message_id)
+                return True
+            lines = [f"*Recent runs* — `{proj['slug']}`"]
+            for run in runs:
+                status = str(run.get("status") or "?")
+                when = str(run.get("started_at") or "")[11:16]
+                detail = " ".join(
+                    str(run.get("output") or run.get("error") or "").split()
+                )[:80]
+                lines.append(f"• {when} `{status}` {detail}".rstrip())
+            self.send(chat_id, "\n".join(lines), reply_to=message_id)
             return True
         if root in ("/stop", "/cancel"):
             uid = self.run_for(chat_id)
@@ -681,10 +702,10 @@ class PerunTelegramBridge:
                 project_override=decision.project,
             )
 
-        if decision.action in ("pending", "projects", "help"):
+        if decision.action in ("pending", "projects", "help", "runs"):
             # Machine-wide, read-only: the existing slash commands answer these
             # exactly, so no agent run is spent. `/pending` is dispatched by the
-            # inbox handler, the other two by the command handler.
+            # inbox handler, the rest by the command handler.
             command = f"/{decision.action}"
             if self._handle_attention_command(chat_id, command, message_id):
                 return True
@@ -734,6 +755,11 @@ class PerunTelegramBridge:
             meta = decision.as_dict()
             meta["source"] = "telegram"
             meta["shadow"] = shadow
+            # Coverage counter: every routed message, including ``unknown``.
+            try:
+                registry.bump_routing_stat("telegram", decision.action)
+            except Exception:  # pragma: no cover - telemetry is best-effort
+                pass
             registry.log_activity(
                 project_id,
                 "routing_decision",

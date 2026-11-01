@@ -128,6 +128,18 @@ CREATE INDEX IF NOT EXISTS idx_activity_project_id ON activity(project_id, id DE
 -- kind + age; without this index that is a full scan once the table grows.
 CREATE INDEX IF NOT EXISTS idx_activity_kind_ts ON activity(kind, ts);
 
+-- Routing coverage, aggregated per day/source/action. One row per combination
+-- instead of one activity row per message: a room is chatty, and the Activity
+-- view must not drown in "routing: unknown". The panel reads "what share of
+-- messages does the router understand?" from here.
+CREATE TABLE IF NOT EXISTS routing_stats (
+    day     TEXT NOT NULL,
+    source  TEXT NOT NULL,
+    action  TEXT NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, source, action)
+);
+
 -- Unified memory. scope='global' rows use project_id=0 so the UNIQUE
 -- constraint works (SQLite treats NULLs as distinct). Deliberately no FK to
 -- projects(id): global rows use project_id=0, which has no projects row.
@@ -584,7 +596,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def init_db() -> None:

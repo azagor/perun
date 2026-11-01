@@ -2663,12 +2663,31 @@ def api_routing_decisions(hours: int = 24, limit: int = 50) -> dict[str, Any]:
             }
         )
     total = len(rows)
+    stats = registry.routing_stats(days=1)
+    by_source: dict[str, dict[str, int]] = {}
+    for row in stats:
+        source = str(row.get("source") or "unknown")
+        bucket = by_source.setdefault(source, {"total": 0, "unknown": 0})
+        bucket["total"] += int(row.get("count") or 0)
+        if str(row.get("action")) == "unknown":
+            bucket["unknown"] += int(row.get("count") or 0)
+    coverage = {
+        source: {
+            "total": bucket["total"],
+            "unknown": bucket["unknown"],
+            # Share of messages the router could classify (not the share it acted on).
+            "coverage": round(1 - bucket["unknown"] / bucket["total"], 3)
+            if bucket["total"] else 0.0,
+        }
+        for source, bucket in by_source.items()
+    }
     return _ok(
         window_hours=max(1, int(hours)),
         total=total,
         by_action=by_action,
         unknown_share=round(by_action.get("unknown", 0) / total, 3) if total else 0.0,
         shadow=shadow,
+        coverage=coverage,
         # Mode comes from settings, not from traffic: an enabled router with no
         # messages yet is still "shadow", not "off".
         enabled=bool(getattr(SETTINGS, "routing_enabled", False)),

@@ -100,6 +100,7 @@ _KEYWORDS: dict[str, frozenset[str]] = {
     ),
     "projects": frozenset({"projects", "projekty"}),
     "help": frozenset({"help", "pomoc", "pomocy"}),
+    "runs": frozenset({"runs", "uruchomienia"}),
     "run": frozenset(
         {
             "run",
@@ -200,6 +201,20 @@ _PROJECTS_PHRASES = (
     "what projects",
     "jakie projekty",
     "jakie mamy projekty",
+)
+_RUNS_PHRASES = (
+    "last run",
+    "ostatni run",
+    "ostatnie uruchomienie",
+    "ostatnie uruchomienia",
+    "why did it fail",
+    "dlaczego padlo",
+    "dlaczego padło",
+    "co sie stalo",
+    "co się stało",
+    "did it work",
+    "jak poszlo",
+    "jak poszło",
 )
 
 
@@ -505,8 +520,11 @@ def detect_action(text: str) -> str:
     for phrase in _PROJECTS_PHRASES:
         if f" {phrase} " in head_text:
             return "projects"
+    for phrase in _RUNS_PHRASES:
+        if f" {phrase} " in head_text:
+            return "runs"
     if head and len(head) <= 2:
-        for action in ("pending", "projects", "help"):
+        for action in ("pending", "projects", "help", "runs"):
             if head[0] in _KEYWORDS[action]:
                 return action
 
