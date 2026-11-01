@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The control plane is reachable only from its own checkout
+
+* The MCP project resolver now includes **hidden** projects when it matches the
+  caller's working directory, so a session in the Perun checkout is scoped to
+  `perun` again (it used to fall through to a global fact because `perun` is
+  registered hidden). A hidden project named by slug from anywhere else resolves
+  to nothing: only the owner working inside `perun` can read, run, or store
+  against it. Telegram remains chat-ID-gated and `perun` has no project room, so
+  remote PerunChat participants cannot reach it either.
+* `perun_memory_store` no longer falls back to a **global** fact when the caller
+  named a project that does not resolve (a typo, or a denied hidden project); it
+  reports "No accessible project" and stores nothing.
 
 ## v0.10.42
 

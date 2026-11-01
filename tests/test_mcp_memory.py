@@ -38,6 +38,38 @@ def test_memory_store_defaults_to_project_when_cwd_matches(mcp_project):
     assert stats["facts_project"] == 1
 
 
+def test_a_hidden_project_is_only_reachable_from_its_own_directory(tmp_path, monkeypatch):
+    """The control plane is hidden: only a session inside it may target it."""
+    hidden_dir = tmp_path / "hidden-proj"
+    hidden_dir.mkdir()
+    registry.add_project("hidden-proj", str(hidden_dir))
+    registry.update_project("hidden-proj", hidden=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    monkeypatch.chdir(elsewhere)
+    assert mcp_mod._resolve_project("hidden-proj") is None
+    denied = mcp_mod.perun_memory_store("must not be stored", project="hidden-proj")
+    assert "No accessible project" in denied
+
+    monkeypatch.chdir(hidden_dir)
+    assert (mcp_mod._resolve_project("hidden-proj") or {}).get("slug") == "hidden-proj"
+    assert "project scope" in mcp_mod.perun_memory_store("own fact", project="hidden-proj")
+
+
+def test_an_unknown_project_does_not_fall_back_to_global(tmp_path, monkeypatch):
+    """A typo in the slug must not silently create a machine-wide fact."""
+    outside = tmp_path / "nowhere"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    before = memory.stats(None)["facts_global"]
+
+    result = mcp_mod.perun_memory_store("typo fact", project="no-such-slug")
+
+    assert "No accessible project" in result
+    assert memory.stats(None)["facts_global"] == before
+
+
 def test_memory_store_with_global_scope_is_global(mcp_project):
     result = mcp_mod.perun_memory_store("a global fact", global_scope=True)
     assert "global scope" in result

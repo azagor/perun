@@ -97,21 +97,40 @@ def _mcp_orchestrator() -> orchestrator.Orchestrator:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+def _cwd_within(path: str) -> bool:
+    """Whether the caller's working directory is inside *path*.
+
+    The only identity an MCP caller has is its working directory, so it is also
+    the boundary for a hidden project: ``perun`` (the control plane) is reachable
+    from a session inside its own checkout and nowhere else.
+    """
+    try:
+        cwd = Path.cwd().resolve()
+        root = Path(path).resolve()
+    except (OSError, ValueError):
+        return False
+    return cwd == root or root in cwd.parents
+
+
+def _visible(project: dict | None) -> dict | None:
+    """Hidden projects are scoped to their own directory, not to the machine."""
+    if project and project.get("hidden") and not _cwd_within(
+            str(project.get("path") or "")):
+        return None
+    return project
+
+
 def _resolve_project(project: str | None) -> dict | None:
     if project:
-        p = registry.get_project(project)
-        if p:
-            return p
-        p = registry.get_project_by_path(project)
-        if p:
-            return p
-        return None
-    # Walk up from cwd looking for a registered path.
+        p = registry.get_project(project) or registry.get_project_by_path(project)
+        return _visible(p)
+    # Walk up from cwd looking for a registered path. Hidden projects are
+    # included on purpose: the cwd is inside them, which is the access rule.
     try:
         cur = Path.cwd()
     except OSError:
         return None
-    projects = registry.list_projects()
+    projects = registry.list_projects(include_hidden=True)
     by_path = {}
     for p in projects:
         try:
@@ -548,7 +567,15 @@ def perun_memory_store(content: str, project: str | None = None,
         kind: rule|decision|note|log (rule/decision are candidates for prefetch).
         valid_to: Optional ISO-8601 expiry; after this the fact is invisible to search.
     """
-    p = _resolve_project(project)
+    if project:
+        p = _resolve_project(project)
+        if not p:
+            # Never fall back to a global fact for a project the caller named
+            # (a typo, or a hidden project outside its own directory).
+            return (f"[perun] No accessible project {project!r} from this "
+                    "directory; nothing stored.")
+    else:
+        p = _resolve_project(None)
     scope = "global" if global_scope else ("project" if p else "global")
     pid = 0 if scope == "global" else (p["id"] if p else 0)
     res = memory.remember(content, project_id=pid, scope=scope, topic=topic,

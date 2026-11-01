@@ -162,7 +162,11 @@ rows if the id were `NULL`. Using `0` keeps the constraint meaningful.
 Two stores, one search surface (`memory.unified_search`):
 
 1. **Facts** — agent/CLI-authored atomic memories (`remember`). Scoped
-   `global` (visible everywhere) or `project`. Guarded by `is_sensitive()`,
+   `global` (visible everywhere) or `project`. The MCP layer scopes by the
+   caller's working directory: the closest registered ancestor wins, and a
+   **hidden** project (the control plane `perun`) is only resolvable from a
+   session inside its own checkout — `perun` is the owner's workspace, and a
+   project session naming it by slug is refused. Guarded by `is_sensitive()`,
    deduped by `content_hash()`, and freshness-weighted (`_freshness_weight`,
    30-day half-life) at query time.
 2. **Doc chunks** — Markdown from a project's `DOC_CANDIDATES`

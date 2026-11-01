@@ -1354,7 +1354,13 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 `perun_attention_list`,
 `perun_context` (**retrieve context docs — a key, or the context for a task**),
 `perun_secret` (**read/write a named secret in the encrypted store**).
-* `_resolve_project()`, `_project_line()`, `_validate_projects_list()`,
+* `_resolve_project()` — explicit slug/path, else the closest registered ancestor
+  of the caller's cwd (hidden projects included). A **hidden** project (the
+  control plane `perun`) is visible only from a cwd inside its own checkout
+  (`_cwd_within()`/`_visible()`); a slug lookup from another directory resolves to
+  nothing, and `perun_memory_store` reports "No accessible project" instead of
+  silently storing a global fact.
+* `_project_line()`, `_validate_projects_list()`,
   `_normalize_project_instruction_filename()`, `_project_instruction_file_path()`,
   `_safe_int()`, `_mcp_orchestrator()`, `main()`.
 * Filesystem helpers: `_allowed_filesystem_roots()`,
