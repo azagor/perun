@@ -125,15 +125,18 @@ with `python -m perun project-roots --add <name> <path>`.
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`
   activity row) and names *this project's* operator, not another agent's.
-* **The control plane is allow-list-only.** `perun` is registered **hidden**, and
-  the human boundary is the existing allow-list: `telegram_allowed_chats` plus a
-  `/pair` handshake (an empty list grants nobody), loopback + token for the
-  dashboard. Anyone on that list already has Perun, including the orchestrator
-  chat; nobody off it can operate Perun at all. The MCP layer has no user identity,
-  so it needs its own local rule: `perun` resolves only from a session whose
-  working directory is inside its checkout, and a project session naming it by
-  slug is refused. `perun` has no project room, so remote PerunChat participants
-  cannot reach it either. Do not "fix" a refused hidden lookup by widening
+* **The control project is local, and shareable only on purpose.** `perun` is
+  registered **hidden** so it stays out of project lists and is never deleted;
+  hiding is a listing rule, not an access rule. If you want another Perun
+  installation to work on it, share it like any project: `shared: true` plus
+  participants on the `perunchat_trusted` list, with `rw`/`ro` roles, HITL
+  approval and the guard/audit unchanged. `reconcile_all_project_chats()` includes
+  hidden projects so such a room is reconciled after a reconnect.
+  Telegram is optional - the CLI, TUI, dashboard (loopback + token) and MCP work
+  without it, and `telegram_allowed_chats` gates only the bridge. The MCP layer
+  has no user identity, so it scopes by cwd: `perun` resolves only from a session
+  inside its checkout; a claimed execution runs in the project directory, so
+  sharing still works. Do not "fix" a refused hidden lookup by widening
   `_visible()`.
 * **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
   project or a command, but it must never be the only check on a mutating action:

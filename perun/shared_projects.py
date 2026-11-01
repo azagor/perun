@@ -304,7 +304,11 @@ def validate_external_deps(project_path: str | Path, deps: list[dict[str, Any]])
 
 
 def load(project_path: str | Path) -> dict[str, Any]:
-    """Load the shared-project section from a project's manifest."""
+    """Load the shared-project section from a project's manifest.
+
+    Applies to every project, including the hidden control project: sharing is
+    the owner's explicit decision and the participants are what grant access.
+    """
     snap = manifest.load(project_path)
     data = snap.get("data") or {}
     out, _ = normalize(data)

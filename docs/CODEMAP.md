@@ -1254,6 +1254,14 @@ the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|s
   `start_or_reload_in_process_bridge()` is used by the unlock flow to start the
   bridge when it was not started due to a missing password.
 
+### `perun/release_notes.py`
+Changelog notes for the running version, shown on the self-update page.
+`parse_changelog()` turns `## vX.Y.Z` sections into `{version, date, body}`;
+`build_bundled()` is what `tools/release.py` writes to `perun/release_notes.json`
+(the Windows installer excludes `docs/`); `for_version()` prefers the bundle, then
+a checkout's `docs/CHANGELOG.md`, and otherwise reports `source: "unavailable"`
+with an empty body rather than inventing notes. `GET /api/update/notes` serves it.
+
 ### `perun/updater.py`
 Self-update machinery. `check()` queries the GitHub releases API and caches the
 answer; `install_mode()` decides whether this copy is a **git checkout**

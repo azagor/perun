@@ -28,6 +28,7 @@ packages = ["perun", "perun.integrations"]
 
 [tool.setuptools.package-data]
 "perun.integrations" = ["templates/*.md"]
+"perun" = ["release_notes.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -814,6 +814,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET/POST | `/api/health/check` | check and optionally fix missing agent files (`perunchat`, `perun-shared`) across OpenCode config dirs, and re-sync every shared project's `opencode.json` so `perun-guard`/`perun-proposals` carry `PERUN_PROJECT_PATH`; returns `{ok, fixes, issues}` |
 | GET | `/api/update/check` | latest GitHub release vs running version; `update_available`, `release`, install `mode`; cached 30 min |
 | GET | `/api/update/status` | persisted update job (`state`, `progress`, `log`, `from_version`, `to_version`) plus live `current` version |
+| GET | `/api/update/notes` | changelog notes for the running version (`?version=` for another): `{version, date, body, source}` — `bundled` (shipped `perun/release_notes.json`), `changelog` (git checkout) or `unavailable` |
 | POST | `/api/update/apply` | start the update; requires `{}` and the API token; refuses if no update, unsupported install mode, or dirty git checkout |
 | POST | `/api/update/dismiss` | clear a finished (`done`/`failed`) update job from the dashboard |
 | GET | `/api/models` | structured `{id,provider,name,label}` entries from `opencode models` (+ `providers`, `count`) |
@@ -1158,6 +1159,13 @@ If you want a second Perun installation to participate in the same project room,
 add that installation's gateway agent id to the manifest *and* to the local trust
 list on the owning machine; the other machine does not become a co-owner, but it
 will be admitted as a trusted participant after the next sync.
+
+The same rule applies to the **hidden** control project (`perun`): hiding only
+keeps it out of project lists. An owner who explicitly sets `shared: true` and
+adds trusted participants gets a normal managed room, HITL approvals and the
+guard/audit; `reconcile_all_project_chats()` includes hidden projects so that
+room is repaired after a gateway reconnect like any other. Nothing is shared by
+default.
 
 **PerunChat memory markers**
 

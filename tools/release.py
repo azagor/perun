@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -148,6 +149,24 @@ def changelog_unreleased_to_version(version: str) -> None:
     print(f"[OK] Created docs/CHANGELOG.md section for v{version}")
 
 
+def write_bundled_release_notes(limit: int = 10) -> None:
+    """Bundle the last releases into the package for installed machines.
+
+    The Windows installer excludes ``docs/``, so the self-update page cannot read
+    the changelog there; ``perun/release_notes.json`` ships with the package.
+    """
+    from perun.release_notes import build_bundled
+
+    text = read_file(PUBLIC / "docs" / "CHANGELOG.md")
+    payload = build_bundled(text, limit=limit)
+    write_file(
+        PUBLIC / "perun" / "release_notes.json",
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+    )
+    print(f"[OK] Bundled {len(payload['releases'])} release(s) into "
+          "perun/release_notes.json")
+
+
 def update_techdoc_latest_release(version: str, summary: str) -> None:
     path = PUBLIC / "docs" / "TECHNICAL_DOCUMENTATION.md"
     text = read_file(path)
@@ -244,6 +263,7 @@ def main() -> int:
         print(f"[DRY-RUN] Would release v{version}: {summary}")
         print(f"[DRY-RUN] Would bump perun/__init__.py")
         print(f"[DRY-RUN] Would update docs/CHANGELOG.md and docs/TECHNICAL_DOCUMENTATION.md")
+        print(f"[DRY-RUN] Would bundle perun/release_notes.json")
         print(f"[DRY-RUN] Would sync to {INTERNAL}")
         print(f"[DRY-RUN] Would commit+tag public, commit internal, push both")
         return 0
@@ -253,6 +273,7 @@ def main() -> int:
 
     # 3. Update docs.
     changelog_unreleased_to_version(version)
+    write_bundled_release_notes()
     update_techdoc_latest_release(version, summary)
     add_techdoc_revision_entry(version, summary)
 

@@ -28,6 +28,63 @@ def _enable_shared(project, participants=None):
     manifest.save(project["path"], data, body=f"# {project['name']}")
 
 
+def test_a_shared_hidden_project_is_reconciled(tmp_path, monkeypatch):
+    """Hiding keeps a project out of lists, not out of the sync pass."""
+    from perun import shared_project_sync
+
+    shared = _make_project(tmp_path, "hidden-shared")
+    registry.update_project("hidden-shared", hidden=True)
+    _enable_shared(shared, [{"agent_id": "frambo", "roles": ["rw"]}])
+
+    quiet = _make_project(tmp_path, "hidden-quiet")
+    registry.update_project("hidden-quiet", hidden=True)
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        shared_project_sync, "sync_project_chat",
+        lambda project, cfg=None: seen.append(project["slug"]) or {"ok": True},
+    )
+
+    result = shared_project_sync.reconcile_all_project_chats()
+
+    assert result["ok"] is True
+    assert seen == ["hidden-shared"]
+
+
+def test_the_control_project_can_be_shared_with_trusted_participants(tmp_path):
+    """Sharing `perun` is the owner's call, gated by the trust list like any project."""
+    repo = tmp_path / "perun-repo"
+    repo.mkdir()
+
+    cfg, errors = shared_projects.apply_payload(
+        repo,
+        {"shared": True,
+         "participants": [{"agent_id": "frambo", "roles": ["rw"]}]},
+        trusted=["frambo"],
+    )
+
+    assert errors == []
+    assert cfg["shared"] is True
+    assert [p["agent_id"] for p in cfg["participants"]] == ["frambo"]
+    # Read back through the same path the bridge, sync and audit use.
+    assert shared_projects.load(repo)["shared"] is True
+
+
+def test_sharing_the_control_project_still_requires_the_trust_list(tmp_path):
+    repo = tmp_path / "perun-repo"
+    repo.mkdir()
+
+    cfg, errors = shared_projects.apply_payload(
+        repo,
+        {"shared": True,
+         "participants": [{"agent_id": "stranger", "roles": ["rw"]}]},
+        trusted=["frambo"],
+    )
+
+    assert errors and "trust list" in errors[0]
+    assert cfg["shared"] is False          # the manifest was not written
+
+
 def test_describe_project_chat_disabled(tmp_path):
     from perun.shared_project_sync import describe_project_chat
 

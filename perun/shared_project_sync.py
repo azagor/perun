@@ -370,9 +370,14 @@ def delete_project_chat(project: dict[str, Any]) -> dict[str, Any]:
 
 
 def reconcile_all_project_chats() -> dict[str, Any]:
-    """Reconcile every shared project's chat (used on gateway reconnect)."""
+    """Reconcile every shared project's chat (used on gateway reconnect).
+
+    Hidden projects are included: hiding only keeps a project out of lists, and
+    an owner who explicitly shares the control project expects its room to be
+    reconciled like any other. The ``shared`` flag is the only gate.
+    """
     results: list[dict[str, Any]] = []
-    for project in registry.list_projects():
+    for project in registry.list_projects(include_hidden=True):
         cfg = shared_projects.load(project["path"])
         if cfg.get("shared"):
             results.append(sync_project_chat(project, cfg))

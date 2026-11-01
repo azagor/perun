@@ -1097,6 +1097,17 @@ def test_settings_patch_coerces_and_validates(client):
     assert bad2.status_code == 400
 
 
+def test_update_notes_report_the_installed_release(client):
+    from perun import release_notes
+
+    body = client.get("/api/update/notes").json()
+
+    notes = body["notes"]
+    assert notes["version"] == release_notes._normalized(release_notes.__version__)
+    assert notes["source"] in ("bundled", "changelog")
+    assert notes["body"]
+
+
 def test_a_rejected_settings_patch_applies_nothing(client):
     """Validate the whole payload first: the live object must not change."""
     from perun import server

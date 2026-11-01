@@ -4,7 +4,28 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The self-update page shows what the installed release changed
+
+* `GET /api/update/notes` returns the changelog section for the running version,
+  and the Updates page renders it as **"What changed in vX.Y.Z"**. The Windows
+  installer excludes `docs/`, so the release pipeline now bundles the last ten
+  releases into `perun/release_notes.json`; a git checkout falls back to
+  `docs/CHANGELOG.md`. When an update is available, the GitHub notes are shown
+  separately as "What's new in vX" instead of replacing the installed summary.
+* `tools/release.py` regenerates the bundle on every release, and a test fails if
+  it is stale.
+
+### The hidden control project can be shared on purpose, and is reconciled like any other
+
+* `reconcile_all_project_chats()` now walks `list_projects(include_hidden=True)`.
+  Hiding a project only keeps it out of lists; if the owner explicitly shares
+  `perun` (`shared: true` plus participants on the `perunchat_trusted` list), its
+  room is created, joined and repaired after a reconnect exactly like a normal
+  shared project. Access is the participant list, not a special case, and HITL
+  approval, the guard allowlist and the post-run audit are unchanged.
+* Telegram remains optional: the CLI, TUI, dashboard (loopback + token) and MCP
+  work without it. The MCP cwd rule from 0.10.43 still applies to local sessions
+  (and does not affect a shared execution, which runs in the project directory).
 
 ## v0.10.43
 

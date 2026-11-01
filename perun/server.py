@@ -770,6 +770,18 @@ def api_update_status() -> dict[str, Any]:
     return updater.status()
 
 
+@app.get("/api/update/notes")
+def api_update_notes(version: str = "") -> dict[str, Any]:
+    """Changelog notes for the running version (or an explicit one).
+
+    Bundled with the package, so an installer-only machine has them without the
+    ``docs/`` tree and without a network call.
+    """
+    from . import release_notes
+
+    return _ok(notes=release_notes.for_version(version))
+
+
 @app.post("/api/update/apply")
 def api_update_apply(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     from . import updater

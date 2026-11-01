@@ -6010,9 +6010,24 @@ async function viewUpdates() {
         <div class="mt update-log" id="update-log" style="display:${job.log && job.log.length ? 'block' : 'none'}">${renderUpdateLog(job.log || [])}</div>`;
     v.appendChild(card);
 
-    if (info.release && info.release.notes) {
+    // What the *running* build contains. Bundled with the package, so this works
+    // on an installed machine (the installer excludes docs/).
+    let installedNotes = null;
+    try {
+        installedNotes = (await api('/api/update/notes')).notes || null;
+    } catch (_) { installedNotes = null; }
+    if (installedNotes && installedNotes.body) {
         v.appendChild(el('div', { class: 'card' },
-            `<div class="card-head"><h4>Release notes</h4><span class="muted">${esc(timeAgo(info.release.published_at))}</span></div>
+            `<div class="card-head"><h4>What changed in v${esc(installedNotes.version)}</h4>
+             <span class="muted">${esc(installedNotes.date || 'installed release')}</span></div>
+             <div class="md-body">${renderMarkdown(installedNotes.body)}</div>`));
+    }
+
+    // The GitHub notes are for the *available* release; when Perun is already up
+    // to date they would duplicate the card above.
+    if (info.update_available && info.release && info.release.notes) {
+        v.appendChild(el('div', { class: 'card' },
+            `<div class="card-head"><h4>What's new in v${esc(info.latest)}</h4><span class="muted">${esc(timeAgo(info.release.published_at))}</span></div>
              <div class="md-body">${renderMarkdown(info.release.notes)}</div>`));
     }
 
