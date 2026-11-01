@@ -1579,6 +1579,19 @@ async function viewProject(slug, tab) {
             <button class="btn primary sm" id="pj-ask">▶ Agent Console</button>
          </div>`));
 
+    // Usage for this project (last 24h) — /api/usage already narrows by slug.
+    const usageBox = el('div', { class: 'meta', id: 'pj-usage' }, 'usage…');
+    v.appendChild(usageBox);
+    (async () => {
+        try {
+            const r = await api(`/api/usage?hours=24&project=${encodeURIComponent(slug)}`);
+            const t = r.totals || {};
+            const tok = Number(t.tokens_in || 0) + Number(t.tokens_out || 0);
+            usageBox.innerHTML = `Usage · last 24h — <b>$${Number(t.cost_usd || 0).toFixed(4)}</b>`
+                + ` · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`;
+        } catch (e) { usageBox.textContent = 'usage unavailable'; }
+    })();
+
     const tabDefs = [
         ['overview', 'Overview'], ['shared', 'Shared'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
         ['memory', 'Memory'], ['activity', 'Activity'], ['git', 'Git'],
@@ -5554,6 +5567,7 @@ async function viewSettings() {
          <div class="form-row">
             <label class="field"><span class="lab">Ollama host</span><input type="text" id="s-ollama" value="${esc(s.ollama_host)}"></label>
             <label class="field"><span class="lab">Owner name <span class="muted">(shown on proposal approvals)</span></span><input type="text" id="s-owner" value="${esc(s.perun_owner_name || '')}" placeholder="owner"></label>
+            <label class="field"><span class="lab">Provider budgets <span class="muted">(provider=USD per month)</span></span><input type="text" id="s-budgets" value="${esc(s.provider_budgets || '')}" placeholder="ollama-cloud=20, opencode=50"></label>
          </div>
          <div class="form-row">
             <label class="field"><span class="lab">HITL secret <span class="muted">(approval-token signing key)</span> <span id="hitl-secret-badge" class="badge ${s.perun_hitl_secret_set ? 'green' : ''}">${s.perun_hitl_secret_set ? 'set' : 'not set'}</span></span><input type="password" id="s-hitl-secret" value="" placeholder="leave blank to keep the current secret"></label>
@@ -5776,6 +5790,7 @@ async function viewSettings() {
             auto_discover_on_start: $('#s-autodisc').checked, index_docs_on_discover: $('#s-indexdisc').checked,
             routing_enabled: $('#s-routing').checked,
             routing_shadow: $('#s-routing-shadow').checked,
+            provider_budgets: $('#s-budgets').value.trim(),
             attention_enabled: $('#s-attention').checked,
             attention_shadow: $('#s-attention-shadow').checked,
             docs_update_after_execution: $('#s-docs').checked,
