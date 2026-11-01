@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.23
+
+*Released 2026-11-01.*
+
 ### Coverage is measured, and "last run?" is free
 
 * `/runs` (Telegram, also reachable by asking **"last run?"**, "dlaczego padło?",
