@@ -2401,6 +2401,12 @@ def api_finish_tui_run(run_uid: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="no such run")
     if run.get("status") in ("queued", "running"):
         _registry.update_run(run_uid, status="done", ended_at=_registry.now_iso())
+    # A TUI session is linked to its project like any run: capture its token/cost
+    # snapshot so it appears in /usage and on the dashboard.
+    try:
+        ORCH.capture_usage(run_uid)
+    except Exception:  # pragma: no cover - usage must never fail a finish
+        pass
     # Also stop tracking the external process; caller should use /kill to close the window.
     process_tracker.TRACKER.finalize(run_uid)
     return _ok(finished=True)
@@ -3283,12 +3289,23 @@ def api_orchestrator_agent_reset() -> dict[str, Any]:
 
 
 @app.get("/api/usage")
-def api_usage(hours: int = 24) -> dict[str, Any]:
-    """Token/cost totals per project for the last *hours* (dashboard + /usage)."""
+def api_usage(hours: int = 24, project: str = "") -> dict[str, Any]:
+    """Token/cost totals per project for the last *hours* (dashboard + /usage).
+
+    ``project`` narrows the ``totals`` to one slug (the project tab); the
+    ``by_project`` list is always machine-wide so the dashboard can rank them.
+    """
     window = max(1, min(int(hours), 24 * 30))
+    project_id = None
+    if (project or "").strip():
+        row = registry.get_project(project.strip())
+        if not row:
+            raise HTTPException(status_code=404, detail="project not found")
+        project_id = row["id"]
     return _ok(
         window_hours=window,
-        totals=registry.usage_totals(hours=window),
+        project=(project or "").strip(),
+        totals=registry.usage_totals(hours=window, project_id=project_id),
         by_project=registry.usage_by_project(hours=window, limit=10),
     )
 

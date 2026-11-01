@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### TUI sessions count toward usage, and the dashboard shows it
+
+* A TUI run started from the dashboard is linked to its project like any other
+  run, so its token/cost snapshot is captured too: when you press **Finish**,
+  when Perun restarts and finds the terminal gone, and (headless runs) when the
+  run finalizes. `capture_usage()` is the single helper; it resolves the session,
+  asks the service, and stores the snapshot.
+* `GET /api/usage?hours=24&project=<slug>` narrows the totals to one project
+  while keeping the machine-wide ranking, and the Dashboard gained a **Usage ·
+  last 24h** card: dollars, tokens, session count and the top projects by cost.
+* `/usage` keeps reporting the machine-wide number.
 
 ## v0.10.26
 

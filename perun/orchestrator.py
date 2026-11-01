@@ -1348,6 +1348,7 @@ class Orchestrator:
                 # long as that terminal is. Only an old one is swept, so a stale
                 # card cannot stay "working" forever after the terminal is gone.
                 if self._standalone_gone(row):
+                    self.capture_usage(uid)
                     self._mark_interrupted(
                         uid, "TUI session ended while Perun was down")
                     interrupted.append(uid)
@@ -1371,6 +1372,49 @@ class Orchestrator:
                 self._mark_interrupted(uid, "interrupted by a Perun restart")
                 interrupted.append(uid)
         return {"resumed": resumed, "interrupted": interrupted}
+
+    def capture_usage(self, run_uid: str) -> bool:
+        """Store the service's token/cost snapshot for a run's session.
+
+        Called when any run ends — including a standalone TUI run, which Perun
+        only observes (the terminal owns the process) — so dashboard-run TUI
+        sessions show up in the same totals as headless runs.
+        """
+        from . import opencode_api
+
+        run = registry.get_run(run_uid)
+        if not run:
+            return False
+        oc_sid = str(run.get("opencode_session_id") or "").strip()
+        session_pk = run.get("session_pk")
+        if not oc_sid and session_pk:
+            session = registry.get_session(session_pk) or {}
+            oc_sid = str(session.get("opencode_session_id") or "").strip()
+        if not oc_sid:
+            return False
+        try:
+            usage = opencode_api.default_api().usage(oc_sid)
+        except Exception:
+            LOG.debug("usage capture failed for %s", run_uid, exc_info=True)
+            return False
+        if not any(usage.values()):
+            return False
+        try:
+            if session_pk:
+                registry.update_session_usage(session_pk, usage)
+            else:
+                existing = registry.find_session_by_opencode(run["project_id"], oc_sid)
+                if existing:
+                    registry.update_session_usage(existing["id"], usage)
+                else:
+                    created = registry.create_session(
+                        run["project_id"], oc_sid,
+                        title=(run.get("prompt") or "")[:80])
+                    registry.update_session_usage(created["id"], usage)
+        except Exception:  # pragma: no cover - usage is telemetry
+            LOG.debug("could not store usage for %s", run_uid, exc_info=True)
+            return False
+        return True
 
     def _standalone_gone(self, run: dict[str, Any]) -> bool:
         """Whether a standalone TUI run's terminal is gone.
@@ -1550,19 +1594,8 @@ class Orchestrator:
                     status="error" if status == "failed" else "active",
                     last_error=error[:500],
                 )
-                # Token/cost snapshot for /usage. Best effort: a service that is
-                # down must not turn a finished run into a failed one.
-                oc_sid = str(run.get("opencode_session_id") or "").strip()
-                if oc_sid:
-                    try:
-                        from . import opencode_api
-
-                        usage = opencode_api.default_api().usage(oc_sid)
-                        if any(usage.values()):
-                            registry.update_session_usage(sid, usage)
-                    except Exception:
-                        LOG.debug("could not capture usage for session %s", sid,
-                                  exc_info=True)
+                # Token/cost snapshot for /usage (best effort, never fatal).
+                self.capture_usage(run_uid)
             proj = registry.get_project(run["project_id"])
             label = proj["slug"] if proj else str(run["project_id"])
             registry.log_activity(

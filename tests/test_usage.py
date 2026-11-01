@@ -48,3 +48,32 @@ def test_totals_and_project_breakdown_ignore_sessions_without_usage():
 
     assert registry.usage_totals(hours=24)["sessions"] == 0
     assert registry.usage_by_project(hours=24) == []
+
+def test_capture_usage_records_a_tui_run_session(monkeypatch):
+    """A TUI run is linked to its project, so its usage lands in the same totals."""
+    from perun import orchestrator, registry
+
+    project = registry.add_project("usage-tui", r"C:\usage-tui")
+    session = registry.create_session(project["id"], "ses_tui")
+    registry.create_run("tui_run_1", project["id"], "tui work",
+                        session_pk=session["id"],
+                        opencode_session_id="ses_tui")
+
+    class FakeAPI:
+        def usage(self, session_id, limit=100):
+            assert session_id == "ses_tui"
+            return {"tokens_in": 500, "tokens_out": 50, "cache_read": 0, "cost": 0.01}
+
+    monkeypatch.setattr(opencode_api, "default_api", lambda: FakeAPI())
+    assert orchestrator.Orchestrator().capture_usage("tui_run_1") is True
+
+    totals = registry.usage_totals(project_id=project["id"])
+    assert totals["tokens_in"] == 500 and round(float(totals["cost_usd"]), 4) == 0.01
+
+
+def test_capture_usage_is_false_without_a_session(monkeypatch):
+    from perun import orchestrator, registry
+
+    project = registry.add_project("usage-nosession", r"C:\usage-nosession")
+    registry.create_run("tui_run_2", project["id"], "no session")
+    assert orchestrator.Orchestrator().capture_usage("tui_run_2") is False

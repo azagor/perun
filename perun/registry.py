@@ -983,19 +983,28 @@ def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
         )
 
 
-def usage_totals(hours: int = 24) -> dict[str, Any]:
-    """Token/cost totals for sessions whose usage was captured in the window."""
+def usage_totals(hours: int = 24, *, project_id: int | None = None) -> dict[str, Any]:
+    """Token/cost totals for sessions whose usage was captured in the window.
+
+    ``project_id`` narrows it to one project (the project tab); omitting it is the
+    machine-wide number the dashboard header shows.
+    """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    where = "usage_at >= ? AND usage_at <> ''"
+    params: list[Any] = [cutoff]
+    if project_id:
+        where += " AND project_id = ?"
+        params.append(int(project_id))
     with db.db() as conn:
         row = db.one(
             conn,
-            """SELECT COUNT(*) AS sessions,
+            f"""SELECT COUNT(*) AS sessions,
                       COALESCE(SUM(tokens_in), 0) AS tokens_in,
                       COALESCE(SUM(tokens_out), 0) AS tokens_out,
                       COALESCE(SUM(cache_read), 0) AS cache_read,
                       COALESCE(SUM(cost_usd), 0) AS cost_usd
-               FROM sessions WHERE usage_at >= ? AND usage_at <> ''""",
-            (cutoff,),
+               FROM sessions WHERE {where}""",
+            tuple(params),
         )
     return dict(row) if row else {"sessions": 0, "tokens_in": 0, "tokens_out": 0,
                                   "cache_read": 0, "cost_usd": 0.0}

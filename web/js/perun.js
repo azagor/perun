@@ -890,6 +890,30 @@ async function viewDashboard() {
     grid.appendChild(stat('Embeddings', stats.ollama_ok ? 'Online' : 'Offline', stats.ollama_ok ? 'Ollama ready' : 'start ollama serve', 'dash-stat-embeddings'));
     v.appendChild(grid);
 
+    // Usage — tokens and cost in the last 24 h, machine-wide and per project
+    const usageCard = el('div', { class: 'card', id: 'dash-usage' },
+        `<div class="card-head"><h4>Usage · last 24h</h4><span class="meta" id="dash-usage-head">loading…</span></div>
+         <div id="dash-usage-body"><div class="meta">reading…</div></div>`);
+    v.appendChild(usageCard);
+    (async () => {
+        try {
+            const r = await api('/api/usage?hours=24');
+            const t = r.totals || {};
+            const cost = Number(t.cost_usd || 0);
+            const tok = Number(t.tokens_in || 0) + Number(t.tokens_out || 0);
+            $('#dash-usage-head').innerHTML =
+                `<b>$${cost.toFixed(4)}</b> · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`;
+            const rows = (r.by_project || []).map((p) =>
+                `<div class="list-row"><span class="intent"><div class="msg truncate">${esc(p.slug)}</div>
+                 <div class="meta">${Number(p.tokens || 0).toLocaleString()} tok</div></span>
+                 <span class="mono">$${Number(p.cost || 0).toFixed(4)}</span></div>`).join('');
+            $('#dash-usage-body').innerHTML = rows
+                || '<div class="meta">No usage captured yet — it is recorded when a run finishes (TUI runs when you finish or close them).</div>';
+        } catch (e) {
+            $('#dash-usage-body').innerHTML = `<div class="meta">usage unavailable: ${esc(e.message)}</div>`;
+        }
+    })();
+
     // Working now — live runs, each mapped to its project
     const workingNowBox = el('div', { id: 'dash-working-now' });
     renderWorkingNow(workingNowBox);
