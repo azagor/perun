@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.38
+
+*Released 2026-11-01.*
+
 ### Two-day production audit: the fixes
 
 Nineteen defects found by auditing `v0.8.45..v0.10.37`. Most were silent — a lost

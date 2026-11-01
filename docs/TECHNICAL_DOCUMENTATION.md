@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.37 (see §15). Inbox hardening: redacted button labels, working dashboard options, and no silent truncation.
+**Latest release:** v0.10.38 (see §15). Two-day audit: routing, inbox, run lifecycle, proposal integrity, usage and PerunChat fixes.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2211,6 +2211,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.38: Two-day audit: routing, inbox, run lifecycle, proposal integrity, usage and PerunChat fixes.
+
 ### 2026-11-01 — v0.10.37: Inbox hardening: redacted button labels, working dashboard options, and no silent truncation.
 
 ### 2026-11-01 — v0.10.36: The provider-quota payload is pinned by fixtures, closing the last audit finding.
