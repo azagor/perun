@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Provider usage: the API's quota, or our measured spend
+
+* `opencode_api.usage_limits()` reads `GET /api/experimental/usage/limits` —
+  the service's own `budgets`/`meters` (limit, spent, percent, resetsAt). It
+  returns `None` when the endpoint is missing or empty (a local install without
+  workspace budgets), which is the case on this machine today.
+* `registry.usage_by_provider(hours)` attributes captured session usage to a
+  provider using the session's run model (`provider/model`), so the tab can show
+  spend even without provider quotas — labelled as Perun's measurement, never as
+  a quota.
+* `GET /api/providers/usage` returns `{limits, measured}` for the Providers tab.
 
 ## v0.10.28
 

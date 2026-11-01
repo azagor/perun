@@ -3288,6 +3288,24 @@ def api_orchestrator_agent_reset() -> dict[str, Any]:
     return _ok(**orchestrator_agent.reset())
 
 
+@app.get("/api/providers/usage")
+def api_providers_usage() -> dict[str, Any]:
+    """Quotas the service reports plus Perun's own spend per provider.
+
+    ``limits`` is the provider's truth (``None`` when the experimental endpoint is
+    empty, as it is on a local install without workspace budgets); ``measured`` is
+    token/cost spend for the last 30 days derived from captured sessions, so the
+    tab can always show something and label it honestly.
+    """
+    from . import opencode_api
+
+    try:
+        limits = opencode_api.default_api().usage_limits()
+    except Exception:  # pragma: no cover - the service may be down
+        limits = None
+    return _ok(limits=limits, measured=registry.usage_by_provider(hours=24 * 30))
+
+
 @app.get("/api/usage")
 def api_usage(hours: int = 24, project: str = "") -> dict[str, Any]:
     """Token/cost totals per project for the last *hours* (dashboard + /usage).

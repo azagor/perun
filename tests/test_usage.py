@@ -98,3 +98,17 @@ def test_refresh_open_usage_captures_standalone_runs(monkeypatch):
     # Within the window: no second pass.
     assert orch.refresh_open_usage() == 0
     assert registry.usage_totals(project_id=project["id"])["tokens_in"] == 42
+
+def test_provider_usage_attributes_spend_to_the_run_model():
+    from perun import registry
+
+    project = registry.add_project("usage-provider", r"C:\usage-provider")
+    session = registry.create_session(project["id"], "ses_prov")
+    registry.create_run("prov_run_1", project["id"], "hi", session_pk=session["id"],
+                        model="ollama-cloud/deepseek-v4.1-flash")
+    registry.update_session_usage(session["id"], {"tokens_in": 100, "tokens_out": 10,
+                                                  "cost": 0.01})
+
+    rows = registry.usage_by_provider()
+    assert rows and rows[0]["provider"] == "ollama-cloud"
+    assert rows[0]["tokens"] == 110 and round(float(rows[0]["cost"]), 4) == 0.01

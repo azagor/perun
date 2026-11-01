@@ -1027,6 +1027,33 @@ def usage_by_project(hours: int = 24, limit: int = 5) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
+    """Measured spend per provider (``model`` is ``provider/model``).
+
+    Attribution uses the session's most recent run: a session belongs to one
+    model in practice, and this avoids storing a per-model breakdown just for a
+    meter. Provider quotas come from the service (``usage_limits``) when it has
+    them; these numbers are ours.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT
+                 CASE WHEN instr(r.model, '/') > 0
+                      THEN substr(r.model, 1, instr(r.model, '/') - 1)
+                      ELSE 'unknown' END AS provider,
+                 COALESCE(SUM(s.tokens_in + s.tokens_out), 0) AS tokens,
+                 COALESCE(SUM(s.cost_usd), 0) AS cost
+               FROM sessions s
+               JOIN runs r ON r.session_pk = s.id
+               WHERE s.usage_at >= ? AND s.usage_at <> ''
+               GROUP BY provider ORDER BY cost DESC""",
+            (cutoff,),
+        )
+    return [dict(r) for r in rows]
+
+
 def list_sessions(project_id: int, limit: int = 100) -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(

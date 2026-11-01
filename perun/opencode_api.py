@@ -304,6 +304,21 @@ class OpenCodeAPI:
             total["cost"] += float(message.get("cost") or 0)
         return total
 
+    def usage_limits(self) -> Optional[Dict[str, Any]]:
+        """Provider quotas/budgets the service reports (experimental endpoint).
+
+        Returns ``None`` when the endpoint is missing, empty (a local install
+        without workspace budgets) or the service is down — callers must fall
+        back to measured spend rather than show a fake percentage.
+        """
+        try:
+            payload = self._request("GET", "/api/experimental/usage/limits",
+                                    allow_404=True)
+        except Exception:
+            return None
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, dict) else None
+
     def messages(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Return the most recent messages of one session."""
         payload = self._request(
