@@ -125,12 +125,16 @@ with `python -m perun project-roots --add <name> <path>`.
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`
   activity row) and names *this project's* operator, not another agent's.
-* **The control plane is owner-only.** `perun` is registered **hidden**: the
-  MCP server resolves it only from a session whose working directory is inside
-  its checkout, so a project session cannot read, run, or store against it by
-  slug. Telegram is already chat-ID-gated (only paired chats), and `perun` has no
-  project room, so remote PerunChat participants cannot reach it either. Do not
-  "fix" a refused hidden lookup by widening `_visible()`.
+* **The control plane is allow-list-only.** `perun` is registered **hidden**, and
+  the human boundary is the existing allow-list: `telegram_allowed_chats` plus a
+  `/pair` handshake (an empty list grants nobody), loopback + token for the
+  dashboard. Anyone on that list already has Perun, including the orchestrator
+  chat; nobody off it can operate Perun at all. The MCP layer has no user identity,
+  so it needs its own local rule: `perun` resolves only from a session whose
+  working directory is inside its checkout, and a project session naming it by
+  slug is refused. `perun` has no project room, so remote PerunChat participants
+  cannot reach it either. Do not "fix" a refused hidden lookup by widening
+  `_visible()`.
 * **Routing is advisory, never authoritative.** `perun/routing.py` may choose a
   project or a command, but it must never be the only check on a mutating action:
   the guard allowlist, proposal approval and post-run audit stay in force.
