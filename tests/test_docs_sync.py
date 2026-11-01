@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from perun import docs_sync, manifest, registry
+from perun import docs_agent, docs_sync, manifest, registry
 
 
 def _project(tmp_path, name="docs-proj"):
@@ -41,7 +41,8 @@ class FakeAPI:
         return list(self.commands_list)
 
     def create_session(self, directory, *, model="", agent="", title=""):
-        self.sessions.append({"directory": directory, "title": title})
+        self.sessions.append({"directory": directory, "title": title,
+                              "agent": agent})
         return {"id": f"ses_docs_{len(self.sessions)}"}
 
     def run_command(self, session_id, name, text=""):
@@ -49,6 +50,9 @@ class FakeAPI:
             raise RuntimeError("service refused the command")
         self.commands_run.append((session_id, name))
         return {"ok": True}
+
+    def session_active(self, session_id):
+        return False                    # the docs turn is already idle
 
 
 @pytest.fixture()
@@ -73,6 +77,30 @@ def _wait(predicate, timeout=5.0):
     return False
 
 
+def test_the_docs_run_is_audited_and_a_write_outside_docs_is_a_violation(tmp_path, enabled):
+    project = _project(tmp_path)
+    api = FakeAPI()
+
+    def _write_after_command(session_id, name, text=""):
+        root = Path(project["path"])
+        (root / "docs").mkdir(exist_ok=True)
+        (root / "docs" / "CODEMAP.md").write_text("updated", encoding="utf-8")
+        (root / "app.py").write_text("code", encoding="utf-8")
+        api.commands_run.append((session_id, name))
+        return {"ok": True}
+
+    api.run_command = _write_after_command
+
+    assert docs_sync.after_execution(project, _proposal(project), api=api) is True
+    assert _wait(lambda: any(
+        row["kind"] == "docs_audit_violation"
+        for row in registry.list_activity(limit=20)
+    ), timeout=5)
+    row = next(r for r in registry.list_activity(limit=20)
+               if r["kind"] == "docs_audit_violation")
+    assert any(p.endswith("app.py") for p in row["meta"]["outside"])
+
+
 def test_the_docs_step_runs_the_installed_command(tmp_path, enabled):
     project = _project(tmp_path)
     api = FakeAPI()
@@ -81,6 +109,8 @@ def test_the_docs_step_runs_the_installed_command(tmp_path, enabled):
     assert _wait(lambda: api.commands_run)
     assert api.commands_run == [("ses_docs_1", "update-docs")]
     assert api.sessions[0]["directory"] == str(project["path"])
+    # The docs session runs as the restricted agent, not the project default.
+    assert api.sessions[0]["agent"] == docs_agent.DOCS_AGENT_ID
     assert _wait(lambda: registry.activity_exists(
         "docs_updated", "/update-docs started for proposal prop_docs_1"))
 

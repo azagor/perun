@@ -211,6 +211,18 @@ owner.
   `POST /api/agents/orchestrator/reset`; the Settings → Orchestrator card shows
   the state and the reset button.
 
+### `perun/managed_agent.py`, `perun/docs_agent.py`
+`managed_agent.py` is the shared policy for every agent file Perun installs:
+`agent_path(agent_id)` (`OPENCODE_CONFIG` -> `XDG`/`~`), `ensure(id, template,
+version)` (write-once with a recorded sha256; refresh only while untouched; never
+raises), `reset()`, `status()`, `available()`. One JSON state file under
+`PERUN_HOME`, keyed by agent id, so one corrupt entry cannot break the others.
+
+`docs_agent.py` installs `perun-docs`, the identity of the post-execution docs
+session: read anything, write only `docs/**`, `AGENTS.md`, `perun.md` (blanket deny
+first, so shell and every other tool are refused). `docs_sync` selects it when it
+opens the `/update-docs` session.
+
 ### `perun/backups.py`
 Pre-change copies of the configs Perun rewrites (project and global
 `opencode.json`). They live under `PERUN_HOME/backups/<label>/` — `<label>` is the
@@ -230,9 +242,13 @@ so it can never write `docs/` — which is how projects ended up with code chang
 and an empty changelog. After a proposal reaches `executed`, this module opens a
 session in the project and runs the installed `/update-docs` command through
 `opencode_api.run_command()`; the command's own template decides what is written.
+The session is created with `agent=docs_agent.DOCS_AGENT_ID` (`perun-docs`), and
+`_audit_docs_run()` snapshots the project before, waits (bounded) for the turn to
+go idle, diffs, and logs `docs_audit` / `docs_audit_violation` with the paths.
 * `after_execution(project, proposal, api=…, settings=…)` — fire-and-forget, once
   per proposal id, one run per project (and one machine-wide), gated by
-  `docs_update_after_execution`; a failed run never breaks the execution result.
+  `docs_update_after_execution`; a failed run never breaks the execution result,
+  and the docs audit never changes the proposal's status.
 * `append_changelog()` — deterministic fallback (command not installed, or the run
   failed): one bullet under `## Unreleased`, idempotent per proposal id, honouring
   the manifest's `docs.changelog` path.

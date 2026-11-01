@@ -4,7 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The post-execution docs step has its own restricted agent, and is audited
+
+* `perun-docs` (new, managed like `perun-orchestrator`: write-once with sha256,
+  refresh only while untouched, reset on request) is the identity of the session
+  that runs `/update-docs`. It may read the project and write `docs/**`,
+  `AGENTS.md` and `perun.md`; the blanket deny covers shell and every other tool.
+  Before this, the docs run used the project's default agent, so approving two
+  source files quietly granted full-tool access to the repository.
+* The docs run is now accountable too: Perun snapshots the project before the
+  command, waits (bounded, 10 min) for the turn to go idle, diffs, and logs a
+  `docs_audit` activity row — `docs_audit_violation` with the paths when a write
+  landed outside the docs surface. The proposal's own result is never changed by
+  this, and a busy docs slot still writes the changelog bullet as before.
+* The global install creates both agents.
 
 ## v0.10.39
 

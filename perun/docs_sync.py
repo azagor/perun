@@ -24,15 +24,22 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from . import config, manifest, opencode_api, registry
+from . import config, docs_agent, fs_audit, manifest, opencode_api, registry
 
 LOG = logging.getLogger("perun.docs")
 
 DOCS_COMMAND = "update-docs"
 DEFAULT_CHANGELOG = "docs/CHANGELOG.md"
+# A docs run is bounded: a stuck turn must not hold the machine-wide slot forever.
+DOCS_RUN_TIMEOUT = 600.0
+AUDIT_POLL_SECONDS = 2.0
+#: Paths the docs agent may write. Used only to report a run that went outside
+#: them (the agent's permission block is the enforcement).
+_DOCS_PATHS = ("docs/", "AGENTS.md", "perun.md")
 # How long a docs step waits for the machine-wide slot before giving the
 # proposal back (seconds). Short: starting a docs run is two HTTP calls.
 SLOT_TIMEOUT = 30.0
@@ -166,6 +173,81 @@ def command_installed(api: "opencode_api.OpenCodeAPI", project: Dict[str, Any]) 
     return DOCS_COMMAND in names
 
 
+def _is_docs_path(project: Dict[str, Any], path: str) -> bool:
+    """Whether an absolute path is on the docs agent's allowed surface."""
+    try:
+        rel = Path(path).resolve().relative_to(
+            Path(project.get("path") or "").resolve()
+        ).as_posix()
+    except (OSError, ValueError):
+        return False
+    return any(rel == allowed or rel.startswith(allowed)
+               for allowed in _DOCS_PATHS)
+
+
+def _wait_for_docs_run(client: "opencode_api.OpenCodeAPI", session_id: str) -> bool:
+    """Block until the docs turn is idle (bounded). False when it cannot be told."""
+    deadline = time.time() + DOCS_RUN_TIMEOUT
+    try:
+        active = client.session_active(session_id)
+    except Exception:  # noqa: BLE001 - an older service has no such probe
+        return False
+    if not active:
+        # The command may not have started yet; one short grace, then accept that
+        # it either already finished or never ran.
+        time.sleep(min(1.0, AUDIT_POLL_SECONDS))
+        try:
+            return not client.session_active(session_id)
+        except Exception:  # noqa: BLE001
+            return False
+    while time.time() < deadline:
+        time.sleep(AUDIT_POLL_SECONDS)
+        try:
+            if not client.session_active(session_id):
+                return True
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
+def _audit_docs_run(client: "opencode_api.OpenCodeAPI", project: Dict[str, Any],
+                    proposal: Dict[str, Any], session_id: str,
+                    before: Optional[Dict[str, Any]]) -> None:
+    """Record what the docs session actually wrote.
+
+    The docs step is outside the approved targets by design, so this is the only
+    accountability for it: the agent is restricted to the docs surface, and any
+    write that still lands elsewhere is reported as a violation.
+    """
+    if before is None:
+        return
+    try:
+        if not _wait_for_docs_run(client, session_id):
+            LOG.debug("docs: could not confirm the docs run finished (%s)", session_id)
+            return
+        result = fs_audit.diff(project, before)
+    except Exception:  # pragma: no cover - never break the docs step over an audit
+        LOG.debug("docs audit failed for %s", project.get("slug"), exc_info=True)
+        return
+    changed = sorted(set(result.get("created", []))
+                     | set(result.get("modified", []))
+                     | set(result.get("deleted", [])))
+    outside = [p for p in changed if not _is_docs_path(project, p)]
+    escaped = list(result.get("escaped") or [])
+    if not changed and not escaped:
+        return
+    kind = "docs_audit_violation" if (outside or escaped) else "docs_audit"
+    registry.log_activity(
+        project.get("id"), kind,
+        (f"docs run for proposal {proposal.get('id')} wrote {len(changed)} file(s)"
+         + (f", {len(outside)} outside the docs surface" if outside else "")
+         + (f", {len(escaped)} escape(s)" if escaped else "")),
+        {"proposal_id": proposal.get("id"), "session_id": session_id,
+         "changed": changed[:20], "outside": outside[:20], "escaped": escaped[:20],
+         "agent": docs_agent.DOCS_AGENT_ID},
+    )
+
+
 def _work(project: Dict[str, Any], proposal: Dict[str, Any],
           api: Optional["opencode_api.OpenCodeAPI"]) -> None:
     project_id = int(project["id"])
@@ -198,8 +280,21 @@ def _work(project: Dict[str, Any], proposal: Dict[str, Any],
                      "path": str(path) if path else ""},
                 )
                 return
+            # The docs session runs under the restricted agent, not the project's
+            # default one: an approved two-file change must not reach every file
+            # through the docs step.
+            try:
+                docs_agent.ensure()
+            except Exception:  # pragma: no cover - installing is best effort
+                LOG.debug("could not install the docs agent", exc_info=True)
+            before = None
+            try:
+                before = fs_audit.snapshot(project)
+            except Exception:  # pragma: no cover - the audit must not block docs
+                LOG.debug("could not snapshot before the docs run", exc_info=True)
             session = client.create_session(
                 str(project.get("path") or ""),
+                agent=docs_agent.DOCS_AGENT_ID,
                 title=f"docs: {project.get('slug') or project_id}",
             )
             session_id = str((session or {}).get("id") or "")
@@ -210,10 +305,13 @@ def _work(project: Dict[str, Any], proposal: Dict[str, Any],
             registry.log_activity(
                 project_id, "docs_updated",
                 f"/{DOCS_COMMAND} started for proposal {proposal.get('id')}",
-                {"proposal_id": proposal.get("id"), "session_id": session_id},
+                {"proposal_id": proposal.get("id"), "session_id": session_id,
+                 "agent": docs_agent.DOCS_AGENT_ID},
             )
-            LOG.info("docs: /%s started in %s (session %s)",
-                     DOCS_COMMAND, project.get("slug"), session_id)
+            LOG.info("docs: /%s started in %s (session %s, agent %s)",
+                     DOCS_COMMAND, project.get("slug"), session_id,
+                     docs_agent.DOCS_AGENT_ID)
+            _audit_docs_run(client, project, proposal, session_id, before)
         finally:
             _semaphore.release()
     except Exception:

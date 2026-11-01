@@ -27,16 +27,11 @@ shared agent file would break on another machine.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import os
-import tempfile
-import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from . import config
+from . import managed_agent
 
 LOG = logging.getLogger("perun.agents")
 
@@ -76,176 +71,46 @@ Operating rules
   what you did, what changed, and what needs the user - short bullets beat prose.
 """
 
-_lock = threading.Lock()
-
-
 def agent_path() -> Path:
     """Where the control-plane agent file lives.
 
-    Resolved through the same helper the global installer uses, so
-    ``OPENCODE_CONFIG=/opt/oc/opencode.json`` puts the agent in ``/opt/oc/agents``
-    next to the config OpenCode actually reads (it used to land in
-    ``~/.config/opencode`` while every other file went to ``/opt/oc``).
+    Resolved through the shared helper, so ``OPENCODE_CONFIG=/opt/oc/opencode.json``
+    puts the agent in ``/opt/oc/agents`` next to the config OpenCode actually
+    reads (it used to land in ``~/.config/opencode`` while every other file went
+    to ``/opt/oc``).
     """
-    env = (os.environ.get("OPENCODE_CONFIG") or "").strip()
-    base = Path(env).expanduser().parent if env else config.OPENCODE_CONFIG_DIR
-    return base / "agents" / f"{ORCHESTRATOR_AGENT_ID}.md"
-
-
-def _state_path() -> Path:
-    return Path(config.HOME) / "agent_templates.json"
-
-
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _read_state() -> Dict[str, Any]:
-    path = _state_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _write_state(state: Dict[str, Any]) -> None:
-    path = _state_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(suffix=".tmp", prefix=path.name + ".", dir=str(path.parent))
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(state, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp, path)
-    except OSError:  # pragma: no cover - best effort, the file is informational
-        LOG.debug("could not write %s", path, exc_info=True)
-
-
-def _write_agent(text: str) -> None:
-    target = agent_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(suffix=".tmp", prefix=target.name + ".", dir=str(target.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-        os.replace(tmp, target)
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _entry(state: Dict[str, Any]) -> Dict[str, Any]:
-    entry = state.get(ORCHESTRATOR_AGENT_ID)
-    return entry if isinstance(entry, dict) else {}
-
-
-def _recorded_version(entry: Dict[str, Any]) -> int:
-    """The template version Perun recorded, tolerant of a hand-edited state file.
-
-    A ``"2"`` string (or anything else non-numeric) used to raise ``ValueError``
-    out of ``ensure()``, which runs on every control-plane run.
-    """
-    try:
-        return int(entry.get("version") or 0)
-    except (TypeError, ValueError):
-        return 0
+    return managed_agent.agent_path(ORCHESTRATOR_AGENT_ID)
 
 
 def is_customized() -> bool:
     """True when the file on disk is not the template Perun last wrote."""
-    target = agent_path()
-    if not target.is_file():
-        return False
-    entry = _entry(_read_state())
-    recorded = str(entry.get("sha256") or "")
-    try:
-        current = _digest(target.read_text(encoding="utf-8"))
-    except OSError:  # pragma: no cover - unreadable file
-        return False
-    if not recorded:
-        # A file Perun did not write: treat it as the user's.
-        return True
-    return current != recorded
+    return managed_agent.is_customized(ORCHESTRATOR_AGENT_ID)
 
 
 def ensure(*, force: bool = False) -> str:
-    """Install or refresh the agent file. Returns ``created``/``updated``/
-    ``unchanged``/``customized``/``failed``.
+    """Install or refresh the agent file.
 
+    Returns ``created``/``updated``/``unchanged``/``customized``/``failed``.
     Safe to call from every process that starts a control-plane run: it never
     overwrites a file the user edited and never raises.
     """
-    template = ORCHESTRATOR_AGENT_MD
-    wanted = _digest(template)
-    target = agent_path()
-    with _lock:
-        state = _read_state()
-        entry = _entry(state)
-        recorded = str(entry.get("sha256") or "")
-        try:
-            exists = target.is_file()
-            current = _digest(target.read_text(encoding="utf-8")) if exists else ""
-        except OSError:  # pragma: no cover - unreadable file
-            return "failed"
-        if exists and not force:
-            if current != wanted and not recorded:
-                LOG.info("agent %s exists and was not written by Perun; leaving it",
-                         ORCHESTRATOR_AGENT_ID)
-                return "customized"
-            if current != recorded:
-                LOG.info("agent %s was edited by the user; leaving it",
-                         ORCHESTRATOR_AGENT_ID)
-                return "customized"
-            if current == wanted:
-                if _recorded_version(entry) != AGENT_TEMPLATE_VERSION:
-                    entry = {"version": AGENT_TEMPLATE_VERSION, "sha256": wanted}
-                    state[ORCHESTRATOR_AGENT_ID] = entry
-                    _write_state(state)
-                return "unchanged"
-        action = "updated" if exists else "created"
-        try:
-            _write_agent(template)
-        except OSError:
-            LOG.debug("could not write the %s agent", ORCHESTRATOR_AGENT_ID, exc_info=True)
-            return "failed"
-        state[ORCHESTRATOR_AGENT_ID] = {
-            "version": AGENT_TEMPLATE_VERSION,
-            "sha256": wanted,
-        }
-        _write_state(state)
-    LOG.info("control-plane agent %s %s at %s", ORCHESTRATOR_AGENT_ID, action, target)
-    return action
+    return managed_agent.ensure(
+        ORCHESTRATOR_AGENT_ID, ORCHESTRATOR_AGENT_MD, AGENT_TEMPLATE_VERSION,
+        force=force,
+    )
 
 
 def reset() -> Dict[str, Any]:
     """Restore the shipped template, discarding local edits (explicit request)."""
-    action = ensure(force=True)
-    return {"ok": action not in ("failed",), "action": action, "path": str(agent_path())}
+    return managed_agent.reset(
+        ORCHESTRATOR_AGENT_ID, ORCHESTRATOR_AGENT_MD, AGENT_TEMPLATE_VERSION)
 
 
 def status() -> Dict[str, Any]:
     """What the dashboard shows next to the orchestrator agent setting."""
-    target = agent_path()
-    entry = _entry(_read_state())
-    return {
-        "agent_id": ORCHESTRATOR_AGENT_ID,
-        "path": str(target),
-        "installed": target.is_file(),
-        "customized": is_customized(),
-        "template_version": AGENT_TEMPLATE_VERSION,
-        "installed_version": _recorded_version(entry),
-    }
+    return managed_agent.status(ORCHESTRATOR_AGENT_ID, AGENT_TEMPLATE_VERSION)
 
 
 def available(agent_id: Optional[str] = None) -> bool:
     """Whether *agent_id* can be passed to ``opencode run --agent``."""
-    agent_id = (agent_id or "").strip()
-    if not agent_id:
-        return True  # an empty id means "OpenCode's default"
-    if agent_id == ORCHESTRATOR_AGENT_ID:
-        return agent_path().is_file()
-    return True  # another agent (e.g. ``build``) is OpenCode's business
+    return managed_agent.available(agent_id)

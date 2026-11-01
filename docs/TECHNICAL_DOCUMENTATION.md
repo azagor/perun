@@ -1797,9 +1797,17 @@ Measured spend is always labelled as Perun's measurement, never as a quota.
 targets (`PERUN_ALLOWLIST`, `perun-guard`, and a post-run filesystem audit), so it
 cannot write `docs/` — that is why projects used to accumulate code changes with an
 empty changelog. Once a proposal reaches `executed`, `docs_sync.after_execution()`
-opens a session in the project and runs the installed **`/update-docs` command**
+opens a session in the project — as the restricted **`perun-docs` agent**, not the
+project's default agent — and runs the installed **`/update-docs` command**
 through `POST /api/session/{id}/command` (the endpoint the TUI uses), so the
-command's own template decides what is written. It runs once per proposal, at most
+command's own template decides what is written. `perun-docs` may read the project
+and write `docs/**`, `AGENTS.md` and `perun.md`; a blanket deny covers shell and
+every other tool. It is managed like `perun-orchestrator` (`perun/managed_agent.py`:
+write-once with sha256, refresh only while untouched, reset on request). Because
+the docs step is outside the approved targets by design, Perun also snapshots the
+project before the command, waits (bounded) for the turn to go idle, diffs, and
+logs `docs_audit` / `docs_audit_violation` with the paths — the docs run cannot
+change the proposal's result, but it is no longer unobserved. It runs once per proposal, at most
 one per project (one machine-wide), never blocks the execution result, and is
 gated by `docs_update_after_execution`. When the command is not installed — or the
 run fails — one bullet is appended under `## Unreleased` instead, idempotent per
