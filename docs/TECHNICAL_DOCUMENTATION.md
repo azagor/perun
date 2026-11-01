@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.21 (see §15). Ship perun-orchestrator: the control plane's own agent, full access, write-once with a reset button.
+**Latest release:** v0.10.22 (see §15). Route what's-waiting, list-projects and help to the existing commands, so they cost no tokens.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2126,6 +2126,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.22: Route what's-waiting, list-projects and help to the existing commands, so they cost no tokens.
+
 ### 2026-11-01 — v0.10.21: Ship perun-orchestrator: the control plane's own agent, full access, write-once with a reset button.
 
 ### 2026-10-31 — v0.10.20: Harden the docs step (no resurrected project, no lost busy proposal) and expose its toggle in Settings.

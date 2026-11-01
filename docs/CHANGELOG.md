@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.22
+
+*Released 2026-11-01.*
+
 ### Three more questions never spend a model call
 
 * The deterministic router now recognises the operator's most common machine-wide
