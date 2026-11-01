@@ -416,3 +416,65 @@ def test_a_cost_question_maps_to_the_usage_command(bridge, monkeypatch) -> None:
 
     assert bridge._route_message("1", "ile kosztowało?", 12) is True
     assert seen == ["/usage"]
+
+def test_resume_lists_recent_runs(bridge) -> None:
+    from perun import registry
+
+    project = registry.add_project("resume-demo", r"C:\resume-demo")
+    registry.set_bridge_link("1", project["id"], None)
+    run = registry.create_run("resume_run_1", project["id"], "fix the widget")
+    registry.update_run("resume_run_1", status="done")
+
+    bridge.handle_command("1", "/resume", 1)
+    assert "Resume" in bridge.sent[-1] and "fix the widget" in bridge.sent[-1]
+
+
+def test_resume_binds_the_chat_to_that_session(bridge) -> None:
+    from perun import registry
+
+    project = registry.add_project("resume-bind", r"C:\resume-bind")
+    registry.set_bridge_link("1", project["id"], None)
+    session = registry.create_session(project["id"], "ses_resume")
+    run = registry.create_run("resume_run_2", project["id"], "carry on",
+                              session_pk=session["id"])
+    registry.update_run("resume_run_2", status="done")
+
+    bridge.handle_command("1", "/resume 1", 1)
+
+    assert registry.get_bridge_link("1")["session_pk"] == session["id"]
+    assert "Resumed" in bridge.sent[-1]
+
+
+def test_resume_without_runs_says_so(bridge) -> None:
+    from perun import registry
+
+    registry.add_project("resume-empty", r"C:\resume-empty")
+    bridge.handle_command("1", "/resume", 1)
+    assert "No runs yet" in bridge.sent[-1]
+
+
+def test_diff_reports_a_non_repository(bridge) -> None:
+    from perun import registry
+
+    project = registry.add_project("diff-plain", r"C:\diff-plain")
+    registry.set_bridge_link("1", project["id"], None)
+    bridge.handle_command("1", "/diff", 1)
+    assert "not a git repository" in bridge.sent[-1]
+
+
+def test_a_changes_question_maps_to_the_diff_command(bridge, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from perun import config
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(routing_enabled=True,
+                                                             routing_shadow=False)))
+    seen: list[str] = []
+    monkeypatch.setattr(bridge, "_handle_attention_command", lambda *a, **k: False)
+    monkeypatch.setattr(bridge, "_handle_text_command",
+                        lambda chat_id, text, message_id, project_override=None:
+                        seen.append(text) or True)
+
+    assert bridge._route_message("1", "git diff", 13) is True
+    assert seen == ["/diff"]

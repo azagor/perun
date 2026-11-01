@@ -519,6 +519,8 @@ class PerunTelegramBridge:
                       "`/health` — opencode, ollama and bridge state\n"
                       "`/runs` — the last few runs and how they ended\n"
                       "`/usage` — tokens and cost in the last 24h\n"
+                      "`/resume` — list recent runs and continue one\n"
+                      "`/diff` — what changed in the working tree\n"
                       "`/new` — fresh session\n"
                       "`/stop` — cancel *your* running reply\n"
                       "`/remember <fact>` — store to memory\n"
@@ -651,6 +653,77 @@ class PerunTelegramBridge:
                     f"• `{row.get('slug')}` — ${float(row.get('cost') or 0):.4f} · "
                     f"{int(row.get('tokens') or 0):,} tok"
                 )
+            self.send(chat_id, "\n".join(lines), reply_to=message_id)
+            return True
+        if root == "/resume":
+            proj = (registry.get_project(project_override) if project_override else None) \
+                or self._current_project(chat_id)
+            if not proj:
+                self.send(chat_id, "Pick a project first with `/project`.", reply_to=message_id)
+                return True
+            runs = registry.list_runs(project_id=proj["id"], limit=6)
+            if not runs:
+                self.send(chat_id, f"No runs yet in `{proj['slug']}`.", reply_to=message_id)
+                return True
+            selector = parts[1].lstrip("#") if len(parts) > 1 else ""
+            if not selector:
+                lines = [f"*Resume* — `{proj['slug']}`"]
+                for index, run in enumerate(runs, 1):
+                    when = str(run.get("started_at") or "")[:16].replace("T", " ")
+                    preview = " ".join(str(run.get("prompt") or "").split())[:60]
+                    lines.append(f"{index}. `{run.get('status')}` · {when} · {preview}")
+                lines.append("Send `/resume <n>` to continue that session (`/new` starts fresh).")
+                self.send(chat_id, "\n".join(lines), reply_to=message_id)
+                return True
+            target = None
+            if selector.isdigit() and 1 <= int(selector) <= len(runs):
+                target = runs[int(selector) - 1]
+            else:
+                target = next((r for r in runs if r.get("run_uid") == selector), None)
+            if not target:
+                self.send(chat_id, f"No run matches `{selector}`. Try `/resume` for the list.",
+                          reply_to=message_id)
+                return True
+            session_pk = target.get("session_pk")
+            if not session_pk:
+                self.send(chat_id, "That run has no session to resume (it ran in legacy "
+                                   "process mode).", reply_to=message_id)
+                return True
+            registry.set_bridge_link(chat_id, proj["id"], session_pk)
+            self.send(chat_id,
+                      f"↩ Resumed `{target.get('run_uid')}` — your next message continues "
+                      "that session. `/new` starts fresh.",
+                      reply_to=message_id)
+            return True
+        if root in ("/diff", "/changes"):
+            from . import git as _git
+
+            proj = (registry.get_project(project_override) if project_override else None) \
+                or self._current_project(chat_id)
+            if not proj:
+                self.send(chat_id, "Pick a project first with `/project`.", reply_to=message_id)
+                return True
+            try:
+                state = _git.info(proj["path"])
+            except Exception as exc:  # pragma: no cover - git failures are messy
+                self.send(chat_id, f"Could not read git state: {type(exc).__name__}",
+                          reply_to=message_id)
+                return True
+            if not state.get("repo"):
+                self.send(chat_id, f"`{proj['slug']}` is not a git repository.",
+                          reply_to=message_id)
+                return True
+            branch = state.get("branch") or "?"
+            if not state.get("dirty"):
+                self.send(chat_id, f"`{proj['slug']}` — working tree clean on `{branch}`.",
+                          reply_to=message_id)
+                return True
+            lines = [f"*Changes — `{proj['slug']}`*",
+                     f"{state.get('change_count')} file(s) on `{branch}`"]
+            for line in (state.get("changes") or [])[:8]:
+                lines.append(f"`{str(line).strip()}`")
+            if int(state.get("change_count") or 0) > 8:
+                lines.append("＋more — see the dashboard")
             self.send(chat_id, "\n".join(lines), reply_to=message_id)
             return True
         if root in ("/runs", "/last"):
@@ -803,7 +876,7 @@ class PerunTelegramBridge:
             )
 
         if decision.action in ("pending", "projects", "help", "runs", "now", "health",
-                              "usage"):
+                              "usage", "resume", "diff"):
             # Machine-wide, read-only: the existing slash commands answer these
             # exactly, so no agent run is spent. `/pending` is dispatched by the
             # inbox handler, the rest by the command handler.

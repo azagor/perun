@@ -380,3 +380,12 @@ def test_usage_questions_are_routed_without_a_run():
         assert detect_action(text) == "usage", text
     # A genuine question about costs stays a question.
     assert detect_action("what is the cost model") == "ask"
+
+def test_resume_and_diff_are_routed_without_a_run():
+    from perun.routing import detect_action
+
+    for text in ("resume", "continue last", "kontynuuj"):
+        assert detect_action(text) == "resume", text
+    for text in ("diff", "git diff", "show changes", "co się zmieniło w plikach"):
+        assert detect_action(text) == "diff", text
+    assert detect_action("what changed in the design") == "ask"

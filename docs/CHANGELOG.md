@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### `/resume` and `/diff`: the last two operator verbs
+
+* `/resume` (also "resume", "continue last", "kontynuuj") lists the project's last
+  six runs with status, time and prompt preview; `/resume <n>` rebinds the chat to
+  that run's session so the next message continues it (`/new` still starts fresh).
+  Runs from the legacy process mode have no session and say so.
+* `/diff` (also "git diff", "show changes", "co się zmieniło w plikach") reports
+  the working tree for the bound project: branch, file count and the porcelain
+  status lines, or "working tree clean"; a non-repository says so instead of
+  guessing.
+* Both are model-free and routed with the same narrow triggers — "what changed in
+  the design" stays a question for the agent.
 
 ## v0.10.25
 

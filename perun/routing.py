@@ -38,7 +38,8 @@ from typing import Any, Iterable, Sequence
 MUTATING = frozenset({"run", "stop", "remember"})
 
 ACTIONS = ("run", "ask", "status", "remember", "recall", "stop", "clarify", "unknown",
-           "pending", "projects", "help", "runs", "now", "health", "usage")
+           "pending", "projects", "help", "runs", "now", "health", "usage",
+           "resume", "diff")
 
 # Words that appear on many projects and therefore cannot identify one.
 _GENERIC_TAGS = frozenset(
@@ -104,6 +105,8 @@ _KEYWORDS: dict[str, frozenset[str]] = {
     "now": frozenset({"running", "aktywne", "now"}),
     "health": frozenset({"health", "doctor", "zdrowie"}),
     "usage": frozenset({"usage", "cost", "koszt", "koszty", "zuzycie", "zużycie", "spend"}),
+    "resume": frozenset({"resume", "continue", "kontynuuj", "wznow", "wznów"}),
+    "diff": frozenset({"diff", "changes", "zmiany"}),
     "run": frozenset(
         {
             "run",
@@ -248,6 +251,25 @@ _HEALTH_PHRASES = (
     "czy wszystko działa",
     "co z serwerem",
     "stan systemu",
+)
+_RESUME_PHRASES = (
+    "continue last",
+    "resume last",
+    "continue the session",
+    "kontynuuj ostatnia",
+    "kontynuuj ostatnią",
+    "wroc do ostatniej",
+    "wróć do ostatniej",
+)
+_DIFF_PHRASES = (
+    "git diff",
+    "show changes",
+    "working tree",
+    "what changed in the tree",
+    "changes in the tree",
+    "co sie zmienilo w plikach",
+    "co się zmieniło w plikach",
+    "zmiany w plikach",
 )
 _USAGE_PHRASES = (
     "how much did that cost",
@@ -580,8 +602,15 @@ def detect_action(text: str) -> str:
     for phrase in _USAGE_PHRASES:
         if f" {phrase} " in head_text:
             return "usage"
+    for phrase in _RESUME_PHRASES:
+        if f" {phrase} " in head_text:
+            return "resume"
+    for phrase in _DIFF_PHRASES:
+        if f" {phrase} " in head_text:
+            return "diff"
     if head and len(head) <= 2:
-        for action in ("pending", "projects", "help", "runs", "now", "health", "usage"):
+        for action in ("pending", "projects", "help", "runs", "now", "health",
+                       "usage", "resume", "diff"):
             if head[0] in _KEYWORDS[action]:
                 return action
 

@@ -666,8 +666,8 @@ reason)`.
   `health` ("is opencode up", "czy działa"). Phrases must sit in the leading
   window and single words only in messages of ≤2 tokens, so "help me run the
   tests" and "fix it now" stay on the agent path. The Telegram bridge maps them
-  to the existing `/pending`, `/projects`, `/help`, `/runs`, `/now` and `/health`
-  commands.
+  to the existing `/pending`, `/projects`, `/help`, `/runs`, `/now`, `/health`,
+  `/usage`, `/resume` and `/diff` commands.
 * `is_addressed()` — `@mention`, `@perun`, slash command, or a direct message.
 * `route()` — applies the policy: ambiguity ⇒ `clarify`; a mutating action
   without a project mention stays on the bound project (today's behaviour);
@@ -803,7 +803,9 @@ Shared Telegram ⇄ Perun bridge.
   `routing_decision` activity rows without the message text, and every routed
   message (including `unknown`) increments the per-day counter in
   `routing_stats` so the panel can show coverage per source.
-  Commands include `/orchestrator` (`/perun`, `/overseer`), `/runs` and `/pair`.
+  Commands include `/orchestrator` (`/perun`, `/overseer`), `/runs`, `/now`,
+  `/health`, `/usage`, `/resume <n>` (rebind the chat to a past run's session) and
+  `/diff` (working tree of the bound project), plus `/pair`.
 * Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
   are configured; cancels all active runs on shutdown), `_setup_logging()`.
 
