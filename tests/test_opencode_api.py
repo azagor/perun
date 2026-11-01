@@ -75,6 +75,17 @@ def test_discovery_returns_empty_without_the_cli(monkeypatch):
     assert opencode_api.discover_base_url() == ""
 
 
+def test_usage_limits_unwraps_the_experimental_payload_or_degrades_to_none():
+    budgets = {"budgets": [{"id": "ollama-cloud", "vendors": ["ollama-cloud"],
+                            "spent": 18.0, "limit": 20.0,
+                            "resetsAt": "2026-12-01T00:00:00Z"}]}
+
+    assert _api([StubResponse(200, {"data": budgets})]).usage_limits() == budgets
+    # No workspace budgets / an empty endpoint: never invent a quota.
+    assert _api([StubResponse(200, {"data": None})]).usage_limits() is None
+    assert _api([StubResponse(404, {})]).usage_limits() is None
+
+
 def test_requests_use_basic_auth_and_encode_the_location():
     api = _api([StubResponse(payload={"data": []})])
 

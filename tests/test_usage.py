@@ -175,6 +175,36 @@ def test_an_oversized_model_breakdown_is_stored_empty_not_truncated():
     assert round(float(rows["ollama-cloud"]["cost"]), 4) == 0.5
 
 
+def test_provider_usage_passes_the_published_quota_through_untouched(monkeypatch):
+    """A provider-published budget is shown as-is; measured spend stays measured."""
+    from perun import server
+
+    limits = {"budgets": [{"id": "ollama-cloud", "vendors": ["ollama-cloud"],
+                           "spent": 18.0, "limit": 20.0,
+                           "resetsAt": "2026-12-01T00:00:00Z"}]}
+
+    class FakeAPI:
+        def usage_limits(self):
+            return limits
+
+    project = registry.add_project("usage-quota", r"C:\usage-quota")
+    session = registry.create_session(project["id"], "ses_quota")
+    registry.create_run("quota_run", project["id"], "hi", session_pk=session["id"],
+                        model="ollama-cloud/deepseek")
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 100, "tokens_out": 10, "cost": 5.0,
+        "models": {"ollama-cloud/deepseek": {"tokens_in": 100, "tokens_out": 10,
+                                             "cost": 5.0}}})
+    monkeypatch.setattr(opencode_api, "default_api", lambda: FakeAPI())
+
+    body = server.api_providers_usage()
+
+    assert body["limits"] == limits
+    row = next(r for r in body["measured"] if r["provider"] == "ollama-cloud")
+    assert "budget_percent" not in row        # never dressed up as a quota
+    assert round(float(row["cost"]), 4) == 5.0
+
+
 def test_provider_budgets_turn_measured_spend_into_a_percentage(monkeypatch):
     """No provider quota: a configured monthly budget gives the percentage."""
     from perun import server

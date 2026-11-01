@@ -10,6 +10,14 @@ _No unreleased changes yet._
 
 *Released 2026-11-01.*
 
+### The provider-quota branch is pinned by fixtures
+
+* The experimental `limits` payload has tests at both ends: `usage_limits()`
+  unwraps `data`, returns `None` when the endpoint is empty or missing, and never
+  invents a quota; `/api/providers/usage` passes the published budgets through
+  untouched while measured spend stays labelled as measured. This was the audit's
+  M2 — the rendering branch remains a manual check, as scoped.
+
 ### Telegram replies are buttons first
 
 * Anything with a finite set of answers is now an inline button, not a sentence
