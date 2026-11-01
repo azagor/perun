@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.31 (see §15). Show provider quota and Perun-measured spend on the Providers tab.
+**Latest release:** v0.10.32 (see §15). Add provider_budgets so measured spend shows as a percentage when no provider quota exists.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2129,6 +2129,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.32: Add provider_budgets so measured spend shows as a percentage when no provider quota exists.
+
 ### 2026-11-01 — v0.10.31: Show provider quota and Perun-measured spend on the Providers tab.
 
 ### 2026-11-01 — v0.10.30: Attribute usage per message model, so switching provider mid-session is priced correctly.

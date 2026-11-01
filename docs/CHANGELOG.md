@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.32
+
+*Released 2026-11-01.*
+
 ### A budget turns measured spend into a percentage
 
 * `provider_budgets` (e.g. `ollama-cloud=20,opencode=50`, USD/month) lets the
