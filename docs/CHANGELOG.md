@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Three more questions never spend a model call
+
+* The deterministic router now recognises the operator's most common machine-wide
+  questions in English and Polish and answers them with the existing commands:
+  **what's waiting / co czeka / pending approvals** → `/pending`, **list projects /
+  pokaż projekty** → `/projects`, **help / pomoc** → `/help`. Same answers, no
+  agent run, no tokens.
+* Triggers are deliberately narrow: phrases are matched inside the leading window
+  (after an optional mention or "please") and single words only in messages of two
+  tokens or fewer, so "uruchom testy", "dodaj komendę pending" and "help me run
+  the tests" keep reaching the agent — the router stays advisory and never
+  hijacks real work.
+* The Telegram help text now advertises the natural-language forms.
 
 ## v0.10.21
 

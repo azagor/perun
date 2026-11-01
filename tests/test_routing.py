@@ -327,3 +327,34 @@ def test_hyphenated_slug_with_inflected_tail() -> None:
 )
 def test_command_keywords_are_scoped_to_the_leading_window(text: str, expected: str) -> None:
     assert detect_action(text) == expected
+
+def test_detect_action_maps_machine_questions_without_a_model():
+    from perun.routing import detect_action
+
+    cases = {
+        "co czeka?": "pending",
+        "what's waiting for me": "pending",
+        "pending approvals": "pending",
+        "anything waiting?": "pending",
+        "co mam do zrobienia": "pending",
+        "list projects": "projects",
+        "pokaż projekty": "projects",
+        "what projects do you have": "projects",
+        "help": "help",
+        "pomoc": "help",
+    }
+    for text, expected in cases.items():
+        assert detect_action(text) == expected, text
+
+
+def test_machine_questions_do_not_swallow_real_work():
+    from perun.routing import detect_action
+
+    # A verb still wins: these must keep reaching the agent.
+    assert detect_action("uruchom testy w perunie") == "run"
+    assert detect_action("dodaj komendę pending") == "run"
+    assert detect_action("status") == "status"
+    assert detect_action("co wiesz o trading-bocie") == "recall"
+    assert detect_action("what is Perun the Trader?") == "ask"
+    # No leading-window command: stays on the agent path on purpose.
+    assert detect_action("help me run the tests in perun") == "unknown"

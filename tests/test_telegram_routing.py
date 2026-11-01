@@ -270,3 +270,55 @@ def test_recall_without_query_shows_usage(bridge):
 def test_unknown_command_is_reported(bridge):
     bridge.handle_command("1", "/bogus", 1)
     assert "Unknown command" in bridge.sent[-1]
+
+def test_a_pending_question_is_answered_without_an_agent_run(bridge, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(routing_enabled=True,
+                                                             routing_shadow=False)))
+    seen: list[str] = []
+    monkeypatch.setattr(bridge, "_handle_attention_command",
+                        lambda chat_id, text, message_id: seen.append(text) or True)
+
+    assert bridge._route_message("1", "co czeka?", 7) is True
+    assert seen == ["/pending"]
+
+
+def test_listing_projects_maps_to_the_existing_command(bridge, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(routing_enabled=True,
+                                                             routing_shadow=False)))
+    seen: list[str] = []
+    monkeypatch.setattr(bridge, "_handle_attention_command",
+                        lambda chat_id, text, message_id: False)
+    monkeypatch.setattr(bridge, "_handle_text_command",
+                        lambda chat_id, text, message_id, project_override=None:
+                        seen.append(text) or True)
+
+    assert bridge._route_message("1", "list projects", 8) is True
+    assert seen == ["/projects"]
+
+
+def test_real_work_still_reaches_the_agent(bridge, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(routing_enabled=True,
+                                                             routing_shadow=False)))
+    called: list[str] = []
+    monkeypatch.setattr(bridge, "_handle_attention_command",
+                        lambda *a, **k: called.append("inbox") or False)
+    monkeypatch.setattr(bridge, "_handle_text_command",
+                        lambda *a, **k: called.append("command") or True)
+
+    assert bridge._route_message("1", "uruchom testy w perunie", 9) is False
+    assert called == []

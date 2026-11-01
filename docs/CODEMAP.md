@@ -654,6 +654,12 @@ reason)`.
   ("nie uruchom") returns `unknown`; a question in the opening words wins over a
   verb later in the sentence; a trailing `?` on an imperative is still a run.
   `stop loss`/`stop limit` are domain terms, not commands.
+* Three read-only machine questions are answered without a model: `pending`
+  ("what's waiting", "co czeka", "pending approvals"), `projects` ("list
+  projects", "pokaż projekty") and `help` ("pomoc"). Phrases must sit in the
+  leading window and single words only in messages of ≤2 tokens, so "help me run
+  the tests" stays on the agent path. The Telegram bridge maps them to the
+  existing `/pending`, `/projects` and `/help` commands.
 * `is_addressed()` — `@mention`, `@perun`, slash command, or a direct message.
 * `route()` — applies the policy: ambiguity ⇒ `clarify`; a mutating action
   without a project mention stays on the bound project (today's behaviour);

@@ -475,7 +475,8 @@ class PerunTelegramBridge:
                       "`/recall <query>` — search memory\n"
                       "`/index` — re-index project docs\n"
                       "`/pair <code>` — authorise this chat (code from the dashboard)\n\n"
-                      "With no project selected, messages go to the orchestrator.",
+                      "With no project selected, messages go to the orchestrator.\n"
+                      "You can also just ask: _what's waiting?_ · _list projects_ · _help_",
                       reply_to=message_id)
             return True
         if root in ("/orchestrator", "/perun", "/overseer"):
@@ -678,6 +679,17 @@ class PerunTelegramBridge:
             return self._handle_text_command(
                 chat_id, f"/{decision.action}", message_id,
                 project_override=decision.project,
+            )
+
+        if decision.action in ("pending", "projects", "help"):
+            # Machine-wide, read-only: the existing slash commands answer these
+            # exactly, so no agent run is spent. `/pending` is dispatched by the
+            # inbox handler, the other two by the command handler.
+            command = f"/{decision.action}"
+            if self._handle_attention_command(chat_id, command, message_id):
+                return True
+            return self._handle_text_command(
+                chat_id, command, message_id, project_override=decision.project,
             )
 
         if decision.action in ("remember", "recall"):

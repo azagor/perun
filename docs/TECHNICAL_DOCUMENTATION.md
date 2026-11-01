@@ -1235,7 +1235,11 @@ plain message first goes through `perun.routing.route()` in `run_message()`:
 `status`/`stop`/`remember`/`recall` are answered without starting an agent run,
 an ambiguous project mention asks which project instead of guessing, and a `run`
 or `ask` that names another project switches the chat's binding (`bridge_links`)
-before the run starts. `status`/`remember`/`recall` target the named project for
+before the run starts. Three more read-only questions are answered the same way,
+through the commands that already exist: `pending` ("what's waiting", "co czeka",
+"pending approvals") → `/pending`, `projects` ("list projects", "pokaż
+projekty") → `/projects`, and `help` ("pomoc") → `/help` — so the operator's
+most frequent machine-wide questions cost no tokens. `status`/`remember`/`recall` target the named project for
 that one message (`project_override`) without moving the chat, so "status
 trading-bot" reports that project while your next message keeps its binding. Command keywords are matched in the leading window only (after
 an optional mention or "please"), negation yields `unknown`, and a question at

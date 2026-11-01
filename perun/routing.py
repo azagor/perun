@@ -37,7 +37,8 @@ from typing import Any, Iterable, Sequence
 # Actions that change state or spend agent tokens.
 MUTATING = frozenset({"run", "stop", "remember"})
 
-ACTIONS = ("run", "ask", "status", "remember", "recall", "stop", "clarify", "unknown")
+ACTIONS = ("run", "ask", "status", "remember", "recall", "stop", "clarify", "unknown",
+           "pending", "projects", "help")
 
 # Words that appear on many projects and therefore cannot identify one.
 _GENERIC_TAGS = frozenset(
@@ -93,6 +94,12 @@ _KEYWORDS: dict[str, frozenset[str]] = {
         {"recall", "przypomnij", "przypomnienie", "odszukaj"}
     ),
     "status": frozenset({"status", "stan", "state", "sytuacja", "raport"}),
+    # Read-only machine questions, answered without an agent run.
+    "pending": frozenset(
+        {"pending", "inbox", "waiting", "approvals", "czeka", "czekaja", "czekają", "skrzynka"}
+    ),
+    "projects": frozenset({"projects", "projekty"}),
+    "help": frozenset({"help", "pomoc", "pomocy"}),
     "run": frozenset(
         {
             "run",
@@ -166,6 +173,34 @@ _QUESTION_WORDS = frozenset(
 # Phrase triggers that are not a single token.
 _RECALL_PHRASES = ("co wiesz o", "co pamietasz o", "co pamiętasz o", "what do you know about")
 _STATUS_PHRASES = ("jak leci", "co slychac", "co słychać")
+# "What needs me?" is the operator's most frequent question; answer it from the
+# inbox, not with a model call.
+_PENDING_PHRASES = (
+    "co czeka",
+    "co czeka na mnie",
+    "co jest w skrzynce",
+    "co w skrzynce",
+    "co mam do zrobienia",
+    "what s waiting",
+    "what is waiting",
+    "what s pending",
+    "what is pending",
+    "any approvals",
+    "anything waiting",
+)
+_PROJECTS_PHRASES = (
+    "list projects",
+    "list my projects",
+    "show projects",
+    "show me the projects",
+    "lista projektow",
+    "lista projektów",
+    "pokaz projekty",
+    "pokaż projekty",
+    "what projects",
+    "jakie projekty",
+    "jakie mamy projekty",
+)
 
 
 @dataclass(frozen=True)
@@ -460,6 +495,20 @@ def detect_action(text: str) -> str:
     for phrase in _STATUS_PHRASES:
         if head_text.startswith(f" {phrase} "):
             return "status"
+
+    # Machine-wide read-only questions: answered from the registry/inbox, so they
+    # never spend an agent run. Phrases are anchored at the start; single words
+    # only in very short messages ("help me run tests" stays a run).
+    for phrase in _PENDING_PHRASES:
+        if f" {phrase} " in head_text:
+            return "pending"
+    for phrase in _PROJECTS_PHRASES:
+        if f" {phrase} " in head_text:
+            return "projects"
+    if head and len(head) <= 2:
+        for action in ("pending", "projects", "help"):
+            if head[0] in _KEYWORDS[action]:
+                return action
 
     # A question in the opening words wins over a verb later in the sentence:
     # "jak dodać status" is a question, not a status command. Commands in the
