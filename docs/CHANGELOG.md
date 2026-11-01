@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.24
+
+*Released 2026-11-01.*
+
 ### "What's running?" and "is it up?" are one message away
 
 * `/now` lists every active run across the machine (project, queued/running, age,
