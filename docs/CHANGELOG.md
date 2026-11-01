@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.41
+
+*Released 2026-11-01.*
+
 ### Fixes found by auditing this session's own changes
 
 * **Upgrade safety.** A filesystem snapshot written before `parent_dirs` /
