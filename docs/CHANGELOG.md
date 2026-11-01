@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.45
+
+*Released 2026-11-01.*
+
 ### Audit follow-ups from the v0.10.44 review
 
 * `tools/release.py` puts the checkout on `sys.path` before importing
