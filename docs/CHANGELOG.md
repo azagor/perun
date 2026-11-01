@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.29
+
+*Released 2026-11-01.*
+
 ### Provider usage: the API's quota, or our measured spend
 
 * `opencode_api.usage_limits()` reads `GET /api/experimental/usage/limits` —
