@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.27
+
+*Released 2026-11-01.*
+
 ### TUI sessions count toward usage, and the dashboard shows it
 
 * A TUI run started from the dashboard is linked to its project like any other
