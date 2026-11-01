@@ -5152,6 +5152,34 @@ async function viewProviders(refresh = false) {
             <button class="btn primary" id="pr-add">＋ Add provider</button>
          </div>`));
 
+    // Usage per provider: the service's own quota when it publishes one, and
+    // always Perun's measured spend (attributed per message model, so a session
+    // that switches provider is priced correctly).
+    let measuredByProvider = {};
+    let budgets = [];
+    try {
+        const usageInfo = await api('/api/providers/usage');
+        for (const row of (usageInfo.measured || [])) measuredByProvider[row.provider] = row;
+        const limits = usageInfo.limits || {};
+        if (Array.isArray(limits.budgets)) budgets = limits.budgets;
+    } catch (e) { /* usage is optional; the tab still works */ }
+
+    const usageLine = (providerId) => {
+        const measured = measuredByProvider[providerId];
+        const parts = [];
+        const budget = budgets.find((b) => (b.vendors || []).includes(providerId) || b.id === providerId);
+        if (budget && budget.limit) {
+            const pct = Math.round((Number(budget.spent || 0) / Number(budget.limit)) * 100);
+            const reset = budget.resetsAt ? ` · resets ${esc(String(budget.resetsAt).slice(0, 10))}` : '';
+            parts.push(`<span class="badge ${pct >= 90 ? 'warn' : 'ok'}" title="Reported by the provider">quota ${pct}%</span>
+                        <span class="muted">$${Number(budget.spent || 0).toFixed(2)} of $${Number(budget.limit).toFixed(2)}${reset}</span>`);
+        }
+        if (measured) {
+            parts.push(`<span class="muted" title="Measured by Perun from captured sessions (30d)">measured $${Number(measured.cost || 0).toFixed(4)} · ${Number(measured.tokens || 0).toLocaleString()} tok</span>`);
+        }
+        return parts.length ? `<div class="provider-meta">${parts.join(' ')}</div>` : '';
+    };
+
     const active = data.providers || [];
     if (!active.length) {
         v.appendChild(el('div', { class: 'card empty' },
@@ -5178,6 +5206,7 @@ async function viewProviders(refresh = false) {
                     ${p.connections && p.connections.length ? `<span class="muted">${esc(p.connections.map((c) => c.label || c.method || c.type).join(', '))}</span>` : ''}
                     ${p.base_url ? `<span class="muted">${esc(p.base_url)}</span>` : ''}
                  </div>
+                 ${usageLine(p.id)}
                  <div class="form-actions">${actions.join('')}</div>`);
             grid.appendChild(card);
         }

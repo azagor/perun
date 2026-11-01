@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The Providers tab shows usage
+
+* Each provider card now carries a usage line: **quota** when the service
+  publishes budgets (`UsageLimits.Budget`: spent/limit/percent/resetsAt), and
+  always **measured** spend from Perun's captured sessions (30 days), priced per
+  message model so a session that switches provider is attributed correctly.
+  The two are labelled separately — a measured number is never presented as a
+  provider quota.
+* Provider limits are read once per tab load; failure degrades to measured-only.
 
 ## v0.10.30
 
