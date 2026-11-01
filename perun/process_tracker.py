@@ -150,9 +150,12 @@ class ProcessTracker:
             self._kill_tree(pid)
             self.finalize(run_uid)
             return True
-        pid = self._resolve_child_pid(entry) or entry.get("pid")
+        pid = self._kill_pid(entry)
         if pid:
             self._kill_tree(pid)
+        else:
+            LOG.warning("no attributable pid for run %s: finalizing without a kill",
+                        run_uid)
         # Also terminate the stored Popen handle if still alive.
         proc = entry.get("proc")
         if proc and proc.poll() is None:
@@ -164,7 +167,25 @@ class ProcessTracker:
             except Exception:
                 pass
         self.finalize(run_uid)
-        return True
+        return bool(pid)
+
+    def _kill_pid(self, entry: dict[str, Any]) -> int | None:
+        """The one pid Stop may kill for *entry*, or ``None`` when unsure.
+
+        Only a pid that carries this run's ``PERUN_RUN_UID`` marker, or the live
+        Popen handle Perun itself launched, is attributable. The Windows
+        Terminal heuristic in ``_resolve_child_pid`` is deliberately excluded: it
+        matches "a terminal that appeared around launch time", and killing that
+        window could take down tabs belonging to other sessions.
+        """
+        pid = self._resolve_child_pid(entry, heuristic=False)
+        if pid:
+            return pid
+        proc = entry.get("proc")
+        try:
+            return proc.pid if proc and proc.poll() is None else None
+        except Exception:  # pragma: no cover - defensive
+            return None
 
     def kill_all_explicit(self) -> int:
         """Kill every tracked terminal process (explicit teardown only).
@@ -176,7 +197,7 @@ class ProcessTracker:
             entries = list(self._entries.items())
         killed = 0
         for run_uid, entry in entries:
-            pid = self._resolve_child_pid(entry) or entry.get("pid")
+            pid = self._kill_pid(entry)
             if pid:
                 try:
                     self._kill_tree(pid)
@@ -207,8 +228,16 @@ class ProcessTracker:
             registry.update_run(run_uid, status="done",
                                 ended_at=registry.now_iso(), pid=0)
 
-    def _resolve_child_pid(self, entry: dict[str, Any]) -> int | None:
-        """Find the real interactive process when the launcher exited early."""
+    def _resolve_child_pid(self, entry: dict[str, Any], *,
+                           heuristic: bool = True) -> int | None:
+        """Find the real interactive process when the launcher exited early.
+
+        ``heuristic=False`` restricts the search to the ``PERUN_RUN_UID`` marker.
+        The Windows Terminal guess below is only good enough to decide *liveness*
+        (``is_alive``); it must never choose a pid to kill, because it matches "a
+        terminal window that appeared around launch time" and could belong to
+        another run.
+        """
         if not _HAS_PSUTIL:
             return None
         shell = entry.get("shell", "")
@@ -276,8 +305,8 @@ class ProcessTracker:
             if result is not None:
                 return result
 
-        # 2) Windows Terminal parent/creation-time heuristic.
-        if "wt" in shell:
+        # 2) Windows Terminal parent/creation-time heuristic (liveness only).
+        if heuristic and "wt" in shell:
             cutoff = entry.get("started_at", time.time()) - 5
             pids_to_check = candidate_pids if candidate_pids else (
                 [p.pid for p in psutil.process_iter()] if fallback_to_all else [])
@@ -367,8 +396,14 @@ class ProcessTracker:
             with self._lock:
                 uids = list(self._entries.keys())
             for uid in uids:
-                if not self.is_alive(uid):
-                    self.finalize(uid)
+                # A DB hiccup (a lock, a closed handle after a test teardown)
+                # must not kill the watcher: it is the only thing that clears a
+                # run row when the user closes the terminal.
+                try:
+                    if not self.is_alive(uid):
+                        self.finalize(uid)
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOG.warning("watcher could not finalize %s: %s", uid, exc)
 
 
 # Module-level singleton.

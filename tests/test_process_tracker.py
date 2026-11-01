@@ -175,3 +175,49 @@ def test_terminate_without_a_tracked_entry_refuses_a_dead_pid(project):
     run = registry.create_run("run_tui_dead", project["id"], "TUI", standalone=True)
     registry.update_run(run["run_uid"], status="running", pid=999999)
     assert ProcessTracker().terminate(run["run_uid"]) is False
+
+
+def test_a_live_stop_only_kills_a_marker_resolved_pid(fresh_tracker, monkeypatch):
+    """The launch-time Windows Terminal guess is never a kill target.
+
+    The heuristic matches "a terminal that appeared around launch time"; killing
+    that window could close tabs belonging to other runs. A live Stop must use
+    the marker (or our own Popen handle) instead.
+    """
+    proc = _sleep_proc()
+    fresh_tracker.register("run-heuristic", proc)
+    seen = {}
+
+    def fake_resolver(entry, *, heuristic=True):
+        seen["heuristic"] = heuristic
+        return None
+
+    monkeypatch.setattr(fresh_tracker, "_resolve_child_pid", fake_resolver)
+    try:
+        # No marker pid, but the Popen handle is ours - still stoppable.
+        assert fresh_tracker.terminate("run-heuristic") is True
+        assert seen["heuristic"] is False
+        proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_a_live_entry_without_an_attributable_pid_is_only_finalized(project, fresh_tracker):
+    """An unrelated live pid is never killed; the run row is still closed."""
+    other = _sleeper()
+    run = registry.create_run("run_tui_unattributed", project["id"], "TUI",
+                              standalone=True)
+    uid = run["run_uid"]
+    registry.update_run(uid, status="running", pid=other.pid)
+    fresh_tracker._entries[uid] = {
+        "proc": None, "pid": other.pid, "shell": "wt", "run_uid": uid,
+        "started_at": time.time(),
+    }
+    try:
+        assert fresh_tracker.terminate(uid) is False
+        assert other.poll() is None, "an unattributable pid must survive a Stop"
+        assert registry.get_run(uid)["status"] == "done"
+    finally:
+        other.kill()
+        other.wait(timeout=5)

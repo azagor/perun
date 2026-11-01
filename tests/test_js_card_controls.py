@@ -36,8 +36,8 @@ def test_dashboard_loads_card_controls_before_perun_js():
     assert names.index("js/card_controls.js") < names.index("js/perun.js"), names
 
 
-def test_perun_js_keeps_no_private_copy_of_the_card_rule():
-    """The Run/Stop/Finish decision lives only in card_controls.js."""
+def test_perun_js_renders_the_run_control_from_the_module():
+    """The Run/Stop decision lives in card_controls.js, not in perun.js."""
     src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
     assert "CardControls.runControlSpec(" in src
     # The bug: a hardcoded Run button next to an always-rendered run action.

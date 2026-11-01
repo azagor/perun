@@ -4,7 +4,28 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Stop never guesses which process to kill
+
+* `ProcessTracker.terminate()` now resolves its target through `_kill_pid()`: a
+  pid carrying the run's `PERUN_RUN_UID` marker, or Perun's own live `Popen`
+  handle. The launch-time Windows Terminal heuristic in `_resolve_child_pid()` is
+  skipped on that path (`heuristic=False`) — it matches "a terminal window that
+  appeared around launch time", and closing it could take down tabs belonging to
+  other runs. It stays available for `is_alive()`, where it only decides liveness.
+  With nothing attributable, Stop finalizes the row and reports `cancelled: false`
+  instead of killing an unrelated process; `kill_all_explicit()` uses the same
+  rule.
+* Regression tests: a live Stop never asks the resolver for a heuristic match, an
+  unattributable live pid survives a Stop while the run row is finalized, and the
+  existing marker/restart cases still pass.
+* `_watch_loop()` now guards each run's liveness/finalize step. A DB hiccup (a
+  lock, a closed handle) used to raise inside the watcher thread and silently stop
+  auto-finalization, which is the only thing that clears a run row when the user
+  closes the terminal.
+* Docs (AGENTS, CODEMAP, TECHNICAL) state the exact rule, so "Stop closes the TUI
+  terminal" and "never kill a process Perun cannot attribute" are both true.
+* Test/doc drift fixed: `tests/test_js_card_controls.py` no longer mentions the
+  withdrawn Finish action, and its rename assertion matches what it checks.
 
 ## v0.10.47
 

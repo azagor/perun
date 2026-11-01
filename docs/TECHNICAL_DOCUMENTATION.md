@@ -794,15 +794,17 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   Perun was down". The dashboard shows a TUI banner and the same **Stop** button
   as any run: for a tracked TUI session it closes the terminal Perun opened
   (`POST /api/runs/{uid}/cancel` → `ProcessTracker.terminate()`, which only kills a
-  pid carrying the run's `PERUN_RUN_UID` marker). After a restart the in-memory
-  handle is gone but `runs.pid` survives, so Stop still works; when the pid is dead
-  or un-attributable, Stop just finalizes the row and the card goes idle.
+  pid carrying the run's `PERUN_RUN_UID` marker or the live `Popen` handle Perun
+  launched — never the launch-time Windows Terminal heuristic). After a restart the
+  in-memory handle is gone but `runs.pid` survives, so Stop still works when the
+  marker check passes; when the pid is dead or un-attributable, Stop just finalizes
+  the row and the card goes idle.
   `POST /api/runs/{uid}/finish` remains the explicit "end tracking, keep the
   terminal" call for API/CLI use.
   The terminal pid is persisted (`runs.pid`) when the terminal is launched, so
   after a restart the card stays lit while that pid is alive and is swept as soon
   as it is gone; the age window only covers rows without a pid. Server shutdown
-  **does not** call `ProcessTracker.terminate_all()` — those terminals are the
+  **does not** call `ProcessTracker.kill_all_explicit()` - those terminals are the
   user's, not Perun's.
   `/api/runs/active` reports `blocking` (non-standalone runs) and the CLI restart
   guard uses it, so an open TUI does not force `--force`.

@@ -650,8 +650,11 @@ entry); probing never happens automatically.
 ### `perun/process_tracker.py`
 Lifecycle tracking for externally-launched TUI/terminal sessions.
 * `ProcessTracker`: `register()`, `get()`, `is_alive()`, `terminate()`,
-  `terminate_all()`, `finalize()`, `_resolve_child_pid()` (descendant-first marker
-  scan with full-system fallback), `_kill_tree()`, `_watch_loop()`.
+  `kill_all_explicit()`, `finalize()`, `_kill_pid()` (the only pid Stop may kill:
+  marker-resolved or Perun's own live subprocess handle), `_resolve_child_pid()`
+  (descendant-first marker scan with full-system fallback; its `heuristic=False`
+  mode skips the launch-time Windows Terminal guess, which is liveness-only),
+  `_kill_tree()`, `_watch_loop()`.
 * Uses `psutil` to walk process trees and resolve Windows Terminal child
   processes. The frontend injects a `PERUN_RUN_UID` environment marker into the
   shell command so the tracker can find the TUI process even when the launcher has
@@ -1562,8 +1565,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `compose_prompt` instructions injection, model resolution/forwarding
   (`model_explicit`, the `--model` argv rule for every source), and end-to-end
   stdout-error capture.
-* `test_process_tracker.py` — `ProcessTracker` registration, lifecycle, marker
-  resolution, watcher auto-finalization, and run-record cleanup.
+* `test_process_tracker.py` - `ProcessTracker` registration, lifecycle, marker
+  resolution, watcher auto-finalization, run-record cleanup, and kill attribution
+  (marker or Perun's own handle, never the launch-time heuristic).
 * `test_agents.py` — OpenCode agent discovery (`perun/agents.py`).
 * `test_daemon.py` — PID file lifecycle, run record round-trip,
   `is_another_perun_running()`, detached start, and `stop()`/`kill()`.
