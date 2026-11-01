@@ -4,7 +4,25 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### A working project card shows Stop again
+
+* The card rendered **▶ Run** unconditionally and only *added* a Stop button for
+  runs that were not standalone. Every TUI session opened from the dashboard is
+  `standalone=1` for its whole life, so Stop was never rendered for it (since
+  v0.10.3, when the restart-marker fix suppressed it) — an active card showed
+  "working" plus a Run button that would have started a second session.
+* `web/js/card_controls.js` (`runControlSpec`, unit-tested with `node --test`) now
+  decides the first card action: **Run** when the project is idle, **Stop** for
+  any active run. Stop calls `POST /api/runs/{uid}/cancel`, which is already the
+  intended path — cancel a headless run, or close the terminal Perun opened for a
+  TUI run (it only kills a pid carrying that run's `PERUN_RUN_UID` marker, and it
+  still works after a restart from the persisted `runs.pid`).
+* `applyCardStates()` re-syncs that control on every 4 s presence poll, so a card
+  that lights up, is stopped or is swept swaps its button in place, and
+  `openProjectTui()` swaps it immediately for the run it just started. The button
+  is rebuilt only when its kind or run id actually changed.
+* The card's `Run` tooltip and doc text now match what it does (OpenCode launched
+  in the project directory, not the Agent Console).
 
 ## v0.10.46
 

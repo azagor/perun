@@ -1,7 +1,8 @@
 // Run with: node --test web/js/card_controls.test.js
 //
-// The decision that produced the "active card shows Run" bug: a standalone TUI
-// run had its Stop button suppressed while the Run button was always rendered.
+// The regression these guard against: a dashboard-launched TUI run stays
+// `standalone=1` across a restart, and the card used to suppress Stop for it
+// while Run stayed hardcoded - so an active card offered a second launch.
 const test = require('node:test');
 const assert = require('node:assert');
 const controls = require('./card_controls.js');
@@ -16,19 +17,19 @@ test('an idle card offers Run', () => {
     assert.equal(spec.uid, '');
 });
 
-test('a headless run is ours to stop', () => {
+test('a headless run can be stopped', () => {
     const spec = controls.runControlSpec(headless);
     assert.equal(spec.kind, 'stop');
     assert.equal(spec.attr, 'data-stop');
     assert.equal(spec.uid, 'abc123');
 });
 
-test('a standalone TUI run can be finished, never stopped', () => {
+test('a standalone TUI run can be stopped too (closes its terminal)', () => {
     const spec = controls.runControlSpec(tui);
-    assert.equal(spec.kind, 'finish');
-    assert.equal(spec.attr, 'data-finish');
+    assert.equal(spec.kind, 'stop');
+    assert.equal(spec.attr, 'data-stop');
     assert.equal(spec.uid, 'def456');
-    assert.match(spec.title, /terminal keeps running/);
+    assert.match(spec.title, /close this TUI terminal/i);
 });
 
 test('no active run ever yields the Run control', () => {
@@ -40,9 +41,9 @@ test('no active run ever yields the Run control', () => {
 
 test('standalone is truthy as a number or a boolean', () => {
     for (const run of [tui, { run_uid: 'x', standalone: true }]) {
-        assert.equal(controls.runControlSpec(run).kind, 'finish');
+        assert.match(controls.runControlSpec(run).title, /TUI terminal/);
     }
     for (const run of [headless, { run_uid: 'x', standalone: false }]) {
-        assert.equal(controls.runControlSpec(run).kind, 'stop');
+        assert.equal(controls.runControlSpec(run).title, 'Cancel this run');
     }
 });

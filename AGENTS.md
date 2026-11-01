@@ -147,17 +147,21 @@ with `python -m perun project-roots --add <name> <path>`.
   re-admit without checking `admitted_at`, and keep the reply exactly-once
   (`runs.reply_sent_at`).
 * **A TUI run is standalone and user-owned.** `POST /api/runs/tui` records an
-  external terminal (`runs.standalone=1`, `runs.pid`); never kill it on server
-  shutdown (`ProcessTracker.terminate_all()` is explicit-only), never mark it
-  interrupted while its pid is alive, never offer a control that kills it
-  (`/api/runs/{uid}/kill` is explicit-only; the card offers **Finish**, which
-  only ends tracking and captures usage), and sweep it when the pid is gone (age
-  window only as a fallback).
+  external terminal Perun launched (`runs.standalone=1`, `runs.pid`); never kill
+  it on server shutdown (`ProcessTracker.terminate_all()` is explicit-only) and
+  never mark it interrupted while its pid is alive. **Stop is the intended way to
+  close it**: `POST /api/runs/{uid}/cancel` cancels the orchestrator run and, for a
+  tracked terminal, kills the process tree — but only a pid (or descendant)
+  carrying that run's `PERUN_RUN_UID` marker, so a recycled pid cannot take out an
+  unrelated editor. With no live/attributable pid it just finalizes the row. Sweep
+  it when the pid is gone (age window only as a fallback).
 * **A working card never offers Run.** The first card action comes from
-  `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for a headless
-  run, Finish for a TUI run. Rendering Run next to a "working" pip was a real bug —
-  it invited a second session; keep the decision in that module (it is unit-tested)
-  instead of hardcoding a button.
+  `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for *any*
+  active run (headless cancel, or closing the TUI terminal Perun opened). A
+  dashboard TUI run is `standalone=1` for its whole life, including after a
+  restart, so suppressing Stop for standalone runs reverted an active card to Run
+  and invited a second session — that was a real regression. Keep the decision in
+  that module (it is unit-tested) instead of hardcoding a button.
 * **Notifications carry a typed target.** `attention_requests.target_kind` +
   `target_id` decide where a reply goes; never infer the context from the current
   project or the newest session. Producers only write rows — the process that owns

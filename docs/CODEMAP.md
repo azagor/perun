@@ -1397,13 +1397,14 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames) and
   `shouldSend(lastText, lastAt, text, now, windowMs)` (double Enter/click
   guard). Exposed as `window.ChatCore` and as a CommonJS module.
-* `web/js/card_controls.js` — the project card's run-control decision, moved out
+* `web/js/card_controls.js` - the project card's run-control decision, moved out
   of `perun.js` so `node --test` can cover it: `runControlSpec(run)` returns
-  **Run** for no run, **Stop** for a headless run Perun owns, and **Finish** for a
-  standalone TUI run (end tracking, never kill the terminal), plus
+  **Run** for no run and **Stop** for any active run (a headless cancel, or closing
+  the TUI terminal Perun opened via `/api/runs/{uid}/cancel`), plus
   `runControlAttr(run)`. `perun.js` renders/syncs the button from it, so an active
-  card can never offer a second launch. Exposed as `window.CardControls` and as a
-  CommonJS module.
+  card can never offer a second launch - the regression when Stop was suppressed
+  for standalone runs while Run stayed hardcoded. Exposed as `window.CardControls`
+  and as a CommonJS module.
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
   `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `multiSelect()`,
   `terminalId()`,
@@ -1646,8 +1647,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   no hardcoded Run button; skips when `node` is unavailable.
 * `web/js/card_controls.test.js` - the `node --test` suite for
   `card_controls.js`: a working card never yields the Run control, a headless run
-  is stoppable, a standalone TUI run is only finishable, and `standalone` works as
-  a number or a boolean.
+  is stoppable, a standalone TUI run is stoppable too (Stop closes its terminal),
+  and `standalone` works as a number or a boolean.
 * `test_backups.py` — the config-copy helper: label sanitisation (a `.` or `..`
   label cannot escape the tree), second-resolution stamps never overwrite, a
   failed copy is swallowed, pruning keeps the newest N per stem and never touches

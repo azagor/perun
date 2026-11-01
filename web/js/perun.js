@@ -489,7 +489,7 @@ function pipState(slug) {
 /* A card's run control comes from js/card_controls.js (loaded just before this
    file) so the rule — an active card never offers Run — is unit-tested. If that
    script is missing (stale cache), keep the safe half: a working card still
-   offers the run's control rather than a second launch. */
+   offers Stop rather than a second launch. */
 const CardControls = window.CardControls || {
     runControlSpec: (run) => (run
         ? { kind: 'stop', uid: run.run_uid || '', cls: 'btn sm danger', attr: 'data-stop',
@@ -549,7 +549,7 @@ function syncRunControl(card, run) {
     const actions = card.querySelector('.pc-actions');
     if (!actions) return;
     const spec = CardControls.runControlSpec(run);
-    const current = actions.querySelector('[data-tui], [data-stop], [data-finish]');
+    const current = actions.querySelector('[data-tui], [data-stop]');
     const matches = current && current.hasAttribute(spec.attr)
         && (current.dataset.runUid || '') === spec.uid;
     if (matches) return;
@@ -1047,8 +1047,6 @@ function projectCard(p) {
     card.addEventListener('click', (e) => {
         const stop = e.target.closest('[data-stop]');
         if (stop) { e.stopPropagation(); cancelProjectRun(stop.dataset.runUid); return; }
-        const finish = e.target.closest('[data-finish]');
-        if (finish) { e.stopPropagation(); finishProjectRun(finish.dataset.runUid); return; }
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
         if (e.target.closest('[data-tui]')) {
@@ -1114,26 +1112,15 @@ async function cancelProjectRun(runUid) {
         if (pip) { pip.classList.remove('working'); pip.classList.add('awake'); }
         const banner = card.querySelector('.pc-running');
         if (banner) banner.remove();
-        const stopBtn = card.querySelector('[data-stop], [data-finish]');
+        const stopBtn = card.querySelector('[data-stop]');
         if (stopBtn) stopBtn.remove();
     }
     try {
+        // /cancel ends both kinds of run: it cancels the orchestrator's run and,
+        // for a TUI session Perun launched, closes the terminal it opened.
         await api(`/api/runs/${runUid}/cancel`, { method: 'POST' });
         toast('Stop requested', 'ok');
         await new Promise((r) => setTimeout(r, 500));
-        await refreshPresence();
-        await loadProjects();
-    } catch (e) { toast(e.message, 'err'); }
-}
-
-/* End tracking for a standalone TUI run: Perun marks it done and captures its
-   usage. The terminal belongs to the user, so this never kills the process -
-   an explicit kill stays a separate, deliberate action. */
-async function finishProjectRun(runUid) {
-    if (!runUid) return;
-    try {
-        await api(`/api/runs/${runUid}/finish`, { method: 'POST' });
-        toast('Session marked finished', 'ok');
         await refreshPresence();
         await loadProjects();
     } catch (e) { toast(e.message, 'err'); }

@@ -791,10 +791,14 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   session to observe. `runs.standalone` marks them, restart reconciliation leaves
   them alone (the card keeps its "working" pip and banner), and only a run older
   than `tui_run_stale_hours` (default 24) is swept as "TUI session ended while
-  Perun was down". The dashboard shows a TUI banner and **Finish** instead of a
-  Stop button for them: Finish (`POST /api/runs/{uid}/finish`) marks the run done
-  and captures its usage, and never kills the terminal. There is no card-level
-  kill; `/api/runs/{uid}/kill` stays an explicit, deliberate action.
+  Perun was down". The dashboard shows a TUI banner and the same **Stop** button
+  as any run: for a tracked TUI session it closes the terminal Perun opened
+  (`POST /api/runs/{uid}/cancel` → `ProcessTracker.terminate()`, which only kills a
+  pid carrying the run's `PERUN_RUN_UID` marker). After a restart the in-memory
+  handle is gone but `runs.pid` survives, so Stop still works; when the pid is dead
+  or un-attributable, Stop just finalizes the row and the card goes idle.
+  `POST /api/runs/{uid}/finish` remains the explicit "end tracking, keep the
+  terminal" call for API/CLI use.
   The terminal pid is persisted (`runs.pid`) when the terminal is launched, so
   after a restart the card stays lit while that pid is alive and is swept as soon
   as it is gone; the age window only covers rows without a pid. Server shutdown
@@ -2170,11 +2174,14 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   `✦ Run`.
 * **One run control per card.** The first action slot is driven by
   `js/card_controls.js` (`runControlSpec`): **Run** when the project is idle,
-  **Stop** for a headless run Perun owns, **Finish** for a standalone TUI run
-  (end tracking + capture usage; never kill the terminal). An active card can
-  therefore never offer a second launch. `applyCardStates()` re-syncs the control
-  on every 4 s presence poll, and `openProjectTui()` swaps it immediately for the
-  run it just created.
+  **Stop** for any active run — `POST /api/runs/{uid}/cancel` cancels a headless
+  run and closes the terminal of a standalone TUI run. A dashboard TUI run keeps
+  `standalone=1` for its whole life, so the action must never depend on knowing
+  whether the process is still tracked in memory: after a restart the row survives
+  (and keeps the card lit while `runs.pid` is alive) but Stop still works from the
+  persisted pid. An active card can therefore never offer a second launch.
+  `applyCardStates()` re-syncs the control on every 4 s presence poll, and
+  `openProjectTui()` swaps it immediately for the run it just created.
 * **Orchestrator chat** targets the control plane; it streams in place and works
   with zero other projects registered. Its Settings card edits the orchestrator's
   **model**, **agent**, and **custom instructions**.
