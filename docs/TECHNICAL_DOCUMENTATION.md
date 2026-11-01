@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.46 (see §15). A working project card now shows Stop or Finish instead of Run, and usage cards refresh every minute.
+**Latest release:** v0.10.47 (see §15). A working project card shows Stop again; Stop still closes the TUI terminal it opened.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2279,6 +2279,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.47: A working project card shows Stop again; Stop still closes the TUI terminal it opened.
+
 ### 2026-11-01 — v0.10.46: A working project card now shows Stop or Finish instead of Run, and usage cards refresh every minute.
 
 ### 2026-11-01 — v0.10.45: Audit follow-ups: a portable release-script import, unknown-version notes, and a hidden-vs-shared hint.

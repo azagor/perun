@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.47
+
+*Released 2026-11-01.*
+
 ### A working project card shows Stop again
 
 * The card rendered **▶ Run** unconditionally and only *added* a Stop button for
