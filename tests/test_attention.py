@@ -435,6 +435,81 @@ def test_too_many_options_fall_back_to_a_text_list(project):
     assert "Options:" in text and "10. option-9" in text
 
 
+def test_option_buttons_are_redacted_just_like_the_card_text(project):
+    item = _ask_with(project, ["use sk-live_abcdef1234567890", "prod"])
+
+    label = attention.keyboard(item)["inline_keyboard"][0][0]["text"]
+
+    assert "sk-live" not in label
+    assert "[redacted]" in label
+    # The value delivered to the session is still the operator's choice verbatim;
+    # only the notification is masked.
+    assert item["options"][0]["label"] == "use sk-live_abcdef1234567890"
+
+
+def test_a_question_option_answers_by_dashboard_id_or_label(project, api):
+    by_id = _ask_with(project, ["staging", "prod"])       # ids "1"/"2"
+    result = attention.choose(by_id["id"], "2", by="dashboard")
+    assert result["ok"], result
+    assert api.calls[-1][2] == "prod"
+
+    by_label = _ask_with(project, ["staging", "prod"], text="Ship where?")
+    result = attention.choose(by_label["id"], "staging", by="dashboard")
+    assert result["ok"], result
+    assert api.calls[-1][2] == "staging"
+
+
+def test_an_unknown_option_id_is_refused_not_ignored(project, api):
+    item = _ask_with(project, ["staging", "prod"])
+    result = attention.choose(item["id"], "9", by="dashboard")
+    assert result["ok"] is False
+    assert "no longer on the card" in result["error"]
+    assert api.calls == []
+
+
+def test_a_closed_card_keeps_no_live_buttons(project, api):
+    item = _ask_with(project, ["staging", "prod"])
+    assert attention.choose(item["id"], "o0", by="telegram:1")["ok"]
+
+    closed = registry.get_attention(item["id"])
+    assert closed["state"] == "answered"
+    assert attention.keyboard(closed) is None
+
+
+def test_a_single_field_answer_that_starts_with_a_brace_stays_verbatim(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Notes?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "notes", "type": "string"}]})
+
+    result = attention.answer(item["id"], "{a note in braces}", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1] == ("form", "ses_form", "frm_1",
+                             {"notes": "{a note in braces}"})
+
+
+def test_a_form_with_too_many_options_lists_all_of_them(project):
+    options = [f"opt-{i}" for i in range(9)]
+    item = attention.request(
+        project, "form", "ses_form", "form", "Pick one",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "pick", "type": "select", "options": options}]})
+
+    assert attention.keyboard(item) is None          # too many to tap
+    text = attention.render(item)
+    assert "opt-8" in text and "(+" not in text      # nothing silently dropped
+
+
+def test_a_long_option_list_says_how_many_were_not_shown(project):
+    item = _ask_with(project, [f"o{i}" for i in range(13)])
+
+    text = attention.render(item)
+
+    assert "13. o12" not in text
+    assert "and 1 more" in text
+
+
 def test_room_answer_is_queued_when_the_bridge_is_offline(project, monkeypatch):
     from perun import perunchat_bridge
 

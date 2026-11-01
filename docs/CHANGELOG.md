@@ -4,7 +4,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Inbox hardening after the v0.10.36 audit
+
+* Button labels now go through the same `redact()` rule as card text. An option
+  an agent filled with a token (or an OpenCode form option) reached Telegram
+  verbatim while the identical text was masked; the delivered value stays the raw
+  label, only the notification is redacted.
+* A closed card returns no keyboard, so a racing toggle or a stale edit cannot
+  re-arm a decision another device already made.
+* The dashboard's option buttons work again: `choose()` accepts Telegram's index
+  (`o2`) *or* the option id/label the dashboard posts, instead of refusing every
+  non-Telegram option tap.
+* A one-field form answer that merely looks like JSON (`{a note in braces}`) is
+  stored verbatim again instead of failing "That JSON is not valid".
+* Nothing is truncated in silence: a form whose choices do not fit the keyboard
+  lists them (up to 12, then "and N more"), as does a long session option list,
+  and a form with more than six fields says how many are not shown.
+* Toggling a multi-select choice logs its position, not the option text.
 
 ## v0.10.36
 

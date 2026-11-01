@@ -722,10 +722,13 @@ dispatched by that target, never by inference from "the current project".
   one-field form whose type is boolean / select-like / multiselect (toggles plus
   a Send row). Indices, not values, travel in `callback_data` (`att:<id>:o<i>` /
   `t<i>` / `d`), which keeps it under Telegram's 64-byte cap; above
-  `MAX_CHOICE_BUTTONS` (8) the card lists the values as text instead.
+  `MAX_CHOICE_BUTTONS` (8) the card lists the values as text instead. Labels are
+  rendered through `_redact()` (the delivered value is not), and a closed item
+  never returns a keyboard.
 * Replies: `answer()` (text → adapter, then a conditional close, so a failed
   delivery leaves the item open), `choose()` (permission `once`/`always`/`reject`,
-  proposal `approve`/`reject`, an option index, or a form's `d` submit; `reject`
+  proposal `approve`/`reject`, an option index *or* id/label — the dashboard posts
+  the id — or a form's `d` submit; `reject`
   also closes the session's other pending permissions), `toggle()` (flip a
   multiselect choice into `ref['toggles']` without sending anything),
   `set_delivery()` (⚡ promote queue→steer in place), `undo()`

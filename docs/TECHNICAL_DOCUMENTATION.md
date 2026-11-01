@@ -1434,16 +1434,23 @@ edit cannot change what an old button means. A tick stores the choice in
 `ref['toggles']` and re-renders; only `d` delivers, through the same
 `reply_form` adapter as a typed answer. Above `MAX_CHOICE_BUTTONS` (8) the card
 falls back to a numbered text list, and free text stays available everywhere.
+Button *text* is redacted like every other outgoing string; the value delivered
+to the target is the raw label. A closed item returns no keyboard, and `choose()`
+accepts either the Telegram index or the option id/label (the dashboard posts the
+id), so both surfaces resolve to the same choice.
 
 **Forms are also answerable in plain text.** A form card lists every field by its title
 (falling back to the key), with `required`, the reply key, and the allowed values
 when the field has options. The answer is one `key: value` line per field; JSON
 is still accepted, and the card prints a template with the *real* keys — the old
 `{"field": "value"}` example named a field that did not exist. A single-field
-form takes the bare message, and the value is coerced to the field's type
+form takes the bare message — even one that looks like JSON, since a single field
+never needs a format — and the value is coerced to the field's type
 (number/integer, boolean, `multiselect` split on commas, choice validated
 against the options). An unknown key is rejected with a hint that lists the
-actual ones.
+actual ones. When the choices do not fit the keyboard, the text lists them (up
+to twelve, then "and N more"); a form with more than six fields says how many
+are not shown.
 
 **Reply ordering.** The adapter runs first and the item is closed with
 `UPDATE … WHERE state='open'` afterwards, so a failed delivery leaves it open and

@@ -310,8 +310,12 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
         if not fields:
             return "\n".join(lines + ["Reply with your answer."])
         shown = fields[:6]
-        lines.append("Answer this field:" if len(shown) == 1
-                     else f"Answer these {len(shown)} fields:")
+        hidden = len(fields) - len(shown)
+        # When the choices are not on the keyboard, the text has to carry them:
+        # never truncate in silence.
+        tappable = keyboard(item) is not None
+        lines.append("Answer this field:" if len(fields) == 1
+                     else f"Answer these {len(fields)} fields:")
         for index, field in enumerate(shown, 1):
             key = str(field.get("key") or "")
             title = str(field.get("title") or "").strip()
@@ -321,9 +325,13 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
                 notes.append(f"`{key}`")
             if field.get("required"):
                 notes.append("required")
-            options = [str(o) for o in (field.get("options") or [])][:6]
+            options = [str(o) for o in (field.get("options") or [])]
             if options:
-                notes.append("one of: " + ", ".join(_redact(o) for o in options))
+                listed = options[:6] if tappable else options[:12]
+                note = "one of: " + ", ".join(_redact(o) for o in listed)
+                if len(listed) < len(options):
+                    note += f" (+{len(options) - len(listed)} more)"
+                notes.append(note)
             suffix = f" — {'; '.join(notes)}" if notes else ""
             lines.append(f"{index}. {label}{suffix}")
         if len(shown) == 1:
@@ -346,6 +354,8 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
             if len(keys) <= 3:
                 sample = ", ".join(f'"{k}": "…"' for k in keys)
                 lines.append(f"Or as JSON: `{{{sample}}}`")
+        if hidden:
+            lines.append(f"…and {hidden} more field(s), not shown here.")
         return "\n".join(lines)
 
     if kind == "proposal":
@@ -418,9 +428,11 @@ def _choice_rows(item: Dict[str, Any], labels: List[str], *, prefix: str = "o",
                  toggled: Optional[set] = None) -> List[List[Dict[str, str]]]:
     rows = []
     for index, label in enumerate(labels[:MAX_CHOICE_BUTTONS]):
-        text = label
+        # Button text leaves Perun just like card text, so it obeys the same
+        # redaction rule; the *delivered* value stays the raw label.
+        text = _redact(label)
         if toggled is not None:
-            text = ("✅ " if index in toggled else "⬜️ ") + label
+            text = ("✅ " if index in toggled else "⬜️ ") + text
         rows.append([{"text": str(text)[:60],
                       "callback_data": f"att:{item['id']}:{prefix}{index}"}])
     return rows
@@ -428,6 +440,10 @@ def _choice_rows(item: Dict[str, Any], labels: List[str], *, prefix: str = "o",
 
 def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Inline keyboard for the initial card (``None`` when a reply is enough)."""
+    if item.get("state", "open") != "open":
+        # A closed card keeps no live buttons: a racing toggle or stale edit
+        # must never re-arm a decision another device already made.
+        return None
     kind = item["target_kind"]
     if kind == "permission":
         # Keep "Allow once" first, the destructive choices on their own rows.
@@ -439,7 +455,7 @@ def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if kind == "proposal":
         options = item.get("options") or PROPOSAL_OPTIONS
         return {"inline_keyboard": [
-            [{"text": str(opt.get("label") or opt.get("id")),
+            [{"text": _redact(str(opt.get("label") or opt.get("id"))),
               "callback_data": f"att:{item['id']}:{opt.get('id')}"}]
             for opt in options
         ]}
@@ -468,7 +484,7 @@ def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     rows = []
     for index, opt in enumerate(options):
         label = str(opt.get("label") or opt.get("id") or f"Option {index + 1}")
-        rows.append([{"text": label[:60],
+        rows.append([{"text": _redact(label)[:60],
                       "callback_data": f"att:{item['id']}:o{index}"}])
     return {"inline_keyboard": rows}
 
@@ -486,10 +502,14 @@ def _option_lines(item: Dict[str, Any]) -> List[str]:
         return []
     if len(options) <= MAX_CHOICE_BUTTONS:
         return ["Choose one below, or reply in your own words."]
-    return ["Options:", *[
+    shown = options[:12]
+    lines = ["Options:", *[
         f"{index}. {_redact(str(opt.get('label') or opt.get('id') or ''))}"
-        for index, opt in enumerate(options[:12], 1)
+        for index, opt in enumerate(shown, 1)
     ]]
+    if len(options) > len(shown):
+        lines.append(f"…and {len(options) - len(shown)} more. Reply with the value.")
+    return lines
 
 
 def confirmation(item: Dict[str, Any], result: Dict[str, Any]) -> str:
@@ -551,9 +571,22 @@ def _coerce_form_answer(item: Dict[str, Any], text: str) -> Dict[str, Any]:
     text = (text or "").strip()
     if not fields:
         raise DeliveryError("this form has no fields to answer")
-    if len(fields) == 1 and not text.startswith("{"):
-        # One field never needs a format: the whole message is the value.
-        parsed = {str(fields[0].get("key")): text}
+    if len(fields) == 1:
+        # One field never needs a format: the whole message is the value. A JSON
+        # object naming that field is still accepted (old clients send that),
+        # but text that merely *looks* like JSON stays verbatim — a note in
+        # braces must not turn into a parse error.
+        key = str(fields[0].get("key"))
+        parsed = None
+        if text.startswith("{"):
+            try:
+                candidate = json.loads(text)
+            except ValueError:
+                candidate = None
+            if isinstance(candidate, dict) and key in candidate:
+                parsed = candidate
+        if parsed is None:
+            parsed = {key: text}
     elif text.startswith("{"):
         try:
             parsed = json.loads(text)
@@ -735,6 +768,25 @@ def _choice_index(action: str, prefix: str) -> Optional[int]:
     return int(tail) if tail.isdigit() else None
 
 
+def _match_option(options: List[Dict[str, Any]], action: str) -> Optional[Dict[str, Any]]:
+    """An option by button index (``o3``) or by its id/label.
+
+    The index form is what Telegram sends; the dashboard posts the option's
+    ``id``, so both surfaces must resolve to the same choice.
+    """
+    index = _choice_index(action, "o")
+    if index is not None:
+        return options[index] if 0 <= index < len(options) else None
+    wanted = action.strip().lower()
+    if not wanted:
+        return None
+    for opt in options:
+        if wanted in (str(opt.get("id") or "").strip().lower(),
+                      str(opt.get("label") or "").strip().lower()):
+            return opt
+    return None
+
+
 def toggle(attention_id: int, index: int, *, by: str = "") -> Dict[str, Any]:
     """Flip one multi-select choice on a form card — nothing is sent yet.
 
@@ -764,8 +816,10 @@ def toggle(attention_id: int, index: int, *, by: str = "") -> Dict[str, Any]:
     else:
         chosen.add(index)
     updated = registry.update_attention_ref(item["id"], toggles=sorted(chosen))
-    LOG.info("att_%s: toggled %r (%d picked) by %s", item["id"],
-             labels[index], len(chosen), by or "someone")
+    # Log the position, not the label: an option can quote anything the agent
+    # saw, and Perun's log must not become a copy of it.
+    LOG.info("att_%s: toggled #%d (%d picked) by %s", item["id"],
+             index, len(chosen), by or "someone")
     return {"ok": True, "item": updated or item, "delivery": {"mode": "toggle"}}
 
 
@@ -781,13 +835,12 @@ def choose(attention_id: int, option: str, *, by: str) -> Dict[str, Any]:
     option = action.lower()
     try:
         if kind in ("session", "room", "handoff"):
-            index = _choice_index(option, "o")
-            if index is None:
-                raise DeliveryError("this one needs a text reply")
             options = item.get("options") or []
-            if not 0 <= index < len(options):
-                raise DeliveryError("that choice is no longer on the card")
-            label = str(options[index].get("label") or options[index].get("id") or "")
+            picked = _match_option(options, option)
+            if picked is None:
+                raise DeliveryError("that choice is no longer on the card"
+                                    if options else "this one needs a text reply")
+            label = str(picked.get("label") or picked.get("id") or "")
             if not label:
                 raise DeliveryError("that choice is empty")
             return _answer(item["id"], label, by=by)
