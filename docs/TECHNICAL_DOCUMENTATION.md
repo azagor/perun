@@ -142,7 +142,9 @@ can all write concurrently.
 
 Column additions after the first release are applied idempotently by
 `db._ADDED_COLUMNS` (`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
-`runs.model_explicit`, `doc_chunks.embedded_hash`, `projects.agent_models`), so
+`runs.model_explicit`, `runs.admitted_at`/`reply_sent_at`/`lease_epoch`/
+`standalone`/`pid`/`run_options`, `sessions.tokens_*`/`cache_read`/`cost_usd`/
+`usage_at`/`usage_models`, `doc_chunks.embedded_hash`, `projects.agent_models`), so
 existing databases migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
 `projects.instructions_path`) are dropped idempotently by `db._REMOVED_COLUMNS` on next start, so
 fresh and upgraded schemas converge. Instruction text is never stored in the database.
@@ -1804,6 +1806,15 @@ service's experimental `GET /api/experimental/usage/limits` (provider budgets:
 `spent`/`limit`/`resetsAt`) and turns `provider_budgets`
 (`provider=USD per month`) into a percentage when the provider publishes none.
 Measured spend is always labelled as Perun's measurement, never as a quota.
+
+The read is a bounded page (1000 messages, retried at 200 when the service rejects
+that limit), and messages with neither tokens nor cost are skipped so a user turn
+cannot create an `unknown` provider bucket. Attribution maps a model prefix to its
+provider card (`opencode-go` → `opencode`) and attributes an unmodelled message to
+the run's model. The dashboard card says **"captured in the last 24h"**, not "last
+24h": the window is when the snapshot was taken, while the amount is the session's
+cumulative cost — a distinction that matters when comparing against an invoice.
+A configured budget percentage is not clamped, so 240 % does not render as 100 %.
 
 **Docs follow the code.** The executor of a proposal is sandboxed to its approved
 targets (`PERUN_ALLOWLIST`, `perun-guard`, and a post-run filesystem audit), so it

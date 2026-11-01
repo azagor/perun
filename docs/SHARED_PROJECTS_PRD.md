@@ -496,6 +496,12 @@ so I can re-verify or remove them.
   OpenCode itself; however, it is **voluntary** — the Project Agent must choose
   these tools over OpenCode's built-in file tools. A compromised or misbehaving
   agent can still bypass the guard.
+- **Documentation writes are accountable too.** Because the executor is scoped to
+  its approved targets, the post-execution docs step is the one write outside the
+  approval: it runs under the restricted `perun-docs` agent (documentation paths
+  only), and Perun diffs the project before/after and records
+  `docs_audit` / `docs_audit_violation` with the paths. The docs step cannot change
+  a proposal's result.
 - **Post-run filesystem audit** acts as the accountability layer: it snapshots
   the allowlisted paths before a run and diffs them afterwards, logging any
   created/modified files outside the allowlist (or unexpected entries next to

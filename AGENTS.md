@@ -111,12 +111,16 @@ with `python -m perun project-roots --add <name> <path>`.
   approved targets, so it cannot write `docs/`; never widen the allowlist to let
   it. `docs_sync.after_execution()` runs the installed `/update-docs` command once
   the proposal reaches `executed` (falling back to one changelog bullet when the
-  command is missing). Keep it fire-and-forget: a docs run must never change or
-  delay an execution result.
-* **Agent files are user-owned.** `perun-orchestrator` (and any agent Perun
-  installs) is written once and refreshed only while its bytes still match the
-  sha256 Perun recorded; a hand-edited file is never overwritten. `reset()` is the
-  only way back, and it is always an explicit user action.
+  command is missing). That session runs as the restricted **`perun-docs`** agent
+  (read anything, write only `docs/**`, `AGENTS.md`, `perun.md`), and its writes
+  are diffed and logged as `docs_audit` / `docs_audit_violation`. Keep it
+  fire-and-forget: a docs run must never change or delay an execution result.
+* **Agent files are user-owned.** `perun-orchestrator`, `perun-docs` (and any
+  agent Perun installs) is written once by `perun/managed_agent.py` and refreshed
+  only while its bytes still match the sha256 Perun recorded; a hand-edited file
+  is never overwritten. `reset()` is the only way back, and it is always an
+  explicit user action. A new managed agent must go through `managed_agent.ensure()`
+  and never write the file directly.
 * **Every project room publishes its operator contact.** Derive the human from
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`

@@ -132,14 +132,19 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   operator-contact notice).
 * Run leases: `claim_run_lease()` (heartbeat + epoch, dead-owner takeover),
   `touch_run_lease()`, `run_lease_owned()`, `release_run_lease()`,
-  `runs_awaiting_reply()`, `claim_reply_delivery()` / `clear_reply_sent()`.
+  `runs_awaiting_reply()` (not `interrupted` — the bridge announces restarts
+  itself), `claim_reply_delivery()` / `clear_reply_sent()`. `create_run(options=…)`
+  persists `runs.run_options` (schema v19) so `skip_instructions` /
+  `use_prompt_file` survive a restart (`env_keys` are recorded, not their values).
 * Activity: `log_activity()`, `list_activity()`, `get_activity()` (one row with
   `meta` parsed), `routing_decisions(hours, limit)` (the `routing_decision`
   window used by the dashboard panel), `bump_routing_stat(source, action)` /
   `routing_stats(days=1)` (per-day coverage counter, `unknown` included — an
-  aggregated row instead of one activity row per room message), `misroute_reported(decision_id)` /
-  `misroute_ids()` / `clear_misroute(decision_id)` (dedupe, the panel's
-  `reported` flag, and undo), `prune_activity(keep_days=90)` (routing telemetry
+  aggregated row instead of one activity row per room message),
+  `misroute_reported(decision_id)` / `log_misroute()` (one atomic
+  `INSERT … WHERE NOT EXISTS`, so a double click cannot duplicate) /
+  `misroute_ids(decision_ids=None)` (scans only the ids the panel shows) /
+  `clear_misroute(decision_id)` (undo), `prune_activity(keep_days=90)` (routing telemetry
   only — run/proposal/audit rows are never pruned), plus
   `recent_interrupted_runs()` / `chats_for_session()` / `interrupt_notice_sent()`
   for the restart notice.
@@ -532,7 +537,11 @@ Start / stream / cancel headless `opencode run`.
 * `Orchestrator`: `start_run()`, `run_and_wait()`, `wait_for_run()` (the
   event wait that `run_and_wait()` delegates to; also used by the PerunChat
   bridge to avoid duplicate runs), `cancel()` (idempotent; also cancels queued
-  runs), `is_final()`, `set_max_concurrent()`, `active()`, `_worker()`,
+  runs), `FINAL_STATUSES` (done/failed/cancelled/timeout/provider_error/
+  `interrupted` — one set driving `is_final()`, `cancel()`, `stream()` and
+  `runs_awaiting_reply()`), `is_final()`, `set_max_concurrent()`, `active()`,
+  `_bind_standalone_session()` (matches an open TUI run to its session by
+  directory, so usage can be captured), `_worker()`,
   `_execute()` (with wall-clock watchdog thread and no-loss stdout
   parsing: `_harvest()` parses each line *before* honouring a cancel/timeout
   break, and a bounded `_drain()` thread harvests buffered final lines after the

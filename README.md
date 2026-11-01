@@ -42,6 +42,16 @@ them all — no matter which folder you happened to open.
   the bot for a different one from the dashboard (name, API key, chat ids) — the
   key is verified before it is saved, stays masked, and the bridge restarts in
   one click.
+* **An inbox, not a firehose.** Permissions, forms, agent questions and proposals
+  arrive as typed Telegram cards answered with buttons; a burst of room messages
+  becomes one digest card, and `/pending` always lists what is waiting.
+* **Ask the machine without spending a run.** A deterministic router answers
+  status / pending / projects / runs / health / usage / diff / resume from the
+  registry, sends everything else to the right project, and records coverage so
+  you can see how much of what people type it understands.
+* **Usage with attribution.** Per-session tokens and cost priced per model (a
+  mid-session provider switch is attributed correctly), plus provider quotas or
+  the monthly budgets you configure.
 * **Federated agent chat without key leaks.** The PerunChat panel connects with
   short-lived single-use WebSocket tickets instead of putting the API key in a
   URL, and agents can rotate their own keys without operator distribution.
@@ -307,9 +317,10 @@ python -m perun proposals-mcp
 ```
 perun/                     the Python package
   config.py                paths + persisted Settings (+ is_control_path)
-  db.py                    SQLite schema (registry + memory + vectors + shared projects)
+  db.py                    SQLite schema (registry + memory + vectors + shared projects + usage + inbox + routing)
   registry.py              projects / sessions / runs / activity / dependencies / bridge links
   control.py               the always-present orchestrator (control plane)
+  routing.py               deterministic project/action router (advisory, never authoritative)
   projects.py              shared project creation (wizard + MCP)
   memory.py                unified facts + doc-chunk store + search
   context.py               keyed retrievable context docs (bounded AGENTS.md)
@@ -321,7 +332,10 @@ perun/                     the Python package
   discovery.py             find projects under configured roots
   manifest.py              perun.md / perun.json parsing, anchors and dependencies
   orchestrator.py          start/stream/cancel `opencode run`
+  session_runner.py        durable, session-admitted runs (leases, reattach, exactly-once replies)
   process_tracker.py       live process/session accounting for runs and TUI launches
+  attention.py             operator inbox: typed targets, cards, reply adapters
+  attention_watcher.py     OpenCode permission/form detection (event stream + poll)
   telegram.py              shared bridge with per-project routing
   server.py                FastAPI + SSE + static dashboard
   providers.py             LLM provider catalog, discovery, connect/disconnect
@@ -334,6 +348,11 @@ perun/                     the Python package
   path_guard.py            project/target allowlist + sensitive-path policy
   guard_mcp.py             the `perun-guard` filesystem MCP server
   hitl.py                  HMAC-SHA256 approval tokens
+  docs_sync.py             `/update-docs` after a proposal executes (audited, bounded)
+  docs_agent.py            the restricted `perun-docs` agent (documentation writes only)
+  managed_agent.py         write-once policy shared by every agent file Perun installs
+  orchestrator_agent.py    the control-plane `perun-orchestrator` identity
+  backups.py               pre-change config copies under `PERUN_HOME/backups/`
   fs_audit.py              before/after filesystem audit for shared runs
   package_handoff.py       external execution ZIP pack/unpack/validate/apply
   proposals_mcp.py         the `perun-proposals` coordination MCP server
