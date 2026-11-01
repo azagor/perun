@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-01T21:25:44+00:00",
+  "generated": "2026-11-01T22:09:33+00:00",
   "releases": [
+    {
+      "version": "0.10.46",
+      "date": "2026-11-01",
+      "body": "### A working project card offers its run's control, never Run\n\n* After a browser refresh, a card whose project had an active session showed a\n  \"working\" pip and banner but still rendered **▶ Run**. A standalone TUI run had\n  its Stop button suppressed (\"Perun cannot stop it\") while Run was hardcoded, so\n  the card invited a second session next to the working one. The first card\n  action now comes from `web/js/card_controls.js` (`runControlSpec`, unit-tested\n  with `node --test`): **Run** when idle, **Stop** for a headless run Perun owns,\n  **Finish** for a standalone TUI run — which calls\n  `POST /api/runs/{uid}/finish`, marks it done and captures usage, and never kills\n  the terminal.\n* `applyCardStates()` re-syncs that control on every 4 s presence poll (so a card\n  that lights up, finishes or is swept changes its action in place), and\n  `openProjectTui()` swaps it immediately for the run it just started. The button\n  is only rebuilt when its kind or run id actually changed.\n* The card's `Run` no longer goes through the Agent Console: its tooltip and doc\n  text now match what it does (OpenCode launched in the project directory).\n\n### Usage cards refresh on their own\n\n* The dashboard's **Usage · captured in the last 24h** card and the project\n  page's usage line now re-fetch every 60 seconds while their view is open,\n  instead of only on first render (a browser reload or a tab switch was the only\n  way to see a run's new numbers). The timer stops itself when the view changes,\n  is replaced on re-render, and never overlaps a request. 60 s matches the data:\n  open TUI runs are captured every 5 minutes, headless runs at finalize."
+    },
     {
       "version": "0.10.45",
       "date": "2026-11-01",
@@ -45,11 +50,6 @@
       "version": "0.10.37",
       "date": "2026-11-01",
       "body": "### Inbox hardening after the v0.10.36 audit\n\n* Button labels now go through the same `redact()` rule as card text. An option\n  an agent filled with a token (or an OpenCode form option) reached Telegram\n  verbatim while the identical text was masked; the delivered value stays the raw\n  label, only the notification is redacted.\n* A closed card returns no keyboard, so a racing toggle or a stale edit cannot\n  re-arm a decision another device already made.\n* The dashboard's option buttons work again: `choose()` accepts Telegram's index\n  (`o2`) *or* the option id/label the dashboard posts, instead of refusing every\n  non-Telegram option tap.\n* A one-field form answer that merely looks like JSON (`{a note in braces}`) is\n  stored verbatim again instead of failing \"That JSON is not valid\".\n* Nothing is truncated in silence: a form whose choices do not fit the keyboard\n  lists them (up to 12, then \"and N more\"), as does a long session option list,\n  and a form with more than six fields says how many are not shown.\n* Toggling a multi-select choice logs its position, not the option text."
-    },
-    {
-      "version": "0.10.36",
-      "date": "2026-11-01",
-      "body": ""
     }
   ]
 }

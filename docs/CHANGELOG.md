@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.46
+
+*Released 2026-11-01.*
+
 ### A working project card offers its run's control, never Run
 
 * After a browser refresh, a card whose project had an active session showed a
