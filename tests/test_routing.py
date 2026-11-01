@@ -371,3 +371,12 @@ def test_now_and_health_are_routed_without_a_run():
     # A real imperative still wins.
     assert detect_action("fix it now") == "run"
     assert detect_action("uruchom testy") == "run"
+
+def test_usage_questions_are_routed_without_a_run():
+    from perun.routing import detect_action
+
+    for text in ("usage", "cost", "how much did that cost", "ile kosztowało?",
+                 "koszty dzisiaj", "zużycie tokenów", "spend"):
+        assert detect_action(text) == "usage", text
+    # A genuine question about costs stays a question.
+    assert detect_action("what is the cost model") == "ask"

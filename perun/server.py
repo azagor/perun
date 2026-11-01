@@ -3282,6 +3282,17 @@ def api_orchestrator_agent_reset() -> dict[str, Any]:
     return _ok(**orchestrator_agent.reset())
 
 
+@app.get("/api/usage")
+def api_usage(hours: int = 24) -> dict[str, Any]:
+    """Token/cost totals per project for the last *hours* (dashboard + /usage)."""
+    window = max(1, min(int(hours), 24 * 30))
+    return _ok(
+        window_hours=window,
+        totals=registry.usage_totals(hours=window),
+        by_project=registry.usage_by_project(hours=window, limit=10),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Telegram (lightweight passthrough for the dashboard)
 # --------------------------------------------------------------------------- #

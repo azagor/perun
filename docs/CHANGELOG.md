@@ -4,7 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Tokens and cost are recorded, and `/usage` reports them
+
+* When a run finishes, Perun reads the service's token/cost snapshot for its
+  session (`GET …/message`: `tokens.input/output`, `tokens.cache.read`, `cost`)
+  and stores it on the session row. A session total is authoritative, so it is
+  **overwritten**, never accumulated — finalizing the same session twice cannot
+  double-count.
+* `/usage` (Telegram, also "usage", "cost", "how much did that cost", "ile
+  kosztowało?", "koszty dzisiaj", "zużycie tokenów") reports the last 24 h:
+  dollars, tokens in/out, cached tokens, session count and the top projects by
+  cost. `GET /api/usage?hours=24` returns the same numbers for the dashboard.
+* Capture is best effort inside `_finalize`: a service that is down leaves the
+  run result untouched and simply records no usage. Runs that finished before
+  this release have no numbers, and `/usage` says so instead of showing zeroes.
 
 ## v0.10.24
 

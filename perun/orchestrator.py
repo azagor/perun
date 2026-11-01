@@ -1550,6 +1550,19 @@ class Orchestrator:
                     status="error" if status == "failed" else "active",
                     last_error=error[:500],
                 )
+                # Token/cost snapshot for /usage. Best effort: a service that is
+                # down must not turn a finished run into a failed one.
+                oc_sid = str(run.get("opencode_session_id") or "").strip()
+                if oc_sid:
+                    try:
+                        from . import opencode_api
+
+                        usage = opencode_api.default_api().usage(oc_sid)
+                        if any(usage.values()):
+                            registry.update_session_usage(sid, usage)
+                    except Exception:
+                        LOG.debug("could not capture usage for session %s", sid,
+                                  exc_info=True)
             proj = registry.get_project(run["project_id"])
             label = proj["slug"] if proj else str(run["project_id"])
             registry.log_activity(

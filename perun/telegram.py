@@ -518,6 +518,7 @@ class PerunTelegramBridge:
                       "`/now` — everything running right now\n"
                       "`/health` — opencode, ollama and bridge state\n"
                       "`/runs` — the last few runs and how they ended\n"
+                      "`/usage` — tokens and cost in the last 24h\n"
                       "`/new` — fresh session\n"
                       "`/stop` — cancel *your* running reply\n"
                       "`/remember <fact>` — store to memory\n"
@@ -626,6 +627,31 @@ class PerunTelegramBridge:
             return True
         if root in ("/health", "/doctor"):
             self.send(chat_id, self._health_report(), reply_to=message_id)
+            return True
+        if root in ("/usage", "/cost"):
+            hours = 24
+            totals = registry.usage_totals(hours=hours)
+            if not int(totals.get("sessions") or 0):
+                self.send(chat_id,
+                          "No usage recorded in the last 24h. Usage is captured when a "
+                          "run finishes (a run started before this feature was added "
+                          "has no numbers).",
+                          reply_to=message_id)
+                return True
+            lines = [
+                f"*Usage — last {hours}h*",
+                f"${float(totals.get('cost_usd') or 0):.4f} · "
+                f"{int(totals.get('tokens_in') or 0):,} in · "
+                f"{int(totals.get('tokens_out') or 0):,} out · "
+                f"{int(totals.get('cache_read') or 0):,} cached",
+                f"{int(totals.get('sessions') or 0)} session(s) with usage",
+            ]
+            for row in registry.usage_by_project(hours=hours, limit=4):
+                lines.append(
+                    f"• `{row.get('slug')}` — ${float(row.get('cost') or 0):.4f} · "
+                    f"{int(row.get('tokens') or 0):,} tok"
+                )
+            self.send(chat_id, "\n".join(lines), reply_to=message_id)
             return True
         if root in ("/runs", "/last"):
             proj = (registry.get_project(project_override) if project_override else None) \
@@ -776,7 +802,8 @@ class PerunTelegramBridge:
                 project_override=decision.project,
             )
 
-        if decision.action in ("pending", "projects", "help", "runs", "now", "health"):
+        if decision.action in ("pending", "projects", "help", "runs", "now", "health",
+                              "usage"):
             # Machine-wide, read-only: the existing slash commands answer these
             # exactly, so no agent run is spent. `/pending` is dispatched by the
             # inbox handler, the rest by the command handler.

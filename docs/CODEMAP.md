@@ -144,6 +144,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `recent_interrupted_runs()` / `chats_for_session()` / `interrupt_notice_sent()`
   for the restart notice.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
+* Usage: `update_session_usage(pk, usage)` (token/cost **snapshot**, overwritten
+  per session), `usage_totals(hours)` and `usage_by_project(hours, limit)` (the
+  `/usage` reply and `GET /api/usage`).
 * Telegram jobs: `enqueue_telegram_job()` (idempotent by `dedupe_key`),
   `claim_telegram_jobs()` (atomic, one per chat), `finish_telegram_job()`,
   `fail_telegram_job()` (backoff → dead letter), `reset_telegram_jobs()`,
@@ -683,7 +686,9 @@ cannot reach.
   (`delivery` `queue`/`steer`, `id` for idempotent admission), `set_inbox_delivery()`,
   `cancel_inbox()`, `interrupt()`, `commands(directory)` (`GET /api/command`) and
   `run_command(session_id, name, text)` (`POST /api/session/{id}/command` — the
-  same entry point the TUI uses for `/update-docs`).
+  same entry point the TUI uses for `/update-docs`), plus `usage(session_id)`
+  (summed `tokens.input/output`, `tokens.cache.read` and `cost` over the session's
+  messages — the snapshot `/usage` stores).
 * Auth is HTTP Basic `opencode:<password>` using the password from OpenCode's
   own service file in the user's config directory (or
   `OPENCODE_SERVICE_PASSWORD`); it is kept in memory only — never logged,

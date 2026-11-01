@@ -38,7 +38,7 @@ from typing import Any, Iterable, Sequence
 MUTATING = frozenset({"run", "stop", "remember"})
 
 ACTIONS = ("run", "ask", "status", "remember", "recall", "stop", "clarify", "unknown",
-           "pending", "projects", "help")
+           "pending", "projects", "help", "runs", "now", "health", "usage")
 
 # Words that appear on many projects and therefore cannot identify one.
 _GENERIC_TAGS = frozenset(
@@ -103,6 +103,7 @@ _KEYWORDS: dict[str, frozenset[str]] = {
     "runs": frozenset({"runs", "uruchomienia"}),
     "now": frozenset({"running", "aktywne", "now"}),
     "health": frozenset({"health", "doctor", "zdrowie"}),
+    "usage": frozenset({"usage", "cost", "koszt", "koszty", "zuzycie", "zużycie", "spend"}),
     "run": frozenset(
         {
             "run",
@@ -247,6 +248,21 @@ _HEALTH_PHRASES = (
     "czy wszystko działa",
     "co z serwerem",
     "stan systemu",
+)
+_USAGE_PHRASES = (
+    "how much did that cost",
+    "how much did it cost",
+    "usage today",
+    "token usage",
+    "ile to kosztowalo",
+    "ile to kosztowało",
+    "ile kosztowalo",
+    "ile kosztowało",
+    "ile wydalem",
+    "ile wydałem",
+    "koszty dzisiaj",
+    "zuzycie tokenow",
+    "zużycie tokenów",
 )
 
 
@@ -561,8 +577,11 @@ def detect_action(text: str) -> str:
     for phrase in _HEALTH_PHRASES:
         if f" {phrase} " in head_text:
             return "health"
+    for phrase in _USAGE_PHRASES:
+        if f" {phrase} " in head_text:
+            return "usage"
     if head and len(head) <= 2:
-        for action in ("pending", "projects", "help", "runs", "now", "health"):
+        for action in ("pending", "projects", "help", "runs", "now", "health", "usage"):
             if head[0] in _KEYWORDS[action]:
                 return action
 

@@ -284,6 +284,26 @@ class OpenCodeAPI:
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         return data if isinstance(data, dict) else (payload if isinstance(payload, dict) else {})
 
+    def usage(self, session_id: str, *, limit: int = 100) -> Dict[str, Any]:
+        """Tokens and cost the service reports for *session_id*.
+
+        Summed over the session's messages, so it is authoritative and can be
+        stored as a snapshot rather than accumulated.
+        """
+        total: Dict[str, Any] = {"tokens_in": 0, "tokens_out": 0,
+                                 "cache_read": 0, "cost": 0.0}
+        for message in self.messages(session_id, limit=limit):
+            tokens = message.get("tokens") or {}
+            if not isinstance(tokens, dict):
+                continue
+            total["tokens_in"] += int(tokens.get("input") or 0)
+            total["tokens_out"] += int(tokens.get("output") or 0)
+            cache = tokens.get("cache") or {}
+            if isinstance(cache, dict):
+                total["cache_read"] += int(cache.get("read") or 0)
+            total["cost"] += float(message.get("cost") or 0)
+        return total
+
     def messages(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Return the most recent messages of one session."""
         payload = self._request(

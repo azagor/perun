@@ -376,3 +376,43 @@ def test_a_whats_running_question_maps_to_the_command(bridge, monkeypatch) -> No
 
     assert bridge._route_message("1", "co się dzieje?", 11) is True
     assert seen == ["/now"]
+
+def test_usage_reports_nothing_before_any_run(bridge) -> None:
+    bridge.handle_command("1", "/usage", 1)
+    assert bridge.sent and "No usage recorded" in bridge.sent[-1]
+
+
+def test_usage_lists_totals_and_projects(bridge) -> None:
+    from perun import registry
+
+    project = registry.add_project("usage-demo", r"C:\usage-demo")
+    session = registry.create_session(project["id"], "ses_usage")
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 1200, "tokens_out": 300, "cache_read": 900, "cost": 0.0042,
+    })
+
+    bridge.handle_command("1", "/usage", 1)
+
+    report = bridge.sent[-1]
+    assert "Usage — last 24h" in report
+    assert "1,200 in" in report and "300 out" in report
+    assert "$0.0042" in report
+    assert "usage-demo" in report
+
+
+def test_a_cost_question_maps_to_the_usage_command(bridge, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from perun import config
+
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: SimpleNamespace(routing_enabled=True,
+                                                             routing_shadow=False)))
+    seen: list[str] = []
+    monkeypatch.setattr(bridge, "_handle_attention_command", lambda *a, **k: False)
+    monkeypatch.setattr(bridge, "_handle_text_command",
+                        lambda chat_id, text, message_id, project_override=None:
+                        seen.append(text) or True)
+
+    assert bridge._route_message("1", "ile kosztowało?", 12) is True
+    assert seen == ["/usage"]

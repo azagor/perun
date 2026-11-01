@@ -964,6 +964,60 @@ def update_session(pk: int, **fields: Any) -> None:
         conn.execute(f"UPDATE sessions SET {cols} WHERE id=?", (*sets.values(), pk))
 
 
+def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
+    """Store the session's token/cost snapshot (overwrite, never accumulate)."""
+    if not pk:
+        return
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE sessions SET tokens_in=?, tokens_out=?, cache_read=?, "
+            "cost_usd=?, usage_at=? WHERE id=?",
+            (
+                int(usage.get("tokens_in") or 0),
+                int(usage.get("tokens_out") or 0),
+                int(usage.get("cache_read") or 0),
+                float(usage.get("cost") or 0.0),
+                now_iso(),
+                int(pk),
+            ),
+        )
+
+
+def usage_totals(hours: int = 24) -> dict[str, Any]:
+    """Token/cost totals for sessions whose usage was captured in the window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            """SELECT COUNT(*) AS sessions,
+                      COALESCE(SUM(tokens_in), 0) AS tokens_in,
+                      COALESCE(SUM(tokens_out), 0) AS tokens_out,
+                      COALESCE(SUM(cache_read), 0) AS cache_read,
+                      COALESCE(SUM(cost_usd), 0) AS cost_usd
+               FROM sessions WHERE usage_at >= ? AND usage_at <> ''""",
+            (cutoff,),
+        )
+    return dict(row) if row else {"sessions": 0, "tokens_in": 0, "tokens_out": 0,
+                                  "cache_read": 0, "cost_usd": 0.0}
+
+
+def usage_by_project(hours: int = 24, limit: int = 5) -> list[dict[str, Any]]:
+    """The most expensive projects in the window (dashboard + /usage)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT p.slug AS slug,
+                      COALESCE(SUM(s.tokens_in + s.tokens_out), 0) AS tokens,
+                      COALESCE(SUM(s.cost_usd), 0) AS cost
+               FROM sessions s JOIN projects p ON p.id = s.project_id
+               WHERE s.usage_at >= ? AND s.usage_at <> ''
+               GROUP BY p.slug ORDER BY cost DESC, tokens DESC LIMIT ?""",
+            (cutoff, max(1, min(int(limit), 50))),
+        )
+    return [dict(r) for r in rows]
+
+
 def list_sessions(project_id: int, limit: int = 100) -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(
