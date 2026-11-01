@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.29 (see §15). Read the service's provider usage limits, fall back to measured spend per provider, and expose both for the Providers tab.
+**Latest release:** v0.10.30 (see §15). Attribute usage per message model, so switching provider mid-session is priced correctly.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2129,6 +2129,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.30: Attribute usage per message model, so switching provider mid-session is priced correctly.
+
 ### 2026-11-01 — v0.10.29: Read the service's provider usage limits, fall back to measured spend per provider, and expose both for the Providers tab.
 
 ### 2026-11-01 — v0.10.28: Price open TUI sessions every five minutes and backfill usage for recent runs.
