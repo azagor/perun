@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Provider attribution is per message, not per session
+
+* Sessions switch provider mid-conversation here, so attributing a session to its
+  last run's model was wrong. `opencode_api.usage()` now returns a per-model
+  breakdown (each assistant message carries its own `model`), stored as a JSON
+  snapshot on the session (`usage_models`, schema v18).
+* `usage_by_provider()` sums the per-model snapshots; sessions captured before
+  this release (no breakdown) still fall back to the run model, so old numbers do
+  not vanish.
 
 ## v0.10.29
 

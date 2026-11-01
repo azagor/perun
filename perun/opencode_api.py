@@ -291,11 +291,29 @@ class OpenCodeAPI:
         stored as a snapshot rather than accumulated.
         """
         total: Dict[str, Any] = {"tokens_in": 0, "tokens_out": 0,
-                                 "cache_read": 0, "cost": 0.0}
+                                 "cache_read": 0, "cost": 0.0, "models": {}}
         for message in self.messages(session_id, limit=limit):
             tokens = message.get("tokens") or {}
             if not isinstance(tokens, dict):
                 continue
+            # A session may switch provider mid-conversation, so the model is
+            # recorded per message; the totals alone cannot price it correctly.
+            raw_model = message.get("model")
+            if isinstance(raw_model, dict):
+                provider = str(raw_model.get("providerID") or "")
+                model_id = str(raw_model.get("id") or raw_model.get("modelID") or "")
+                model_key = f"{provider}/{model_id}" if provider and model_id else ""
+            else:
+                model_key = str(raw_model or "")
+            bucket = total["models"].setdefault(
+                model_key or "unknown", {"tokens_in": 0, "tokens_out": 0,
+                                         "cache_read": 0, "cost": 0.0})
+            bucket["tokens_in"] += int(tokens.get("input") or 0)
+            bucket["tokens_out"] += int(tokens.get("output") or 0)
+            cache0 = tokens.get("cache") or {}
+            if isinstance(cache0, dict):
+                bucket["cache_read"] += int(cache0.get("read") or 0)
+            bucket["cost"] += float(message.get("cost") or 0)
             total["tokens_in"] += int(tokens.get("input") or 0)
             total["tokens_out"] += int(tokens.get("output") or 0)
             cache = tokens.get("cache") or {}

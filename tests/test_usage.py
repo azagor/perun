@@ -16,15 +16,15 @@ def test_usage_sums_the_session_messages():
 
     usage = api.usage("ses_x")
 
-    assert usage == {"tokens_in": 150, "tokens_out": 25,
-                     "cache_read": 1300, "cost": 0.0015}
+    assert {k: usage[k] for k in ("tokens_in", "tokens_out", "cache_read", "cost")} == {
+        "tokens_in": 150, "tokens_out": 25, "cache_read": 1300, "cost": 0.0015}
 
 
 def test_a_service_without_usage_still_returns_zeroes():
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
     api.messages = lambda session_id, limit=50: []  # type: ignore[assignment]
-    assert api.usage("ses_x") == {"tokens_in": 0, "tokens_out": 0,
-                                  "cache_read": 0, "cost": 0.0}
+    usage = api.usage("ses_x")
+    assert usage["tokens_in"] == 0 and usage["cost"] == 0.0 and usage["models"] == {}
 
 
 def test_session_usage_is_a_snapshot_not_a_running_total():
@@ -109,6 +109,41 @@ def test_provider_usage_attributes_spend_to_the_run_model():
     registry.update_session_usage(session["id"], {"tokens_in": 100, "tokens_out": 10,
                                                   "cost": 0.01})
 
-    rows = registry.usage_by_provider()
-    assert rows and rows[0]["provider"] == "ollama-cloud"
-    assert rows[0]["tokens"] == 110 and round(float(rows[0]["cost"]), 4) == 0.01
+    rows = {r["provider"]: r for r in registry.usage_by_provider()}
+    assert "ollama-cloud" in rows
+    assert rows["ollama-cloud"]["tokens"] == 110
+    assert round(float(rows["ollama-cloud"]["cost"]), 4) == 0.01
+
+def test_usage_breaks_down_by_model_when_a_session_switches_provider():
+    api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
+    api.messages = lambda session_id, limit=50: [  # type: ignore[assignment]
+        {"model": {"providerID": "ollama-cloud", "id": "deepseek"},
+         "tokens": {"input": 100, "output": 10, "cache": {"read": 0}}, "cost": 0.01},
+        {"model": {"providerID": "opencode", "id": "kimi"},
+         "tokens": {"input": 50, "output": 5, "cache": {"read": 0}}, "cost": 0.02},
+    ]
+
+    usage = api.usage("ses_switch")
+
+    assert usage["tokens_in"] == 150 and round(usage["cost"], 4) == 0.03
+    assert usage["models"]["ollama-cloud/deepseek"]["tokens_in"] == 100
+    assert usage["models"]["opencode/kimi"]["cost"] == 0.02
+
+
+def test_spend_is_attributed_per_model_after_a_switch():
+    from perun import registry
+
+    project = registry.add_project("usage-switch", r"C:\usage-switch")
+    session = registry.create_session(project["id"], "ses_switch")
+    registry.create_run("switch_run", project["id"], "hi", session_pk=session["id"],
+                        model="ollama-cloud/deepseek")
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 150, "tokens_out": 15, "cost": 0.03,
+        "models": {"ollama-cloud/deepseek": {"tokens_in": 100, "tokens_out": 10, "cost": 0.01},
+                   "opencode/kimi": {"tokens_in": 50, "tokens_out": 5, "cost": 0.02}},
+    })
+
+    rows = {r["provider"]: r for r in registry.usage_by_provider()}
+    assert rows["ollama-cloud"]["tokens"] == 110
+    assert rows["opencode"]["tokens"] == 55
+    assert round(rows["opencode"]["cost"], 4) == 0.02

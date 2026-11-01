@@ -971,13 +971,14 @@ def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
     with db.db() as conn:
         conn.execute(
             "UPDATE sessions SET tokens_in=?, tokens_out=?, cache_read=?, "
-            "cost_usd=?, usage_at=? WHERE id=?",
+            "cost_usd=?, usage_at=?, usage_models=? WHERE id=?",
             (
                 int(usage.get("tokens_in") or 0),
                 int(usage.get("tokens_out") or 0),
                 int(usage.get("cache_read") or 0),
                 float(usage.get("cost") or 0.0),
                 now_iso(),
+                json.dumps(usage.get("models") or {}, ensure_ascii=False)[:20000],
                 int(pk),
             ),
         )
@@ -1039,19 +1040,40 @@ def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(
             conn,
-            """SELECT
-                 CASE WHEN instr(r.model, '/') > 0
-                      THEN substr(r.model, 1, instr(r.model, '/') - 1)
-                      ELSE 'unknown' END AS provider,
-                 COALESCE(SUM(s.tokens_in + s.tokens_out), 0) AS tokens,
-                 COALESCE(SUM(s.cost_usd), 0) AS cost
+            """SELECT s.id, s.usage_models, s.tokens_in, s.tokens_out, s.cost_usd,
+                      r.model AS run_model
                FROM sessions s
-               JOIN runs r ON r.session_pk = s.id
+               LEFT JOIN runs r ON r.session_pk = s.id
                WHERE s.usage_at >= ? AND s.usage_at <> ''
-               GROUP BY provider ORDER BY cost DESC""",
+               ORDER BY s.id, r.id DESC""",
             (cutoff,),
         )
-    return [dict(r) for r in rows]
+    totals: dict[str, dict[str, Any]] = {}
+    seen: set = set()
+    for row in rows:
+        row = dict(row)
+        session_id = int(row["id"])
+        if session_id in seen:
+            continue                      # only the newest run per session
+        seen.add(session_id)
+        models = {}
+        try:
+            models = json.loads(row.get("usage_models") or "{}") or {}
+        except ValueError:
+            models = {}
+        if isinstance(models, dict) and models:
+            for model_key, usage in models.items():
+                provider = model_key.split("/", 1)[0] if "/" in model_key else "unknown"
+                bucket = totals.setdefault(provider, {"provider": provider, "tokens": 0, "cost": 0.0})
+                bucket["tokens"] += int((usage or {}).get("tokens_in") or 0) + int((usage or {}).get("tokens_out") or 0)
+                bucket["cost"] += float((usage or {}).get("cost") or 0.0)
+        else:
+            run_model = str(row.get("run_model") or "")
+            provider = run_model.split("/", 1)[0] if "/" in run_model else "unknown"
+            bucket = totals.setdefault(provider, {"provider": provider, "tokens": 0, "cost": 0.0})
+            bucket["tokens"] += int(row.get("tokens_in") or 0) + int(row.get("tokens_out") or 0)
+            bucket["cost"] += float(row.get("cost_usd") or 0.0)
+    return sorted(totals.values(), key=lambda item: item["cost"], reverse=True)
 
 
 def list_sessions(project_id: int, limit: int = 100) -> list[dict[str, Any]]:
