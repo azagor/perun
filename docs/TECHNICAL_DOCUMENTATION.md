@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.24 (see §15). Add /now and /health (and their natural-language forms): live runs and service state with no model call.
+**Latest release:** v0.10.25 (see §15). Capture token and cost per session and answer /usage (last 24h, top projects).
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2129,6 +2129,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.25: Capture token and cost per session and answer /usage (last 24h, top projects).
+
 ### 2026-11-01 — v0.10.24: Add /now and /health (and their natural-language forms): live runs and service state with no model call.
 
 ### 2026-11-01 — v0.10.23: Add /runs routing plus a per-source coverage counter, so the router's blind spots are measurable.

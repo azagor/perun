@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.25
+
+*Released 2026-11-01.*
+
 ### Tokens and cost are recorded, and `/usage` reports them
 
 * When a run finishes, Perun reads the service's token/cost snapshot for its
