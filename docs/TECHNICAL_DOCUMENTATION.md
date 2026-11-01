@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.41 (see §15). Audit of this session's own changes: upgrade-safe snapshots, guarded bridge retry, one restart notice.
+**Latest release:** v0.10.42 (see §15). Remaining audit items closed: reattach seed, per-chat digests, usage fallback, docs start grace, reply budget, staged secrets.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2235,6 +2235,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.42: Remaining audit items closed: reattach seed, per-chat digests, usage fallback, docs start grace, reply budget, staged secrets.
+
 ### 2026-11-01 — v0.10.41: Audit of this session's own changes: upgrade-safe snapshots, guarded bridge retry, one restart notice.
 
 ### 2026-11-01 — v0.10.40: The post-execution docs run has its own restricted agent and is audited.

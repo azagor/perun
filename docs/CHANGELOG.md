@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.42
+
+*Released 2026-11-01.*
+
 ### The remaining audit items
 
 * A reattached run no longer seeds from the session transcript (it concatenated
