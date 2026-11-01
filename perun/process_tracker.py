@@ -33,6 +33,14 @@ from . import registry
 
 LOG = logging.getLogger("perun.processes")
 
+#: Executables that own a terminal window. Killing one closes the window; killing
+#: the agent inside it only returns the shell to a prompt (``cmd /k``,
+#: ``pwsh -NoExit``), which is why Stop targets the shell and not its child.
+_SHELL_NAMES = {
+    "cmd", "cmd.exe", "pwsh", "pwsh.exe", "powershell", "powershell.exe",
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "nu",
+}
+
 
 class ProcessTracker:
     """In-memory registry of launched TUI sessions."""
@@ -147,7 +155,9 @@ class ProcessTracker:
                             "the PERUN_RUN_UID marker", pid, run_uid)
                 self.finalize(run_uid)
                 return False
-            self._kill_tree(pid)
+            # The persisted pid is the agent process (the best liveness signal);
+            # what must die for the window to close is the shell that owns it.
+            self._kill_tree(self._terminal_owner(pid, run_uid) or pid)
             self.finalize(run_uid)
             return True
         pid = self._kill_pid(entry)
@@ -172,20 +182,63 @@ class ProcessTracker:
     def _kill_pid(self, entry: dict[str, Any]) -> int | None:
         """The one pid Stop may kill for *entry*, or ``None`` when unsure.
 
-        Only a pid that carries this run's ``PERUN_RUN_UID`` marker, or the live
-        Popen handle Perun itself launched, is attributable. The Windows
-        Terminal heuristic in ``_resolve_child_pid`` is deliberately excluded: it
-        matches "a terminal that appeared around launch time", and killing that
-        window could take down tabs belonging to other sessions.
+        Two things matter here. Attribution: only a pid that carries this run's
+        ``PERUN_RUN_UID`` marker, or the live Popen handle Perun itself launched,
+        may be killed (the launch-time Windows Terminal heuristic in
+        ``_resolve_child_pid`` is liveness-only). And *which* attributable pid:
+        Stop must close the window, so it targets the shell that owns the
+        terminal, not the agent inside it — ``cmd /k`` and ``pwsh -NoExit`` keep
+        the window open after the agent exits.
         """
+        run_uid = str(entry.get("run_uid") or "")
+        proc = entry.get("proc")
+        own: int | None = None
+        try:
+            if proc and proc.poll() is None:
+                own = proc.pid
+        except Exception:  # pragma: no cover - defensive
+            own = None
+        # cmd.exe / pwsh launched directly *are* the console window.
+        if own and _HAS_PSUTIL:
+            try:
+                if (psutil.Process(own).name() or "").lower() in _SHELL_NAMES:
+                    return own
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
         pid = self._resolve_child_pid(entry, heuristic=False)
         if pid:
-            return pid
-        proc = entry.get("proc")
-        try:
-            return proc.pid if proc and proc.poll() is None else None
-        except Exception:  # pragma: no cover - defensive
+            return self._terminal_owner(pid, run_uid) or pid
+        return own
+
+    def _terminal_owner(self, pid: int, run_uid: str) -> int | None:
+        """The shell process whose exit closes the terminal *pid* lives in.
+
+        Walks up from the agent process to the outermost shell that carries this
+        run's ``PERUN_RUN_UID`` in its command line — the process Perun launched
+        (`cmd /k set "PERUN_RUN_UID=…" && …`). Killing its tree closes the window
+        and ends the session; killing the agent alone leaves a prompt behind.
+        """
+        if not (_HAS_PSUTIL and run_uid):
             return None
+        try:
+            proc = psutil.Process(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+        chain = [proc]
+        try:
+            chain.extend(proc.parents())  # nearest first
+        except Exception:  # pragma: no cover - defensive
+            pass
+        owner: int | None = None
+        for candidate in chain:
+            try:
+                name = (candidate.name() or "").lower()
+                cmd = " ".join(candidate.cmdline() or [])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if name in _SHELL_NAMES and run_uid in cmd:
+                owner = candidate.pid  # keep walking: the last match is outermost
+        return owner
 
     def kill_all_explicit(self) -> int:
         """Kill every tracked terminal process (explicit teardown only).

@@ -4,7 +4,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Stop now closes the TUI terminal, including after a restart
+
+* Pressing Stop on a card whose project had an open TUI terminal only marked the
+  run `cancelled`; the window stayed open. Two defects: `/api/runs/{uid}/cancel`
+  called `ProcessTracker.terminate()` only when the in-memory entry existed — after
+  a server restart it does not — so the persisted `runs.pid` + `PERUN_RUN_UID`
+  marker were never consulted; and the kill target was whatever the marker scan
+  returned first, usually the *agent* process inside the terminal.
+* The endpoint now always offers the run to the tracker (which no-ops to
+  `finalize()` when nothing is attributable). `terminate()` resolves the **shell
+  that owns the terminal** via `_terminal_owner()` — the outermost
+  `cmd`/`pwsh`/`sh` carrying the marker in its command line — because `cmd /k` and
+  `pwsh -NoExit` keep the window at a prompt after the agent exits. Liveness still
+  follows the agent process, so an agent that exits still ends its run.
+* Regression tests: the kill target is the shell, not its child; a stop after a
+  restart kills the shell around the persisted agent pid; `/cancel` reaches the
+  tracker with an empty in-memory map.
 
 ## v0.10.48
 

@@ -221,3 +221,97 @@ def test_a_live_entry_without_an_attributable_pid_is_only_finalized(project, fre
     finally:
         other.kill()
         other.wait(timeout=5)
+
+
+def _shell_with_marked_child(uid: str):
+    """Start a shell carrying the run marker, with a long-lived child under it.
+
+    This is the shape Stop has to handle: ``cmd /k`` (or ``pwsh -NoExit``) stays
+    alive after the agent exits, so closing the terminal means killing the shell,
+    not the child.
+    """
+    code = "import time; time.sleep(30)"
+    if os.name == "nt":
+        # A single command-line string: cmd.exe does not understand the \" quoting
+        # that list2cmdline adds around an embedded quoted executable.
+        return subprocess.Popen(
+            f'cmd.exe /c set "PERUN_RUN_UID={uid}" && "{sys.executable}" -c "{code}"'
+        )
+    return subprocess.Popen(
+        ["/bin/sh", "-c", f'PERUN_RUN_UID={uid} "{sys.executable}" -c "{code}" ; :']
+    )
+
+
+def _first_child_pid(shell, timeout: float = 10.0):
+    import psutil
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            kids = psutil.Process(shell.pid).children(recursive=True)
+        except psutil.NoSuchProcess:
+            return None
+        if kids:
+            return kids[0].pid
+        time.sleep(0.2)
+    return None
+
+
+def _kill_tree_now(pid: int) -> None:
+    import psutil
+
+    try:
+        procs = psutil.Process(pid).children(recursive=True) + [psutil.Process(pid)]
+    except psutil.NoSuchProcess:
+        return
+    for proc in procs:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def test_terminal_owner_walks_up_to_the_marked_shell(fresh_tracker):
+    uid = "owner-run-1"
+    shell = _shell_with_marked_child(uid)
+    try:
+        child = _first_child_pid(shell)
+        assert child, "the shell did not spawn its child"
+        assert fresh_tracker._terminal_owner(child, uid) == shell.pid
+    finally:
+        _kill_tree_now(shell.pid)
+
+
+def test_stop_targets_the_shell_not_the_agent(fresh_tracker):
+    uid = "shell-target-1"
+    shell = _shell_with_marked_child(uid)
+    try:
+        child = _first_child_pid(shell)
+        assert child, "the shell did not spawn its child"
+        entry = {
+            "proc": shell, "pid": shell.pid,
+            "shell": "cmd" if os.name == "nt" else "sh",
+            "run_uid": uid, "started_at": time.time(),
+        }
+        assert fresh_tracker._kill_pid(entry) == shell.pid
+        assert fresh_tracker._kill_pid(entry) != child
+    finally:
+        _kill_tree_now(shell.pid)
+
+
+def test_a_stop_after_a_restart_closes_the_shell_hosting_the_agent(project):
+    """The persisted pid is the agent; the shell around it owns the window."""
+    uid = "restart-shell-run"
+    shell = _shell_with_marked_child(uid)
+    try:
+        child = _first_child_pid(shell)
+        assert child, "the shell did not spawn its child"
+        registry.create_run(uid, project["id"], "TUI", standalone=True)
+        registry.update_run(uid, status="running", pid=child)
+
+        restarted = ProcessTracker()  # empty in-memory map: the server restarted
+        assert restarted.terminate(uid) is True
+        shell.wait(timeout=10)
+        assert registry.get_run(uid)["status"] == "done"
+    finally:
+        _kill_tree_now(shell.pid)

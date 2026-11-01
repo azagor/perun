@@ -793,12 +793,16 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   than `tui_run_stale_hours` (default 24) is swept as "TUI session ended while
   Perun was down". The dashboard shows a TUI banner and the same **Stop** button
   as any run: for a tracked TUI session it closes the terminal Perun opened
-  (`POST /api/runs/{uid}/cancel` → `ProcessTracker.terminate()`, which only kills a
-  pid carrying the run's `PERUN_RUN_UID` marker or the live `Popen` handle Perun
-  launched — never the launch-time Windows Terminal heuristic). After a restart the
-  in-memory handle is gone but `runs.pid` survives, so Stop still works when the
-  marker check passes; when the pid is dead or un-attributable, Stop just finalizes
-  the row and the card goes idle.
+  (`POST /api/runs/{uid}/cancel` → `ProcessTracker.terminate()`). The endpoint
+  always offers the run to the tracker, so Stop still works after a restart from
+  the persisted `runs.pid`; the kill target is the shell that owns the terminal
+  (`_terminal_owner()` — the outermost `cmd`/`pwsh`/`sh` that carries the run's
+  `PERUN_RUN_UID` in its command line), because `cmd /k` / `pwsh -NoExit` keep the
+  window open after the agent exits. Attribution still gates it (marker-bearing pid
+  or Perun's own live handle; never the launch-time Windows Terminal heuristic),
+  and with nothing attributable Stop just finalizes the row and the card goes idle.
+  Liveness keeps following the agent process, so an agent that exits ends its run
+  even if the shell is still at a prompt.
   `POST /api/runs/{uid}/finish` remains the explicit "end tracking, keep the
   terminal" call for API/CLI use.
   The terminal pid is persisted (`runs.pid`) when the terminal is launched, so
@@ -894,7 +898,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/runs` | start a headless run `{project,prompt?,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator; an omitted `prompt` uses a default starter prompt |
 | POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?,model?,agent?}` |
 | GET | `/api/runs/{run_uid}` | run status/output |
-| POST | `/api/runs/{run_uid}/cancel` | cancel a headless run **and** terminate a tracked TUI/terminal session |
+| POST | `/api/runs/{run_uid}/cancel` | cancel a headless run **and** terminate a tracked TUI/terminal session; the run is always offered to the tracker, so a restarted server still closes the terminal from `runs.pid` + its `PERUN_RUN_UID` marker |
 | POST | `/api/runs/{run_uid}/finish` | finalize a TUI run record (e.g. user closed the window manually) |
 | POST | `/api/runs/{run_uid}/kill` | terminate the tracked terminal/TUI process for a run and finalize it |
 | GET | `/api/runs/{run_uid}/stream` | **SSE** run events |

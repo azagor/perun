@@ -150,13 +150,17 @@ with `python -m perun project-roots --add <name> <path>`.
   external terminal Perun launched (`runs.standalone=1`, `runs.pid`); never kill
   it on server shutdown (`ProcessTracker.kill_all_explicit()` is explicit-only) and
   never mark it interrupted while its pid is alive. **Stop is the intended way to
-  close it**: `POST /api/runs/{uid}/cancel` cancels the orchestrator run and, for a
-  tracked terminal, kills the process tree — but only a pid carrying that run's
-  `PERUN_RUN_UID` marker, or the live `Popen` handle Perun itself launched. Never a
-  heuristic match: the launch-time "Windows Terminal that appeared recently" guess
-  is liveness-only, because killing it could close another run's tab. With no
-  live/attributable pid, Stop just finalizes the row. Sweep it when the pid is
-  gone (age window only as a fallback).
+  close it**: `POST /api/runs/{uid}/cancel` cancels the orchestrator run and always
+  offers the run to `ProcessTracker.terminate()` — even after a restart, when the
+  in-memory entry is gone, because `runs.pid` + the `PERUN_RUN_UID` marker still
+  identify the terminal. The kill target is the **shell that owns the terminal**
+  (`_terminal_owner()`: the outermost `cmd`/`pwsh`/`sh` carrying the marker in its
+  command line), not the agent inside it — `cmd /k` and `pwsh -NoExit` keep the
+  window open after the agent exits, so killing only the child leaves a prompt and
+  an "active" terminal behind. Attribution still gates it: a pid carrying the
+  marker, or the live `Popen` handle Perun launched — never the launch-time Windows
+  Terminal heuristic (liveness-only). With nothing attributable, Stop finalizes the
+  row. Sweep the run when the pid is gone (age window only as a fallback).
 * **A working card never offers Run.** The first card action comes from
   `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for *any*
   active run (headless cancel, or closing the TUI terminal Perun opened). A

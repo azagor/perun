@@ -2300,9 +2300,11 @@ def api_cancel_run(run_uid: str) -> dict[str, Any]:
     from . import process_tracker
 
     orch_cancelled = ORCH.cancel(run_uid)
-    tracker_killed = False
-    if process_tracker.TRACKER.get(run_uid):
-        tracker_killed = process_tracker.TRACKER.terminate(run_uid)
+    # Always offer the run to the tracker, even when it has no in-memory entry:
+    # after a restart the entry is gone but `runs.pid` + the PERUN_RUN_UID marker
+    # still let Stop close the terminal Perun opened. `terminate()` is a no-op
+    # (finalize only) when no pid can be attributed.
+    tracker_killed = process_tracker.TRACKER.terminate(run_uid)
     # If this was a TUI-only run, ORCH won't have a record; finalize explicitly.
     if tracker_killed and not orch_cancelled:
         process_tracker.TRACKER.finalize(run_uid)

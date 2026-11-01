@@ -1679,25 +1679,27 @@ def test_tui_run_lifecycle(client, tmp_path, monkeypatch):
     assert r.json()["killed"] is False
 
 
-def test_cancel_short_circuits_untracked_run(client, monkeypatch):
-    """Canceling a headless run should not call process_tracker when the run is not tracked."""
+def test_cancel_offers_an_untracked_run_to_the_tracker(client, monkeypatch):
+    """A restarted server has no in-memory entry, but Stop must still reach the
+    persisted pid and its PERUN_RUN_UID marker, or the terminal stays open."""
     from perun import process_tracker, server
 
     fresh = process_tracker.ProcessTracker()
     monkeypatch.setattr(process_tracker, "TRACKER", fresh)
 
-    called: dict = {}
+    calls: list[str] = []
 
-    def fake_cancel(run_uid):
-        called["cancel"] = run_uid
-        return True
+    def fake_terminate(run_uid):
+        calls.append(run_uid)
+        return True  # pretend the persisted pid was killed
 
-    monkeypatch.setattr(server.ORCH, "cancel", fake_cancel)
+    monkeypatch.setattr(fresh, "terminate", fake_terminate)
+    monkeypatch.setattr(server.ORCH, "cancel", lambda uid: False)
 
     r = client.post("/api/runs/headless-only/cancel")
     assert r.status_code == 200
     assert r.json()["cancelled"] is True
-    assert called.get("cancel") == "headless-only"
+    assert calls == ["headless-only"]
     assert fresh.get("headless-only") is None
 
 
