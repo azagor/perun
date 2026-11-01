@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.34
+
+*Released 2026-11-01.*
+
 ### Usage on the project page and the routing readout
 
 * (0.10.33, noted here because its release section reused the previous body) the
