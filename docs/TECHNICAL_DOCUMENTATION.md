@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.47 (see §15). A working project card shows Stop again; Stop still closes the TUI terminal it opened.
+**Latest release:** v0.10.48 (see §15). Stop only kills a process it can attribute to the run, and the run watcher survives a database hiccup.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2281,6 +2281,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.48: Stop only kills a process it can attribute to the run, and the run watcher survives a database hiccup.
+
 ### 2026-11-01 — v0.10.47: A working project card shows Stop again; Stop still closes the TUI terminal it opened.
 
 ### 2026-11-01 — v0.10.46: A working project card now shows Stop or Finish instead of Run, and usage cards refresh every minute.

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.48
+
+*Released 2026-11-01.*
+
 ### Stop never guesses which process to kill
 
 * `ProcessTracker.terminate()` now resolves its target through `_kill_pid()`: a
