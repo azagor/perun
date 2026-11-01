@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-01T23:17:00+00:00",
+  "generated": "2026-11-01T23:36:02+00:00",
   "releases": [
+    {
+      "version": "0.10.50",
+      "date": "2026-11-02",
+      "body": "### Stop is consistent everywhere, and its blast radius is documented\n\n* Telegram's `/stop` and `/cancel` now use the same path as the dashboard: after\n  `ORCH.cancel` they call `ProcessTracker.terminate(uid)`, so a phone-initiated\n  stop also closes the terminal Perun opened (or does nothing beyond finalizing the\n  row when nothing is attributable). A tracker failure is logged, never allowed to\n  swallow the reply.\n* `_terminal_owner()` matches the literal `PERUN_RUN_UID=<uid>` assignment (and its\n  quoted `cmd`/`pwsh`/POSIX forms) instead of the bare run id, so a command line\n  that merely mentions the uid can never become a kill target.\n* Tests: a running headless run cancelled over HTTP ends `cancelled` (never\n  `done`, which would mean `finalize()` ran before `ORCH.cancel`); the bridge's\n  `/stop` reaches the tracker and still replies when the tracker fails.\n* AGENTS and TECHNICAL now state the blast radius: closing the shell ends every\n  process started in that window — identical to closing it by hand, including a\n  nested `opencode serve` shared with other sessions."
+    },
     {
       "version": "0.10.49",
       "date": "2026-11-02",
@@ -45,11 +50,6 @@
       "version": "0.10.41",
       "date": "2026-11-01",
       "body": "### Fixes found by auditing this session's own changes\n\n* **Upgrade safety.** A filesystem snapshot written before `parent_dirs` /\n  `sensitive` existed no longer turns every sibling directory (or every\n  `.opencode` file) into an \"escape\"/violation: with a legacy snapshot only a\n  genuinely new sibling name is reported, and the sensitive comparison is skipped\n  until a fresh snapshot exists. Without this, the first execution after the\n  upgrade failed with `[POLICY VIOLATION … escape(s)]`.\n* **PerunChat retry.** The reconnect loop read `settings.perunchat()` a second\n  time *outside* its guard; a bad encrypted secret could still kill the thread.\n  It now uses the key/endpoint `_refresh_credentials()` already resolved.\n* **No duplicate restart notice.** `runs_awaiting_reply()` no longer includes\n  `interrupted` runs: the bridge's `_notify_interrupted_runs()` already announces\n  them, and delivering them here too sent two messages for one restart. The\n  status is still final, so a waiting worker/stream stops correctly."
-    },
-    {
-      "version": "0.10.40",
-      "date": "2026-11-01",
-      "body": "### The post-execution docs step has its own restricted agent, and is audited\n\n* `perun-docs` (new, managed like `perun-orchestrator`: write-once with sha256,\n  refresh only while untouched, reset on request) is the identity of the session\n  that runs `/update-docs`. It may read the project and write `docs/**`,\n  `AGENTS.md` and `perun.md`; the blanket deny covers shell and every other tool.\n  Before this, the docs run used the project's default agent, so approving two\n  source files quietly granted full-tool access to the repository.\n* The docs run is now accountable too: Perun snapshots the project before the\n  command, waits (bounded, 10 min) for the turn to go idle, diffs, and logs a\n  `docs_audit` activity row — `docs_audit_violation` with the paths when a write\n  landed outside the docs surface. The proposal's own result is never changed by\n  this, and a busy docs slot still writes the changelog bullet as before.\n* The global install creates both agents."
     }
   ]
 }

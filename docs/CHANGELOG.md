@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.50
+
+*Released 2026-11-02.*
+
 ### Stop is consistent everywhere, and its blast radius is documented
 
 * Telegram's `/stop` and `/cancel` now use the same path as the dashboard: after
