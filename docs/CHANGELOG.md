@@ -4,7 +4,32 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### A working project card offers its run's control, never Run
+
+* After a browser refresh, a card whose project had an active session showed a
+  "working" pip and banner but still rendered **▶ Run**. A standalone TUI run had
+  its Stop button suppressed ("Perun cannot stop it") while Run was hardcoded, so
+  the card invited a second session next to the working one. The first card
+  action now comes from `web/js/card_controls.js` (`runControlSpec`, unit-tested
+  with `node --test`): **Run** when idle, **Stop** for a headless run Perun owns,
+  **Finish** for a standalone TUI run — which calls
+  `POST /api/runs/{uid}/finish`, marks it done and captures usage, and never kills
+  the terminal.
+* `applyCardStates()` re-syncs that control on every 4 s presence poll (so a card
+  that lights up, finishes or is swept changes its action in place), and
+  `openProjectTui()` swaps it immediately for the run it just started. The button
+  is only rebuilt when its kind or run id actually changed.
+* The card's `Run` no longer goes through the Agent Console: its tooltip and doc
+  text now match what it does (OpenCode launched in the project directory).
+
+### Usage cards refresh on their own
+
+* The dashboard's **Usage · captured in the last 24h** card and the project
+  page's usage line now re-fetch every 60 seconds while their view is open,
+  instead of only on first render (a browser reload or a tab switch was the only
+  way to see a run's new numbers). The timer stops itself when the view changes,
+  is replaced on re-render, and never overlaps a request. 60 s matches the data:
+  open TUI runs are captured every 5 minutes, headless runs at finalize.
 
 ## v0.10.45
 

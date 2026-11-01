@@ -791,7 +791,10 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   session to observe. `runs.standalone` marks them, restart reconciliation leaves
   them alone (the card keeps its "working" pip and banner), and only a run older
   than `tui_run_stale_hours` (default 24) is swept as "TUI session ended while
-  Perun was down". The dashboard shows a TUI banner and no Stop button for them.
+  Perun was down". The dashboard shows a TUI banner and **Finish** instead of a
+  Stop button for them: Finish (`POST /api/runs/{uid}/finish`) marks the run done
+  and captures its usage, and never kills the terminal. There is no card-level
+  kill; `/api/runs/{uid}/kill` stays an explicit, deliberate action.
   The terminal pid is persisted (`runs.pid`) when the terminal is launched, so
   after a restart the card stays lit while that pid is alive and is swept as soon
   as it is gone; the age window only covers rows without a pid. Server shutdown
@@ -1826,6 +1829,10 @@ provider card (`opencode-go` → `opencode`) and attributes an unmodelled messag
 the run's model. The dashboard card says **"captured in the last 24h"**, not "last
 24h": the window is when the snapshot was taken, while the amount is the session's
 cumulative cost — a distinction that matters when comparing against an invoice.
+The dashboard card and the project page's usage line refresh in place every 60 s
+while their view is open (`USAGE_REFRESH_MS` in `web/js/perun.js`); the timer stops
+when the view changes and a request in flight is never doubled. 60 s is deliberate:
+the numbers only move when a run finalizes or on the 5-minute open-TUI sweep.
 A configured budget percentage is not clamped, so 240 % does not render as 100 %.
 
 **Docs follow the code.** The executor of a proposal is sandboxed to its approved
@@ -2155,12 +2162,19 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   tasks because tools are not used by slash commands.
 * **Uniform project cards.** `projectCard()` renders the *same* action set for
   every project, including the orchestrator control-plane card: `Open` (project
-  page) and `Run` (Agent Console with that project preselected). The old
+  page) and `Run` (OpenCode launched in the project directory). The old
   card-level special case that routed all control-card clicks to
   `#/orchestrator` — which made its `Ask` button do something different from
   every other card's — is gone. The orchestrator **chat** is reachable only from
   the left toolbar (nav item `Orchestrator Chat`); the topbar's quick action is
   `✦ Run`.
+* **One run control per card.** The first action slot is driven by
+  `js/card_controls.js` (`runControlSpec`): **Run** when the project is idle,
+  **Stop** for a headless run Perun owns, **Finish** for a standalone TUI run
+  (end tracking + capture usage; never kill the terminal). An active card can
+  therefore never offer a second launch. `applyCardStates()` re-syncs the control
+  on every 4 s presence poll, and `openProjectTui()` swaps it immediately for the
+  run it just created.
 * **Orchestrator chat** targets the control plane; it streams in place and works
   with zero other projects registered. Its Settings card edits the orchestrator's
   **model**, **agent**, and **custom instructions**.

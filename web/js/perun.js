@@ -486,6 +486,29 @@ function pipState(slug) {
     return { working, awake, cls: working ? 'working' : (awake ? 'awake' : ''), label: working ? 'working' : (awake ? 'awake' : 'idle') };
 }
 
+/* A card's run control comes from js/card_controls.js (loaded just before this
+   file) so the rule — an active card never offers Run — is unit-tested. If that
+   script is missing (stale cache), keep the safe half: a working card still
+   offers the run's control rather than a second launch. */
+const CardControls = window.CardControls || {
+    runControlSpec: (run) => (run
+        ? { kind: 'stop', uid: run.run_uid || '', cls: 'btn sm danger', attr: 'data-stop',
+            label: '\u25a0 Stop', title: 'Cancel this run' }
+        : { kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
+            label: '\u25b6 Run', title: "Run OpenCode in this project's directory" }),
+};
+if (!window.CardControls) {
+    console.error('perun: card_controls.js did not load; card actions are degraded');
+}
+
+function runControlButton(spec) {
+    const btn = el('button', { class: spec.cls, title: spec.title });
+    btn.setAttribute(spec.attr, '');
+    if (spec.uid) btn.dataset.runUid = spec.uid;
+    btn.textContent = spec.label;
+    return btn;
+}
+
 function applyCardStates() {
     document.querySelectorAll('.proj-card[data-slug]').forEach((card) => {
         const slug = card.dataset.slug;
@@ -499,11 +522,10 @@ function applyCardStates() {
             const lbl = pip.querySelector('[data-pip-label]');
             if (lbl) lbl.textContent = ps.label;
         }
-        // Sync running banner and stop button with the current active run so
-        // cards update live without requiring a full page re-render.
+        // Sync the running banner and the run control with the current active
+        // run so cards update live without requiring a full page re-render.
         const run = ps.working ? (state.activeRuns || []).find((r) => r.project_slug === slug) : null;
         let banner = card.querySelector('.pc-running');
-        let stopBtn = card.querySelector('[data-stop]');
         if (run) {
             const promptText = esc((run.prompt || '').slice(0, 140));
             if (!banner) {
@@ -514,26 +536,26 @@ function applyCardStates() {
                 const span = banner.querySelector('.pr-prompt');
                 if (span) span.textContent = run.prompt ? run.prompt.slice(0, 140) : '';
             }
-            if (run.standalone) {
-                // An external terminal owns this run; Perun cannot stop it.
-                if (stopBtn) stopBtn.remove();
-            } else if (!stopBtn) {
-                stopBtn = el('button', {
-                    class: 'btn sm danger',
-                    dataset: { stop: '', runUid: run.run_uid },
-                    title: 'Cancel this run',
-                }, '■ Stop');
-                const actions = card.querySelector('.pc-actions');
-                const openBtn = actions && actions.querySelector('[data-open]');
-                if (actions) actions.insertBefore(stopBtn, openBtn || null);
-            } else {
-                stopBtn.dataset.runUid = run.run_uid;
-            }
-        } else {
-            if (banner) banner.remove();
-            if (stopBtn) stopBtn.remove();
+        } else if (banner) {
+            banner.remove();
         }
+        syncRunControl(card, run);
     });
+}
+
+/* Keep a card's run control in step with *run* (null = idle) without recreating
+   the button unless its kind or run actually changed. */
+function syncRunControl(card, run) {
+    const actions = card.querySelector('.pc-actions');
+    if (!actions) return;
+    const spec = CardControls.runControlSpec(run);
+    const current = actions.querySelector('[data-tui], [data-stop], [data-finish]');
+    const matches = current && current.hasAttribute(spec.attr)
+        && (current.dataset.runUid || '') === spec.uid;
+    if (matches) return;
+    const fresh = runControlButton(spec);
+    if (current) current.replaceWith(fresh);
+    else actions.insertBefore(fresh, actions.firstElementChild || null);
 }
 
 function renderWorkingNow(container) {
@@ -895,7 +917,10 @@ async function viewDashboard() {
         `<div class="card-head"><h4>Usage · captured in the last 24h</h4><span class="meta" id="dash-usage-head">loading…</span></div>
          <div id="dash-usage-body"><div class="meta">reading…</div></div>`);
     v.appendChild(usageCard);
-    (async () => {
+    let usageBusy = false;
+    const renderDashboardUsage = async () => {
+        if (usageBusy || !document.getElementById('dash-usage')) return;
+        usageBusy = true;
         try {
             const r = await api('/api/usage?hours=24');
             const t = r.totals || {};
@@ -910,9 +935,23 @@ async function viewDashboard() {
             $('#dash-usage-body').innerHTML = rows
                 || '<div class="meta">No usage captured yet — it is recorded when a run finishes (TUI runs when you finish or close them).</div>';
         } catch (e) {
-            $('#dash-usage-body').innerHTML = `<div class="meta">usage unavailable: ${esc(e.message)}</div>`;
+            // The view may have changed while the request was in flight.
+            const body = $('#dash-usage-body');
+            if (body) body.innerHTML = `<div class="meta">usage unavailable: ${esc(e.message)}</div>`;
+        } finally {
+            usageBusy = false;
         }
-    })();
+    };
+    renderDashboardUsage();
+    if (dashboardUsageTimer) clearInterval(dashboardUsageTimer);
+    dashboardUsageTimer = setInterval(() => {
+        if (!document.getElementById('dash-usage')) {
+            clearInterval(dashboardUsageTimer);
+            dashboardUsageTimer = null;
+            return;
+        }
+        renderDashboardUsage();
+    }, USAGE_REFRESH_MS);
 
     // Working now — live runs, each mapped to its project
     const workingNowBox = el('div', { id: 'dash-working-now' });
@@ -984,7 +1023,8 @@ function projectCard(p) {
          </span>`;
     const run = ps.working ? (state.activeRuns || []).find((r) => r.project_slug === p.slug) : null;
     const running = run ? `<div class="pc-running">${run.standalone ? '🖥' : '⚡'} <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span>${run.standalone ? ' <span class="muted">TUI session</span>' : ''}</div>` : '';
-    const stopBtn = ps.working && run && !run.standalone ? `<button class="btn sm danger" data-stop data-run-uid="${esc(run.run_uid)}" title="Cancel this run">■ Stop</button>` : '';
+    // Never render Run next to a working card: the control belongs to the run.
+    const runBtn = runControlButton(CardControls.runControlSpec(run)).outerHTML;
     const card = el('div', { class: 'card clickable proj-card' + stateCls, dataset: { slug: p.slug } },
         `<div class="pc-top">
             <div><div class="pc-name">${fav}${esc(p.name)}</div><div class="pc-path">${esc(p.path)}</div></div>
@@ -999,8 +1039,7 @@ function projectCard(p) {
             <span>▤ ${p.chunk_count || 0} chunks</span>
          </div>
          <div class="pc-actions">
-            <button class="btn sm primary" data-tui title="Run OpenCode in this project's directory">▶ Run</button>
-            ${stopBtn}
+            ${runBtn}
             <button class="btn sm" data-open>Open</button>
             <button class="btn sm ghost" data-index>Index docs</button>
             ${delBtn}
@@ -1008,6 +1047,8 @@ function projectCard(p) {
     card.addEventListener('click', (e) => {
         const stop = e.target.closest('[data-stop]');
         if (stop) { e.stopPropagation(); cancelProjectRun(stop.dataset.runUid); return; }
+        const finish = e.target.closest('[data-finish]');
+        if (finish) { e.stopPropagation(); finishProjectRun(finish.dataset.runUid); return; }
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
         if (e.target.closest('[data-tui]')) {
@@ -1038,7 +1079,8 @@ async function openProjectTui(p) {
         await launchInTerminal({ project: p.slug, cwd: p.path, model: p.model, agent: p.agent, tui: true, runUid });
         await refreshPresence();
         if (runUid) {
-            // Optimistically show working state so the card lights up immediately.
+            // Optimistically show working state so the card lights up immediately,
+            // including the control that belongs to the new run.
             const card = document.querySelector(`.proj-card[data-slug="${CSS.escape(p.slug)}"]`);
             if (card) {
                 card.classList.add('is-working');
@@ -1047,6 +1089,7 @@ async function openProjectTui(p) {
                 if (pip) { pip.classList.add('working'); pip.classList.remove('awake'); }
                 const lbl = pip && pip.querySelector('[data-pip-label]');
                 if (lbl) lbl.textContent = 'working';
+                syncRunControl(card, res.run || { run_uid: runUid, project_slug: p.slug, standalone: 1 });
             }
         }
     } catch (e) { toast(e.message, 'err'); }
@@ -1071,13 +1114,26 @@ async function cancelProjectRun(runUid) {
         if (pip) { pip.classList.remove('working'); pip.classList.add('awake'); }
         const banner = card.querySelector('.pc-running');
         if (banner) banner.remove();
-        const stopBtn = card.querySelector('[data-stop]');
+        const stopBtn = card.querySelector('[data-stop], [data-finish]');
         if (stopBtn) stopBtn.remove();
     }
     try {
         await api(`/api/runs/${runUid}/cancel`, { method: 'POST' });
         toast('Stop requested', 'ok');
         await new Promise((r) => setTimeout(r, 500));
+        await refreshPresence();
+        await loadProjects();
+    } catch (e) { toast(e.message, 'err'); }
+}
+
+/* End tracking for a standalone TUI run: Perun marks it done and captures its
+   usage. The terminal belongs to the user, so this never kills the process -
+   an explicit kill stays a separate, deliberate action. */
+async function finishProjectRun(runUid) {
+    if (!runUid) return;
+    try {
+        await api(`/api/runs/${runUid}/finish`, { method: 'POST' });
+        toast('Session marked finished', 'ok');
         await refreshPresence();
         await loadProjects();
     } catch (e) { toast(e.message, 'err'); }
@@ -1582,7 +1638,10 @@ async function viewProject(slug, tab) {
     // Usage for this project (captured in the last 24h) — /api/usage already narrows by slug.
     const usageBox = el('div', { class: 'meta', id: 'pj-usage' }, 'usage…');
     v.appendChild(usageBox);
-    (async () => {
+    let usageBusy = false;
+    const renderProjectUsage = async () => {
+        if (usageBusy) return;
+        usageBusy = true;
         try {
             const r = await api(`/api/usage?hours=24&project=${encodeURIComponent(slug)}`);
             const t = r.totals || {};
@@ -1590,7 +1649,18 @@ async function viewProject(slug, tab) {
             usageBox.innerHTML = `Usage · captured in the last 24h — <b>$${Number(t.cost_usd || 0).toFixed(4)}</b>`
                 + ` · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`;
         } catch (e) { usageBox.textContent = 'usage unavailable'; }
-    })();
+        finally { usageBusy = false; }
+    };
+    renderProjectUsage();
+    if (projectUsageTimer) clearInterval(projectUsageTimer);
+    projectUsageTimer = setInterval(() => {
+        if (!document.getElementById('pj-usage')) {
+            clearInterval(projectUsageTimer);
+            projectUsageTimer = null;
+            return;
+        }
+        renderProjectUsage();
+    }, USAGE_REFRESH_MS);
 
     const tabDefs = [
         ['overview', 'Overview'], ['shared', 'Shared'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
@@ -5330,6 +5400,12 @@ async function viewProviders(refresh = false) {
 
 /* ========================================================= SETTINGS ===== */
 let routingTimer = null;
+// Usage cards refresh in place while their view is open. 60 s is the floor that
+// makes sense: the server only adds new TUI numbers every 5 minutes, and a
+// headless run's numbers land when it finalizes.
+let dashboardUsageTimer = null;
+let projectUsageTimer = null;
+const USAGE_REFRESH_MS = 60000;
 
 function stopRoutingTimer() {
     if (routingTimer) { clearInterval(routingTimer); routingTimer = null; }
