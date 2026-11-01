@@ -168,7 +168,9 @@ def _session_info(api: "opencode_api.OpenCodeAPI", session_id: str) -> Dict[str,
     try:
         info = api.session(session_id) or {}
     except opencode_api.OpenCodeError:
-        info = {}
+        # Do not cache a failed lookup: a 2 s timeout is not "this session has no
+        # location", and caching it drops the location from every later poll.
+        return {}
     _session_cache[session_id] = info
     if len(_session_cache) > 200:
         _session_cache.clear()
@@ -260,6 +262,7 @@ def _reconcile(polled: Set[str], live_permissions: Set[str],
                live_forms: Set[str]) -> int:
     """Close items whose permission/form disappeared (answered in the TUI)."""
     closed = 0
+    seen: Set[tuple] = set()
     for kind, live in (("permission", live_permissions), ("form", live_forms)):
         for item in registry.open_attention_of_kind(kind):
             if item["target_kind"] != kind:
@@ -270,6 +273,7 @@ def _reconcile(polled: Set[str], live_permissions: Set[str],
             key = str(ref.get("request_id") if kind == "permission" else ref.get("form_id"))
             if not key:
                 continue
+            seen.add((kind, key))
             if key in live:
                 _misses.pop((kind, key), None)
                 continue
@@ -289,6 +293,11 @@ def _reconcile(polled: Set[str], live_permissions: Set[str],
                     {"attention_id": item["id"], "target_kind": kind},
                 )
                 closed += 1
+    # Drop misses for items that are no longer open (answered on another device,
+    # sibling-cancelled, expired): otherwise every such request leaves a tuple in
+    # ``_misses`` for the life of the process.
+    for stale in [k for k in _misses if k not in seen]:
+        _misses.pop(stale, None)
     return closed
 
 
@@ -332,28 +341,40 @@ def _poll_once_locked(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[
     except (TypeError, ValueError):
         ttl_minutes = attention.DEFAULT_TTL_MINUTES
 
-    polled = {loc for loc in {str(l) for l in locations} if loc}
+    # ``polled`` now means "we actually asked this location and got an answer".
+    # It used to mean "this location exists", so a failed fetch looked exactly
+    # like "the request is gone" and two polls closed a card that was still live.
+    polled: Set[str] = set()
     created = 0
     live_permissions: Set[str] = set()
     live_forms: Set[str] = set()
 
-    for directory in sorted(polled):
+    # Cheap indexed UPDATE: without it a bridge that stays up for weeks never
+    # expires anything (``expire_stale`` used to run only at startup).
+    try:
+        registry.expire_attention()
+    except Exception:  # pragma: no cover - expiry is best effort
+        LOG.debug("attention watcher: expire failed", exc_info=True)
+
+    for directory in sorted({loc for loc in {str(l) for l in locations} if loc}):
         project = attention.project_for_location(directory)
         if not project:
+            # Not a project of ours: never reconcile (or miss-count) it, and do
+            # not create cards for it either.
             continue
         try:
             permissions = client.pending_permissions(directory)
+            forms = client.pending_forms(directory)
         except opencode_api.OpenCodeError:
-            permissions = []
+            # Could not ask: skip this location entirely. A failed fetch must not
+            # count as a miss, or a 2 s timeout cancels a live card.
+            continue
+        polled.add(directory)
         for perm in permissions:
             live_permissions.add(str(perm.get("id") or ""))
             item = _permission_item(client, perm, project, directory, ttl_minutes)
             if item and item.get("is_new"):
                 created += 1
-        try:
-            forms = client.pending_forms(directory)
-        except opencode_api.OpenCodeError:
-            forms = []
         for form in forms:
             live_forms.add(str(form.get("id") or ""))
             item = _form_item(client, form, project, directory, ttl_minutes)

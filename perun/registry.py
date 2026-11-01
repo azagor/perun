@@ -1047,6 +1047,11 @@ def usage_by_project(hours: int = 24, limit: int = 5) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+#: A provider card id and the prefix the service reports for its models can
+#: differ (``opencode`` vs ``opencode-go``); spend must land on the card.
+_PROVIDER_ALIASES = {"opencode-go": "opencode"}
+
+
 def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
     """Measured spend per provider (``model`` is ``provider/model``).
 
@@ -1083,13 +1088,19 @@ def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
             models = {}
         if isinstance(models, dict) and models:
             for model_key, usage in models.items():
+                if model_key == "unknown":
+                    # Usage captured without a model: attribute it to the run's
+                    # model rather than inventing an "unknown" provider row.
+                    model_key = str(row.get("run_model") or "")
                 provider = model_key.split("/", 1)[0] if "/" in model_key else "unknown"
+                provider = _PROVIDER_ALIASES.get(provider, provider)
                 bucket = totals.setdefault(provider, {"provider": provider, "tokens": 0, "cost": 0.0})
                 bucket["tokens"] += int((usage or {}).get("tokens_in") or 0) + int((usage or {}).get("tokens_out") or 0)
                 bucket["cost"] += float((usage or {}).get("cost") or 0.0)
         else:
             run_model = str(row.get("run_model") or "")
             provider = run_model.split("/", 1)[0] if "/" in run_model else "unknown"
+            provider = _PROVIDER_ALIASES.get(provider, provider)
             bucket = totals.setdefault(provider, {"provider": provider, "tokens": 0, "cost": 0.0})
             bucket["tokens"] += int(row.get("tokens_in") or 0) + int(row.get("tokens_out") or 0)
             bucket["cost"] += float(row.get("cost_usd") or 0.0)
@@ -1117,16 +1128,17 @@ def delete_session(pk: int) -> None:
 def create_run(run_uid: str, project_id: int, prompt: str, *,
                session_pk: int | None = None, opencode_session_id: str = "",
                model: str = "", model_explicit: bool = False,
-               agent: str = "", standalone: bool = False) -> dict[str, Any]:
+               agent: str = "", standalone: bool = False,
+               options: dict[str, Any] | None = None) -> dict[str, Any]:
     with db.db() as conn:
         conn.execute(
             """INSERT INTO runs
                (run_uid,project_id,session_pk,opencode_session_id,prompt,
-                model,model_explicit,agent,status,created_at,standalone)
-               VALUES (?,?,?,?,?,?,?,?, 'queued', ?, ?)""",
+                model,model_explicit,agent,status,created_at,standalone,run_options)
+               VALUES (?,?,?,?,?,?,?,?, 'queued', ?, ?, ?)""",
             (run_uid, project_id, session_pk, opencode_session_id, prompt,
              model, int(bool(model_explicit)), agent, now_iso(),
-             int(bool(standalone))),
+             int(bool(standalone)), json.dumps(options or {})),
         )
         row = db.one(conn, "SELECT * FROM runs WHERE run_uid=?", (run_uid,))
         return dict(row)
@@ -1316,24 +1328,58 @@ def get_activity(activity_id: int) -> dict[str, Any] | None:
     return entry
 
 
+def misroute_message(decision_id: int) -> str:
+    return f"misroute reported for routing decision {int(decision_id)}"
+
+
 def misroute_reported(decision_id: int) -> bool:
     """True when this routing decision already has a misroute marker."""
-    message = f"misroute reported for routing decision {int(decision_id)}"
     with db.db() as conn:
         row = db.one(
             conn,
             "SELECT 1 FROM activity WHERE kind='routing_misroute' AND message=?",
-            (message,),
+            (misroute_message(decision_id),),
         )
     return bool(row)
 
 
-def misroute_ids() -> set[int]:
-    """Decision ids that already carry a misroute marker."""
+def log_misroute(project_id: int | None, decision_id: int,
+                 meta: dict[str, Any]) -> bool:
+    """Insert the marker at most once. Returns False when it already existed.
+
+    ``WHERE NOT EXISTS`` in the same statement is atomic; the previous
+    check-then-insert let two dashboard clicks create two rows.
+    """
+    message = misroute_message(decision_id)
     with db.db() as conn:
-        rows = db.rows(
-            conn, "SELECT meta FROM activity WHERE kind='routing_misroute'"
+        cur = conn.execute(
+            """INSERT INTO activity (project_id,ts,kind,message,meta)
+               SELECT ?,?,?,?,?
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM activity
+                   WHERE kind='routing_misroute' AND message=?
+               )""",
+            (project_id or 0, now_iso(), "routing_misroute", message,
+             json.dumps(meta or {}), message),
         )
+        return bool(cur.rowcount)
+
+
+def misroute_ids(decision_ids: list[int] | None = None) -> set[int]:
+    """Decision ids that already carry a misroute marker.
+
+    With *decision_ids* only those rows are read (the panel used to parse every
+    misroute row on every refresh).
+    """
+    sql = "SELECT meta FROM activity WHERE kind='routing_misroute'"
+    params: tuple = ()
+    if decision_ids:
+        placeholders = ",".join("?" for _ in decision_ids)
+        sql += (f" AND CAST(json_extract(meta, '$.decision_id') AS INTEGER)"
+                f" IN ({placeholders})")
+        params = tuple(int(d) for d in decision_ids)
+    with db.db() as conn:
+        rows = db.rows(conn, sql, params)
     ids: set[int] = set()
     for row in rows:
         try:
@@ -1458,7 +1504,9 @@ def bump_routing_stat(source: str, action: str, *, day: str = "") -> None:
     Aggregated on purpose: logging an activity row per room message would bury
     the Activity view under ``routing: unknown``.
     """
-    day = (day or "").strip() or datetime.now().date().isoformat()
+    # UTC, like every other timestamp Perun stores: a local "today" bucket would
+    # split a UTC day across two rows and disagree with the decision window.
+    day = (day or "").strip() or datetime.now(timezone.utc).date().isoformat()
     with db.db() as conn:
         conn.execute(
             """INSERT INTO routing_stats(day,source,action,count) VALUES (?,?,?,1)
@@ -1470,7 +1518,7 @@ def bump_routing_stat(source: str, action: str, *, day: str = "") -> None:
 def routing_stats(days: int = 1) -> list[dict[str, Any]]:
     """``routing_stats`` rows for the last *days* days (dashboard coverage)."""
     days = max(1, min(int(days), 90))
-    cutoff = (datetime.now().date() - timedelta(days=days - 1)).isoformat()
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
     with db.db() as conn:
         rows = db.rows(
             conn,
@@ -1690,16 +1738,24 @@ def close_attention(attention_id: int, state: str, *, answer: str = "",
 
 
 def update_attention_ref(attention_id: int, **fields: Any) -> dict[str, Any] | None:
-    """Merge *fields* into the item's ``ref`` JSON and return the fresh row."""
-    item = get_attention(attention_id)
-    if not item:
-        return None
-    ref = dict(item.get("ref") or {})
-    ref.update(fields)
+    """Merge *fields* into the item's ``ref`` JSON and return the fresh row.
+
+    One atomic ``json_set`` statement, not read-merge-write: a multi-select tick
+    and a delivery writing ``inbox_id`` at the same moment used to overwrite each
+    other's key (both had read the same base object).
+    """
+    keys = [str(k) for k in fields if re.fullmatch(r"[A-Za-z0-9_]+", str(k))]
+    if not keys:
+        return get_attention(attention_id)
+    expr = "ref"
+    params: list[Any] = []
+    for key in keys:
+        expr = f"json_set({expr}, '$.{key}', json(?))"
+        params.append(json.dumps(fields[key], ensure_ascii=False))
     with db.db() as conn:
         conn.execute(
-            "UPDATE attention_requests SET ref=?, updated_at=? WHERE id=?",
-            (json.dumps(ref), now_iso(), int(attention_id)),
+            f"UPDATE attention_requests SET ref={expr}, updated_at=? WHERE id=?",
+            (*params, now_iso(), int(attention_id)),
         )
     return get_attention(attention_id)
 
@@ -1721,6 +1777,20 @@ def touch_attention_waiter(attention_id: int) -> None:
         conn.execute(
             "UPDATE attention_requests SET waiter_seen_epoch=? WHERE id=?",
             (int(time.time()), int(attention_id)),
+        )
+
+
+def clear_attention_waiter(attention_id: int) -> None:
+    """Drop the heartbeat: nobody is listening for this answer any more.
+
+    Without this, a ``perun_ask_operator`` call returning "no answer yet" still
+    looked like a live waiter for ``WAITER_FRESH_SECONDS``, so an answer in that
+    window was closed as delivered and never injected into the session.
+    """
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE attention_requests SET waiter_seen_epoch=0 WHERE id=?",
+            (int(attention_id),),
         )
 
 
@@ -2203,7 +2273,7 @@ def runs_awaiting_reply(limit: int = 10, within_hours: int = 24) -> list[dict[st
         rows = db.rows(
             conn,
             """SELECT * FROM runs
-               WHERE status IN ('done','failed','timeout','provider_error')
+               WHERE status IN ('done','failed','timeout','provider_error','interrupted')
                  AND ended_at IS NOT NULL AND ended_at >= ?
                  AND COALESCE(reply_sent_at,'')=''
                  AND session_pk IS NOT NULL

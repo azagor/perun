@@ -150,19 +150,26 @@ def test_shadow_mode_renders_nothing(bridge, project, monkeypatch):
     assert registry.attention_deliveries(registry.open_attention()[0]["id"]) == []
 
 
-def test_reply_to_a_card_answers_that_item(bridge, project, api):
+def test_reply_to_a_card_rejects_a_permission_with_feedback(bridge, project, api):
+    """The card promises "reply with feedback to reject"; deliver exactly that."""
     item = _permission(project)
     bridge.attention_tick()
-    card_id = bridge.sent[-1]
     registry.record_attention_delivery(item["id"], "1", 42)
 
     handled = bridge._handle_attention_reply(
-        "1", {"text": "allow it", "message_id": 99,
+        "1", {"text": "not in this repo", "message_id": 99,
               "reply_to_message": {"message_id": 42}})
 
     assert handled is True
-    assert bridge.sent[-1]["text"].startswith("⚠️")   # permissions need a button
-    assert registry.get_attention(item["id"])["state"] == "open"
+    assert api.calls == [("permission", "ses_tg", "per_1", "reject")]
+    assert registry.get_attention(item["id"])["state"] == "rejected"
+    assert registry.get_attention(item["id"])["answer"] == "not in this repo"
+
+
+def test_a_tap_on_the_card_approves_it(bridge, project, api):
+    item = _permission(project)
+    bridge.attention_tick()
+    registry.record_attention_delivery(item["id"], "1", 42)
 
     choice = {"id": "c1", "data": f"att:{item['id']}:once",
               "message": {"message_id": 42, "chat": {"id": "1"}}}
@@ -170,7 +177,6 @@ def test_reply_to_a_card_answers_that_item(bridge, project, api):
 
     assert api.calls == [("permission", "ses_tg", "per_1", "once")]
     assert registry.get_attention(item["id"])["state"] == "approved"
-    # The card is edited in place (same message), not answered with a new one.
     last = _last_edit(bridge)
     assert last.get("message_id") == 42
     assert "approved" in last.get("text", "").lower()
@@ -620,6 +626,33 @@ def test_a_permission_is_never_digested(bridge, project, monkeypatch):
     assert bridge.attention_tick() == 1
     assert len(bridge.sent) == 1
     assert bridge.sent[0]["markup"]["inline_keyboard"][0][0]["text"] == "Allow once"
+
+
+def test_a_digest_keeps_the_items_past_the_fifth(bridge, project, monkeypatch):
+    """Items six and beyond were marked shown but never listed anywhere."""
+    clock = {"now": 50_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    items = [_room_item(project, f"msg_{i}", f"question {i}") for i in range(6)]
+
+    assert bridge.attention_tick() == 0
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1
+
+    card = bridge.sent[0]
+    assert "6 waiting" in card["text"]
+    listed = [it for it in items if it["id"] in bridge._digested]
+    rest = [it for it in items if it["id"] not in bridge._digested]
+    assert len(listed) == 5 and len(rest) == 1
+    assert rest[0]["id"] in bridge._digest_pending
+
+    # The second window delivers the remainder instead of losing it.
+    bridge.sent.clear()
+    clock["now"] += 31
+    assert bridge.attention_tick() == 1
+    assert "1 waiting" in bridge.sent[0]["text"]
+    assert f"att_{rest[0]['id']}" in bridge.sent[0]["text"]
 
 
 def test_digest_zero_sends_room_messages_immediately(bridge, project, monkeypatch):

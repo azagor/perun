@@ -510,6 +510,20 @@ def test_a_long_option_list_says_how_many_were_not_shown(project):
     assert "and 1 more" in text
 
 
+def test_an_answer_after_a_wait_timeout_is_injected_not_swallowed(project, api):
+    """The timeout used to leave a fresh heartbeat, so the answer vanished."""
+    item = attention.request(project, "session", "ses_wait", "ask", "Ship it?")
+
+    assert attention.wait(item["id"], 0.0) is None
+    assert not registry.get_attention(item["id"])["waiter_seen_epoch"]
+
+    result = attention.answer(item["id"], "yes, ship it", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls and api.calls[-1][0] == "prompt"
+    assert api.calls[-1][2] == "yes, ship it"
+
+
 def test_room_answer_is_queued_when_the_bridge_is_offline(project, monkeypatch):
     from perun import perunchat_bridge
 

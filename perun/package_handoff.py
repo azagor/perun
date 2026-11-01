@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import posixpath
 import shutil
 import stat
 import tempfile
@@ -119,6 +120,15 @@ def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
             raise PackageError(
                 f"package uncompressed size {total} exceeds max {max_package}")
 
+    # Never build an archive our own unpacker would reject: a project containing
+    # `notes~backup.md` used to produce a package the claimant could not return.
+    for p in selected:
+        rel = p.relative_to(root).as_posix()
+        if "\\" in rel or any(ch in rel for ch in "$%~"):
+            raise PackageError(
+                f"{rel} contains characters the handoff protocol cannot carry "
+                "('$', '%', '~'); rename it or use a local run")
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in selected:
@@ -166,6 +176,7 @@ def unpack(
 
     files: dict[str, bytes] = {}
     seen_names: set[str] = set()
+    seen_normalized: set[str] = set()
     seen_casefold: set[str] = set()
     total_uncompressed = 0
     try:
@@ -178,7 +189,22 @@ def unpack(
                 if info.filename in seen_names:
                     raise PackageError(f"duplicate entry name not allowed: {info.filename}")
                 seen_names.add(info.filename)
-                lowered_name = info.filename.replace("\\", "/").casefold()
+                if info.is_dir():
+                    # The protocol transfers files only; a directory entry would
+                    # otherwise be applied as an empty regular file. Skip before
+                    # the name checks: "dir/" is not a file name.
+                    continue
+
+                # Dedupe on the *resolved* name, not the raw one: "api.py" and
+                # "./api.py" both land on the same file and used to slip past as
+                # two distinct entries (last one wins at apply time).
+                normalized = posixpath.normpath(info.filename.replace("\\", "/"))
+                if normalized != info.filename.replace("\\", "/"):
+                    raise PackageError(f"non-canonical entry name: {info.filename}")
+                if normalized in seen_normalized:
+                    raise PackageError(f"duplicate entry name not allowed: {info.filename}")
+                seen_normalized.add(normalized)
+                lowered_name = normalized.casefold()
                 if lowered_name in seen_casefold:
                     raise PackageError(
                         f"duplicate entry (case-insensitive): {info.filename}"

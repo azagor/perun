@@ -320,6 +320,40 @@ def list_by_project(project_id: int, status: str | None = None) -> list[dict[str
     return [_row_to_dict(r) for r in rows]
 
 
+def _execution_details(proposal: dict[str, Any]) -> dict[str, Any]:
+    """The object the HITL token is bound to (must match ``approve`` exactly)."""
+    return {
+        "proposal_id": str(proposal.get("id") or proposal.get("proposal_id") or ""),
+        "project_id": proposal.get("project_id"),
+        "action_type": proposal.get("action_type"),
+        "targets": proposal.get("targets"),
+        "details": proposal.get("details"),
+    }
+
+
+def _approval_window_open(proposal: dict[str, Any]) -> bool:
+    """Whether the stored approval is still inside its seven-day window."""
+    stamp = str(proposal.get("approved_at") or "")
+    if not stamp:
+        return False
+    try:
+        approved = datetime.fromisoformat(stamp)
+    except ValueError:
+        return False
+    if approved.tzinfo is None:
+        approved = approved.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - approved).total_seconds() <= APPROVED_TTL_SECONDS
+
+
+def _store_approval_token(proposal_id: str, token: dict[str, Any]) -> None:
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET approval_token=?, approval_expiry=?, "
+            "updated_at=? WHERE id=? AND status='approved'",
+            (_to_json(token), token["expiry_epoch"], _now(), proposal_id),
+        )
+
+
 def approve(proposal_id: str, approver: str, *,
             allow_self: bool = False) -> dict[str, Any]:
     """Approve a proposal and issue a signed HITL token.
@@ -558,6 +592,19 @@ def claim_execution(
     token = _from_json(token_raw) if isinstance(token_raw, str) else token_raw
     if not isinstance(token, dict) or not token.get("token"):
         raise ValueError("proposal has no valid approval token; re-approve it")
+    if not _approval_window_open(proposal):
+        raise ValueError("the approval window has expired; ask for a new approval")
+    ok, reason = hitl.default_engine().verify(
+        token=str(token.get("token") or ""),
+        proposal_id=str(proposal["id"]),
+        execution_details=_execution_details(proposal),
+        expiry_epoch=int(token.get("expiry_epoch") or 0),
+        nonce=str(token.get("nonce") or ""),
+        check_expiry=False,      # the row's window authorizes the handoff
+        consume_nonce=False,     # a failed CAS must not burn the token
+    )
+    if not ok:
+        raise ValueError(f"approval token invalid: {reason}")
 
     _assert_targets_unchanged(project, proposal, stage="claimed")
 
@@ -1007,13 +1054,7 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         _set_status(proposal_id, "failed", "corrupt approval token")
         raise ValueError("corrupt approval token")
 
-    execution_details = {
-        "proposal_id": proposal_id,
-        "project_id": proposal["project_id"],
-        "action_type": proposal["action_type"],
-        "targets": proposal["targets"],
-        "details": proposal["details"],
-    }
+    execution_details = _execution_details(proposal)
     ok, reason = engine.validate(
         token=token.get("token", ""),
         proposal_id=proposal_id,
@@ -1021,6 +1062,20 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         expiry_epoch=int(expiry),
         nonce=token.get("nonce", ""),
     )
+    if not ok and reason == "expired" and _approval_window_open(proposal):
+        # The 180 s token only proves "the approver clicked just now". A later
+        # "Run now" is authorized by the stored approval itself (status approved,
+        # inside the seven-day window), so mint a fresh token from it instead of
+        # making the proposal permanently unexecutable after three minutes.
+        fresh = engine.issue(proposal_id, execution_details)
+        _store_approval_token(proposal_id, fresh)
+        ok, reason = engine.validate(
+            token=fresh["token"],
+            proposal_id=proposal_id,
+            execution_details=execution_details,
+            expiry_epoch=int(fresh["expiry_epoch"]),
+            nonce=fresh["nonce"],
+        )
     if not ok:
         _set_status(proposal_id, "expired" if reason == "expired" else "failed", reason)
         raise ValueError(f"approval token invalid: {reason}")
@@ -1029,10 +1084,21 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         cur = conn.execute(
             "UPDATE action_proposals SET status='executing', result='', "
             "execution_mode='perun', executed_by=?, updated_at=? "
-            "WHERE id=? AND status='approved'",
-            (LOCAL_EXECUTOR, _now(), proposal_id),
+            "WHERE id=? AND status='approved' "
+            # One local execution per project at a time: the guard MCP server
+            # derives the live allowlist from the *executing* rows, and two of
+            # them make every read/write fail as ambiguous.
+            "AND NOT EXISTS (SELECT 1 FROM action_proposals "
+            "                WHERE project_id=? AND status='executing')",
+            (LOCAL_EXECUTOR, _now(), proposal_id, proposal["project_id"]),
         )
         if cur.rowcount != 1:
+            latest = get(proposal_id) or {}
+            if latest.get("status") == "approved":
+                raise ValueError(
+                    "another proposal in this project is already executing; "
+                    "wait for it to finish"
+                )
             raise ValueError("proposal is no longer approved")
 
     proposal = get(proposal_id)

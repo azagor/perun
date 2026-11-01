@@ -171,13 +171,20 @@ def _work(project: Dict[str, Any], proposal: Dict[str, Any],
     project_id = int(project["id"])
     proposal_id = str(proposal.get("id") or "")
     try:
-        # A short wait absorbs a burst of executions; past that, give the
-        # proposal back so a later attempt can still run its docs step.
+        # A short wait absorbs a burst of executions. Past that, write the
+        # changelog bullet now: nothing ever re-invokes after_execution() for a
+        # proposal, so "leaving it for later" silently lost the trace.
         if not _semaphore.acquire(timeout=SLOT_TIMEOUT):
-            with _lock:
-                _seen.discard(proposal_id)
-            LOG.info("docs: another update is running; leaving proposal %s for later",
-                     proposal_id)
+            path = append_changelog(project, proposal)
+            registry.log_activity(
+                project_id, "docs_updated",
+                f"changelog entry for proposal {proposal.get('id')} "
+                f"(docs slot busy; full docs step skipped)",
+                {"proposal_id": proposal.get("id"),
+                 "path": str(path) if path else ""},
+            )
+            LOG.info("docs: another update is running; wrote the changelog bullet "
+                     "for proposal %s instead", proposal_id)
             return
         try:
             client = api or opencode_api.default_api()

@@ -211,10 +211,15 @@ def test_route_ambiguous_read_only_also_clarifies() -> None:
     assert set(decision.candidates) == {"perun", "perunchat"}
 
 
-def test_route_unknown_is_unchanged_behaviour() -> None:
+def test_route_unknown_never_binds_a_project() -> None:
+    """An unrecognised message must not move the chat, even if it names one.
+
+    The bridge keeps the bound project; recording the *mention* here made the
+    routing panel claim a decision "for perun" that actually ran elsewhere.
+    """
     decision = route("dzieki, do zobaczenia", projects=PROJECTS, current="perun")
     assert decision.action == "unknown"
-    assert decision.project == "perun"
+    assert decision.project is None
 
 
 def test_route_question_without_project_stays_ask() -> None:
@@ -299,9 +304,10 @@ def test_change_verbs_are_runs() -> None:
 
 def test_hyphenated_slug_with_inflected_tail() -> None:
     for text in ("dodaj stop loss do trading-bota", "sprawdz trading-bocie"):
-        decision = route(text, projects=PROJECTS)
-        assert decision.project == "trading-bot", text
-        assert decision.matched_by == "inflected"
+        slug, candidates, matched_by, confidence = resolve_project(text, PROJECTS)
+        assert slug == "trading-bot", text
+        assert matched_by == "inflected"
+        assert confidence >= 0.9
 
 
 # --- regression: keywords must not fire mid-sentence ----------------------

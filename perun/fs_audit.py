@@ -32,6 +32,12 @@ def _stat_key(path: Path) -> tuple[int, float, int]:
 
 
 _WALK_SKIP_DIRS = {".git", ".perun", "node_modules", ".venv", "venv", "__pycache__"}
+#: Skipped by the write walk, but snapshotted (metadata only) so a new plugin or
+#: command cannot slip past the audit. ``.git`` stays out: it changes constantly.
+_SENSITIVE_WALK = (".opencode", ".perun", ".claude")
+#: A directory target is fingerprinted as a bounded tree; beyond this it is
+#: reported as unverifiable and the external claim refuses it.
+TREE_DIGEST_MAX_FILES = 500
 
 
 def snapshot(
@@ -67,19 +73,44 @@ def snapshot(
                     if key != (0, 0.0, 0):
                         files[str(p)] = key
 
-    # Snapshot the parent's immediate entries with metadata so a modified or
-    # deleted sibling is detected, not only a newly created one. The project
-    # directory itself is excluded: its mtime changes on every legitimate write.
+    # Snapshot the parent's immediate *files* with metadata so a modified or
+    # deleted sibling is detected. Directories are tracked by existence only: a
+    # sibling project's directory mtime changes whenever any other agent writes a
+    # top-level file there, which used to be reported as an "escape" and failed a
+    # perfectly clean execution.
     root = Path(project["path"]).resolve()
     parent = root.parent
     parent_entries: dict[str, tuple[int, float, int]] = {}
+    parent_dirs: set[str] = set()
     if parent.exists():
         for entry in parent.iterdir():
-            if entry.resolve() == root:
+            try:
+                if entry.resolve() == root:
+                    continue
+                if entry.is_dir():
+                    parent_dirs.add(str(entry))
+                    continue
+            except OSError:  # pragma: no cover - vanished between list and stat
                 continue
             key = _stat_key(entry)
             if key != (0, 0.0, 0):
                 parent_entries[str(entry)] = key
+
+    # The walk deliberately skips sensitive paths, which is exactly where a
+    # hostile write would land (a plugin, a command, a Perun instruction file).
+    # Record their *existence and metadata* here, never their content.
+    sensitive: dict[str, tuple[int, float, int]] = {}
+    for name in _SENSITIVE_WALK:
+        base = root / name
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d.lower() not in _WALK_SKIP_DIRS]
+            for fname in filenames:
+                p = Path(dirpath) / fname
+                key = _stat_key(p)
+                if key != (0, 0.0, 0):
+                    sensitive[str(p)] = key
 
     resolved_targets = [
         str(path_guard.resolve_target(project["path"], target))
@@ -89,6 +120,8 @@ def snapshot(
         "project_slug": project["slug"],
         "files": files,
         "parent_entries": parent_entries,
+        "parent_dirs": sorted(parent_dirs),
+        "sensitive": sensitive,
         "targets": resolved_targets,
     }
 
@@ -99,6 +132,48 @@ def _is_under(target: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _tree_digest(root: Path) -> dict[str, Any]:
+    """Bounded content fingerprint of a directory target.
+
+    Sorted ``relpath`` + bytes, so renaming, adding, deleting or editing any file
+    under the directory changes the digest. Sensitive subtrees are skipped like
+    the main walk, but a directory target that contains one is still caught by
+    the sensitive snapshot in :func:`diff`.
+    """
+    digest = hashlib.sha256()
+    count = 0
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d.lower() not in _WALK_SKIP_DIRS
+            and not path_guard.is_sensitive_path(Path(dirpath) / d)
+        )
+        for name in sorted(filenames):
+            p = Path(dirpath) / name
+            if path_guard.is_sensitive_path(p):
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if count >= TREE_DIGEST_MAX_FILES or total + size > TARGET_DIGEST_TOTAL_BYTES:
+                return {"kind": "unverifiable", "files": count}
+            rel = p.relative_to(root).as_posix()
+            digest.update(rel.encode("utf-8", "replace"))
+            digest.update(b"\0")
+            try:
+                with p.open("rb") as handle:
+                    for block in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(block)
+            except OSError:
+                continue
+            digest.update(b"\0")
+            count += 1
+            total += size
+    return {"kind": "tree", "files": count, "sha256": digest.hexdigest()}
 
 
 def target_digests(
@@ -128,7 +203,9 @@ def target_digests(
             continue
         try:
             if path.is_dir():
-                digests[label] = {"kind": "dir"}
+                # A bare {"kind": "dir"} is identical before and after any edit,
+                # which made the approval pin a no-op for `targets: ["docs"]`.
+                digests[label] = _tree_digest(path)
                 continue
             if not path.is_file():
                 digests[label] = None
@@ -207,13 +284,26 @@ def diff(project: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
         before_parent = {str(p): None for p in before_parent}
     if isinstance(after_parent, (set, list, tuple)):
         after_parent = {str(p): None for p in after_parent}
-    escaped = sorted(
+    escaped = {
         str(p)
         for p in set(before_parent) | set(after_parent)
         if _key(before_parent.get(p)) != _key(after_parent.get(p))
-    )
+    }
+    # A directory that appeared or vanished next to the project is an escape; one
+    # whose mtime changed is just a sibling doing its own work.
+    escaped |= set(before.get("parent_dirs") or []) ^ set(after.get("parent_dirs") or [])
+    escaped = sorted(escaped)
 
     violations: list[str] = []
+    # Sensitive subtrees are compared here, because the main walk skips them.
+    before_sensitive = before.get("sensitive") or {}
+    after_sensitive = after.get("sensitive") or {}
+    sensitive_changes = sorted(
+        str(p)
+        for p in set(before_sensitive) | set(after_sensitive)
+        if _key(before_sensitive.get(p)) != _key(after_sensitive.get(p))
+    )
+    violations.extend(sensitive_changes)
     cfg = shared_projects.load(project["path"])
     if cfg.get("shared"):
         allowlist_entries = path_guard.from_project(project)

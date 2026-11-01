@@ -52,6 +52,34 @@ def test_resolve_by_marker(fresh_tracker):
     assert fresh_tracker.is_alive("marked-run") is False
 
 
+def test_a_stop_after_a_restart_refuses_an_unrelated_pid(fresh_tracker):
+    """Pids are recycled; only a process carrying our marker may be killed."""
+    project = registry.add_project("pt-guard", r"C:\pt-guard")
+    registry.create_run("pt-guard-run", project["id"], "hi", standalone=True)
+    proc = _sleep_proc()  # alive, but not one of ours
+    registry.update_run("pt-guard-run", pid=proc.pid, status="running")
+    try:
+        assert fresh_tracker.terminate("pt-guard-run") is False
+        assert proc.poll() is None
+        assert registry.get_run("pt-guard-run")["status"] == "done"
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_a_stop_after_a_restart_kills_a_marked_process(fresh_tracker):
+    project = registry.add_project("pt-marked", r"C:\pt-marked")
+    registry.create_run("pt-marked-run", project["id"], "hi", standalone=True)
+    proc = _sleep_proc(PERUN_RUN_UID="pt-marked-run")
+    registry.update_run("pt-marked-run", pid=proc.pid, status="running")
+    try:
+        assert fresh_tracker.terminate("pt-marked-run") is True
+        proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
 def test_terminate_finalizes_run(tmp_path, fresh_tracker, monkeypatch):
     # Use an isolated registry/DB so the run record can be created and updated.
     from perun import config, db

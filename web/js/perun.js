@@ -3313,9 +3313,14 @@ function mountConsole(host, initial) {
         if (!prompt) { toast('Enter a prompt or queue a task', 'err'); return; }
         logLine('› ' + (promptEl().value.trim() || 'Queued tasks only'));
         try {
+            // Carry the session the chat is already on, so Finish can capture
+            // this run's usage (a TUI launched without one has no session id).
+            const sessionOpt = $('#c-session').selectedOptions[0];
+            const sessionId = sessionOpt ? (sessionOpt.dataset.oc || '') : '';
             const res = await api('/api/runs/tui', {
                 method: 'POST',
-                body: { project: slug, prompt, model: p.model, agent: p.agent },
+                body: { project: slug, prompt, model: p.model, agent: p.agent,
+                        opencode_session_id: sessionId },
             });
             const runUid = res && res.run && res.run.run_uid;
             if (!runUid) { throw new Error('Perun did not return a run id'); }
@@ -3323,8 +3328,6 @@ function mountConsole(host, initial) {
             runBtn.disabled = true; stopBtn.disabled = false;
             await refreshPresence();
             perunFx.flash($('#perun-sigil'));
-            const sessionOpt = $('#c-session').selectedOptions[0];
-            const sessionId = sessionOpt ? (sessionOpt.dataset.oc || '') : '';
             if (!p.path) { toast('Selected project has no folder path.', 'err'); return; }
             await launchInTerminal({ project: p.slug, cwd: p.path, model: p.model, agent: p.agent, prompt, tui: true, runUid: currentRun, sessionId });
             promptEl().value = '';
@@ -4893,7 +4896,13 @@ async function viewPerunChat() {
             const t = await api('/api/perunchat/ws-ticket', { method: 'POST', body: {} });
             const s = await api('/api/perunchat/status');
             endpoint = `${s.endpoint}${s.endpoint.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(t.ticket)}`;
-        } catch (e) { toast('Could not load chat credentials: ' + e.message, 'err'); return; }
+        } catch (e) {
+            // A Perun restart or a 401 after key rotation used to leave the panel
+            // dead until the operator navigated away and back.
+            toast('Could not load chat credentials: ' + e.message, 'err');
+            scheduleReconnect();
+            return;
+        }
         try {
             wsExplicitClose = false;
             wsReconnectDelay = 1000;
@@ -5437,13 +5446,16 @@ async function loadAttentionPanel() {
         }, 30000);
         return;
     }
+    // The panel refreshes every 30 s; keep whatever the operator has typed so a
+    // tick cannot swallow a half-written reply.
+    const drafts = {};
+    host.querySelectorAll('[data-att-input]').forEach((input) => {
+        drafts[input.dataset.attInput] = input.value;
+    });
     host.innerHTML = items.map((it) => {
         const choices = (it.options || []).map((o) =>
             `<button class="btn sm" data-att-choose="${it.id}" data-att-option="${esc(o.id)}">${esc(o.label)}</button>`
         ).join(' ');
-        const steer = it.target_kind === 'session' && it.state === 'answered'
-            ? `<button class="btn sm ghost" data-att-steer="${it.id}" title="Deliver now instead of after the current turn">⚡ interrupt</button>`
-            : '';
         const detail = [it.target_kind, `att_${it.id}`, timeAgo(it.created_at)].filter(Boolean).join(' · ');
         return `<div class="list-row" style="align-items:flex-start">
             <span class="badge ${it.target_kind === 'permission' ? 'amber' : 'blue'}">${esc(it.target_kind)}</span>
@@ -5453,12 +5465,16 @@ async function loadAttentionPanel() {
               <div class="row wrap" style="gap:6px;margin-top:6px">
                 <input class="input" data-att-input="${it.id}" placeholder="reply…" style="min-width:240px">
                 <button class="btn sm" data-att-reply="${it.id}">Send</button>
-                ${choices}${steer}
+                ${choices}
                 <button class="btn sm ghost danger" data-att-dismiss="${it.id}" title="Dismiss">✕</button>
               </div>
             </span>
           </div>`;
     }).join('');
+    host.querySelectorAll('[data-att-input]').forEach((input) => {
+        const draft = drafts[input.dataset.attInput];
+        if (draft) input.value = draft;
+    });
     const refresh = () => loadAttentionPanel();
     host.querySelectorAll('[data-att-reply]').forEach((btn) => {
         btn.addEventListener('click', async () => {
@@ -5492,17 +5508,6 @@ async function loadAttentionPanel() {
             } else {
                 choose(btn, false);
             }
-        });
-    });
-    host.querySelectorAll('[data-att-steer]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            try {
-                await api(`/api/attention/${btn.dataset.attSteer}/delivery`,
-                    { method: 'POST', body: { delivery: 'steer' } });
-                toast('Interrupt requested', 'ok');
-                refresh();
-            } catch (e) { btn.disabled = false; toast(e.message, 'err'); }
         });
     });
     host.querySelectorAll('[data-att-dismiss]').forEach((btn) => {

@@ -183,9 +183,9 @@ def test_a_declared_changelog_outside_the_project_is_ignored(tmp_path):
     assert path.resolve().is_relative_to(project["path"].resolve())
 
 
-def test_a_busy_docs_runner_gives_the_proposal_back(tmp_path, monkeypatch):
-    """A held slot must not make the proposal disappear: the worker waits, then
-    hands the id back so a later attempt can still run its docs step."""
+def test_a_busy_docs_runner_still_writes_the_changelog(tmp_path, monkeypatch):
+    """A held slot must not lose the trace: nothing retries the docs step, so the
+    worker writes the changelog bullet itself instead of "leaving it for later"."""
     project = _project(tmp_path)
     monkeypatch.setattr(docs_sync, "enabled", lambda settings=None: True)
     monkeypatch.setattr(docs_sync, "SLOT_TIMEOUT", 0.05)
@@ -196,15 +196,14 @@ def test_a_busy_docs_runner_gives_the_proposal_back(tmp_path, monkeypatch):
         api = FakeAPI()
         assert docs_sync.after_execution(project, proposal, api=api) is True
         assert _wait(lambda: docs_sync._running == set(), timeout=3)
-        # Waited out the timeout, did nothing, and did not keep the id.
+        # No docs session was started, but the change is in the changelog.
         assert api.sessions == [] and api.commands_run == []
-        assert "prop_docs_busy" not in docs_sync._seen
+        assert "prop_docs_busy" in docs_sync._seen
+        changelog = docs_sync.changelog_path(project)
+        assert changelog.is_file()
+        assert "prop_docs_busy" in changelog.read_text(encoding="utf-8")
     finally:
         docs_sync._semaphore.release()
-
-    # With the slot free the same proposal is handled normally.
-    assert docs_sync.after_execution(project, proposal, api=api) is True
-    assert _wait(lambda: api.commands_run, timeout=3)
 
 
 def test_a_deleted_project_is_not_recreated(tmp_path):

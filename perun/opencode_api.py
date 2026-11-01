@@ -284,7 +284,7 @@ class OpenCodeAPI:
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         return data if isinstance(data, dict) else (payload if isinstance(payload, dict) else {})
 
-    def usage(self, session_id: str, *, limit: int = 100) -> Dict[str, Any]:
+    def usage(self, session_id: str, *, limit: int = 1000) -> Dict[str, Any]:
         """Tokens and cost the service reports for *session_id*.
 
         Summed over the session's messages, so it is authoritative and can be
@@ -295,6 +295,12 @@ class OpenCodeAPI:
         for message in self.messages(session_id, limit=limit):
             tokens = message.get("tokens") or {}
             if not isinstance(tokens, dict):
+                continue
+            price = float(message.get("cost") or 0)
+            if not tokens and not price:
+                # A user message carries no usage. Creating a bucket for it
+                # produced an "unknown" provider that defeated the run-model
+                # fallback in usage_by_provider().
                 continue
             # A session may switch provider mid-conversation, so the model is
             # recorded per message; the totals alone cannot price it correctly.
@@ -313,13 +319,13 @@ class OpenCodeAPI:
             cache0 = tokens.get("cache") or {}
             if isinstance(cache0, dict):
                 bucket["cache_read"] += int(cache0.get("read") or 0)
-            bucket["cost"] += float(message.get("cost") or 0)
+            bucket["cost"] += price
             total["tokens_in"] += int(tokens.get("input") or 0)
             total["tokens_out"] += int(tokens.get("output") or 0)
             cache = tokens.get("cache") or {}
             if isinstance(cache, dict):
                 total["cache_read"] += int(cache.get("read") or 0)
-            total["cost"] += float(message.get("cost") or 0)
+            total["cost"] += price
         return total
 
     def usage_limits(self) -> Optional[Dict[str, Any]]:

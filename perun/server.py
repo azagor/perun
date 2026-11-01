@@ -217,6 +217,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Start a background thread that repairs embeddings written while Ollama
     # was down. It is daemonic and signalled on shutdown.
     reembed_stop = _start_reembed_thread()
+
+    # Capture usage for sessions that finished while the service was down. The
+    # method is documented and idempotent (it skips a session that already has a
+    # snapshot) but was never called from anywhere.
+    def _backfill_usage() -> None:
+        try:
+            ORCH.backfill_usage(hours=24)
+        except Exception:  # pragma: no cover - telemetry is best effort
+            logging.getLogger("perun.server").debug(
+                "usage backfill failed", exc_info=True
+            )
+
+    threading.Thread(target=_backfill_usage, name="perun-usage-backfill",
+                     daemon=True).start()
     # Start the autonomous PerunChat agent bridge when a key is configured.
     if PERUNCHAT_BRIDGE is not None:
         PERUNCHAT_BRIDGE.start()
@@ -2378,10 +2392,20 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # actually receives.
     model = (payload.get("model") or "").strip() or project.get("model", "")
     agent = (payload.get("agent") or "").strip() or project.get("agent", "")
+    # A TUI opened on a known session can carry its id, so usage is captured when
+    # the operator presses Finish. Without it Perun binds the session later, while
+    # the terminal is open (see Orchestrator.refresh_open_usage).
+    oc_sid = str(payload.get("opencode_session_id") or "").strip()
+    session_pk = payload.get("session_pk")
+    try:
+        session_pk = int(session_pk) if session_pk else None
+    except (TypeError, ValueError):
+        session_pk = None
     _registry.create_run(
         run_uid, project["id"], prompt,
         model=model, model_explicit=bool(model),
         agent=agent, standalone=True,
+        session_pk=session_pk, opencode_session_id=oc_sid,
     )
     _registry.update_run(run_uid, status="running", started_at=_registry.now_iso())
     _registry.log_activity(project["id"], "run",
@@ -2645,7 +2669,7 @@ def api_routing_decisions(hours: int = 24, limit: int = 50) -> dict[str, Any]:
     rows = registry.routing_decisions(hours=hours, limit=limit)
     by_action: dict[str, int] = {}
     shadow = 0
-    reported_ids = registry.misroute_ids()
+    reported_ids = registry.misroute_ids([int(row["id"]) for row in rows])
     decisions: list[dict[str, Any]] = []
     for row in rows:
         meta = row.get("meta") or {}
@@ -2710,17 +2734,14 @@ def api_routing_misroute(
     row = registry.get_activity(decision_id)
     if not row or row.get("kind") != "routing_decision":
         raise HTTPException(status_code=404, detail="routing decision not found")
-    if registry.misroute_reported(decision_id):
-        return _ok(reported=decision_id, duplicate=True)
     meta = row.get("meta") or {}
     note = str(payload.get("note") or "").strip()[:500]
     if note and memory.is_sensitive(note):
         # A free-text note must not become a secret store.
         note = "[redacted]"
-    registry.log_activity(
+    created = registry.log_misroute(
         row.get("project_id") or None,
-        "routing_misroute",
-        f"misroute reported for routing decision {decision_id}",
+        decision_id,
         {
             "decision_id": decision_id,
             "action": meta.get("action"),
@@ -2732,6 +2753,8 @@ def api_routing_misroute(
             "note": note,
         },
     )
+    if not created:
+        return _ok(reported=decision_id, duplicate=True)
     return _ok(reported=decision_id)
 
 
@@ -3247,10 +3270,22 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 pass
 
     allowed = set(config.Settings.__dataclass_fields__)
+    # Validate everything *before* touching the live object: this used to apply
+    # fields up to the failing one, so a rejected PATCH still changed the running
+    # orchestrator while the dashboard showed an error.
+    staged: dict[str, Any] = {}
     for key, value in payload.items():
         if key in allowed:
-            setattr(SETTINGS, key, _coerce_setting(key, value))
-    SETTINGS.save()
+            staged[key] = _coerce_setting(key, value)
+    previous = {key: getattr(SETTINGS, key) for key in staged}
+    for key, value in staged.items():
+        setattr(SETTINGS, key, value)
+    try:
+        SETTINGS.save()
+    except Exception:
+        for key, value in previous.items():
+            setattr(SETTINGS, key, value)
+        raise
     # Keep the orchestrator in sync so run_timeout, default_model, etc. apply
     # immediately instead of requiring a server restart.
     ORCH.settings = SETTINGS
@@ -3318,7 +3353,8 @@ def api_providers_usage() -> dict[str, Any]:
         limit = budgets.get(str(row.get("provider") or "").lower())
         if limit:
             row["budget"] = round(limit, 2)
-            row["budget_percent"] = round(min(1.0, float(row.get("cost") or 0) / limit), 3)
+            # Not clamped: 240 % of a budget must not render like exactly 100 %.
+            row["budget_percent"] = round(float(row.get("cost") or 0) / limit, 3)
     return _ok(limits=limits, measured=measured, budgets=budgets)
 
 

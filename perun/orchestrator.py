@@ -45,6 +45,12 @@ HISTORY_TTL_SECONDS = 300.0
 # Blocking workshop timeout for a run stream; short enough to notice a
 # disconnect quickly without busy-waiting.
 STREAM_POLL_SECONDS = 15.0
+#: Every status a run never leaves. ``interrupted`` used to be missing, so a live
+#: waiter (Telegram worker, SSE stream) looped forever and a later Stop rewrote
+#: the final state to ``cancelled``.
+FINAL_STATUSES = frozenset({
+    "done", "failed", "cancelled", "timeout", "provider_error", "interrupted",
+})
 # On Windows opencode resolves to a ``.cmd`` file and is launched through
 # ``cmd /c``. cmd.exe has a 8191-character command-line limit, while the raw
 # CreateProcess limit is 32767. Stay well below the lower of the two so long
@@ -881,6 +887,14 @@ class Orchestrator:
             run_uid, project["id"], prompt,
             session_pk=session_pk, opencode_session_id=opencode_session_id,
             model=model, model_explicit=model_explicit, agent=agent,
+            # Only the *shape* of extra_env is persisted; its values may be
+            # secrets and must never be written to the database.
+            options={
+                "skip_instructions": bool(skip_instructions),
+                "use_prompt_file": bool(use_prompt_file),
+                "env_keys": sorted(str(k) for k in (extra_env or {})),
+                "standalone": bool(opencode_standalone),
+            },
         )
         # Carry skip_instructions and prompt-file mode in memory (not persisted
         # to DB) so chat-like runs can bypass project-instruction injection and
@@ -928,7 +942,7 @@ class Orchestrator:
         run = registry.get_run(run_uid)
         if run is None:
             return False
-        if run["status"] in ("done", "failed", "cancelled", "timeout", "provider_error"):
+        if run["status"] in FINAL_STATUSES:
             # Already final: cancelling again would resurrect a finished run and
             # emit a second "end". Report it as a no-op.
             return False
@@ -970,7 +984,7 @@ class Orchestrator:
 
     def is_final(self, run_uid: str) -> bool:
         run = registry.get_run(run_uid)
-        return bool(run and run["status"] in ("done", "failed", "cancelled", "timeout", "provider_error"))
+        return bool(run and run["status"] in FINAL_STATUSES)
 
     def active(self) -> list[str]:
         with self._lock:
@@ -1384,11 +1398,53 @@ class Orchestrator:
         updated = 0
         try:
             for run in registry.list_active_runs()[:5]:
-                if run.get("standalone") and self.capture_usage(run["run_uid"]):
+                if not run.get("standalone"):
+                    continue
+                # A TUI opened straight from the project card has no known session;
+                # while it is open the service does, so bind it once here.
+                if not str(run.get("opencode_session_id") or "").strip():
+                    self._bind_standalone_session(run)
+                if self.capture_usage(run["run_uid"]):
                     updated += 1
         except Exception:  # pragma: no cover - telemetry must not break reconcile
             LOG.debug("could not refresh open usage", exc_info=True)
         return updated
+
+    def _bind_standalone_session(self, run: dict[str, Any]) -> str:
+        """Resolve and persist the OpenCode session a TUI run works in.
+
+        Only used while the terminal is open (the service reports it as active);
+        the directory must match the run's project, so two terminals in different
+        projects cannot be confused.
+        """
+        run_uid = str(run.get("run_uid") or "")
+        project = registry.get_project(int(run.get("project_id") or 0)) or {}
+        path = str(project.get("path") or "")
+        if not run_uid or not path:
+            return ""
+        api = opencode_api.default_api()
+        try:
+            active = api.active_sessions()
+        except Exception:
+            return ""
+        candidates: list[str] = []
+        for sid in active:
+            try:
+                info = api.session(str(sid)) or {}
+            except Exception:
+                continue
+            directory = str((info.get("location") or {}).get("directory") or "")
+            if directory and os.path.normcase(directory) == os.path.normcase(path):
+                candidates.append(str(sid))
+        if len(candidates) != 1:
+            # None, or several terminals in one project: guessing would put one
+            # session's cost on another run.
+            return ""
+        try:
+            registry.update_run(run_uid, opencode_session_id=candidates[0])
+        except Exception:  # pragma: no cover - best effort
+            return ""
+        return candidates[0]
 
     def backfill_usage(self, hours: int = 24, *, limit: int = 50) -> int:
         """Capture usage for recently finished runs that never got a snapshot."""
@@ -1464,6 +1520,16 @@ class Orchestrator:
         """
         pid = int(run.get("pid") or 0)
         if pid:
+            # The tracker resolves the real child (a ``wt.exe`` launcher exits at
+            # once); asking it first keeps a live Windows-Terminal TUI from being
+            # marked interrupted 15 s after launch.
+            try:
+                from .process_tracker import TRACKER
+
+                if TRACKER.is_alive(str(run.get("run_uid") or "")):
+                    return False
+            except Exception:  # pragma: no cover - tracker is best effort
+                pass
             return not registry.pid_alive(pid)
         try:
             hours = int(getattr(self.settings, "tui_run_stale_hours", 24))
@@ -1571,6 +1637,22 @@ class Orchestrator:
         if not project:
             self._mark_interrupted(uid, "run project no longer exists")
             return
+        try:
+            options = json.loads(run.get("run_options") or "{}") or {}
+        except ValueError:
+            options = {}
+        if not isinstance(options, dict):
+            options = {}
+        if options.get("env_keys"):
+            # The values are deliberately not persisted (they may be secrets), so
+            # this run cannot be reconstructed faithfully. Say so instead of
+            # silently re-dispatching it with a different environment.
+            self._mark_interrupted(
+                uid, "cannot resume a run that needs extra environment variables")
+            return
+        # Restore the in-memory flags a restart used to drop.
+        run["skip_instructions"] = bool(options.get("skip_instructions"))
+        run["use_prompt_file"] = bool(options.get("use_prompt_file"))
         with self._lock:
             self._done[uid] = threading.Event()
             self._cancelled.discard(uid)
@@ -1601,7 +1683,12 @@ class Orchestrator:
                   error: str, *, cancelled: bool, reply: str = "",
                   opencode_session_id: str = "") -> None:
         run = registry.get_run(run_uid)
-        fatal = status in ("failed", "cancelled", "timeout", "provider_error")
+        # A final state another writer already recorded wins: a user's Stop must
+        # not be rewritten as ``done`` because the model finished in the same
+        # instant (and a late observer must not reopen an interrupted run).
+        if run and run.get("status") in FINAL_STATUSES and run["status"] != status:
+            status = run["status"]
+        fatal = status in FINAL_STATUSES and status != "done"
         registry.update_run(
             run_uid, status=status, exit_code=exit_code,
             ended_at=registry.now_iso(),

@@ -12,6 +12,24 @@ from perun.orchestrator import Orchestrator
 from perun.session_runner import SessionRunner
 
 
+def test_a_reattached_reply_does_not_replay_earlier_turns():
+    """Only text after this run's admission marker is this run's answer."""
+    class Api:
+        def messages(self, sid, limit=100):
+            return [
+                {"id": "m1", "type": "assistant",
+                 "parts": [{"type": "text", "text": "turn one"}]},
+                {"id": "msg_run", "type": "user",
+                 "parts": [{"type": "text", "text": "do it"}]},
+                {"id": "m2", "type": "assistant",
+                 "parts": [{"type": "text", "text": "turn two"}]},
+            ]
+
+    runner = SessionRunner.__new__(SessionRunner)
+    assert runner._existing_reply(Api(), "ses", after_id="msg_run") == "turn two"
+    assert runner._existing_reply(Api(), "ses") == "turn one\n\nturn two"
+
+
 class FakeAPI:
     """Stands in for the OpenCode service; no HTTP, no discovery."""
 

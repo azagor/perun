@@ -1097,6 +1097,19 @@ def test_settings_patch_coerces_and_validates(client):
     assert bad2.status_code == 400
 
 
+def test_a_rejected_settings_patch_applies_nothing(client):
+    """Validate the whole payload first: the live object must not change."""
+    from perun import server
+
+    before = server.SETTINGS.default_model
+    r = client.patch("/api/settings", json={
+        "default_model": "opencode/big-pickle",
+        "max_concurrent_runs": "lots",          # invalid -> 400
+    })
+    assert r.status_code == 400
+    assert server.SETTINGS.default_model == before
+
+
 def test_settings_patch_rejects_bad_types_and_leaks_no_token(client):
     from perun import server
 

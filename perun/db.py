@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS runs (
     reply_sent_at        TEXT DEFAULT '',
     lease_epoch          INTEGER DEFAULT 0,
     standalone           INTEGER DEFAULT 0,
-    pid                  INTEGER DEFAULT 0
+    pid                  INTEGER DEFAULT 0,
+    run_options          TEXT DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
@@ -471,6 +472,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # lets the next process tell "still open" from "closed while we were away".
         ("standalone", "INTEGER DEFAULT 0"),
         ("pid", "INTEGER DEFAULT 0"),
+        # In-memory options that used to vanish on a restart (`skip_instructions`,
+        # `use_prompt_file`), so a resumed run is the run the caller asked for.
+        ("run_options", "TEXT DEFAULT '{}'"),
     ],
     # Per-session token/cost snapshot from the OpenCode service. A session total
     # is authoritative, so it is stored (overwritten), never accumulated.
@@ -606,7 +610,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 def init_db() -> None:

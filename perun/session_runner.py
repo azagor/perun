@@ -133,14 +133,31 @@ class SessionRunner:
                 self.orch.bus.publish(run_uid, {
                     "type": "session", "run": run_uid, "session": sid,
                 })
-                api.prompt(
-                    sid, composed, delivery="queue",
-                    message_id=f"msg_{run_uid}", resume=True,
-                )
-                admitted = True
+                message_id = f"msg_{run_uid}"
+                try:
+                    api.prompt(
+                        sid, composed, delivery="queue",
+                        message_id=message_id, resume=True,
+                    )
+                    admitted = True
+                except opencode_api.OpenCodeUnavailable:
+                    # The POST may have landed even though its response did not.
+                    # Never fall back to the CLI runner once a session exists: that
+                    # would run the same turn twice in the same session. Ask the
+                    # session whether our admission message is there instead.
+                    if not self._admission_landed(api, sid, message_id):
+                        self._finish(
+                            run_uid, "failed",
+                            "the prompt could not be confirmed; it may have been "
+                            "admitted — check the session before retrying",
+                            "", lease, sid,
+                        )
+                        return
+                    admitted = True
                 status, error, reply = self._observe(
                     run_uid, project, sid, inbox, lease,
-                    seed=self._existing_reply(api, sid) if run.get("_reattach") else "",
+                    seed=self._existing_reply(api, sid, after_id=message_id)
+                    if run.get("_reattach") else "",
                 )
             finally:
                 hub.unsubscribe(token)
@@ -203,6 +220,7 @@ class SessionRunner:
             parts["seed"] = [seed]
             order.append("seed")
         last_beat = 0.0
+        probe_failures = 0
         deadline = time.time() + max(1, int(self.orch.settings.run_timeout))
         status, error = "failed", "run ended without a result"
 
@@ -211,11 +229,11 @@ class SessionRunner:
                 LOG.warning("run %s: lease lost, stopping observer", run_uid)
                 return "interrupted", "observation handed to another process", ""
             if self.orch.is_cancelled(run_uid):
-                api.interrupt(sid)
+                self._interrupt(api, sid)
                 return "cancelled", "", self._reply_from(parts, order)
             now = time.time()
             if now >= deadline:
-                api.interrupt(sid)
+                self._interrupt(api, sid)
                 return ("timeout", f"run exceeded {self.orch.settings.run_timeout}s",
                         self._reply_from(parts, order))
             if now - last_beat > 5.0:
@@ -226,8 +244,21 @@ class SessionRunner:
             except queue.Empty:
                 # The service may have finished while we were not subscribed (or
                 # dropped the event): a non-active session with text is done.
-                if not api.session_active(sid):
-                    reply = self._reply_from(parts, order) or self._existing_reply(api, sid)
+                try:
+                    active = api.session_active(sid)
+                except opencode_api.OpenCodeUnavailable:
+                    # Cannot tell is not "finished": a transient 2 s timeout during
+                    # an OpenCode restart used to finalize a live run as
+                    # interrupted. Give it a short grace window instead.
+                    probe_failures += 1
+                    if probe_failures < 30:
+                        continue
+                    return ("interrupted",
+                            "lost the opencode service while observing", "")
+                probe_failures = 0
+                if not active:
+                    reply = (self._reply_from(parts, order)
+                             or self._existing_reply(api, sid))
                     if reply:
                         return "done", "", reply
                     return "failed", "session ended with no output", ""
@@ -282,17 +313,65 @@ class SessionRunner:
         return status, error, self._reply_from(parts, order)
 
     @staticmethod
+    def _interrupt(api: "opencode_api.OpenCodeAPI", sid: str) -> None:
+        """Ask the service to stop the turn; never let that mask the result."""
+        try:
+            api.interrupt(sid)
+        except opencode_api.OpenCodeError:
+            LOG.debug("could not interrupt session %s", sid, exc_info=True)
+
+    @staticmethod
     def _reply_from(parts: Dict[str, List[str]], order: List[str]) -> str:
         return "\n\n".join(
             "".join(parts[mid]).strip() for mid in order if parts.get(mid)
         ).strip()
 
-    def _existing_reply(self, api: "opencode_api.OpenCodeAPI", sid: str) -> str:
-        """Assistant text already in the session (used when reattaching)."""
+    def _admission_landed(self, api: "opencode_api.OpenCodeAPI", sid: str,
+                          message_id: str, *, attempts: int = 10) -> bool:
+        """Whether ``message_id`` exists in the session (admission confirmed).
+
+        A prompt POST that times out is ambiguous; re-reading the session is the
+        only way to tell "never sent" from "sent, answer lost". Conservative on
+        purpose: if the service stays unreachable we report ``False`` and the run
+        ends as failed rather than risking a second turn.
+        """
+        for attempt in range(max(1, attempts)):
+            try:
+                for message in api.messages(sid, limit=50):
+                    if str(message.get("id") or "") == message_id:
+                        return True
+                return False
+            except opencode_api.OpenCodeUnavailable:
+                if attempt == attempts - 1:
+                    return False
+                time.sleep(1.0)
+            except opencode_api.OpenCodeError:
+                return False
+        return False
+
+    def _existing_reply(self, api: "opencode_api.OpenCodeAPI", sid: str,
+                        *, after_id: str = "") -> str:
+        """Assistant text already in the session (used when reattaching).
+
+        With *after_id*, only messages at or after that admission marker count: a
+        reattached run used to send the whole transcript (every previous turn) to
+        the chat as if it were this turn's answer.
+        """
         try:
-            messages = api.messages(sid, limit=50)
+            messages = api.messages(sid, limit=100)
         except opencode_api.OpenCodeError:
             return ""
+        if after_id:
+            index = next(
+                (i for i, m in enumerate(messages) if str(m.get("id") or "") == after_id),
+                None,
+            )
+            if index is not None:
+                messages = messages[index:]
+            else:
+                # Marker not visible (old session): keep only the final turn.
+                messages = [m for m in messages
+                            if str(m.get("type") or "") in ("assistant", "message")][-1:]
         chunks: List[str] = []
         for message in messages:
             if str(message.get("type") or "") not in ("assistant", "message"):

@@ -160,8 +160,11 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `attention_by_message()` (reply-to → item), `attention_delivered_message()` (the
   message id that last carried an item to a chat), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
   `attention_deliveries()`, `undelivered_attention(within_minutes=…)`,
-  `close_attention()` (conditional on `state='open'`), `update_attention_ref()`,
-  `set_attention_delivery()`, `touch_attention_waiter()`, `expire_attention()`,
+  `close_attention()` (conditional on `state='open'`), `update_attention_ref()`
+  (one atomic `json_set`, so a toggle and a delivery cannot clobber each other),
+  `set_attention_delivery()`, `touch_attention_waiter()` /
+  `clear_attention_waiter()` (the timeout path drops its heartbeat before
+  returning, so a late answer is injected instead of closed), `expire_attention()`,
   `reopen_attention()`, `attention_count_since()` (hourly cap),
   `attention_muted_projects()` / `mute_attention_project()` /
   `unmute_attention_project()`, the `attention_outbox_*` queue (list/retry included), and
@@ -651,19 +654,25 @@ reason)`.
 * `normalize()` — NFKC + casefold + alphanumeric words, so `trading-bot`,
   `trading_bot` and `trading bot` are identical.
 * `resolve_project()` — exact slug, exact display-name phrase, unique
-  non-generic tag (0.95), single-word stem with Polish palatalisation
-  (`perunie`, `perunchacie`, `tradingu`, 0.8), and multi-word slug with an
-  inflected tail (`trading-bota`, 0.9). Longest span wins; two projects at the
-  same confidence/span return `candidates` instead of a guess.
+  non-generic tag (0.95), stem with Polish palatalisation (`perunie`,
+  `perunchacie`, `tradingu`), and multi-word slug with an inflected tail
+  (`trading-bota`, 0.9). A stem must take a known inflection (`_INFLECTIONS`) and
+  only the slug's **head** word may stem, so `controller` no longer selects
+  `parental-control`. Longest span wins; two projects at the same
+  confidence/span return `candidates` instead of a guess.
   Tags are ignored unless unique and non-generic (live tags include `docs`,
   `tests`, `opencode`, and `perunchat` itself is tagged `perun`).
 * `detect_action()` — explicit PL/EN keyword sets (`stop`, `remember`, `recall`,
   `status`, `run`), matched in the **leading window** (after an optional mention
   or "please") so a sentence that merely mentions a command word — "dodaj
-  komendę status" — stays a run instead of becoming a status query. Negation
-  ("nie uruchom") returns `unknown`; a question in the opening words wins over a
-  verb later in the sentence; a trailing `?` on an imperative is still a run.
-  `stop loss`/`stop limit` are domain terms, not commands.
+  komendę status" — stays a run instead of becoming a status query. Negation is
+  tested on the stripped head ("prosze nie uruchom" is a refusal too); a question
+  in the opening words wins over a verb later in the sentence; a trailing `?` on an
+  imperative is still a run; `_looks_like_paste()` sends pasted output
+  (`status=500 …`, fenced blocks, `$ ` prompts) to `unknown`; `stop` must be a
+  one/two-word imperative. `stop loss`/`stop limit` are domain terms, not commands.
+  `route()` only returns `clarify` for a directive — an ambiguous mention in a
+  question or comparison reaches the agent, and an `unknown` never binds a project.
 * Six read-only machine questions are answered without a model: `pending`
   ("what's waiting", "co czeka", "pending approvals"), `projects` ("list
   projects", "pokaż projekty"), `help` ("pomoc"), `runs` ("last run", "why did
@@ -870,10 +879,18 @@ Autonomous PerunChat chat participant for the Orchestrator.
   the proposal claimable. Reviews are capped at two concurrent runs
   (`_review_sem`), proposal content is wrapped as `<untrusted_proposal>` data,
   and a failed review posts a human-action notice.
+* Credentials are resolved per attempt (`_refresh_credentials()`), preferring
+  `PERUNCHAT_KEY_FILE`, and rooms that drop out of `_rooms()` get a `ROOM_LEAVE`;
+  a project room whose binding cannot be read is never answered as the control
+  plane, and `_room_burst` stops an agent-to-agent exchange after six replies.
 * No-loss reply delivery: every outbound reply frame is persisted in a
   write-ahead outbox under PERUN_HOME before sending and removed only
-  after success; `_flush_outbox()` resends queued frames after a reconnect with
-  their original id + `sequence_number`, which is idempotent at the gateway.
+  after success; the load-modify-store runs under `_outbox_lock` over a unique
+  temp file (a concurrent room worker used to lose a frame, and the flush could
+  erase one queued during it). `_flush_outbox()` resends queued frames after a
+  reconnect with their original id + `sequence_number`, which is idempotent at
+  the gateway. The counter is written atomically and seeded from the clock, so a
+  lost file cannot restart it below the gateway's high-water mark.
   Empty replies are retried once, and a still-running run is awaited instead of
   starting a duplicate. Replied-message ids are persisted under PERUN_HOME so bridge restarts do not reply twice to replayed
   history.
@@ -976,8 +993,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `perun/hitl.py` — local HMAC-SHA256 HITL approval-token engine for action
   proposals (tokens bind proposal id, canonical JSON action hash, expiry, and
   nonce); signing secret configurable via `PERUN_HITL_SECRET` /
-  `perun_hitl_secret`. `validate()` checks the signature before consuming the
-  nonce, rejects malformed token/nonce/expiry types, and `HITLConfig` requires
+  `perun_hitl_secret`. `verify()` checks the signature (optionally ignoring
+  expiry and without consuming the nonce) and `validate()` = verify + consume,
+  so an external claim can verify a stored token after its 180 s execution window
+  while the seven-day approval is what authorizes it. Rejects malformed
+  token/nonce/expiry types; `HITLConfig` requires
   `nonce_ttl_seconds >= token_ttl_seconds + 5`.
 * `perun/path_guard.py` — resolves the project allowlist (root + declared
   external deps), resolves relative targets against the project root, validates
@@ -1013,7 +1033,12 @@ Autonomous PerunChat chat participant for the Orchestrator.
   logs allowlist violations, target-scope violations, and created/modified/
   deleted parent-directory entries to the activity table. Also provides
   `target_digests()` / `drifted_targets()` — the per-target sha256+size fingerprint
-  captured at approval and re-checked at claim/apply. Content is always hashed
+  captured at approval and re-checked at claim/apply. A directory target is a
+  bounded tree digest (`_tree_digest`: sorted relpath + bytes, max 500 files)
+  instead of the old content-free `{"kind": "dir"}`. Sibling directories are
+  tracked by existence only (their mtime is another project's business), and
+  `.opencode`/`.perun`/`.claude` metadata is snapshotted even though the write
+  walk skips it. Content is always hashed
   (so `os.utime` cannot hide an edit); a target above the 256 MiB/file and
   512 MiB total budget is marked `unverifiable` and refused for external claims
   rather than checked more weakly. `null` means the target does not exist yet.

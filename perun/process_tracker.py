@@ -16,6 +16,7 @@ tree. ``psutil`` is used when available; without it we fall back to the raw
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import threading
@@ -29,6 +30,8 @@ except Exception:  # pragma: no cover - optional dependency
     _HAS_PSUTIL = False
 
 from . import registry
+
+LOG = logging.getLogger("perun.processes")
 
 
 class ProcessTracker:
@@ -56,6 +59,10 @@ class ProcessTracker:
         except Exception:  # pragma: no cover - tracking is best effort
             pass
         self._ensure_watcher()
+        # ``wt.exe`` (and some launchers) exit immediately; resolve the real
+        # child now if it is already there, so ``runs.pid`` is not a dead pid.
+        threading.Thread(target=self._remember_child, args=(run_uid,),
+                         daemon=True).start()
 
     def get(self, run_uid: str) -> dict[str, Any] | None:
         with self._lock:
@@ -73,16 +80,72 @@ class ProcessTracker:
         if proc and proc.poll() is None:
             return True
         # Popen handle died; try to find a spawned child (e.g. Windows Terminal).
-        return bool(self._resolve_child_pid(entry))
+        child = self._resolve_child_pid(entry)
+        if child:
+            self._remember_child(run_uid, child)
+            return True
+        return False
+
+    def _remember_child(self, run_uid: str, pid: int | None = None) -> None:
+        """Persist the *resolved* child pid once, so a restart checks the right one."""
+        entry = self.get(run_uid)
+        if not entry:
+            return
+        if pid is None:
+            # Give the launcher a moment to spawn its child before looking.
+            time.sleep(1.0)
+            pid = self._resolve_child_pid(entry)
+        if not pid or pid == entry.get("child_pid") or pid == entry.get("pid"):
+            return
+        entry["child_pid"] = pid
+        try:
+            registry.update_run(run_uid, pid=int(pid))
+        except Exception:  # pragma: no cover - tracking is best effort
+            pass
+
+    def _belongs_to_run(self, pid: int, run_uid: str) -> bool:
+        """Whether *pid* (or a descendant) carries ``PERUN_RUN_UID=<run_uid>``.
+
+        Pids are recycled; killing a tree because "some process has this pid" can
+        destroy an unrelated editor or build. The launcher command sets the
+        marker, so the real terminal process carries it.
+        """
+        if not _HAS_PSUTIL:
+            return False
+        try:
+            root = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return False
+        candidates = [root]
+        try:
+            candidates.extend(root.children(recursive=True))
+        except Exception:
+            pass
+        for proc in candidates:
+            try:
+                if run_uid in (proc.environ() or {}).get("PERUN_RUN_UID", ""):
+                    return True
+                if run_uid in " ".join(proc.cmdline() or []):
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
 
     def terminate(self, run_uid: str) -> bool:
         """Kill the process tree for a tracked session and finalize its run."""
         entry = self.get(run_uid)
         if not entry:
-            # Explicit Stop after a restart: use the persisted pid.
+            # Explicit Stop after a restart: use the persisted pid, but only when
+            # it can be attributed to this run.
             run = registry.get_run(run_uid) or {}
             pid = int(run.get("pid") or 0)
             if not pid or not registry.pid_alive(pid):
+                self.finalize(run_uid)
+                return False
+            if not self._belongs_to_run(pid, run_uid):
+                LOG.warning("refusing to kill pid %s for run %s: it does not carry "
+                            "the PERUN_RUN_UID marker", pid, run_uid)
+                self.finalize(run_uid)
                 return False
             self._kill_tree(pid)
             self.finalize(run_uid)
@@ -131,11 +194,14 @@ class ProcessTracker:
         return killed
 
     def finalize(self, run_uid: str) -> None:
-        """Stop tracking and mark the run record as done if it is still active."""
+        """Stop tracking and mark the run record as done if it is still active.
+
+        The row is finalized even without an in-memory entry: after a restart
+        that entry is gone, and the old early return left the run ``running``
+        (still lit on its card) while ``kill`` reported success.
+        """
         with self._lock:
-            if run_uid not in self._entries:
-                return
-            del self._entries[run_uid]
+            self._entries.pop(run_uid, None)
         run = registry.get_run(run_uid)
         if run and run.get("status") in ("queued", "running"):
             registry.update_run(run_uid, status="done",

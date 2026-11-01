@@ -4,7 +4,119 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Two-day production audit: the fixes
+
+Nineteen defects found by auditing `v0.8.45..v0.10.37`. Most were silent — a lost
+answer, a card that died, a run that ran twice — which is why the suite was green.
+
+**Routing (live on this machine).**
+* Negation is tested on the stripped head, so "prosze nie uruchom testow" and
+  "@perun nie uruchom testow" are refusals, not runs.
+* The machine-question phrase tables are anchored to the leading window (as the
+  docs always claimed): "uruchom testy i sprawdz co sie dzieje" runs the tests
+  instead of answering "what's running".
+* An ambiguous mention only asks "which project?" for a directive; a comparison or
+  a question that names two projects reaches the agent.
+* Slug stems must take a known inflection ("perun" → "perunie"), and only the
+  slug's head word may stem: "controller" no longer selects `parental-control`,
+  "machines" no longer selects `perun-in-the-machine`.
+* Pasted output is left alone: `status=500 …`, a fenced block or a `$ ` prompt is
+  `unknown`, not a command; `stop` must be a one/two-word imperative.
+* `unknown` decisions no longer record the project they merely mentioned, and the
+  coverage counter uses UTC days like every other timestamp.
+
+**Operator inbox.**
+* A digest lists five items and *requeues* the rest; it used to mark every item as
+  shown, so six-and-beyond were invisible everywhere (no card, no delivery row,
+  and `/pending` joins deliveries).
+* `wait()` clears its heartbeat before timing out: an answer landing just after
+  "No answer yet" is now injected instead of being closed as delivered.
+* A failed permission/form fetch is not a "the request is gone" signal anymore;
+  locations that were not successfully queried are never reconcilled, and a
+  failed session lookup is not cached.
+* Buttons and other composed Telegram strings go through `redact()`: the
+  "Confirm always allow" patterns and the `/answer` listing were raw.
+* Digest cards are Markdown like every other card (they rendered literal `<b>`),
+  item ids are not truncated in silence, and a reply to a permission card is a
+  rejection with the operator's reason — which is what the card promises.
+* `update_attention_ref()` is one atomic `json_set` (a tick and a delivery no longer
+  overwrite each other's key), multiselect toggles are serialized, open items are
+  expired on every tick and pruned hourly, and the two per-item sets are trimmed.
+* The dashboard keeps a half-typed reply across its 30 s refresh and no longer
+  carries a dead ⚡ branch (steer/undo live in Telegram).
+* Misroute markers are inserted with `WHERE NOT EXISTS` (a double click cannot
+  duplicate one) and the panel only scans the ids it shows.
+
+**Runs.**
+* `interrupted` is a final status: a Telegram worker or SSE stream waiting on a
+  run no longer loops forever, and a later Stop cannot rewrite it as `cancelled`.
+* A `_finalize` that loses the race to a user's cancel keeps `cancelled`.
+* A status probe that fails during an OpenCode restart is "cannot tell", not
+  "finished": the run gets a 30 s grace window instead of being killed.
+* A prompt admission that times out is confirmed against the session before the
+  CLI runner is used — a busy service could previously execute the same turn
+  twice in one session.
+* TUI runs: the Windows-Terminal launcher pid is replaced by the resolved child, a
+  live tracker entry counts as alive, and Stop after a restart refuses to kill a
+  pid that does not carry `PERUN_RUN_UID` (pids are recycled).
+* Reply delivery is no longer "at most once": the claim is released when Telegram
+  refuses every chat, and a partially delivered run is logged.
+* A reattached run seeds only text after its own admission marker, not the whole
+  transcript.
+* `runs.run_options` (schema v19) keeps `skip_instructions` / `use_prompt_file`
+  across a restart; a run that needs extra environment variables is marked
+  interrupted rather than re-dispatched with a different environment.
+
+**Proposals, handoff, audit.**
+* An approved proposal stays executable for its seven-day window: an expired
+  180 s execution token is re-issued from the stored approval instead of turning
+  the row terminal. An external claim verifies the token signature and the
+  approval window (`hitl.verify()`), and no longer accepts an unverified token.
+* A directory target is fingerprinted as a bounded tree, so editing `docs/` after
+  approval is drift (it used to be `{"kind": "dir"}` on both sides).
+* The audit ignores a sibling directory's mtime (another project writing its own
+  files is not an escape) but snapshots `.opencode`/`.perun`/`.claude` metadata,
+  so a planted plugin is a violation even though the write walk skips them.
+* Two local executions in one project are serialized (the guard derives its
+  live allowlist from the executing rows and refuses everything when two exist).
+* A busy docs slot writes the changelog bullet instead of dropping it; the
+  package protocol dedupes on the normalized entry name and refuses at pack time
+  names its own unpacker rejects; backup pruning sorts by mtime (a same-second
+  `-10` used to sort before `-2` and be deleted first).
+
+**Usage, settings, install.**
+* TUI runs are linked to their session (the chat passes it; otherwise the open
+  terminal is matched by directory) and `backfill_usage()` actually runs at
+  startup; before this, TUI usage was never captured at all.
+* `usage()` reads up to 1000 messages, skips messages with no usage (the
+  "unknown" provider that defeated attribution), maps `opencode-go` spend onto
+  the `opencode` card, and no longer clamps a budget to 100 %.
+* `PATCH /api/settings` validates every field before applying any, and rolls back
+  if the write fails.
+* The orchestrator agent honours `OPENCODE_CONFIG`, a hand-edited template version
+  no longer crashes every control-plane run, and the installer has the `LOG` it
+  referenced. `uninstall()` removes all four of its commands and only its own
+  `instructions[]` entry ("notes/perun-guidelines.md" is the user's).
+
+**PerunChat.**
+* The bridge resolves its key/agent id on every attempt (a startup hiccup used to
+  end the thread for good) and prefers `PERUNCHAT_KEY_FILE`, so a rotated key is
+  picked up. A reconnect backoff is interruptible, so Save takes effect.
+* The sequence counter is written atomically and seeded from the clock: a lost
+  file can no longer restart below the gateway's high-water mark and have every
+  frame rejected forever.
+* The outbox is one locked read-modify-write over a unique temp file, and the
+  reconnect flush merges instead of overwriting frames queued during it.
+* The bridge sends `ROOM_LEAVE` for rooms it no longer wants, refuses to answer a
+  project room as the control plane when the binding cannot be read, stops an
+  agent-to-agent burst after six exchanges, and only treats a *leading* question
+  word as a question.
+
+### Known gap (unchanged by this round)
+
+The post-execution docs run still uses the project's default agent and happens
+after the filesystem audit, so its own writes are not checked. Closing that needs
+a dedicated restricted docs agent; it is tracked in `docs/AUDIT_2026-11-01.md`.
 
 ## v0.10.37
 

@@ -58,6 +58,46 @@ def test_diff_reports_escape_next_to_project_root(tmp_path):
     assert str(deleted) in result["escaped"]
 
 
+def test_a_sibling_directory_writing_its_own_files_is_not_an_escape(tmp_path):
+    """Directory mtimes change whenever another project works; that is not us."""
+    project = _make_shared_project(tmp_path)
+    sibling = tmp_path / "other-project"
+    sibling.mkdir()
+    before = fs_audit.snapshot(project)
+
+    # Normal sibling activity: a new top-level file inside it.
+    (sibling / "new_file.py").write_text("x")
+
+    result = fs_audit.diff(project, before)
+    assert result["escaped"] == []
+
+
+def test_a_new_sensitive_subtree_file_is_a_violation(tmp_path):
+    """The walk skips .opencode; a plugin planted there must still be reported."""
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    (root / ".opencode" / "plugin").mkdir(parents=True)
+    before = fs_audit.snapshot(project)
+
+    (root / ".opencode" / "plugin" / "telemetry.ts").write_text("// planted")
+
+    result = fs_audit.diff(project, before)
+    assert str(root / ".opencode" / "plugin" / "telemetry.ts") in result["violations"]
+
+
+def test_a_directory_target_detects_changes_inside_it(tmp_path):
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "CODEMAP.md").write_text("before")
+    before = fs_audit.target_digests(project, ["docs"])
+
+    (docs / "CODEMAP.md").write_text("after")
+
+    assert fs_audit.drifted_targets(project, ["docs"], before) == ["docs"]
+
+
 def test_target_scope_flags_writes_outside_declared_targets(tmp_path):
     project = _make_shared_project(tmp_path)
     root = Path(project["path"])

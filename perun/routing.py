@@ -420,11 +420,25 @@ _PALATAL = {
 }
 
 
+#: Endings a slug word may take before it still counts as the same word. A bare
+#: prefix is far too generous ("control" would swallow "controller", "plan"
+#: would swallow "planet", and a project would be silently rebound).
+_INFLECTIONS = frozenset({
+    # Polish
+    "a", "e", "i", "o", "u", "y", "ą", "ę", "ie", "iu", "em", "om", "owi",
+    "ów", "ami", "ach", "cie", "ciu", "cia", "ek", "ka", "ko", "ki", "ku",
+    "ej", "ym", "ych", "ego", "emu",
+    # English
+    "s", "es", "ed", "ing", "er", "ers", "ly",
+})
+
+
 def _stem_match(word: str, text_word: str) -> bool:
-    """True when ``text_word`` is ``word`` plus an inflectional ending."""
+    """True when ``text_word`` is ``word`` plus a known inflectional ending."""
     if len(text_word) <= len(word) or len(text_word) - len(word) > 3:
         return False
-    if text_word.startswith(word):
+    tail = text_word[len(word):]
+    if text_word.startswith(word) and tail in _INFLECTIONS:
         return True
     if len(word) < 2 or text_word[: len(word) - 1] != word[:-1]:
         return False
@@ -432,6 +446,23 @@ def _stem_match(word: str, text_word: str) -> bool:
     if not alternate:
         return False
     return text_word[len(word) - 1 :].startswith(alternate)
+
+
+def _looks_like_paste(raw: str) -> bool:
+    """True when the message is pasted output, not an instruction to Perun.
+
+    ``normalize`` drops punctuation, so without this guard a pasted
+    ``status=500 …`` becomes a status query, `kill -9 1234` a stop, and a fenced
+    block containing "perun status" a command — the operator's error report never
+    reaches the agent.
+    """
+    text = str(raw or "")
+    stripped = text.lstrip()
+    if stripped.startswith(("```", "~~~", "$ ", "> ", "# ", "PS ", "C:\\>", "/> ")):
+        return True
+    first_line = text.splitlines()[0] if text else ""
+    # key=value on the first line is a log line (status=500, ERROR=...), not a verb.
+    return bool(re.match(r"^\s*[A-Za-z_][\w.\-]*\s*=\s*\S", first_line))
 
 
 def _stem_owner(
@@ -492,22 +523,24 @@ def resolve_project(
                 start, length = inflected
                 hits.append((0.9, length, start, slug, "inflected"))
 
-    # Stem pass: slug words of 4+ characters, allowing up to three trailing
-    # characters of inflection ("perun" -> "peruna", "trading" -> "tradingu").
+    # Stem pass: the *head* word of a slug, 4+ characters, with a known
+    # inflectional tail ("perun" -> "peruna", "trading" -> "tradingu"). Interior
+    # words are not stemmed: "controller" must not resolve "parental-control",
+    # nor "machines" resolve "perun-in-the-machine".
     for term, matched_by, _confidence, _slug in terms:
         if matched_by != "slug":
             continue
-        for word in term.split():
-            if len(word) < 4:
+        word = term.split()[0]
+        if len(word) < 4:
+            continue
+        owner = _stem_owner(word, word_owners)
+        if owner is None:
+            continue
+        for index, text_word in enumerate(words):
+            if text_word == word:
                 continue
-            owner = _stem_owner(word, word_owners)
-            if owner is None:
-                continue
-            for index, text_word in enumerate(words):
-                if text_word == word:
-                    continue
-                if _stem_match(word, text_word):
-                    hits.append((0.8, 1, index, owner, "stem"))
+            if _stem_match(word, text_word):
+                hits.append((0.8, 1, index, owner, "stem"))
 
     if not hits:
         return None, (), "none", 0.0
@@ -563,6 +596,8 @@ def detect_action(text: str) -> str:
     for. Negation ("nie uruchom testów") also yields ``unknown`` instead of
     starting a run.
     """
+    if _looks_like_paste(text):
+        return "unknown"
     norm = normalize(text)
     if not norm:
         return "unknown"
@@ -570,7 +605,10 @@ def detect_action(text: str) -> str:
     head = _leading_tokens(tokens)
     padded = f" {norm} "
 
-    if tokens and (tokens[0] in _NEGATIONS or tokens[:2] == ["do", "not"]):
+    # Negation is tested on the *stripped* head, so "prosze nie uruchom testow"
+    # and "@perun nie uruchom testow" are refusals too, not runs. ``normalize``
+    # splits "don't" into "don t".
+    if head and (head[0] in _NEGATIONS or head[:2] in (["do", "not"], ["don", "t"])):
         return "unknown"
 
     # Phrase commands are anchored at the start of the message.
@@ -586,30 +624,30 @@ def detect_action(text: str) -> str:
     # never spend an agent run. Phrases are anchored at the start; single words
     # only in very short messages ("help me run tests" stays a run).
     for phrase in _PENDING_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "pending"
     for phrase in _PROJECTS_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "projects"
     for phrase in _RUNS_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "runs"
     for phrase in _NOW_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "now"
     for phrase in _HEALTH_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "health"
     for phrase in _USAGE_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "usage"
     for phrase in _RESUME_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "resume"
     if head and len(head) <= 2 and head[0] in _KEYWORDS["routing"]:
         return "routing"
     for phrase in _DIFF_PHRASES:
-        if f" {phrase} " in head_text:
+        if head_text.startswith(f" {phrase} "):
             return "diff"
     if head and len(head) <= 2:
         for action in ("pending", "projects", "help", "runs", "now", "health",
@@ -624,6 +662,9 @@ def detect_action(text: str) -> str:
     window = set(head[:2])
     for action in ("stop", "remember", "recall", "status"):
         if not (window & _KEYWORDS[action]):
+            continue
+        if action == "stop" and len(head) > 2:
+            # "stop the docker container" is prose; /stop is a one/two word command.
             continue
         blocked = any(f" {blocker} " in padded for blocker in _KEYWORD_BLOCKERS.get(action, ()))
         if not blocked:
@@ -668,7 +709,10 @@ def route(
     action = detect_action(text)
     project, candidates, matched_by, confidence = resolve_project(text, projects)
 
-    if candidates:
+    # An ambiguous mention only blocks when there is something to act on. A
+    # comparison ("porownaj perun i perunchat") or a question that happens to
+    # name two projects must reach the agent, not a "which project?" dead end.
+    if candidates and action not in ("unknown", "ask"):
         return RouteDecision(
             action="clarify",
             project=None,
@@ -681,10 +725,23 @@ def route(
     if action == "unknown":
         return RouteDecision(
             action="unknown",
-            project=project or current,
+            project=None,
             confidence=confidence,
             matched_by=matched_by,
+            candidates=candidates,
             reason="no action keyword",
+        )
+
+    if candidates:
+        # A question with an ambiguous mention stays a question in the project
+        # the chat is already bound to.
+        return RouteDecision(
+            action="ask",
+            project=current,
+            confidence=confidence,
+            matched_by="ambiguous",
+            candidates=candidates,
+            reason="ambiguous mention; answering in the current project",
         )
 
     if project is None:

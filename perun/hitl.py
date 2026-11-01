@@ -110,14 +110,23 @@ class HITLTokenEngine:
             "nonce": nonce,
         }
 
-    def validate(
+    def verify(
         self,
         token: str,
         proposal_id: str,
         execution_details: Dict[str, Any],
         expiry_epoch: int,
         nonce: str,
+        *,
+        check_expiry: bool = True,
+        consume_nonce: bool = False,
     ) -> Tuple[bool, Optional[str]]:
+        """Signature/action/expiry check, optionally without burning the nonce.
+
+        An external claim verifies the stored token *after* its short execution
+        window has passed: the approval row is what authorizes a later handoff, and
+        the signature still proves the row was not hand-edited.
+        """
         # Reject malformed inputs before touching the nonce store so a bad call
         # cannot burn a legitimate nonce.
         if (
@@ -132,16 +141,29 @@ class HITLTokenEngine:
             or not isinstance(execution_details, dict)
         ):
             return False, "invalid_signature"
-        if int(time.time()) > expiry_epoch:
+        if check_expiry and int(time.time()) > expiry_epoch:
             return False, "expired"
         ahash = self.action_hash(execution_details)
         message = f"{proposal_id}||{ahash}||{expiry_epoch}||{nonce}".encode()
         expected = hmac.new(self.config.secret_key, message, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected.encode(), token.encode()):
             return False, "invalid_signature"
-        if not self.store.consume(nonce):
+        if consume_nonce and not self.store.consume(nonce):
             return False, "nonce_replay"
         return True, None
+
+    def validate(
+        self,
+        token: str,
+        proposal_id: str,
+        execution_details: Dict[str, Any],
+        expiry_epoch: int,
+        nonce: str,
+    ) -> Tuple[bool, Optional[str]]:
+        return self.verify(
+            token, proposal_id, execution_details, expiry_epoch, nonce,
+            check_expiry=True, consume_nonce=True,
+        )
 
 
 def _default_secret() -> bytes:

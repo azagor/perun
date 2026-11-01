@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -646,7 +647,19 @@ def _deliver_text(item: Dict[str, Any], text: str, by: str, *,
     kind = item["target_kind"]
     ref = item.get("ref") or {}
 
-    if kind in ("permission", "proposal"):
+    if kind == "permission":
+        # The card says "reply with feedback to reject", so a typed answer is a
+        # rejection carrying the operator's reason — exactly what OpenCode shows
+        # the agent. Decisions still need the buttons.
+        session_id = str(ref.get("session_id") or "")
+        request_id = str(ref.get("request_id") or item["target_id"])
+        if not session_id:
+            raise DeliveryError("permission item has no session id")
+        opencode_api.default_api().reply_permission(
+            session_id, request_id, "reject", message=text,
+        )
+        return {"mode": "permission"}
+    if kind == "proposal":
         raise DeliveryError("this one needs one of the buttons")
 
     if kind == "session":
@@ -749,7 +762,10 @@ def _answer(attention_id: int, text: str, *, by: str,
                 "item": registry.get_attention(item["id"]),
             }
         return {"ok": False, "error": f"opencode unavailable: {exc}", "item": item}
-    if not registry.close_attention(item["id"], "answered", answer=text,
+    # A text answer to a permission card is a rejection: record it as one so the
+    # card and the audit trail do not claim it was approved.
+    closing = "rejected" if item["target_kind"] == "permission" else "answered"
+    if not registry.close_attention(item["id"], closing, answer=text,
                                     answered_by=by):
         return {"ok": False, "error": "already handled", "item": item}
     registry.log_activity(
@@ -787,35 +803,42 @@ def _match_option(options: List[Dict[str, Any]], action: str) -> Optional[Dict[s
     return None
 
 
+#: Serialises the multi-select read-modify-write inside this process. Two devices
+#: ticking at once is rare, but losing a tick makes the card lie about what will
+#: be sent. (A second Perun process could still interleave; the submit re-reads.)
+_toggle_lock = threading.Lock()
+
+
 def toggle(attention_id: int, index: int, *, by: str = "") -> Dict[str, Any]:
     """Flip one multi-select choice on a form card — nothing is sent yet.
 
     The state lives in ``ref['toggles']`` so a re-render (or a second device)
     shows the same marks; the bridge calls :func:`choose` with ``d`` to submit.
     """
-    item = registry.get_attention(attention_id)
-    if not item:
-        return {"ok": False, "error": "attention item not found"}
-    if item["state"] != "open":
-        return {"ok": False, "error": f"already {item['state']}", "item": item}
-    field = _form_answer_field(item)
-    if item["target_kind"] != "form" or field is None or not _is_multiselect(field):
-        return {"ok": False, "error": "this card has nothing to toggle", "item": item}
-    labels = _choice_labels(field)
-    try:
-        index = int(index)
-    except (TypeError, ValueError):
-        return {"ok": False, "error": "that choice is no longer on the card",
-                "item": item}
-    if not 0 <= index < len(labels):
-        return {"ok": False, "error": "that choice is no longer on the card",
-                "item": item}
-    chosen = _toggled(item)
-    if index in chosen:
-        chosen.discard(index)
-    else:
-        chosen.add(index)
-    updated = registry.update_attention_ref(item["id"], toggles=sorted(chosen))
+    with _toggle_lock:
+        item = registry.get_attention(attention_id)
+        if not item:
+            return {"ok": False, "error": "attention item not found"}
+        if item["state"] != "open":
+            return {"ok": False, "error": f"already {item['state']}", "item": item}
+        field = _form_answer_field(item)
+        if item["target_kind"] != "form" or field is None or not _is_multiselect(field):
+            return {"ok": False, "error": "this card has nothing to toggle", "item": item}
+        labels = _choice_labels(field)
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "that choice is no longer on the card",
+                    "item": item}
+        if not 0 <= index < len(labels):
+            return {"ok": False, "error": "that choice is no longer on the card",
+                    "item": item}
+        chosen = _toggled(item)
+        if index in chosen:
+            chosen.discard(index)
+        else:
+            chosen.add(index)
+        updated = registry.update_attention_ref(item["id"], toggles=sorted(chosen))
     # Log the position, not the label: an option can quote anything the agent
     # saw, and Perun's log must not become a copy of it.
     LOG.info("att_%s: toggled #%d (%d picked) by %s", item["id"],
@@ -1007,25 +1030,35 @@ def wait(attention_id: int, seconds: float, *, poll: float = 1.0) -> Optional[st
     prompt: the answer travels back as this call's tool result instead.
     """
     deadline = time.time() + max(0.0, float(seconds))
-    while True:
-        item = registry.get_attention(attention_id)
-        if not item:
-            return None
-        if item["state"] != "open":
-            return str(item.get("answer") or "")
-        if item["ttl_epoch"] and int(item["ttl_epoch"]) <= int(time.time()):
-            registry.expire_attention()
+    try:
+        while True:
             item = registry.get_attention(attention_id)
-            return str((item or {}).get("answer") or "")
-        registry.touch_attention_waiter(attention_id)
-        if time.time() >= deadline:
-            # Close the race with an answer that landed just after the heartbeat:
-            # if the item is no longer open, hand it back instead of "pending".
-            latest = registry.get_attention(attention_id)
-            if latest and latest["state"] != "open":
-                return str(latest.get("answer") or "")
-            return None
-        time.sleep(max(0.2, poll))
+            if not item:
+                return None
+            if item["state"] != "open":
+                return str(item.get("answer") or "")
+            if item["ttl_epoch"] and int(item["ttl_epoch"]) <= int(time.time()):
+                registry.expire_attention()
+                item = registry.get_attention(attention_id)
+                return str((item or {}).get("answer") or "")
+            if time.time() >= deadline:
+                # Stop advertising a waiter *before* re-reading: from here on the
+                # answer adapter must inject a prompt instead of assuming this
+                # call will return the answer. Refreshing the heartbeat first (as
+                # this used to) left a 5 s window in which an answer was closed as
+                # delivered but never reached the session.
+                registry.clear_attention_waiter(attention_id)
+                latest = registry.get_attention(attention_id)
+                if latest and latest["state"] != "open":
+                    return str(latest.get("answer") or "")
+                return None
+            registry.touch_attention_waiter(attention_id)
+            time.sleep(max(0.2, poll))
+    finally:
+        try:
+            registry.clear_attention_waiter(attention_id)
+        except Exception:  # pragma: no cover - clearing must never raise
+            LOG.debug("could not clear the attention waiter", exc_info=True)
 
 
 def expire_stale() -> int:

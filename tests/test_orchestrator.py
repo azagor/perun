@@ -121,6 +121,36 @@ def test_orchestrator_global_model_not_forced_on_projects(monkeypatch):
     assert run["model_explicit"] == 0
 
 
+def test_interrupted_is_a_final_status(monkeypatch):
+    """A waiter must stop looping once the run is interrupted."""
+    from perun import registry
+
+    project = registry.add_project("fin-demo", r"C:\fin-demo")
+    registry.create_run("fin_run", project["id"], "hi")
+    registry.update_run("fin_run", status="interrupted",
+                        ended_at=registry.now_iso())
+
+    o = orch.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *a, **k: None)
+    assert o.is_final("fin_run") is True
+    assert o.cancel("fin_run") is False          # already finished: no second end
+
+
+def test_a_late_finalize_never_overwrites_a_cancel(monkeypatch):
+    from perun import registry
+
+    project = registry.add_project("fin-race", r"C:\fin-race")
+    registry.create_run("fin_race", project["id"], "hi")
+    registry.update_run("fin_race", status="cancelled",
+                        ended_at=registry.now_iso(), error="cancelled by user")
+
+    o = orch.Orchestrator()
+    monkeypatch.setattr(o, "_worker", lambda *a, **k: None)
+    o._finalize("fin_race", "done", 0, "", cancelled=False, reply="late")
+
+    assert registry.get_run("fin_race")["status"] == "cancelled"
+
+
 def test_orchestrator_global_agent_not_forced_on_projects(monkeypatch):
     from perun import orchestrator, registry, config
 

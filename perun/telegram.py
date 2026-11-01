@@ -271,6 +271,9 @@ class PerunTelegramBridge:
         # card are remembered so the next tick does not resend them as cards.
         self._digest_pending: Dict[int, float] = {}
         self._digested: set[int] = set()
+        # Hourly, not once per process: a bridge that stays up for weeks must
+        # still expire open items and prune closed ones.
+        self._last_attention_prune: float = 0.0
 
     def update_token(self, token: str) -> None:
         """Update the bot token used by this bridge instance."""
@@ -1117,59 +1120,62 @@ class PerunTelegramBridge:
             return 0
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for attention_id in due:
-            first_seen = self._digest_pending.pop(attention_id, None)
+            self._digest_pending.pop(attention_id, None)
             item = registry.get_attention(attention_id)
             if not item or item.get("state") != "open":
                 self._digested.discard(attention_id)
                 continue
-            key = str(item.get("project_id") or 0)
-            grouped.setdefault(key, []).append(item)
-            if first_seen is not None:
-                self._digested.add(attention_id)
+            grouped.setdefault(str(item.get("project_id") or 0), []).append(item)
 
+        # A card carries five items. Everything else is *requeued*, never marked
+        # as shown: marking it here (as this used to) made items six and beyond
+        # invisible forever — no card, no delivery row, and `/pending` inner-joins
+        # deliveries, so they were not listed there either.
         sent = 0
         for items in grouped.values():
             items.sort(key=lambda it: it["id"])
-            head = items[:5]
             chats = attention.recipients(
-                head[0], allowed=list(self.allowed),
+                items[0], allowed=list(self.allowed),
                 muted=registry.attention_muted_projects,
             )
-            if not chats:
-                for item in head:
+            eligible_ids = {it["id"] for it in items if attention.eligible(it, settings)[0]}
+            eligible = [it for it in items if it["id"] in eligible_ids]
+            if not chats or not eligible:
+                # No recipient, quiet hours, or the hourly cap: hold for later.
+                for item in items:
                     self._digested.discard(item["id"])
+                    self._digest_pending.setdefault(item["id"], now)
                 continue
-            label = attention.project_label(head[0])
-            eligible: List[Dict[str, Any]] = []
-            for item in head:
-                ok, _reason = attention.eligible(item, settings)
-                if ok:
-                    eligible.append(item)
-                else:
-                    # Quiet hours or the hourly cap started while it waited.
-                    self._digested.discard(item["id"])
-            if not eligible:
-                continue
-            head = eligible
-            more = len(items) - len(head)
-            lines = [f"🗂 <b>{len(head) + more} waiting in {label}</b>"]
-            for item in head:
+            listed, rest = eligible[:5], eligible[5:]
+            label = attention.project_label(listed[0])
+            # Markdown, like every other card: ``send()`` runs ``format_html`` and
+            # would otherwise escape the header into literal ``<b>`` tags.
+            lines = [f"🗂 *{len(eligible)} waiting in {label}*"]
+            for item in listed:
                 # Same redaction a single card would get: a room message can quote
                 # a token or an Authorization header, and a digest must not be the
                 # one path that lets it through.
                 question = " ".join(attention.redact(item.get("question") or "").split())
                 if len(question) > 90:
                     question = question[:87] + "…"
-                lines.append(f"• att_{item['id']} — {_esc(question)}")
-            if more:
-                lines.append(f"＋{more} more — /pending")
+                lines.append(f"`att_{item['id']}` — {question}")
+            if rest:
+                lines.append(f"…and {len(rest)} more, in the next card.")
             text = "\n".join(lines)
             markup = {"inline_keyboard": [
                 [{"text": f"Open att_{item['id']}", "callback_data": f"att:{item['id']}:show"}]
-                for item in head
+                for item in listed
             ]}
             if getattr(settings, "attention_shadow", True):
-                LOG.info("[shadow] digest of %d item(s) would go to %s", len(head), chats)
+                # Log once per item, send nothing, and keep them queued so
+                # turning shadow off does not silently lose the backlog.
+                for item in listed:
+                    if item["id"] not in self._attention_logged:
+                        self._attention_logged.add(item["id"])
+                        LOG.info("[shadow] digest of %d item(s) would go to %s",
+                                 len(eligible), chats)
+                for item in eligible:
+                    self._digest_pending.setdefault(item["id"], now)
                 continue
             delivered = 0
             failed: List[str] = []
@@ -1185,8 +1191,7 @@ class PerunTelegramBridge:
                 # accepted the card — a partial failure must not re-list the items
                 # on the chat that already showed them.
                 LOG.warning("could not send a digest to %s; will retry", ", ".join(failed))
-                for item in head:
-                    self._digested.discard(item["id"])
+                for item in eligible:
                     self._digest_pending.setdefault(item["id"], now)
                 continue
             if failed:
@@ -1195,17 +1200,22 @@ class PerunTelegramBridge:
             # Remember on disk that these were shown: the in-memory set dies
             # with the process, and an undelivered item would otherwise be
             # listed again after every restart.
-            for item in head:
+            for item in listed:
+                self._digested.add(item["id"])
                 registry.log_activity(
                     item.get("project_id"), "attention_digest",
                     f"att_{item['id']} listed in a digest",
                     {"attention_id": item["id"], "chats": chats},
                 )
+            for item in rest:
+                self._digest_pending.setdefault(item["id"], now)
             sent += delivered
         if len(self._digested) > 200:
             # Ids only grow; a closed item never comes back through the delivery
             # path, so the oldest half can be forgotten.
             self._digested = set(sorted(self._digested)[-100:])
+        if len(self._attention_logged) > 200:
+            self._attention_logged = set(sorted(self._attention_logged)[-100:])
         return sent
 
     def _attention_startup_replay(self, settings: "config.Settings") -> None:
@@ -1247,6 +1257,13 @@ class PerunTelegramBridge:
         if replay:
             self._attention_startup_replay(settings)
             return 0
+        try:
+            registry.expire_attention()
+            if time.time() - self._last_attention_prune > 3600:
+                self._last_attention_prune = time.time()
+                registry.prune_attention()
+        except Exception:  # pragma: no cover - housekeeping is best effort
+            LOG.debug("attention housekeeping failed", exc_info=True)
         try:
             from . import attention_watcher
             attention_watcher.poll_once()
@@ -1534,8 +1551,11 @@ class PerunTelegramBridge:
 
         if action == "always":
             # A persistent grant needs a second, explicit tap: show the patterns.
+            # Redacted like every other composed string: a save pattern can quote
+            # the command, including the credential the card already masks.
             patterns = ", ".join(
-                str(p) for p in ((item.get("ref") or {}).get("save") or [])[:3]
+                attention.redact(str(p))
+                for p in ((item.get("ref") or {}).get("save") or [])[:3]
             ) or "the tool's proposed patterns"
             self._edit_card(
                 chat_id, message_id,
@@ -1644,7 +1664,10 @@ class PerunTelegramBridge:
                           reply_to=message_id or None)
                 return True
             if len(items) > 1:
-                listing = "\n".join(f"• att_{i['id']} — {i['question'][:60]}" for i in items[:8])
+                listing = "\n".join(
+                    f"• att_{i['id']} — {attention.redact(i['question'])[:60]}"
+                    for i in items[:8]
+                )
                 self.send(chat_id, "More than one is open — reply to the card you mean:\n"
                                    + listing, reply_to=message_id or None)
                 return True
@@ -1770,13 +1793,20 @@ class PerunTelegramBridge:
             if not text:
                 text = (f"⚠️ Run {run.get('status')}: "
                         f"{(run.get('error') or 'no output')[:1500]}")
-            try:
-                for chat_id in chats:
-                    self.send(chat_id, text)
-            except Exception:
+            # ``send()`` returns None instead of raising, so the old try/except
+            # never fired: a Telegram outage burned the claim and the reply was
+            # never retried. Release it when nothing reached anyone.
+            delivered = 0
+            for chat_id in chats:
+                if self.send(chat_id, text):
+                    delivered += 1
+            if not delivered:
                 registry.clear_reply_sent(uid)
-                LOG.exception("could not deliver run %s", uid)
+                LOG.warning("could not deliver run %s to any chat; will retry", uid)
                 continue
+            if delivered < len(chats):
+                LOG.warning("run %s reply reached %d/%d chat(s)", uid,
+                            delivered, len(chats))
             registry.log_activity(
                 run.get("project_id"), "run_reply_delivered",
                 f"Run {uid} reply delivered to {len(chats)} chat(s)",

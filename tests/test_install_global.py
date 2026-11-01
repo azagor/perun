@@ -107,6 +107,24 @@ def test_uninstall_removes_only_perun(fake_xdg):
     assert not install_global.instructions_target().exists()
 
 
+def test_uninstall_removes_its_own_commands_and_keeps_similar_paths(fake_xdg):
+    cfg_path = install_global.opencode_json()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps({
+        "instructions": ["notes/perun-guidelines.md"],
+        "command": {"mine": {"template": "x"}},
+    }), encoding="utf-8")
+
+    install_global.install(index=False)
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert {"perun-projects", "perun-ask", "logwork", "update-docs"} <= set(cfg["command"])
+
+    install_global.uninstall()
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg["command"] == {"mine": {"template": "x"}}
+    assert "notes/perun-guidelines.md" in cfg["instructions"]
+
+
 def test_status_reports_installed(fake_xdg):
     assert install_global.status()["installed"] is False
     install_global.install(index=False)

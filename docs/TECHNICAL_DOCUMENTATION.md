@@ -146,7 +146,7 @@ Column additions after the first release are applied idempotently by
 existing databases migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
 `projects.instructions_path`) are dropped idempotently by `db._REMOVED_COLUMNS` on next start, so
 fresh and upgraded schemas converge. Instruction text is never stored in the database.
-`db.SCHEMA_VERSION` (currently `10`) is written to `PRAGMA user_version` on every
+`db.SCHEMA_VERSION` (currently `19`) is written to `PRAGMA user_version` on every
 start, so future non-additive migrations can tell what already ran.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
@@ -758,7 +758,20 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   `run_message` path claims the same flag first, so only one of them sends.
 - **Fallback.** If the OpenCode service is unreachable *before* admission, the
   worker falls back to the legacy `opencode run` child; `PERUN_SESSION_RUNNER=0`
-  forces the legacy path for tests or an emergency rollback.
+  forces the legacy path for tests or an emergency rollback. Once a session exists,
+  a prompt POST that times out is **confirmed** against the session
+  (`msg_<run_uid>` present?) before any fallback: a busy service could otherwise
+  run the same turn twice in that session. A confirmation that cannot be obtained
+  ends the run as `failed` rather than guessing.
+- **`interrupted` is final.** `FINAL_STATUSES` (done/failed/cancelled/timeout/
+  provider_error/interrupted) drives `is_final()`, `cancel()`, the SSE stream and
+  `runs_awaiting_reply()`. Before this, a Telegram worker or stream waiting on an
+  interrupted run looped forever, and a later Stop rewrote the row as `cancelled`.
+  A finalized row also keeps a status another writer already recorded, so a cancel
+  that lands as the model finishes is not turned into `done`.
+- **A failed status probe is not a finished run.** `_observe()` treats
+  `OpenCodeUnavailable` from `session_active()` as "cannot tell" for up to 30 s
+  instead of finalizing a live run as `interrupted` during a service restart.
 - **Standalone TUI runs** (`POST /api/runs/tui`) are the one exception to
   "a run is a session": the terminal is external, so Perun has no process and no
   session to observe. `runs.standalone` marks them, restart reconciliation leaves
@@ -983,7 +996,12 @@ one hour by default (the `external_execution_claim_ttl` setting, clamped to
 `[1, 7 days]` — the approved-proposal lifetime) and then swept back to
 `approved`. The claim TTL is set from **Settings → External claim TTL (s)** or
 `PATCH /api/settings`.
-Approved proposals that are never claimed or executed expire after seven days.
+Approved proposals that are never claimed or executed expire after seven days. That
+window is the authority for a *later* execution: the HITL token itself only lives
+180 s (it proves the approver clicked just now), so a "Run now" after three minutes
+re-issues a token from the stored approval instead of making the row terminal, and
+an external claim verifies the stored token's signature plus the seven-day window
+(`hitl.verify()`, no nonce consumption) rather than a shape check.
 
 `action_proposals.executed_by` records the actor that attempted or applied the
 change, not only a successful run: local executions write `perun`
@@ -1005,7 +1023,11 @@ proposals.
 **Target-drift guard.** Approval fingerprints each declared target
 (`approval_snapshot`: sha256 + size per target, `null` for a file that does not
 exist yet) and `claim_execution()` recomputes it. Every verifiable target is
-content-hashed, so restoring the timestamp with `os.utime` cannot hide an edit.
+content-hashed, so restoring the timestamp with `os.utime` cannot hide an edit. A
+**directory** target is a bounded tree fingerprint (sorted `relpath` + bytes, up to
+500 files and the digest byte budget); a tree over budget is `unverifiable` and the
+claim refuses it. Before this, a directory was recorded as `{"kind": "dir"}` on both
+sides, so `targets: ["docs"]` could never drift.
 If a target was modified, created or deleted between approval and claim, the
 claim is refused with `target changed since approval: …`; the same check runs
 again in `complete_external_execution()` (reported as `changed during upload`), so
@@ -1045,7 +1067,11 @@ skill …”. Guard writes are target-scoped to the proposal's declared paths. C
 key/certificate files, `.ssh`, `.aws`, `.gnupg`), VCS metadata (`.git`), host
 config (`.opencode`, `.perun`), the project manifest, and `opencode.json` are
 denied even inside the project root. The post-run audit repeats the target check
-and also detects modified/deleted parent-directory entries. This is cooperative
+and also detects modified/deleted parent-directory *files* and any appearance or
+removal of a sibling directory — a sibling's mtime change is just another project
+writing its own files, not an escape. Because the walk skips `.opencode`/`.perun`/
+`.claude`, the audit snapshots those subtrees as metadata and reports any change as
+a violation (a planted plugin or command is exactly what it exists to catch). This is cooperative
 enforcement backed by the audit, not an OS-level sandbox: review the audit output
 before treating a run as trusted. When the guard server is started by the
 OpenCode service (`standalone=False`), it lacks the per-run `PERUN_ALLOWLIST`;
@@ -1101,7 +1127,13 @@ redacts `token=` from uvicorn records. `POST /api/v1/keys/rotate` atomically
 revokes the caller's key and returns a replacement; the matching
 `perunchat_rotate_key` MCP tool probes `PERUNCHAT_KEY_FILE` before rotating,
 persists the new key with `0600`, and reconnects. Active legacy `prn_test_` keys
-are logged at startup and every 24 hours for migration.
+are logged at startup and every 24 hours for migration. The bridge resolves its
+key and agent id on **every** (re)connect attempt and prefers `PERUNCHAT_KEY_FILE`
+when set: a rotated key is picked up without a Settings save, and a startup hiccup
+no longer ends the thread for good. Its sequence counter is written atomically and
+seeded from the clock, so a lost file cannot restart below the gateway's
+high-water mark and have every frame rejected as `non_monotonic_sequence`; the
+write-ahead outbox is one locked read-modify-write over a unique temp file.
 
 A shared project is owned by the Perun instance that created its managed room.
 If you want a second Perun installation to participate in the same project room,

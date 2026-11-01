@@ -80,11 +80,16 @@ _lock = threading.Lock()
 
 
 def agent_path() -> Path:
-    """Where the control-plane agent file lives."""
-    try:
-        return config.OPENCODE_CONFIG_DIR / "agents" / f"{ORCHESTRATOR_AGENT_ID}.md"
-    except Exception:  # pragma: no cover - only if the config dir is unresolvable
-        return Path.home() / ".config" / "opencode" / "agents" / f"{ORCHESTRATOR_AGENT_ID}.md"
+    """Where the control-plane agent file lives.
+
+    Resolved through the same helper the global installer uses, so
+    ``OPENCODE_CONFIG=/opt/oc/opencode.json`` puts the agent in ``/opt/oc/agents``
+    next to the config OpenCode actually reads (it used to land in
+    ``~/.config/opencode`` while every other file went to ``/opt/oc``).
+    """
+    env = (os.environ.get("OPENCODE_CONFIG") or "").strip()
+    base = Path(env).expanduser().parent if env else config.OPENCODE_CONFIG_DIR
+    return base / "agents" / f"{ORCHESTRATOR_AGENT_ID}.md"
 
 
 def _state_path() -> Path:
@@ -138,6 +143,18 @@ def _entry(state: Dict[str, Any]) -> Dict[str, Any]:
     return entry if isinstance(entry, dict) else {}
 
 
+def _recorded_version(entry: Dict[str, Any]) -> int:
+    """The template version Perun recorded, tolerant of a hand-edited state file.
+
+    A ``"2"`` string (or anything else non-numeric) used to raise ``ValueError``
+    out of ``ensure()``, which runs on every control-plane run.
+    """
+    try:
+        return int(entry.get("version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def is_customized() -> bool:
     """True when the file on disk is not the template Perun last wrote."""
     target = agent_path()
@@ -184,7 +201,7 @@ def ensure(*, force: bool = False) -> str:
                          ORCHESTRATOR_AGENT_ID)
                 return "customized"
             if current == wanted:
-                if int(entry.get("version") or 0) != AGENT_TEMPLATE_VERSION:
+                if _recorded_version(entry) != AGENT_TEMPLATE_VERSION:
                     entry = {"version": AGENT_TEMPLATE_VERSION, "sha256": wanted}
                     state[ORCHESTRATOR_AGENT_ID] = entry
                     _write_state(state)
@@ -220,7 +237,7 @@ def status() -> Dict[str, Any]:
         "installed": target.is_file(),
         "customized": is_customized(),
         "template_version": AGENT_TEMPLATE_VERSION,
-        "installed_version": int(entry.get("version") or 0),
+        "installed_version": _recorded_version(entry),
     }
 
 

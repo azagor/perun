@@ -105,10 +105,19 @@ def test_enabled_status_is_answered_without_a_run(bridge, orch, routing_on) -> N
     assert "status" in bridge.sent[-1].lower() or "perun" in bridge.sent[-1].lower()
 
 
-def test_enabled_ambiguity_asks_instead_of_running(bridge, orch, routing_on, tmp_path) -> None:
+def test_an_ambiguous_comparison_still_reaches_the_agent(bridge, orch, routing_on, tmp_path) -> None:
+    """A cross-project question is the orchestrator's job, not a clarify card."""
     _add(tmp_path, "perun")
     _add(tmp_path, "perunchat")
     bridge.run_message("1", "porownaj perun i perunchat", 1)
+    assert len(orch.started) == 1
+    assert all("Which project" not in str(sent) for sent in bridge.sent)
+
+
+def test_an_ambiguous_directive_still_asks(bridge, orch, routing_on, tmp_path) -> None:
+    _add(tmp_path, "perun")
+    _add(tmp_path, "perunchat")
+    bridge.run_message("1", "uruchom testy w perun i perunchat", 1)
     assert orch.started == []
     assert "Which project" in bridge.sent[-1]
     assert "perun" in bridge.sent[-1] and "perunchat" in bridge.sent[-1]

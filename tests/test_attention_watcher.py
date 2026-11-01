@@ -115,6 +115,30 @@ def test_a_request_answered_in_the_tui_closes_its_item(api, project, monkeypatch
     assert item["answer"] == "resolved outside Perun"
 
 
+def test_a_failed_fetch_never_counts_as_the_request_being_gone(api, project):
+    """A 2 s timeout is not "the operator answered in the TUI"."""
+    from perun import opencode_api
+
+    api.active = {"ses_watch": {"type": "running"}}
+    api.sessions = {"ses_watch": {"location": {"directory": project["path"]}}}
+    api.permissions = {project["path"]: [_permission(project["id"])]}
+    assert attention_watcher.poll_once(api)["created"] == 1
+
+    class Broken(FakeAPI):
+        def pending_permissions(self, location):
+            raise opencode_api.OpenCodeUnavailable("timeout")
+
+    broken = Broken()
+    broken.active = api.active
+    broken.sessions = api.sessions
+
+    for _ in range(3):
+        assert attention_watcher.poll_once(broken)["closed"] == 0
+
+    item = registry.open_attention()[0]
+    assert item["state"] == "open"
+
+
 def test_forms_become_items_with_their_field_list(api, project):
     api.active = {"ses_form": {"type": "running"}}
     api.sessions = {"ses_form": {"location": {"directory": project["path"]}}}

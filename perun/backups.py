@@ -38,11 +38,22 @@ def backup_dir(label: str) -> Path:
 
 
 def _copies(directory: Path, stem: str) -> List[Path]:
-    """Existing copies for *stem*, oldest first (the stamp sorts lexically)."""
+    """Existing copies for *stem*, oldest first.
+
+    Sorted by ``(mtime, name)``, not by name alone: the same-second counter is an
+    unpadded ``-2, -3, … -10``, so a lexical sort put ``-10`` before ``-2`` and
+    prune() deleted the *newest* copy first.
+    """
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.iterdir()
-                  if p.is_file() and p.name.startswith(stem + "-"))
+    copies = [p for p in directory.iterdir()
+              if p.is_file() and p.name.startswith(stem + "-")]
+    def _key(path: Path) -> tuple[float, str]:
+        try:
+            return (path.stat().st_mtime, path.name)
+        except OSError:  # pragma: no cover - vanished mid-scan
+            return (0.0, path.name)
+    return sorted(copies, key=_key)
 
 
 def prune(directory: Path, stem: str, keep: int = DEFAULT_KEEP) -> int:
@@ -79,7 +90,7 @@ def save_copy(path: str | Path, *, label: str, keep: int = DEFAULT_KEEP,
         # Two saves inside one second must not overwrite each other.
         counter = 2
         while dest.exists():
-            dest = directory / f"{stem}-{stamp}-{counter}"
+            dest = directory / f"{stem}-{stamp}-{counter:03d}"
             counter += 1
         shutil.copy2(source, dest)
     except OSError:

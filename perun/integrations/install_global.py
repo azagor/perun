@@ -26,6 +26,7 @@ untouched.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -34,6 +35,8 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
+
+LOG = logging.getLogger("perun.install")
 
 MCP_NAME = "perun"
 PERUN_SUBDIR = "perun"
@@ -405,19 +408,28 @@ def uninstall() -> int:
 
     instr = data.get("instructions")
     if isinstance(instr, list):
-        filtered = [i for i in instr if PERUN_SUBDIR not in str(i)]
+        # Remove *our* pointer only. Matching the substring "perun" also deleted
+        # a user's own "notes/perun-guidelines.md".
+        ours = _relative_to_config(instructions_target())
+        filtered = [i for i in instr if str(i).replace("\\", "/") != ours]
         if filtered != instr:
             data["instructions"] = filtered
             changed = True
 
     commands = data.get("command")
     if isinstance(commands, dict):
-        for key in list(commands):
-            if key.startswith("perun-"):
-                commands.pop(key)
+        # The installer registers four commands; only two start with "perun-",
+        # so `logwork` and `update-docs` used to survive an uninstall while their
+        # files were deleted.
+        removed = False
+        for key in ("perun-projects", "perun-ask", "logwork", "update-docs"):
+            if key in commands:
+                commands.pop(key, None)
+                removed = True
         if not commands:
             data.pop("command", None)
-        changed = True
+        if removed:
+            changed = True
 
     if changed and path.exists():
         _backup(path)

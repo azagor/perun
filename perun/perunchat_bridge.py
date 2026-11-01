@@ -530,7 +530,11 @@ class PerunChatBridge:
         self._stop = threading.Event()
         self._ws: Optional[Any] = None
         self._lock = threading.RLock()
+        # Serialises load-modify-store on the write-ahead outbox (room workers and
+        # the reconnect flush used to race and drop frames).
+        self._outbox_lock = threading.RLock()
         self._agent_id: Optional[str] = None
+        self._effective_key = ""
         # Recently replied message ids. Persisted to disk so a bridge restart
         # cannot reply twice to messages the gateway replays on reconnect.
         self._recent_replied: Set[str] = set()
@@ -547,6 +551,9 @@ class PerunChatBridge:
         self._rate_limit_lock = threading.Lock()
         # Room -> wall-clock of the last [Routing] notice (anti-burst).
         self._last_routing_notice: Dict[str, float] = {}
+        # Consecutive-reply budget per room: two autonomous agents whose replies
+        # end in "?" otherwise answer each other forever (~3 model runs/min each).
+        self._room_burst: Dict[str, Tuple[int, float]] = {}
         self._seq = self._load_seq()
         # Wall-clock ms of the most recent successful gateway connect. Used to
         # detect messages that predate the connection (the gateway replays
@@ -789,9 +796,13 @@ class PerunChatBridge:
     def restart(self) -> None:
         self.stop()
         # Wait for the receive loop to exit so we don't immediately reconnect
-        # with stale settings.
+        # with stale settings. It wakes from ``_stop.wait`` immediately now, so
+        # this no longer loses the race against a 60 s reconnect backoff.
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=5.0)
+        with self._lock:
+            self._thread = None if (self._thread is None
+                                    or not self._thread.is_alive()) else self._thread
         self.start()
 
     def _configured_rooms(self) -> List[str]:
@@ -955,19 +966,32 @@ class PerunChatBridge:
         return config.HOME / "perunchat_bridge_seq.json"
 
     def _load_seq(self) -> int:
+        # Seeded with a millisecond timestamp: a lost or half-written counter must
+        # never restart below the gateway's high-water mark, which permanently
+        # rejects every frame as ``non_monotonic_sequence``.
+        floor = int(time.time() * 1000)
         try:
             path = self._seq_file()
             if path.is_file():
                 data = json.loads(path.read_text(encoding="utf-8"))
-                return max(0, int(data.get("seq", 0)))
+                return max(0, int(data.get("seq", 0)), floor)
         except Exception:
             pass
-        return 0
+        return floor
 
     def _save_seq(self) -> None:
+        # Written through a temp file: the old truncate+write left an empty file
+        # after a crash, which reset the counter to 0 (see _load_seq).
         try:
+            import tempfile
+
             path = self._seq_file()
-            path.write_text(json.dumps({"seq": self._seq}), encoding="utf-8")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(suffix=".tmp", prefix=path.name,
+                                       dir=str(path.parent))
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"seq": self._seq}, handle)
+            os.replace(tmp, path)
         except Exception:
             pass
 
@@ -1171,25 +1195,34 @@ class PerunChatBridge:
 
     def _store_outbox(self, frames: List[Dict[str, Any]]) -> None:
         try:
+            import tempfile
+
             path = self._outbox_file()
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps({"frames": frames[-_MAX_OUTBOX_FRAMES:]}), encoding="utf-8"
-            )
-            tmp.replace(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Unique temp name: two writers sharing ``<file>.tmp`` left the tail
+            # of one JSON document after another and lost the whole outbox.
+            fd, tmp = tempfile.mkstemp(suffix=".tmp", prefix=path.name,
+                                       dir=str(path.parent))
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"frames": frames[-_MAX_OUTBOX_FRAMES:]}, handle)
+            os.replace(tmp, path)
         except Exception:
             pass
 
     def _queue_outbox(self, frame: Dict[str, Any]) -> None:
         """Persist an outbound frame BEFORE attempting to send it (write-ahead)."""
-        frames = [f for f in self._load_outbox() if f.get("id") != frame.get("id")]
-        frames.append(frame)
-        self._store_outbox(frames)
+        with self._outbox_lock:
+            frames = [f for f in self._load_outbox() if f.get("id") != frame.get("id")]
+            frames.append(frame)
+            self._store_outbox(frames)
 
     def _drop_from_outbox(self, frame_id: Optional[str]) -> None:
         if not frame_id:
             return
-        self._store_outbox([f for f in self._load_outbox() if f.get("id") != frame_id])
+        with self._outbox_lock:
+            self._store_outbox(
+                [f for f in self._load_outbox() if f.get("id") != frame_id]
+            )
 
     def _send_frame(self, ws: Any, frame: Dict[str, Any], *,
                     write_ahead: bool = True) -> bool:
@@ -1288,7 +1321,16 @@ class PerunChatBridge:
                 break
             # Brief pacing so a burst of queued replies looks natural in-room.
             time.sleep(_OUTBOX_FLUSH_DELAY_SECONDS)
-        self._store_outbox(remaining)
+        with self._outbox_lock:
+            # Merge, don't overwrite: a room worker may have queued a new frame
+            # while this flush was pacing, and the old unconditional store erased
+            # it (the message had already been marked replied).
+            still_queued = {f.get("id") for f in remaining}
+            pending_ids = {f.get("id") for f in pending}
+            late = [f for f in self._load_outbox()
+                    if f.get("id") not in pending_ids]
+            self._store_outbox(late + [f for f in pending
+                                       if f.get("id") in still_queued])
 
     def _resolve_agent_id(self, key: str, rest_base: str) -> Optional[str]:
         url = f"{rest_base}/api/v1/me"
@@ -1301,6 +1343,24 @@ class PerunChatBridge:
         except Exception as exc:
             logger.warning("PerunChat /api/v1/me failed: %s", exc)
         return None
+
+    def _leave_room(self, ws: Any, room_id: str) -> None:
+        """Tell the gateway we no longer take part in *room_id*.
+
+        Without this, unsharing or deleting a project left the socket joined: the
+        room kept being answered (by the control-plane persona, since the binding
+        was gone).
+        """
+        try:
+            ws.send(json.dumps({
+                "type": "ROOM_LEAVE",
+                "room_id": room_id,
+                "room_type": _room_type(room_id),
+                "timestamp": int(time.time() * 1000),
+            }))
+        except Exception:
+            logger.debug("PerunChat ROOM_LEAVE failed for %s", room_id, exc_info=True)
+        self._acked_rooms.discard(room_id.lower())
 
     def _join_room(self, ws: Any, room_id: str) -> bool:
         """Send a ROOM_JOIN for *room_id*, returning False on a dead socket."""
@@ -1332,17 +1392,55 @@ class PerunChatBridge:
             self._join_room(ws, room_id)
         return ws
 
+    def _refresh_credentials(self) -> bool:
+        """Read the key/endpoint and resolve the agent id; False on failure.
+
+        Re-read on every attempt, and prefer ``PERUNCHAT_KEY_FILE`` when set: the
+        rotation flow revokes the old key and writes the new one there, which the
+        bridge used to ignore (so it kept the revoked key forever).
+        """
+        try:
+            key, endpoint = self.settings.perunchat()
+        except Exception:  # pragma: no cover - a bad encrypted value
+            logger.debug("PerunChat: could not read credentials", exc_info=True)
+            return False
+        key_file = (os.environ.get("PERUNCHAT_KEY_FILE") or "").strip()
+        if key_file:
+            try:
+                file_key = Path(key_file).read_text(encoding="utf-8").strip()
+                if file_key:
+                    key = file_key
+            except OSError:
+                pass
+        if not key or not endpoint:
+            return False
+        try:
+            agent_id = self._resolve_agent_id(key, _rest_base(endpoint))
+        except Exception:
+            logger.debug("PerunChat: agent id lookup failed", exc_info=True)
+            return False
+        self._effective_key = key
+        if agent_id:
+            self._agent_id = agent_id
+        return bool(agent_id)
+
     def _run(self) -> None:
-        key, endpoint = self.settings.perunchat()
-        rest_base = _rest_base(endpoint)
-        agent_id = self._resolve_agent_id(key, rest_base)
-        if not agent_id:
-            logger.error("Cannot start PerunChat bridge: could not resolve agent_id from API key")
-            return
-        self._agent_id = agent_id
         backoff = 1.0
 
         while not self._stop.is_set():
+            # Resolve credentials on *every* attempt: a startup hiccup (gateway
+            # restarting, Wi-Fi not up) used to end the thread for good, and a
+            # rotated key was never picked up.
+            if not self._refresh_credentials():
+                logger.warning("PerunChat: could not resolve the agent id; retrying in "
+                               "%.0fs", backoff)
+                if self._stop.wait(backoff):
+                    break
+                backoff = min(backoff * 2, 60.0)
+                continue
+            key, endpoint = self.settings.perunchat()
+            key = getattr(self, "_effective_key", "") or key
+            agent_id = str(self._agent_id or "")
             try:
                 # Refresh on every (re)connect so a room created while offline
                 # is joined with the new connection, not one reconnect later.
@@ -1391,7 +1489,12 @@ class PerunChatBridge:
                         # appear while we are connected; join it without a
                         # full reconnect so Perun stops looking silent.
                         self._refresh_discovered_rooms()
-                        for room in self._rooms():
+                        desired = self._rooms()
+                        desired_lower = {r.lower() for r in desired}
+                        for stale in list(self._acked_rooms):
+                            if stale not in desired_lower:
+                                self._leave_room(ws, stale)
+                        for room in desired:
                             if room.lower() in self._acked_rooms:
                                 continue
                             # Not acknowledged yet. Retrying is safe and is how
@@ -1469,7 +1572,10 @@ class PerunChatBridge:
                 self._ws = None
             if self._stop.is_set():
                 break
-            time.sleep(backoff)
+            # Wait on the event, not time.sleep: a Settings save that changes
+            # the key during a 60 s backoff must not be a no-op.
+            if self._stop.wait(backoff):
+                break
             backoff = min(backoff * 2, 60.0)
 
 
@@ -2748,6 +2854,17 @@ class PerunChatBridge:
             if binding:
                 project, _cfg = binding
             else:
+                # A group room addressed to a project we know, but whose binding
+                # cannot be read (manifest unreadable, sharing just turned off):
+                # never answer it as the machine-wide overseer with no brief.
+                slug = room_id.split(":", 2)[1] if room_id.startswith("grp:") else ""
+                if slug and registry.get_project(slug):
+                    logger.warning(
+                        "PerunChat: %s belongs to project %s but its shared-project "
+                        "binding is unavailable; not answering as the control plane",
+                        room_id, slug,
+                    )
+                    return
                 project = control.ensure()
             reply = ""
             run_uid = ""
@@ -2922,6 +3039,19 @@ class PerunChatBridge:
         if sender and own_id and sender == own_id and not operator_frame:
             return _ReplyDecision(False, "own message")
 
+        # Burst budget: a rapid back-and-forth (the signature of two bots
+        # answering each other) stops after six exchanges; an operator message or
+        # ten quiet minutes resets it.
+        now = time.time()
+        count, last = self._room_burst.get(room_id, (0, 0.0))
+        if operator_frame or now - last > 600:
+            count = 0
+        if now - last < 120:
+            count += 1
+        self._room_burst[room_id] = (count, now)
+        if count > 6 and not operator_frame:
+            return _ReplyDecision(False, "consecutive-reply budget reached")
+
         # Always reply in private 1:1 rooms.
         if room_id.startswith("priv:") or room_id.startswith("private:"):
             return _ReplyDecision(True, "private room", is_direct=True)
@@ -2982,30 +3112,35 @@ class PerunChatBridge:
         return _ReplyDecision(False, "no trigger matched")
 
     def _is_question(self, text: str) -> bool:
-        """Detect explicit or implicit questions."""
-        if text.rstrip().endswith("?"):
+        """Detect a question in the *leading* words, not anywhere in the text.
+
+        Matching "is"/"do"/"can" anywhere made almost every English sentence an
+        addressed question (100 % reply), which also fed agent-to-agent loops.
+        """
+        stripped = str(text or "").strip()
+        if stripped.endswith("?"):
             return True
-        lowered = text.lower()
-        question_starters = (
-            "what", "how", "why", "when", "where", "who", "which", "can", "could",
-            "would", "will", "is", "are", "does", "do", "has", "have", "should",
-        )
-        for starter in question_starters:
-            if re.search(rf"\b{starter}\b", lowered):
-                return True
-        return False
+        words = re.findall(r"[a-z']+", stripped.lower())[:3]
+        if not words:
+            return False
+        starters = {
+            "what", "how", "why", "when", "where", "who", "which", "whose",
+            "can", "could", "would", "will", "should", "shall", "may", "might",
+            "is", "are", "was", "were", "does", "do", "did", "has", "have", "had",
+        }
+        return words[0] in starters
 
     def _is_greeting(self, text: str) -> bool:
-        """Detect short greetings."""
-        lowered = text.lower()
+        """Detect a short greeting at the start of the message."""
+        words = re.findall(r"[a-z']+", str(text or "").lower())
+        if not words or len(words) > 5:
+            return False
+        head = " ".join(words[:3])
         greetings = (
             "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
             "morning", "evening", "howdy", "greetings", "what's up", "sup",
         )
-        for greeting in greetings:
-            if greeting in lowered:
-                return True
-        return False
+        return any(re.search(rf"(^|\s){re.escape(g)}(\s|$)", head) for g in greetings)
 
     def _room_quiet_for(self, room_id: str, seconds: float) -> bool:
         """Return True if the room has had no messages for the given period."""
