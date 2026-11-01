@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.44
+
+*Released 2026-11-01.*
+
 ### The self-update page shows what the installed release changed
 
 * `GET /api/update/notes` returns the changelog section for the running version,

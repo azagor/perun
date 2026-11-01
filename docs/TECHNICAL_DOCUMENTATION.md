@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.43 (see §15). Hidden projects (the control plane) are reachable only from their own checkout; memory no longer falls back to global for a named project.
+**Latest release:** v0.10.44 (see §15). The Updates page shows what the installed release changed; hidden projects stay shareable on purpose.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2258,6 +2258,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-01 — v0.10.44: The Updates page shows what the installed release changed; hidden projects stay shareable on purpose.
+
 ### 2026-11-01 — v0.10.43: Hidden projects (the control plane) are reachable only from their own checkout; memory no longer falls back to global for a named project.
 
 ### 2026-11-01 — v0.10.42: Remaining audit items closed: reattach seed, per-chat digests, usage fallback, docs start grace, reply budget, staged secrets.
