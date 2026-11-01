@@ -65,7 +65,7 @@ def test_ask_operator_records_the_question_against_that_session(project, monkeyp
     assert seen["item"]["question"] == "Ship it?"
 
 
-def test_ask_operator_lists_options_and_returns_a_handle_on_timeout(project, monkeypatch):
+def test_ask_operator_stores_options_as_choices_and_returns_a_handle_on_timeout(project, monkeypatch):
     monkeypatch.setattr(attention, "wait", lambda *a, **k: None)
 
     reply = mcp_mod.perun_ask_operator(
@@ -75,7 +75,9 @@ def test_ask_operator_lists_options_and_returns_a_handle_on_timeout(project, mon
 
     assert "No answer yet (att_" in reply
     item = registry.open_attention()[0]
-    assert "staging" in item["question"]
+    # The question is what the operator reads; the options are buttons, not a
+    # second copy of the list pasted into the text.
+    assert item["question"] == "Deploy where?"
     assert [o["label"] for o in item["options"]] == ["staging", "prod"]
 
 

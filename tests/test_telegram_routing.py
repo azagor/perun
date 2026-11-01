@@ -453,6 +453,26 @@ def test_resume_without_runs_says_so(bridge) -> None:
     assert "No runs yet" in bridge.sent[-1]
 
 
+def test_routing_reports_coverage_per_source(bridge) -> None:
+    """`/routing` renders the 7-day counter (detection alone would not catch this)."""
+    from perun import registry
+
+    registry.bump_routing_stat("telegram", "status")
+    registry.bump_routing_stat("telegram", "unknown")
+
+    bridge.handle_command("1", "/routing", 1)
+
+    report = bridge.sent[-1]
+    assert "Routing coverage — 7 days" in report
+    assert "`telegram` — 50% of 2 message(s)" in report
+    assert "share the router could classify" in report
+
+
+def test_routing_without_traffic_says_so(bridge) -> None:
+    bridge.handle_command("1", "/routing", 1)
+    assert "No routing traffic yet" in bridge.sent[-1]
+
+
 def test_diff_reports_a_non_repository(bridge) -> None:
     from perun import registry
 

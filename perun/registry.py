@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -14,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import config, db
+
+LOG = logging.getLogger("perun.registry")
 
 
 def now_iso() -> str:
@@ -964,10 +967,26 @@ def update_session(pk: int, **fields: Any) -> None:
         conn.execute(f"UPDATE sessions SET {cols} WHERE id=?", (*sets.values(), pk))
 
 
+#: A per-model breakdown is tiny in practice (well under 1 KB); the cap only
+#: exists to keep a pathological snapshot out of the row. Truncating the JSON
+#: would make it unparseable, so an over-cap snapshot is stored as ``{}`` and
+#: ``usage_by_provider()`` falls back to the run model — the same path as a
+#: pre-0.10.30 snapshot, but explicitly and with a log line.
+_USAGE_MODELS_MAX_CHARS = 20000
+
+
 def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
     """Store the session's token/cost snapshot (overwrite, never accumulate)."""
     if not pk:
         return
+    models = json.dumps(usage.get("models") or {}, ensure_ascii=False)
+    if len(models) > _USAGE_MODELS_MAX_CHARS:
+        LOG.warning(
+            "session %s: per-model usage breakdown is %d chars (cap %d); "
+            "storing an empty breakdown so the row stays parseable",
+            pk, len(models), _USAGE_MODELS_MAX_CHARS,
+        )
+        models = "{}"
     with db.db() as conn:
         conn.execute(
             "UPDATE sessions SET tokens_in=?, tokens_out=?, cache_read=?, "
@@ -978,7 +997,7 @@ def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
                 int(usage.get("cache_read") or 0),
                 float(usage.get("cost") or 0.0),
                 now_iso(),
-                json.dumps(usage.get("models") or {}, ensure_ascii=False)[:20000],
+                models,
                 int(pk),
             ),
         )
@@ -1031,10 +1050,11 @@ def usage_by_project(hours: int = 24, limit: int = 5) -> list[dict[str, Any]]:
 def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
     """Measured spend per provider (``model`` is ``provider/model``).
 
-    Attribution uses the session's most recent run: a session belongs to one
-    model in practice, and this avoids storing a per-model breakdown just for a
-    meter. Provider quotas come from the service (``usage_limits``) when it has
-    them; these numbers are ours.
+    Attribution prefers the per-model breakdown captured with the snapshot, so a
+    session that switched provider mid-conversation is priced correctly. A
+    snapshot without one (pre-0.10.30, or an over-cap blob stored as ``{}``)
+    falls back to the session's most recent run model. Provider quotas come from
+    the service (``usage_limits``) when it has them; these numbers are ours.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
     with db.db() as conn:

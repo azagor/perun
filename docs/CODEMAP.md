@@ -145,8 +145,12 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   for the restart notice.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 * Usage: `update_session_usage(pk, usage)` (token/cost **snapshot**, overwritten
-  per session), `usage_totals(hours)` and `usage_by_project(hours, limit)` (the
-  `/usage` reply and `GET /api/usage`).
+  per session, including a per-model `usage_models` breakdown; a breakdown over
+  `_USAGE_MODELS_MAX_CHARS` is stored as `{}` with a log line rather than a
+  truncated, unparseable blob), `usage_totals(hours,
+  project_id=None)`, `usage_by_project(hours, limit)` and `usage_by_provider(hours)`
+  (per model prefix, falling back to the run model for pre-0.10.30 snapshots) — the
+  `/usage` reply, `GET /api/usage` and `GET /api/providers/usage`.
 * Telegram jobs: `enqueue_telegram_job()` (idempotent by `dedupe_key`),
   `claim_telegram_jobs()` (atomic, one per chat), `finish_telegram_job()`,
   `fail_telegram_job()` (backoff → dead letter), `reset_telegram_jobs()`,
@@ -512,8 +516,9 @@ Start / stream / cancel headless `opencode run`.
   parsing: `_harvest()` parses each line *before* honouring a cancel/timeout
   break, and a bounded `_drain()` thread harvests buffered final lines after the
   process exits), `_emit_end()`, `_finalize()`, `stream()`. Agent precedence:
-  explicit arg → `project.agent` → (control only)
-  `orchestrator_agent`/`default_agent`. Model precedence: explicit arg →
+  explicit arg → `project.agent` → (control only) `orchestrator_agent`, else the
+  installed `perun-orchestrator`, with `default_agent` only when that file cannot
+  be written. Model precedence: explicit arg →
   `project.agent_models[agent]` → `project.model` → (control only)
   `orchestrator_model`/`default_model`. The global default is never forced onto
   ordinary project runs — with no override they defer to OpenCode's own default
@@ -712,15 +717,25 @@ dispatched by that target, never by inference from "the current project".
   `render()`, `keyboard()`, `confirmation()`, `followup_keyboard()`,
   `redact()` (the public wrapper every outgoing text must go through — headers,
   URL credentials, bearer tokens, `sk-…` keys and `--token` flags).
+* Buttons: `keyboard()` renders a choice as an inline button wherever one exists
+  — permissions, proposals, a `perun_ask_operator` question with `options`, and a
+  one-field form whose type is boolean / select-like / multiselect (toggles plus
+  a Send row). Indices, not values, travel in `callback_data` (`att:<id>:o<i>` /
+  `t<i>` / `d`), which keeps it under Telegram's 64-byte cap; above
+  `MAX_CHOICE_BUTTONS` (8) the card lists the values as text instead.
 * Replies: `answer()` (text → adapter, then a conditional close, so a failed
   delivery leaves the item open), `choose()` (permission `once`/`always`/`reject`,
-  proposal `approve`/`reject`; `reject` also closes the session's other pending
-  permissions), `set_delivery()` (⚡ promote queue→steer in place), `undo()`
+  proposal `approve`/`reject`, an option index, or a form's `d` submit; `reject`
+  also closes the session's other pending permissions), `toggle()` (flip a
+  multiselect choice into `ref['toggles']` without sending anything),
+  `set_delivery()` (⚡ promote queue→steer in place), `undo()`
   (↩ cancel an undelivered inbox item and reopen), `wait()` (blocking wait used by
   `perun_ask_operator`; the heartbeat is what prevents double delivery),
   `expire_stale()`, `drain_outbox()` (posts room replies queued while the socket was down, on reconnect and on every notifier tick; a rejected post is retried, not lost).
-* Adapters: `permission` → `reply_permission`; `form` → `reply_form` (a JSON
-  object, or plain text for a single string field); `session` → `prompt` with
+* Adapters: `permission` → `reply_permission`; `form` → `reply_form` (one
+  `key: value` line per field, a JSON object, or a button answer; a single-field
+  form takes the bare message; the card lists the real keys, titles, required
+  flags and options); `session` → `prompt` with
   ``msg_att_<id>``; `room`/`handoff` → `post_to_room(..., in_reply_to=…)` or the
   outbox when the socket is down; `proposal` → `action_proposals.approve/reject`
   with actor ``telegram:<chat>``.
@@ -804,8 +819,10 @@ Shared Telegram ⇄ Perun bridge.
   message (including `unknown`) increments the per-day counter in
   `routing_stats` so the panel can show coverage per source.
   Commands include `/orchestrator` (`/perun`, `/overseer`), `/runs`, `/now`,
-  `/health`, `/usage`, `/resume <n>` (rebind the chat to a past run's session) and
-  `/diff` (working tree of the bound project), plus `/pair`.
+  `/health` (`_health_report()`: opencode/ollama/bridge probes with short timeouts),
+  `/usage` (24 h tokens/cost), `/resume <n>` (rebind the chat to a past run's
+  session), `/diff` (working tree of the bound project), `/routing` (7-day
+  per-source coverage from `routing_stats`) and `/pair`.
 * Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
   are configured; cancels all active runs on shutdown), `_setup_logging()`.
 
@@ -1315,7 +1332,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `buildCommand()`, `launchInTerminal()`, the `perunFx` canvas engine (`flash()`),
   presence (`presence`, `computePresence()`, `pipState()`, `applyCardStates()`,
   `refreshPresence()`, `updateStormMeter()`), and the view renderers (`viewDashboard`,
-  `viewOrchestrator`, `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`,
+  `viewOrchestrator` (chat plus model/agent pickers that PATCH the machine-wide
+  orchestrator settings — the same fields as Settings → Orchestrator),
+  `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`,
   `mountGit`, `mountManifest`, `manifestOverview`, `openManifestPath()`,
   `openManifestLink()`, `wireManifestLinks()`, `projectInstructionsForm`,
   `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,

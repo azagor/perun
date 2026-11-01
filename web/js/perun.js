@@ -2985,15 +2985,25 @@ async function viewOrchestrator() {
          <div class="row wrap orch-head-tools">
             <span class="mselect-label">Model</span>
             <span id="orch-model-host"></span>
+            <span class="mselect-label">Agent</span>
+            <span id="orch-agent-host"></span>
             <button class="btn ghost sm" id="orch-new">＋ New session</button>
          </div>`));
 
+    // Both pickers edit the machine-wide orchestrator settings (the same fields
+    // as Settings → Orchestrator). They are shortcuts, not per-chat overrides.
     const msModel = modelSelect({
         value: s.orchestrator_model || s.default_model || '',
         placeholder: 'choose model',
         onSelect: (id) => persistOrchModel(id),
     });
     v.querySelector('#orch-model-host').appendChild(msModel);
+    const msAgent = agentSelect({
+        value: s.orchestrator_agent || '',
+        placeholder: 'perun-orchestrator (default)',
+        onSelect: (id) => persistOrchAgent(id),
+    });
+    v.querySelector('#orch-agent-host').appendChild(msAgent);
 
     const chat = el('div', { class: 'chat card' });
     const log = el('div', { class: 'chat-log' });
@@ -3016,7 +3026,7 @@ async function viewOrchestrator() {
     };
     const greeting = () => {
         log.innerHTML = '';
-        bubble('assistant', 'Ask me anything about your projects — or tell me to create, launch, or remove one. Use the model picker above to choose which model I run on.');
+        bubble('assistant', 'Ask me anything about your projects — or tell me to create, launch, or remove one. Use the model and agent pickers above to change how I run.');
     };
     greeting();
 
@@ -3049,7 +3059,7 @@ async function viewOrchestrator() {
                 project: controlSlug,
                 prompt,
                 model: msModel.getValue(),
-                agent: s.orchestrator_agent || '',
+                agent: msAgent.getValue(),
                 session_pk: state.orchestrator.sessionPk,
                 opencode_session_id: state.orchestrator.ocSid,
             };
@@ -3102,6 +3112,14 @@ async function persistOrchModel(id) {
         await api('/api/settings', { method: 'PATCH', body: { orchestrator_model: id } });
         if (state.settings) state.settings.orchestrator_model = id;
         toast('Orchestrator model saved', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+}
+
+async function persistOrchAgent(id) {
+    try {
+        await api('/api/settings', { method: 'PATCH', body: { orchestrator_agent: id } });
+        if (state.settings) state.settings.orchestrator_agent = id;
+        toast('Orchestrator agent saved', 'ok');
     } catch (e) { toast(e.message, 'err'); }
 }
 
@@ -5608,7 +5626,7 @@ async function viewSettings() {
     card.querySelector('#s-model-host').appendChild(msDefault);
     const sAgent = agentSelect({ value: s.default_agent || '', placeholder: '(none)' });
     card.querySelector('#s-agent-host').appendChild(sAgent);
-    const sOrchAgent = agentSelect({ value: s.orchestrator_agent || '', placeholder: '(none)' });
+    const sOrchAgent = agentSelect({ value: s.orchestrator_agent || '', placeholder: 'perun-orchestrator (default)' });
 
     // ---- orchestrator (control plane) ----
     v.appendChild(sectionTitle('Orchestrator'));

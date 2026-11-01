@@ -646,13 +646,16 @@ Free-form notes rendered on the project page.
 
 1. resolves the **agent** first, then the **model**:
    * `agent`: explicit call arg → `project.agent` → (control plane only)
-     `Settings.orchestrator_agent` / `default_agent`.
+     `Settings.orchestrator_agent`, otherwise the installed `perun-orchestrator`;
+     `Settings.default_agent` applies only when that file cannot be written.
    * `model`: explicit call arg → `project.agent_models[agent]` (per-agent
      default) → `project.model` → (control plane only)
      `Settings.orchestrator_model` / `default_model`.
    The global `default_model` / `default_agent` are used **only for the control
    plane**, not for ordinary projects, so an empty Model/Agent field lets OpenCode
-   use its own project defaults. The run records `model_explicit=1` whenever a
+   use its own project defaults. On the control plane `default_agent` is itself a
+   fallback: the overseer keeps its own `perun-orchestrator` identity, because a
+   coding agent is the wrong system prompt for orchestrating. The run records `model_explicit=1` whenever a
    model was resolved (call arg, per-agent default, project override, or
    control-plane setting), and `_execute` forwards it as `--model`.
 2. writes a `runs` row (`status=queued`) and an activity entry,
@@ -1421,6 +1424,27 @@ URLs and globs are never collapsed. The answer the operator types is relayed to
 the target **verbatim** (redaction is for what Perun composes, not for the
 human's own words).
 
+**Buttons first.** A finite set of answers is always an inline button: permission
+decisions, proposal verdicts, the `options` an agent passed to
+`perun_ask_operator`, and a one-field form whose type is boolean (Yes/No),
+select-like (one row per value) or multiselect (tick/untick rows plus a
+`Send N selected` row). `callback_data` carries an *index* — `att:<id>:o<i>`,
+`t<i>`, `d` — never a label, so it always fits Telegram's 64-byte cap and a card
+edit cannot change what an old button means. A tick stores the choice in
+`ref['toggles']` and re-renders; only `d` delivers, through the same
+`reply_form` adapter as a typed answer. Above `MAX_CHOICE_BUTTONS` (8) the card
+falls back to a numbered text list, and free text stays available everywhere.
+
+**Forms are also answerable in plain text.** A form card lists every field by its title
+(falling back to the key), with `required`, the reply key, and the allowed values
+when the field has options. The answer is one `key: value` line per field; JSON
+is still accepted, and the card prints a template with the *real* keys — the old
+`{"field": "value"}` example named a field that did not exist. A single-field
+form takes the bare message, and the value is coerced to the field's type
+(number/integer, boolean, `multiselect` split on commas, choice validated
+against the options). An unknown key is rejected with a hint that lists the
+actual ones.
+
 **Reply ordering.** The adapter runs first and the item is closed with
 `UPDATE … WHERE state='open'` afterwards, so a failed delivery leaves it open and
 one device cannot close a row another device just answered. `reject` on a
@@ -1710,6 +1734,25 @@ runs exactly once. Before the rewrite the previous file is copied to
 `PERUN_HOME/backups/<slug>/opencode.json-<timestamp>` (newest five kept); the copy
 never lands beside the config, because a project config lives in a repository and
 a sibling `.bak` would show up as an untracked file.
+
+**Usage and provider meters.** Token/cost numbers come from the service itself:
+`GET /api/session/{id}/message` carries `tokens.input/output`, `tokens.cache.read`
+and `cost` per assistant message, and each message names its own `model` — so a
+session that switches provider mid-conversation is priced per model, not per
+session. `opencode_api.usage(session_id)` sums those into totals plus a per-model
+breakdown; `Orchestrator.capture_usage(run_uid)` stores it as a **snapshot** on the
+session row (`tokens_in/out`, `cache_read`, `cost_usd`, `usage_at`,
+`usage_models`, schema v18 — stored as `{}` with a log line if the per-model
+breakdown would exceed 20 000 chars, never as a truncated blob) and is called when
+a headless run finalizes, when a TUI
+run is finished from the dashboard or swept after a restart, and every five
+minutes for open TUI runs (`refresh_open_usage`). `backfill_usage(hours)` captures
+sessions that predate the feature. `GET /api/usage?hours=&project=` and
+`GET /api/providers/usage` read it back; the latter also passes through the
+service's experimental `GET /api/experimental/usage/limits` (provider budgets:
+`spent`/`limit`/`resetsAt`) and turns `provider_budgets`
+(`provider=USD per month`) into a percentage when the provider publishes none.
+Measured spend is always labelled as Perun's measurement, never as a quota.
 
 **Docs follow the code.** The executor of a proposal is sandboxed to its approved
 targets (`PERUN_ALLOWLIST`, `perun-guard`, and a post-run filesystem audit), so it

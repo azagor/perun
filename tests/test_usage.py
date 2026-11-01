@@ -149,6 +149,32 @@ def test_spend_is_attributed_per_model_after_a_switch():
     assert round(rows["opencode"]["cost"], 4) == 0.02
 
 
+def test_an_oversized_model_breakdown_is_stored_empty_not_truncated():
+    """A cut mid-JSON would make the snapshot unparseable; ``{}`` is explicit."""
+    from perun import registry
+
+    project = registry.add_project("usage-oversize", r"C:\usage-oversize")
+    session = registry.create_session(project["id"], "ses_oversize")
+    registry.create_run("oversize_run", project["id"], "hi", session_pk=session["id"],
+                        model="ollama-cloud/deepseek")
+
+    huge = {f"ollama-cloud/model-{i}": {"tokens_in": 1, "tokens_out": 0, "cost": 0.0}
+            for i in range(2000)}
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 2000, "tokens_out": 0, "cost": 0.5, "models": huge,
+    })
+
+    with registry.db.db() as conn:
+        stored = conn.execute("SELECT usage_models, tokens_in FROM sessions WHERE id=?",
+                              (session["id"],)).fetchone()
+    assert stored["usage_models"] == "{}"          # parseable, not a truncated blob
+    assert stored["tokens_in"] == 2000             # the totals are still kept
+
+    rows = {r["provider"]: r for r in registry.usage_by_provider()}
+    assert rows["ollama-cloud"]["tokens"] == 2000  # fallback to the run model
+    assert round(float(rows["ollama-cloud"]["cost"]), 4) == 0.5
+
+
 def test_provider_budgets_turn_measured_spend_into_a_percentage(monkeypatch):
     """No provider quota: a configured monthly budget gives the percentage."""
     from perun import server

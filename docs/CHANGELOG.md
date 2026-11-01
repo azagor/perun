@@ -4,7 +4,62 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Telegram replies are buttons first
+
+* Anything with a finite set of answers is now an inline button, not a sentence
+  to retype: the `options` an agent passes to `perun_ask_operator` (they were
+  stored but never shown as choices, and `choose()` refused them), a one-field
+  boolean form (Yes/No), a one-field select form (one row per value), and a
+  one-field multiselect form (tick/untick rows plus `Send N selected`). Ticks
+  live in `ref['toggles']`, so a re-render — or a second device — shows the same
+  marks, and only the Send row delivers.
+* `callback_data` carries an index (`att:<id>:o<i>`, `t<i>`, `d`), never a label,
+  so it stays inside Telegram's 64-byte cap and a card edit cannot change what an
+  old button means. More than eight choices degrade to a numbered text list.
+* A form card used to read `Fields: q0 (string), q1 (string)` followed by
+  `Reply with JSON, e.g. {"field": "value"}` — a placeholder name that was not a
+  field. It now lists each field by title (or key), marks required ones, shows
+  their options, and prints a reply template with the **real** keys. `question`
+  for an options-bearing question no longer duplicates the list.
+* Free-text answers still work: one `key: value` line per field (JSON accepted
+  too), a single-field form takes the bare message, and the value is coerced to
+  the field type. An unknown key is rejected with a hint naming the actual
+  fields instead of a generic "must be JSON".
+
+### The orchestrator keeps its own identity, and you can change it from the chat
+
+* The control plane now defaults to `perun-orchestrator` when `orchestrator_agent`
+  is empty. `default_agent` is a coding preference and no longer silently becomes
+  the overseer's system prompt; it applies only when the managed agent file cannot
+  be written. `orchestrator_agent` still wins when set, and `project.agent` still
+  wins on the control project itself.
+* The Orchestrator page gained an **Agent** picker next to **Model**. Both are
+  shortcuts to the machine-wide settings (the same fields as Settings →
+  Orchestrator), so the chat no longer needs a detour through Settings to switch
+  agents. The picker shows `perun-orchestrator (default)` when nothing is set.
+
+### An unparseable usage snapshot can no longer hide provider spend
+
+* `update_session_usage()` used to cut `usage_models` at 20 000 chars
+  (`json.dumps(...)[:20000]`). A cut mid-JSON made `usage_by_provider()` fail to
+  parse the row and silently fall back to the run model — correct totals, wrong
+  provider, and only for that session. An over-cap breakdown is now stored as
+  `{}` with a log line, which is the same explicit fallback as a pre-0.10.30
+  snapshot; the token/cost totals are untouched.
+* `/routing` gained an output test (seed a `routing_stats` row, assert the
+  `50% of 2` line) and an empty-state test, so a rendering regression no longer
+  passes CI on the detection test alone. Both were the audit's M1 and M3.
+
+### Documentation brought back in line with 0.10.20–0.10.34
+
+* CODEMAP records the usage/providers surface (`usage_totals(project_id=)`,
+  `usage_by_provider()`, the per-model snapshot) and every operator command added
+  this cycle (`/now`, `/health`, `/usage`, `/resume`, `/diff`, `/routing`).
+* TECHNICAL gained a "Usage and provider meters" section: where the numbers come
+  from (per-message `model` + `tokens`/`cost`), how they are stored (snapshot, not
+  accumulation), when they are captured (finalize, TUI finish, restart sweep,
+  5-minute refresh, backfill), and why a measured number is never presented as a
+  provider quota.
 
 ## v0.10.34
 

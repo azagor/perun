@@ -88,10 +88,11 @@ def test_resolve_control_agent_prefers_the_configured_agent(agent_home):
     assert orchestrator.resolve_control_agent(
         SimpleNamespace(orchestrator_agent="build")) == "build"
 
-    # An explicit default_agent keeps its old meaning for the control plane.
+    # default_agent is a coding preference; it must not become the overseer.
     assert orchestrator.resolve_control_agent(
         SimpleNamespace(orchestrator_agent="",
-                        default_agent="control-agent")) == "control-agent"
+                        default_agent="control-agent")) == (
+            orchestrator_agent.ORCHESTRATOR_AGENT_ID)
 
     # Nothing configured: Perun's own agent.
     assert orchestrator.resolve_control_agent(

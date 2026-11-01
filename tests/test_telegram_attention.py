@@ -283,6 +283,33 @@ def test_plain_text_with_one_open_item_asks_before_sending(bridge, project, api)
     assert registry.get_attention(item["id"])["state"] == "answered"
 
 
+def test_a_multiselect_form_is_ticked_and_sent_with_buttons(bridge, project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Pick targets",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "envs", "type": "multiselect",
+                         "options": ["dev", "prod"]}]})
+
+    def cq(action):  # noqa: ANN001
+        return {"id": "c", "data": f"att:{item['id']}:{action}",
+                "message": {"message_id": 42, "chat": {"id": "1"}}}
+
+    bridge._handle_attention_callback(cq("t1"), cq("t1")["data"])
+
+    assert api.calls == []                       # a tick never sends anything
+    assert registry.get_attention(item["id"])["state"] == "open"
+    assert registry.get_attention(item["id"])["ref"]["toggles"] == [1]
+    labels = [row[0]["text"] for row in
+              _last_edit(bridge)["reply_markup"]["inline_keyboard"]]
+    assert labels[0].startswith("⬜") and labels[1].startswith("✅ prod")
+    assert "Selected: prod" in _last_card_text(bridge)
+
+    bridge._handle_attention_callback(cq("d"), cq("d")["data"])
+
+    assert api.calls[-1] == ("form", "frm_1", {"envs": ["prod"]})
+    assert registry.get_attention(item["id"])["state"] == "answered"
+
+
 def test_steer_and_undo_callbacks(bridge, project, api):
     item = attention.request(project, "session", "ses_tg", "ask", "Ship it?")
     bridge.attention_tick()

@@ -37,7 +37,9 @@ Precedence, highest first:
 2. the project's own override (`perun.md` `model:` / `agent:` front matter,
    or the dashboard's per-project setting),
 3. for the control plane only: `orchestrator_model` / `orchestrator_agent`,
-4. for the control plane only: the global `default_model` / `default_agent`.
+   then, with no agent configured, the installed `perun-orchestrator`,
+4. for the control plane only: the global `default_model`; `default_agent` only
+   when the `perun-orchestrator` file cannot be installed.
 
 **The global default is never forced onto an ordinary project run.** With no
 override, a project run defers to OpenCode's own default model. This keeps

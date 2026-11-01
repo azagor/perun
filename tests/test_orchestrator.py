@@ -133,9 +133,29 @@ def test_orchestrator_global_agent_not_forced_on_projects(monkeypatch):
     assert run["agent"] == ""  # project should use OpenCode's own default
 
 
-def test_orchestrator_global_agent_used_for_control_plane(monkeypatch):
-    from perun import orchestrator, config, control
+def test_orchestrator_control_plane_uses_perun_agent_by_default(monkeypatch, tmp_path):
+    """`default_agent` is a coding preference; the overseer keeps its own identity."""
+    from perun import config, control, orchestrator, orchestrator_agent
 
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", tmp_path / "opencode")
+    monkeypatch.setattr(config, "HOME", tmp_path / "perun-home")
+    control.ensure()
+    settings = config.Settings.load()
+    settings.default_agent = "control-agent"
+    o = orchestrator.Orchestrator(settings)
+    monkeypatch.setattr(o, "_worker", lambda *args, **kwargs: None)
+    run = o.start_run("perun", "hi")
+    assert run["agent"] == orchestrator_agent.ORCHESTRATOR_AGENT_ID
+
+
+def test_orchestrator_control_plane_falls_back_to_the_default_agent(monkeypatch, tmp_path):
+    """Only an agent file that cannot be written lets `default_agent` take over."""
+    from perun import config, control, orchestrator, orchestrator_agent
+
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", tmp_path / "opencode")
+    monkeypatch.setattr(config, "HOME", tmp_path / "perun-home")
+    monkeypatch.setattr(orchestrator_agent, "ensure", lambda **kw: "failed")
+    monkeypatch.setattr(orchestrator_agent, "available", lambda agent_id=None: False)
     control.ensure()
     settings = config.Settings.load()
     settings.default_agent = "control-agent"

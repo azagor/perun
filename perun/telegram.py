@@ -1516,6 +1516,20 @@ class PerunTelegramBridge:
         # Acknowledge immediately, then edit the card in place: the spinner is
         # gone before any work and the chat keeps one card per decision.
         ack("Working…")
+
+        if action[:1] == "t" and action[1:].isdigit():
+            # Multi-select form: a tick re-renders the card, it does not answer,
+            # so the keyboard is swapped in one edit instead of cleared first.
+            result = attention.toggle(attention_id, int(action[1:]),
+                                      by=f"telegram:{chat_id}")
+            fresh = result.get("item") or item
+            if result.get("ok"):
+                self._edit_card(chat_id, message_id, attention.render(fresh),
+                                reply_markup=attention.keyboard(fresh))
+            else:
+                self._finish_card(chat_id, message_id, fresh, result)
+            return
+
         self._clear_buttons(chat_id, message_id)
 
         if action == "always":

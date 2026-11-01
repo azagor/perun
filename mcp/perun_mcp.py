@@ -1385,12 +1385,10 @@ def perun_ask_operator(question: str, options: list[str] | None = None,
                 "`project=\"<slug>\"` explicitly.")
 
     opts = [{"id": str(i + 1), "label": str(o)} for i, o in enumerate(options or [])]
-    stored = text
-    if options:
-        listing = "\n".join(f"- {o}" for o in options)
-        stored = f"{text}\n\nOptions:\n{listing}"
+    # Options stay in ``options`` (a choice is a button on every surface); the
+    # question text is what the operator reads, not a second copy of the list.
     item = attention.request(
-        proj, "session", session_id or f"unknown:{os.getpid()}", "ask", stored,
+        proj, "session", session_id or f"unknown:{os.getpid()}", "ask", text,
         options=opts,
         ref={"session_id": session_id, "session_title": ""},
         dedupe_key=registry.attention_dedupe_key(

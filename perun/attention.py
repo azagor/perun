@@ -305,17 +305,47 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
         return "\n".join(lines)
 
     if kind == "form":
-        fields = ref.get("fields") or []
+        fields = [f for f in (ref.get("fields") or []) if isinstance(f, dict)]
         lines = [f"📝 {head}", _redact(item.get("question") or "")]
-        if fields:
-            rendered = ", ".join(
-                f"`{f.get('key')}` ({f.get('type')})" for f in fields[:6]
-            )
-            lines.append(f"Fields: {rendered}")
-            if len(fields) == 1 and fields[0].get("type") == "string":
-                lines.append("Reply with the value.")
+        if not fields:
+            return "\n".join(lines + ["Reply with your answer."])
+        shown = fields[:6]
+        lines.append("Answer this field:" if len(shown) == 1
+                     else f"Answer these {len(shown)} fields:")
+        for index, field in enumerate(shown, 1):
+            key = str(field.get("key") or "")
+            title = str(field.get("title") or "").strip()
+            label = f"*{_redact(title)}*" if title and title != key else f"`{key}`"
+            notes: List[str] = []
+            if title and title != key:
+                notes.append(f"`{key}`")
+            if field.get("required"):
+                notes.append("required")
+            options = [str(o) for o in (field.get("options") or [])][:6]
+            if options:
+                notes.append("one of: " + ", ".join(_redact(o) for o in options))
+            suffix = f" — {'; '.join(notes)}" if notes else ""
+            lines.append(f"{index}. {label}{suffix}")
+        if len(shown) == 1:
+            field = shown[0]
+            options = [str(o) for o in (field.get("options") or [])]
+            if _is_multiselect(field) and options:
+                picked = [options[i] for i in sorted(_toggled(item))
+                          if 0 <= i < len(options)]
+                if picked:
+                    lines.append("Selected: " + ", ".join(_redact(p) for p in picked))
+                lines.append("Tap the options below, then Send.")
+            elif _form_answer_field(item) is not None:
+                lines.append("Pick one below.")
             else:
-                lines.append('Reply with JSON, e.g. `{"field": "value"}`.')
+                lines.append("Reply with the value.")
+        else:
+            keys = [str(f.get("key")) for f in shown]
+            lines.append("Reply with one line per field:")
+            lines.extend(f"`{k}`: …" for k in keys)
+            if len(keys) <= 3:
+                sample = ", ".join(f'"{k}": "…"' for k in keys)
+                lines.append(f"Or as JSON: `{{{sample}}}`")
         return "\n".join(lines)
 
     if kind == "proposal":
@@ -329,6 +359,7 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
         return "\n".join([
             f"💬 {head} · `{item.get('target_id')}`",
             _redact(item.get("question") or ""),
+            *_option_lines(item),
             "Reply to this message and it will be posted in that room.",
         ])
 
@@ -336,33 +367,129 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
     return "\n".join([
         f"❓ {head}",
         _redact(item.get("question") or ""),
+        *_option_lines(item),
         "Reply to this message; your answer goes into that session.",
     ])
+
+
+#: Buttons on a single card stay a glance, not a menu. Beyond this the card
+#: lists the values instead, so the operator still knows what to type.
+MAX_CHOICE_BUTTONS = 8
+
+
+def _form_answer_field(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The single field a form card can answer with buttons (``None`` otherwise).
+
+    Only a one-field form is button-answerable: a tap carries exactly one value,
+    and a multi-field form needs all of them at once.
+    """
+    fields = [f for f in ((item.get("ref") or {}).get("fields") or [])
+              if isinstance(f, dict)]
+    if len(fields) != 1:
+        return None
+    field = fields[0]
+    ftype = str(field.get("type") or "string")
+    if ftype == "boolean":
+        return field
+    if field.get("options") and ftype in ("select", "multiselect", "choice",
+                                          "radio", "enum", "string"):
+        return field
+    return None
+
+
+def _is_multiselect(field: Dict[str, Any]) -> bool:
+    return str(field.get("type") or "") == "multiselect"
+
+
+def _choice_labels(field: Dict[str, Any]) -> List[str]:
+    if str(field.get("type") or "") == "boolean":
+        return ["Yes", "No"]
+    return [str(o) for o in (field.get("options") or [])]
+
+
+def _choice_value(field: Dict[str, Any], label: str) -> Any:
+    """The value the service expects for the tapped label."""
+    if str(field.get("type") or "") == "boolean":
+        return label.strip().lower() in ("yes", "1", "true", "y", "on")
+    return label
+
+
+def _choice_rows(item: Dict[str, Any], labels: List[str], *, prefix: str = "o",
+                 toggled: Optional[set] = None) -> List[List[Dict[str, str]]]:
+    rows = []
+    for index, label in enumerate(labels[:MAX_CHOICE_BUTTONS]):
+        text = label
+        if toggled is not None:
+            text = ("✅ " if index in toggled else "⬜️ ") + label
+        rows.append([{"text": str(text)[:60],
+                      "callback_data": f"att:{item['id']}:{prefix}{index}"}])
+    return rows
 
 
 def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Inline keyboard for the initial card (``None`` when a reply is enough)."""
     kind = item["target_kind"]
-    options = item.get("options") or []
-    if kind == "permission":
-        options = options or PERMISSION_OPTIONS
-    elif kind == "proposal":
-        options = options or PROPOSAL_OPTIONS
-    else:
-        return None
-    rows = [
-        [{"text": str(opt.get("label") or opt.get("id")),
-          "callback_data": f"att:{item['id']}:{opt.get('id')}"}]
-        for opt in options
-    ]
     if kind == "permission":
         # Keep "Allow once" first, the destructive choices on their own rows.
-        rows = [
+        return {"inline_keyboard": [
             [{"text": "Allow once", "callback_data": f"att:{item['id']}:once"}],
             [{"text": "Always allow", "callback_data": f"att:{item['id']}:always"}],
             [{"text": "Reject", "callback_data": f"att:{item['id']}:reject"}],
-        ]
+        ]}
+    if kind == "proposal":
+        options = item.get("options") or PROPOSAL_OPTIONS
+        return {"inline_keyboard": [
+            [{"text": str(opt.get("label") or opt.get("id")),
+              "callback_data": f"att:{item['id']}:{opt.get('id')}"}]
+            for opt in options
+        ]}
+    if kind == "form":
+        field = _form_answer_field(item)
+        if field is None:
+            return None
+        labels = _choice_labels(field)
+        if not labels or len(labels) > MAX_CHOICE_BUTTONS:
+            return None
+        if _is_multiselect(field):
+            toggled = _toggled(item)
+            rows = _choice_rows(item, labels, prefix="t", toggled=toggled)
+            chosen = len([i for i in toggled if 0 <= i < len(labels)])
+            rows.append([{
+                "text": f"✔️ Send {chosen} selected" if chosen else "✔️ Send selection",
+                "callback_data": f"att:{item['id']}:d",
+            }])
+            return {"inline_keyboard": rows}
+        return {"inline_keyboard": _choice_rows(item, labels)}
+    # session / room / handoff: the options an agent passed to
+    # ``perun_ask_operator`` are choices, so they are buttons too.
+    options = item.get("options") or []
+    if not options or len(options) > MAX_CHOICE_BUTTONS:
+        return None
+    rows = []
+    for index, opt in enumerate(options):
+        label = str(opt.get("label") or opt.get("id") or f"Option {index + 1}")
+        rows.append([{"text": label[:60],
+                      "callback_data": f"att:{item['id']}:o{index}"}])
     return {"inline_keyboard": rows}
+
+
+def _toggled(item: Dict[str, Any]) -> set:
+    """Multi-select indices already picked on this card (stored in ``ref``)."""
+    raw = (item.get("ref") or {}).get("toggles") or []
+    return {int(i) for i in raw if str(i).lstrip("-").isdigit()}
+
+
+def _option_lines(item: Dict[str, Any]) -> List[str]:
+    """Fallback text for options that do not fit on the keyboard."""
+    options = item.get("options") or []
+    if not options:
+        return []
+    if len(options) <= MAX_CHOICE_BUTTONS:
+        return ["Choose one below, or reply in your own words."]
+    return ["Options:", *[
+        f"{index}. {_redact(str(opt.get('label') or opt.get('id') or ''))}"
+        for index, opt in enumerate(options[:12], 1)
+    ]]
 
 
 def confirmation(item: Dict[str, Any], result: Dict[str, Any]) -> str:
@@ -405,20 +532,52 @@ def _permission_decision(option: str) -> str:
     raise DeliveryError(f"unknown permission choice: {option}")
 
 
+#: ``key: value`` (or ``key = value``) — the phone-friendly answer format. JSON
+#: stays supported, but a JSON template with made-up field names is exactly what
+#: made the Telegram card unreadable.
+_FIELD_LINE = re.compile(r"^([A-Za-z0-9_.\-]+)\s*[:=]\s*(.*)$")
+
+
+def _form_hint(fields: List[Dict[str, Any]]) -> str:
+    keys = [str(f.get("key")) for f in fields[:6]]
+    hint = ("reply with one line per field (" + " · ".join(f"{k}: …" for k in keys)
+            + ") or as a JSON object")
+    return hint[0].upper() + hint[1:]
+
+
 def _coerce_form_answer(item: Dict[str, Any], text: str) -> Dict[str, Any]:
-    fields = (item.get("ref") or {}).get("fields") or []
+    fields = [f for f in ((item.get("ref") or {}).get("fields") or [])
+              if isinstance(f, dict)]
     text = (text or "").strip()
-    if len(fields) == 1 and fields[0].get("type") == "string":
-        return {str(fields[0]["key"]): text}
-    try:
-        parsed = json.loads(text)
-    except ValueError as exc:
-        raise DeliveryError("answer must be a JSON object for this form") from exc
-    if not isinstance(parsed, dict):
-        raise DeliveryError("answer must be a JSON object for this form")
+    if not fields:
+        raise DeliveryError("this form has no fields to answer")
+    if len(fields) == 1 and not text.startswith("{"):
+        # One field never needs a format: the whole message is the value.
+        parsed = {str(fields[0].get("key")): text}
+    elif text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except ValueError as exc:
+            raise DeliveryError("That JSON is not valid — " + _form_hint(fields)) from exc
+        if not isinstance(parsed, dict):
+            raise DeliveryError("A form answer must be a JSON object — "
+                                + _form_hint(fields))
+    else:
+        parsed = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = _FIELD_LINE.match(line)
+            if not match:
+                raise DeliveryError(_form_hint(fields))
+            parsed[match.group(1)] = match.group(2).strip()
+        if not parsed:
+            raise DeliveryError(_form_hint(fields))
     known = {str(f.get("key")) for f in fields}
     if known and set(parsed) - known:
-        raise DeliveryError("unknown form field(s): " + ", ".join(sorted(set(parsed) - known)))
+        raise DeliveryError("unknown form field(s): " + ", ".join(sorted(set(parsed) - known))
+                            + " — " + _form_hint(fields))
     out: Dict[str, Any] = {}
     for field in fields:
         key = str(field.get("key"))
@@ -449,7 +608,8 @@ def _coerce_form_answer(item: Dict[str, Any], text: str) -> Dict[str, Any]:
     return out
 
 
-def _deliver_text(item: Dict[str, Any], text: str, by: str) -> Dict[str, Any]:
+def _deliver_text(item: Dict[str, Any], text: str, by: str, *,
+                  form_answer: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     kind = item["target_kind"]
     ref = item.get("ref") or {}
 
@@ -478,7 +638,9 @@ def _deliver_text(item: Dict[str, Any], text: str, by: str) -> Dict[str, Any]:
 
     if kind == "form":
         api = opencode_api.default_api()
-        answer = _coerce_form_answer(item, text)
+        # A button answer is already a typed value (a toggle list, a boolean);
+        # only a typed message has to be coerced.
+        answer = form_answer if form_answer is not None else _coerce_form_answer(item, text)
         api.reply_form(str(item["target_id"]), str(ref.get("form_id") or ""), answer)
         return {"mode": "form"}
 
@@ -504,7 +666,13 @@ def _deliver_text(item: Dict[str, Any], text: str, by: str) -> Dict[str, Any]:
 
 
 def answer(attention_id: int, text: str, *, by: str) -> Dict[str, Any]:
-    """Deliver a free-text answer, then close the item.
+    """Deliver a free-text answer, then close the item."""
+    return _answer(attention_id, text, by=by)
+
+
+def _answer(attention_id: int, text: str, *, by: str,
+            form_answer: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Deliver an answer (typed or button-chosen), then close the item.
 
     Order matters: the adapter runs first, so a failed delivery leaves the item
     open and the operator can retry instead of losing the answer.
@@ -522,7 +690,7 @@ def answer(attention_id: int, text: str, *, by: str) -> Dict[str, Any]:
         # verbatim (a credential typed into the reply is intentional). Only the
         # *notification* is redacted, because that is what Perun composes and
         # sends to a cloud chat.
-        delivery = _deliver_text(item, text, by)
+        delivery = _deliver_text(item, text, by, form_answer=form_answer)
     except DeliveryError as exc:
         registry.log_activity(
             item.get("project_id"), "attention_failed",
@@ -560,16 +728,92 @@ def answer(attention_id: int, text: str, *, by: str) -> Dict[str, Any]:
     return {"ok": True, "item": registry.get_attention(item["id"]), "delivery": delivery}
 
 
+def _choice_index(action: str, prefix: str) -> Optional[int]:
+    if not action.startswith(prefix):
+        return None
+    tail = action[len(prefix):]
+    return int(tail) if tail.isdigit() else None
+
+
+def toggle(attention_id: int, index: int, *, by: str = "") -> Dict[str, Any]:
+    """Flip one multi-select choice on a form card — nothing is sent yet.
+
+    The state lives in ``ref['toggles']`` so a re-render (or a second device)
+    shows the same marks; the bridge calls :func:`choose` with ``d`` to submit.
+    """
+    item = registry.get_attention(attention_id)
+    if not item:
+        return {"ok": False, "error": "attention item not found"}
+    if item["state"] != "open":
+        return {"ok": False, "error": f"already {item['state']}", "item": item}
+    field = _form_answer_field(item)
+    if item["target_kind"] != "form" or field is None or not _is_multiselect(field):
+        return {"ok": False, "error": "this card has nothing to toggle", "item": item}
+    labels = _choice_labels(field)
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "that choice is no longer on the card",
+                "item": item}
+    if not 0 <= index < len(labels):
+        return {"ok": False, "error": "that choice is no longer on the card",
+                "item": item}
+    chosen = _toggled(item)
+    if index in chosen:
+        chosen.discard(index)
+    else:
+        chosen.add(index)
+    updated = registry.update_attention_ref(item["id"], toggles=sorted(chosen))
+    LOG.info("att_%s: toggled %r (%d picked) by %s", item["id"],
+             labels[index], len(chosen), by or "someone")
+    return {"ok": True, "item": updated or item, "delivery": {"mode": "toggle"}}
+
+
 def choose(attention_id: int, option: str, *, by: str) -> Dict[str, Any]:
-    """Deliver a button choice (permission decision or proposal verdict)."""
+    """Deliver a button choice (permission, proposal, option, or form choice)."""
     item = registry.get_attention(attention_id)
     if not item:
         return {"ok": False, "error": "attention item not found"}
     if item["state"] != "open":
         return {"ok": False, "error": f"already {item['state']}", "item": item}
     kind = item["target_kind"]
-    option = str(option or "").strip().lower()
+    action = str(option or "").strip()
+    option = action.lower()
     try:
+        if kind in ("session", "room", "handoff"):
+            index = _choice_index(option, "o")
+            if index is None:
+                raise DeliveryError("this one needs a text reply")
+            options = item.get("options") or []
+            if not 0 <= index < len(options):
+                raise DeliveryError("that choice is no longer on the card")
+            label = str(options[index].get("label") or options[index].get("id") or "")
+            if not label:
+                raise DeliveryError("that choice is empty")
+            return _answer(item["id"], label, by=by)
+        if kind == "form":
+            field = _form_answer_field(item)
+            if field is None:
+                raise DeliveryError("this form needs a text reply")
+            key = str(field.get("key") or "")
+            labels = _choice_labels(field)
+            if option == "d":
+                if not _is_multiselect(field):
+                    raise DeliveryError("this card has nothing to send")
+                picked = [labels[i] for i in sorted(_toggled(item))
+                          if 0 <= i < len(labels)]
+                if not picked:
+                    raise DeliveryError("pick at least one option first")
+                return _answer(item["id"], ", ".join(picked), by=by,
+                               form_answer={key: picked})
+            index = _choice_index(option, "o")
+            if index is None:
+                raise DeliveryError(f"this form needs a text reply ({_form_hint([field])})")
+            if not 0 <= index < len(labels):
+                raise DeliveryError("that choice is no longer on the card")
+            label = labels[index]
+            return _answer(item["id"], label, by=by,
+                           form_answer={key: _choice_value(field, label)})
         if kind == "permission":
             decision = _permission_decision(option)
             ref = item.get("ref") or {}

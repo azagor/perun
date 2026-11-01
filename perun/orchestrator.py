@@ -377,20 +377,17 @@ def _prefetch_blocks(project: dict[str, Any], prompt: str) -> list[str]:
 def resolve_control_agent(settings: config.Settings | None = None) -> str:
     """The agent a control-plane run should use ("" = OpenCode's default).
 
-    ``orchestrator_agent`` wins when set. Empty means "automatic": Perun installs
-    and uses its own ``perun-orchestrator`` agent, falling back to nothing (the
-    caller then tries ``default_agent``) when the file cannot be written.
+    ``orchestrator_agent`` wins when set. Otherwise Perun installs and uses its
+    own ``perun-orchestrator`` agent: the control plane is an overseer, not a
+    coding session, so the global ``default_agent`` must not silently become its
+    identity. ``default_agent`` applies only when the managed file cannot be
+    written — this returns "" then and the caller tries it, then OpenCode's
+    built-in default.
     """
     from . import orchestrator_agent as _agents
 
     configured = (getattr(settings, "orchestrator_agent", "") or "").strip()
-    if configured:
-        wanted = configured
-    else:
-        # An explicit ``default_agent`` keeps working exactly as it used to for the
-        # control plane; only a machine with neither setting gets Perun's agent.
-        wanted = ((getattr(settings, "default_agent", "") or "").strip()
-                  or _agents.ORCHESTRATOR_AGENT_ID)
+    wanted = configured or _agents.ORCHESTRATOR_AGENT_ID
     if wanted == _agents.ORCHESTRATOR_AGENT_ID:
         _agents.ensure()
     if _agents.available(wanted):
@@ -847,6 +844,7 @@ class Orchestrator:
             # The control plane has its own identity; see resolve_control_agent().
             agent = resolve_control_agent(self.settings)
         if not agent and control.is_control(project):
+            # Only when perun-orchestrator could not be installed (see above).
             agent = self.settings.default_agent
 
         requested_model = (model or "").strip()

@@ -263,6 +263,178 @@ def test_form_answer_accepts_json_and_validates_fields(project, api):
     assert api.calls[-1] == ("form", "ses_form", "frm_1", {"env": "prod", "confirm": True})
 
 
+def test_form_card_names_the_fields_and_shows_a_reply_template(project):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Questions",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [
+                 {"key": "q0", "type": "string", "title": "Which audit?", "required": True},
+                 {"key": "q1", "type": "string"},
+                 {"key": "env", "type": "string", "options": ["dev", "prod"]},
+             ]},
+    )
+
+    text = attention.render(item)
+
+    assert "Answer these 3 fields:" in text
+    assert "1. *Which audit?* — `q0`; required" in text
+    assert "2. `q1`" in text
+    assert "3. `env` — one of: dev, prod" in text
+    assert "`q0`: …" in text and "`q1`: …" in text and "`env`: …" in text
+    assert '{"q0": "…"' in text                 # a real template, not `"field"`
+    assert "Fields:" not in text and "(string)" not in text
+
+
+def test_a_single_field_form_asks_for_the_value(project):
+    item = attention.request(
+        project, "form", "ses_form", "form", "How many?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "count", "type": "number"}]},
+    )
+
+    text = attention.render(item)
+
+    assert "Answer this field:" in text and "1. `count`" in text
+    assert text.rstrip().endswith("Reply with the value.")
+
+
+def test_form_answer_accepts_one_line_per_field(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Deploy?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "env", "type": "string"},
+                        {"key": "confirm", "type": "boolean"}]},
+    )
+
+    result = attention.answer(item["id"], "env: prod\nconfirm: yes", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1] == ("form", "ses_form", "frm_1",
+                             {"env": "prod", "confirm": True})
+
+
+def test_form_line_answer_rejects_an_unknown_field(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Deploy?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "env", "type": "string"},
+                        {"key": "confirm", "type": "boolean"}]},
+    )
+
+    result = attention.answer(item["id"], "evn: prod", by="telegram:1")
+
+    assert result["ok"] is False
+    assert "unknown form field" in result["error"]
+    assert "env: …" in result["error"]          # the hint names the real keys
+
+
+def test_a_single_field_form_takes_a_bare_value(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "How many?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "count", "type": "number"}]},
+    )
+
+    result = attention.answer(item["id"], "3", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1] == ("form", "ses_form", "frm_1", {"count": 3})
+
+
+def _ask_with(project, options, *, kind="session", text="Deploy where?"):
+    return attention.request(
+        project, kind, "ses_ask", "ask", text,
+        options=[{"id": str(i + 1), "label": o} for i, o in enumerate(options)],
+    )
+
+
+def test_session_options_are_buttons_and_deliver_the_label(project, api):
+    item = _ask_with(project, ["staging", "prod"])
+
+    rows = attention.keyboard(item)["inline_keyboard"]
+    assert [row[0]["text"] for row in rows] == ["staging", "prod"]
+    assert [row[0]["callback_data"] for row in rows] == [
+        f"att:{item['id']}:o0", f"att:{item['id']}:o1"]
+    assert all(len(row[0]["callback_data"]) <= 64 for row in rows)
+    assert "Choose one below" in attention.render(item)
+
+    result = attention.choose(item["id"], "o1", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1][2] == "prod"          # the label, not the index
+    assert registry.get_attention(item["id"])["state"] == "answered"
+
+
+def test_a_single_select_form_answers_with_one_tap(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Deploy where?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "env", "type": "select",
+                         "options": ["staging", "prod"]}]})
+
+    rows = attention.keyboard(item)["inline_keyboard"]
+    assert [row[0]["callback_data"] for row in rows] == [
+        f"att:{item['id']}:o0", f"att:{item['id']}:o1"]
+    assert "Pick one below" in attention.render(item)
+
+    result = attention.choose(item["id"], "o1", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1] == ("form", "ses_form", "frm_1", {"env": "prod"})
+
+
+def test_a_boolean_form_offers_yes_and_no(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Continue?",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "confirm", "type": "boolean"}]})
+
+    rows = attention.keyboard(item)["inline_keyboard"]
+    assert [row[0]["text"] for row in rows] == ["Yes", "No"]
+
+    result = attention.choose(item["id"], "o0", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1] == ("form", "ses_form", "frm_1", {"confirm": True})
+
+
+def test_a_multiselect_form_toggles_then_sends_the_picked_list(project, api):
+    item = attention.request(
+        project, "form", "ses_form", "form", "Pick targets",
+        ref={"form_id": "frm_1", "session_id": "ses_form",
+             "fields": [{"key": "envs", "type": "multiselect",
+                         "options": ["dev", "prod", "staging"]}]})
+
+    assert attention.toggle(item["id"], 0, by="telegram:1")["ok"]
+    toggled = attention.toggle(item["id"], 2, by="telegram:1")["item"]
+    assert toggled["ref"]["toggles"] == [0, 2]
+
+    rows = attention.keyboard(toggled)["inline_keyboard"]
+    assert rows[0][0]["text"].startswith("✅")
+    assert rows[1][0]["text"].startswith("⬜")
+    assert "Send 2 selected" in rows[-1][0]["text"]
+    assert "Selected: dev, staging" in attention.render(toggled)
+
+    # A second tap un-picks; the card is never answered by a toggle.
+    again = attention.toggle(item["id"], 0, by="telegram:1")["item"]
+    assert again["ref"]["toggles"] == [2]
+    assert registry.get_attention(item["id"])["state"] == "open"
+
+    result = attention.choose(item["id"], "d", by="telegram:1")
+
+    assert result["ok"], result
+    assert api.calls[-1] == ("form", "ses_form", "frm_1", {"envs": ["staging"]})
+
+
+def test_too_many_options_fall_back_to_a_text_list(project):
+    labels = [f"option-{i}" for i in range(10)]
+    item = _ask_with(project, labels)
+
+    assert attention.keyboard(item) is None
+    text = attention.render(item)
+    assert "Options:" in text and "10. option-9" in text
+
+
 def test_room_answer_is_queued_when_the_bridge_is_offline(project, monkeypatch):
     from perun import perunchat_bridge
 
