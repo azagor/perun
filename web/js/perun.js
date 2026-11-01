@@ -1840,6 +1840,7 @@ async function sharedProjectCard(detail) {
         <div class="card-head"><h4>Shared project</h4>
             <span class="shared-status ${initialStatus.cls}" id="sp-status">${esc(initialStatus.text)}</span></div>
         <label class="opt"><input type="checkbox" id="sp-enabled" ${enabled ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
+        <p class="muted" style="font-size:.72rem;margin-top:4px">Hiding a project only removes it from lists; it does not disable sharing. Turn this off to tear the room down.</p>
         <div id="sp-config"></div>
         <div id="sp-chat" class="shared-section sp-chat-panel"></div>
         <div id="sp-form" class="mt ${enabled ? '' : 'hidden'}">

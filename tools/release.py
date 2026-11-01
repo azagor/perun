@@ -155,6 +155,10 @@ def write_bundled_release_notes(limit: int = 10) -> None:
     The Windows installer excludes ``docs/``, so the self-update page cannot read
     the changelog there; ``perun/release_notes.json`` ships with the package.
     """
+    # ``python tools/release.py`` puts only ``tools/`` on sys.path, so make the
+    # checkout importable instead of relying on PYTHONPATH or an installed copy.
+    if str(PUBLIC) not in sys.path:
+        sys.path.insert(0, str(PUBLIC))
     from perun.release_notes import build_bundled
 
     text = read_file(PUBLIC / "docs" / "CHANGELOG.md")

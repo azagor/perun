@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Audit follow-ups from the v0.10.44 review
+
+* `tools/release.py` puts the checkout on `sys.path` before importing
+  `perun.release_notes`, so bundling the notes no longer depends on
+  `PYTHONPATH` or an installed copy (a failed import there would have left a
+  half-prepared release).
+* A test covers `GET /api/update/notes?version=<unknown>`: an unknown version
+  reports `source: "unavailable"` and an empty body instead of inventing notes.
+* The Shared tab says that hiding a project does not disable sharing — turn the
+  toggle off to tear its room down.
 
 ## v0.10.44
 

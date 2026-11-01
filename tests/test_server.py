@@ -1108,6 +1108,15 @@ def test_update_notes_report_the_installed_release(client):
     assert notes["body"]
 
 
+def test_update_notes_for_an_unknown_version_are_empty(client):
+    body = client.get("/api/update/notes?version=9.9.9").json()
+
+    notes = body["notes"]
+    assert notes["version"] == "9.9.9"
+    assert notes["source"] == "unavailable"
+    assert notes["body"] == ""
+
+
 def test_a_rejected_settings_patch_applies_nothing(client):
     """Validate the whole payload first: the live object must not change."""
     from perun import server
