@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.51
+
+*Released 2026-11-02.*
+
 ### Coroutines: scheduled and event-triggered agent jobs
 
 * New **Coroutines** dashboard tab: a quick-create path and a five-step wizard

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.50 (see §15). Telegram /stop closes the terminal too, and the kill target matches the launcher's marker exactly.
+**Latest release:** v0.10.51 (see §15). Coroutines: scheduled, event-driven and looped agent jobs, dashboard wizard, PerunChat room triggers, and a hardened global-job policy.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2387,6 +2387,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-02 — v0.10.51: Coroutines: scheduled, event-driven and looped agent jobs, dashboard wizard, PerunChat room triggers, and a hardened global-job policy.
+
 ### 2026-11-02 — v0.10.50: Telegram /stop closes the terminal too, and the kill target matches the launcher's marker exactly.
 
 ### 2026-11-02 — v0.10.49: Stop closes the TUI terminal again, including after a restart.
