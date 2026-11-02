@@ -28,6 +28,26 @@ from . import (
 
 logger = logging.getLogger(__name__)
 
+
+def _publish_event(proposal: dict[str, Any], kind: str) -> None:
+    """Feed the durable coroutine event inbox; never break the proposal flow."""
+    try:
+        from . import domain_events
+
+        domain_events.publish(
+            kind,
+            f"{kind}:{proposal['id']}",
+            {
+                "proposal_id": proposal["id"],
+                "project_id": proposal.get("project_id"),
+                "status": proposal.get("status"),
+                "intent": str(proposal.get("intent") or "")[:500],
+                "targets": proposal.get("targets") or [],
+            },
+        )
+    except Exception:  # pragma: no cover - events are best effort
+        logger.debug("could not publish %s", kind, exc_info=True)
+
 STATUSES = {
     "pending", "approved", "rejected", "expired", "executing", "executed", "failed", "claimed"
 }
@@ -415,6 +435,7 @@ def approve(proposal_id: str, approver: str, *,
             f"Proposal {proposal_id} approved by {approver}",
             {"proposal_id": proposal_id, "approver": approver, "intent": proposal["intent"]},
         )
+        _publish_event(proposal, "proposal.approved")
     return {**proposal, "approval_token": token}
 
 
@@ -804,6 +825,7 @@ def complete_external_execution(
                 "executor_id": executor_id,
             },
         )
+        _publish_event(proposal, "proposal.executed")
         if proposal.get("status") == "executed":
             try:
                 from . import docs_sync
@@ -1299,6 +1321,7 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             {"proposal_id": proposal_id, "status": proposal["status"],
              "result": proposal.get("result", "")[:200]},
         )
+        _publish_event(proposal, "proposal.executed")
         if proposal.get("status") == "executed":
             # The executor is sandboxed to the approved targets, so it cannot
             # update the docs itself: run the installed /update-docs command.

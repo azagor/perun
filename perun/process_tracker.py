@@ -286,6 +286,22 @@ class ProcessTracker:
         if run and run.get("status") in ("queued", "running"):
             registry.update_run(run_uid, status="done",
                                 ended_at=registry.now_iso(), pid=0)
+            try:
+                from . import domain_events
+
+                domain_events.publish(
+                    "run.finished",
+                    f"run.finished:{run_uid}",
+                    {
+                        "run_uid": run_uid,
+                        "project_id": run.get("project_id"),
+                        "status": "done",
+                        "coroutine_id": run.get("coroutine_id"),
+                        "standalone": run.get("standalone"),
+                    },
+                )
+            except Exception:  # pragma: no cover - events are best effort
+                pass
 
     def _resolve_child_pid(self, entry: dict[str, Any], *,
                            heuristic: bool = True) -> int | None:

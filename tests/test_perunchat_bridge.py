@@ -41,10 +41,18 @@ def test_bridge_disabled_without_key(settings):
     assert not bridge.enabled
 
 
-def test_bridge_disabled_without_auto_reply(settings):
+def test_bridge_disabled_without_auto_reply_or_event_ingest(settings):
     settings.perunchat_auto_reply = False
+    settings.perunchat_ingest_events = False
     bridge = PerunChatBridge(MagicMock(settings=settings))
     assert not bridge.enabled
+
+
+def test_bridge_ingests_events_without_conversational_replies(settings):
+    settings.perunchat_auto_reply = False
+    settings.perunchat_ingest_events = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    assert bridge.enabled
 
 
 def test_bridge_enabled(settings):
@@ -60,6 +68,7 @@ def test_bridge_reads_current_settings_from_orchestrator(settings):
     bridge reading the old auto_reply value and reporting 'bridge: stopped'.
     """
     settings.perunchat_auto_reply = False
+    settings.perunchat_ingest_events = False
     new_settings = config.Settings.load()
     new_settings.perunchat_api_key = "prn_test_secret"
     new_settings.perunchat_auto_reply = True

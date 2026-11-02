@@ -374,6 +374,20 @@ def delete_project(slug: str) -> bool:
         conn.execute("DELETE FROM activity WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM doc_chunks WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM tasks WHERE project_id=?", (pid,))
+        # Coroutine definitions belong to their project; child rows are
+        # removed explicitly because SQLite FK enforcement is off.
+        conn.execute(
+            "DELETE FROM coroutines WHERE project_id=? OR execution_project_id=?",
+            (pid, pid),
+        )
+        conn.execute(
+            "DELETE FROM coroutine_event_deliveries "
+            "WHERE coroutine_id NOT IN (SELECT id FROM coroutines)"
+        )
+        conn.execute(
+            "DELETE FROM coroutine_room_outbox "
+            "WHERE coroutine_id NOT IN (SELECT id FROM coroutines)"
+        )
         conn.execute("DELETE FROM runs WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM sessions WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM project_chats WHERE project_id=?", (pid,))
@@ -1129,16 +1143,25 @@ def create_run(run_uid: str, project_id: int, prompt: str, *,
                session_pk: int | None = None, opencode_session_id: str = "",
                model: str = "", model_explicit: bool = False,
                agent: str = "", standalone: bool = False,
-               options: dict[str, Any] | None = None) -> dict[str, Any]:
+               options: dict[str, Any] | None = None,
+               coroutine_id: int | None = None,
+               coroutine_cycle_id: str = "",
+               coroutine_iteration: int = 0,
+               coroutine_fire_key: str = "",
+               coroutine_trigger: str = "") -> dict[str, Any]:
     with db.db() as conn:
         conn.execute(
             """INSERT INTO runs
                (run_uid,project_id,session_pk,opencode_session_id,prompt,
-                model,model_explicit,agent,status,created_at,standalone,run_options)
-               VALUES (?,?,?,?,?,?,?,?, 'queued', ?, ?, ?)""",
+                model,model_explicit,agent,status,created_at,standalone,run_options,
+                coroutine_id,coroutine_cycle_id,coroutine_iteration,
+                coroutine_fire_key,coroutine_trigger)
+               VALUES (?,?,?,?,?,?,?,?, 'queued', ?, ?, ?,?,?,?,?,?)""",
             (run_uid, project_id, session_pk, opencode_session_id, prompt,
              model, int(bool(model_explicit)), agent, now_iso(),
-             int(bool(standalone)), json.dumps(options or {})),
+             int(bool(standalone)), json.dumps(options or {}),
+             coroutine_id, coroutine_cycle_id, int(coroutine_iteration),
+             coroutine_fire_key, coroutine_trigger),
         )
         row = db.one(conn, "SELECT * FROM runs WHERE run_uid=?", (run_uid,))
         return dict(row)
@@ -1147,7 +1170,8 @@ def create_run(run_uid: str, project_id: int, prompt: str, *,
 def update_run(run_uid: str, **fields: Any) -> None:
     allowed = {"session_pk", "opencode_session_id", "status", "exit_code",
                "started_at", "ended_at", "output", "error",
-               "admitted_at", "reply_sent_at", "lease_epoch", "pid"}
+               "admitted_at", "reply_sent_at", "lease_epoch", "pid",
+               "coroutine_outcome", "coroutine_accounted_at"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return

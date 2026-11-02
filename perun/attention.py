@@ -130,6 +130,23 @@ def request(
                 "source": source,
             },
         )
+        try:
+            from . import domain_events
+
+            domain_events.publish(
+                "attention.created",
+                f"attention.created:{item['id']}",
+                {
+                    "attention_id": item["id"],
+                    "project_id": project_id,
+                    "source": source,
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "question": str(question or "")[:500],
+                },
+            )
+        except Exception:  # pragma: no cover - events are best effort
+            LOG.debug("could not publish attention.created", exc_info=True)
     return item
 
 

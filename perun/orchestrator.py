@@ -825,7 +825,12 @@ class Orchestrator:
                   use_prompt_file: bool = False,
                   extra_env: dict[str, str] | None = None,
                   run_uid: str = "",
-                  opencode_standalone: bool = False) -> dict[str, Any]:
+                  opencode_standalone: bool = False,
+                  coroutine_id: int | None = None,
+                  coroutine_cycle_id: str = "",
+                  coroutine_iteration: int = 0,
+                  coroutine_fire_key: str = "",
+                  coroutine_trigger: str = "") -> dict[str, Any]:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
@@ -895,6 +900,11 @@ class Orchestrator:
                 "env_keys": sorted(str(k) for k in (extra_env or {})),
                 "standalone": bool(opencode_standalone),
             },
+            coroutine_id=coroutine_id,
+            coroutine_cycle_id=coroutine_cycle_id,
+            coroutine_iteration=coroutine_iteration,
+            coroutine_fire_key=coroutine_fire_key,
+            coroutine_trigger=coroutine_trigger,
         )
         # Carry skip_instructions and prompt-file mode in memory (not persisted
         # to DB) so chat-like runs can bypass project-instruction injection and
@@ -967,12 +977,39 @@ class Orchestrator:
         # single-shot per run.
         registry.update_run(run_uid, status="cancelled", ended_at=registry.now_iso(),
                             error="cancelled by user")
+        self._publish_run_event(registry.get_run(run_uid) or run, "cancelled")
         self._emit_end(run_uid, {"type": "end", "run": run_uid, "status": "cancelled"})
         return True
 
     def is_cancelled(self, run_uid: str) -> bool:
         with self._lock:
             return run_uid in self._cancelled
+
+    def _publish_run_event(self, run: dict[str, Any], status: str) -> None:
+        """Feed the durable domain-event inbox (coroutine ``run.finished``)."""
+        if not run:
+            return
+        try:
+            from . import domain_events
+
+            domain_events.publish(
+                "run.finished",
+                f"run.finished:{run['run_uid']}",
+                {
+                    "run_uid": run["run_uid"],
+                    "project_id": run.get("project_id"),
+                    "status": status,
+                    "coroutine_id": run.get("coroutine_id"),
+                    "agent": run.get("agent") or "",
+                    "model": run.get("model") or "",
+                    # Enough context for a downstream job without putting a
+                    # full transcript into the event inbox.
+                    "output": str(run.get("output") or "")[:2000],
+                    "error": str(run.get("error") or "")[:500],
+                },
+            )
+        except Exception:  # pragma: no cover - events must never fail a run
+            LOG.debug("could not publish run.finished", exc_info=True)
 
     def _emit_end(self, run_uid: str, event: dict[str, Any]) -> None:
         """Publish a terminal event at most once per run."""
@@ -1671,6 +1708,7 @@ class Orchestrator:
         registry.log_activity(run.get("project_id"), "run",
                               f"Run {run_uid} interrupted: {reason}",
                               {"status": "interrupted", "reason": reason})
+        self._publish_run_event(run, "interrupted")
         self._emit_end(run_uid, {"type": "end", "run": run_uid,
                                  "status": "interrupted"})
 
@@ -1729,6 +1767,7 @@ class Orchestrator:
                 run["project_id"], "run",
                 f"Run {run_uid} {status}", {"status": status, "exit_code": exit_code})
 
+        self._publish_run_event(run or {}, status)
         self._emit_end(run_uid, {"type": "end", "run": run_uid, "status": status,
                                  "exit_code": exit_code, "reply": reply,
                                  "error": "" if not fatal else error[:1000]})

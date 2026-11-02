@@ -146,6 +146,44 @@ with `python -m perun project-roots --add <name> <path>`.
   through the event stream; never make "a run" mean "a child process" again, never
   re-admit without checking `admitted_at`, and keep the reply exactly-once
   (`runs.reply_sent_at`).
+* **Coroutines are a scheduler, not a second execution engine.** Every fire is
+  a normal `Orchestrator.start_run`; do not add a parallel runner. A fire is
+  idempotent through the unique `runs.coroutine_fire_key`; completion is
+  accounted exactly once through `runs.coroutine_accounted_at`. Never fire a
+  slot twice to "catch up" — the default is skip, and `catch_up='once'` is a
+  single deliberate replay. **Global coroutines are user-wide and run in the
+  control plane as the orchestrator; never bind them to a user project or offer
+  a project picker for them. Event triggers are project-scoped — a global job
+  must be interval/cron/once/manual, never event — and an event job may never
+  run in the orchestrator control plane, because its tool access is the risk,
+  not the label on the job. An event job defaults to the read-only `plan`
+  agent and may not name `perun-orchestrator`; empty-agent event rows are
+  filled at startup.**
+* **Pause is not Stop.** Pause lets the active run finish and suppresses future
+  cycles/iterations; Stop cancels the run and marks the job stopped. Resume
+  recomputes the next slot from now and resets a room job's `event_listen_since`.
+* **Catch-up never bursts.** A restart must not start a missed slot storm. The
+  scheduler skips past slots (or fires exactly one with `catch_up='once'`), and
+  a loop parks its next cycle slot in `next_cycle_epoch` while iterations run.
+* **Unlimited loops need hard caps.** `max_iterations=0` is allowed only with a
+  daily run cap and a cycle wall-clock cap; the stall guard and the per-job
+  timeout watchdog are not optional. A loop must never silently occupy the
+  last execution slot.
+* **Room results go through `coroutine_room_outbox`.** The scheduler may run in
+  a different process from the PerunChat WebSocket, so never call
+  `post_to_room` from the scheduler. The bridge drains the outbox (on connect
+  and every 10 s), applies the room-aware redactor, and uses `in_reply_to`.
+  A job with `suppress_auto_reply` owns the message; the bridge must stay quiet
+  so the room does not get two answers.
+* **Event payloads are untrusted data.** Webhooks and room messages are
+  framed as an explicit, random-boundary untrusted block before they reach a
+  prompt. Webhook secrets are stored as SHA-256 only and travel in
+  `X-Perun-Webhook-Secret`; never put a secret in the URL, because uvicorn's
+  access log records the path. The event inbox is bounded and old events are
+  dropped; never replay a whole outage as a burst of agent cycles.
+* **The scheduler is a singleton with a visible heartbeat.** `serve` owns the
+  one scheduler thread; the dashboard shows a stale-heartbeat warning and a
+  global pause. Never add a second scheduler or hide a dead one.
 * **A TUI run is standalone and user-owned.** `POST /api/runs/tui` records an
   external terminal Perun launched (`runs.standalone=1`, `runs.pid`); never kill
   it on server shutdown (`ProcessTracker.kill_all_explicit()` is explicit-only) and

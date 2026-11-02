@@ -83,11 +83,26 @@ CREATE TABLE IF NOT EXISTS runs (
     lease_epoch          INTEGER DEFAULT 0,
     standalone           INTEGER DEFAULT 0,
     pid                  INTEGER DEFAULT 0,
-    run_options          TEXT DEFAULT '{}'
+    run_options          TEXT DEFAULT '{}',
+    coroutine_id         INTEGER,
+    coroutine_cycle_id   TEXT DEFAULT '',
+    coroutine_iteration  INTEGER DEFAULT 0,
+    coroutine_fire_key   TEXT DEFAULT '',
+    coroutine_trigger    TEXT DEFAULT '',
+    coroutine_outcome    TEXT DEFAULT '',
+    coroutine_accounting_at TEXT DEFAULT '',
+    coroutine_accounted_at TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_project_id_desc ON runs(project_id, id DESC);
+-- Coroutine fires are ordinary runs. The unique fire key is the duplicate-fire
+-- guard that survives crashes, restarts and two processes sharing this DB.
+CREATE INDEX IF NOT EXISTS idx_runs_coroutine ON runs(coroutine_id, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_coroutine_fire
+    ON runs(coroutine_fire_key) WHERE coroutine_fire_key <> '';
+CREATE INDEX IF NOT EXISTS idx_runs_coroutine_accounting
+    ON runs(coroutine_accounted_at, status);
 
 -- One owner per run (the process observing the OpenCode session). A stale lease
 -- (no heartbeat for 30 s) is taken over by the reconciler; the owner token is
@@ -416,6 +431,163 @@ CREATE TABLE IF NOT EXISTS attention_mutes (
     created_at   TEXT NOT NULL,
     PRIMARY KEY (chat_id, project_slug)
 );
+
+-- ------------------------------------------------------------------------- #
+-- Coroutines (scheduled/event-triggered agent jobs)
+-- ------------------------------------------------------------------------- #
+-- A coroutine is a durable job definition. What it actually executes is an
+-- ordinary `runs` row, so the existing streaming/cancel/lease/recovery pipeline
+-- is reused. `scope` controls listing/ownership; `execution_project_id` is the
+-- directory the agent actually runs in (required, even for global jobs).
+CREATE TABLE IF NOT EXISTS coroutines (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid                     TEXT UNIQUE NOT NULL,
+    name                    TEXT NOT NULL,
+    description             TEXT DEFAULT '',
+    scope                   TEXT NOT NULL DEFAULT 'project',   -- project|global
+    project_id              INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    execution_project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    trigger_type            TEXT NOT NULL DEFAULT 'manual',    -- interval|cron|once|manual|event
+    trigger_expr            TEXT DEFAULT '',
+    timezone                TEXT DEFAULT '',
+    run_at_epoch            REAL DEFAULT 0,
+    next_fire_epoch         REAL DEFAULT 0,
+    -- The next *cycle* slot, preserved while a loop spends next_fire_epoch on
+    -- its iterations. Restored when the cycle ends.
+    next_cycle_epoch        REAL DEFAULT 0,
+    next_trigger            TEXT DEFAULT 'schedule',   -- schedule|loop|event
+    last_fire_at            TEXT DEFAULT '',
+    last_run_uid            TEXT DEFAULT '',
+    active_cycle_id         TEXT DEFAULT '',
+    active_cycle_started_epoch REAL DEFAULT 0,
+    active_iteration        INTEGER DEFAULT 0,
+    active_trigger_ref      TEXT DEFAULT '',
+    status                  TEXT NOT NULL DEFAULT 'active',
+    prompt                  TEXT NOT NULL DEFAULT '',
+    model                   TEXT DEFAULT '',
+    agent                   TEXT DEFAULT '',
+    session_mode            TEXT DEFAULT 'fresh',              -- fresh|continue
+    session_pk              INTEGER,
+    opencode_session_id     TEXT DEFAULT '',
+    execution_mode          TEXT DEFAULT 'single',             -- single|loop
+    max_iterations          INTEGER DEFAULT 1,                 -- 0 = unlimited
+    iteration_delay_seconds INTEGER DEFAULT 5,
+    completion_marker       TEXT DEFAULT '',
+    stall_iterations        INTEGER DEFAULT 3,
+    cycle_max_seconds       INTEGER DEFAULT 0,
+    max_runs                INTEGER DEFAULT 0,
+    max_runs_per_day        INTEGER DEFAULT 0,
+    max_cost_usd_per_cycle  REAL DEFAULT 0,
+    max_cost_usd_per_day    REAL DEFAULT 0,
+    run_timeout_seconds     INTEGER DEFAULT 0,
+    overlap_policy          TEXT DEFAULT 'skip',
+    catch_up                TEXT DEFAULT 'skip',               -- skip|once
+    jitter_seconds          INTEGER DEFAULT 0,
+    failure_policy          TEXT DEFAULT 'pause',              -- continue|pause
+    failure_threshold       INTEGER DEFAULT 3,
+    restart_policy          TEXT DEFAULT 'resume',             -- resume|pause
+    post_result_to_room     INTEGER DEFAULT 0,
+    suppress_auto_reply     INTEGER DEFAULT 1,
+    post_on_failure         INTEGER DEFAULT 0,
+    event_source            TEXT DEFAULT '',
+    event_room_id           TEXT DEFAULT '',
+    event_mention_only      INTEGER DEFAULT 0,
+    event_sender_allow      TEXT DEFAULT '[]',
+    event_listen_since      REAL DEFAULT 0,
+    event_min_interval_seconds INTEGER DEFAULT 5,
+    event_filter            TEXT DEFAULT '{}',
+    claim_token             TEXT DEFAULT '',
+    dispatch_failures       INTEGER DEFAULT 0,
+    last_error              TEXT DEFAULT '',
+    options                 TEXT DEFAULT '{}',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    deleted_at              TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_coroutines_due
+    ON coroutines(status, next_fire_epoch);
+CREATE INDEX IF NOT EXISTS idx_coroutines_project
+    ON coroutines(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_coroutines_scope
+    ON coroutines(scope, status);
+CREATE INDEX IF NOT EXISTS idx_coroutines_room
+    ON coroutines(trigger_type, event_source, event_room_id, status);
+
+-- Durable event inbox. The bridge (which may run in another process) only
+-- writes rows here; the scheduler in `serve` matches them. Dedupe keys make a
+-- gateway replay after a reconnect harmless.
+CREATE TABLE IF NOT EXISTS coroutine_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source      TEXT NOT NULL,
+    dedupe_key  TEXT NOT NULL UNIQUE,
+    room_id     TEXT DEFAULT '',
+    sender      TEXT DEFAULT '',
+    payload     TEXT DEFAULT '{}',
+    received_at TEXT NOT NULL,
+    handled_at  TEXT DEFAULT '',
+    expires_at  TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_coroutine_events_source
+    ON coroutine_events(source, id);
+CREATE INDEX IF NOT EXISTS idx_coroutine_events_expiry
+    ON coroutine_events(expires_at);
+CREATE INDEX IF NOT EXISTS idx_coroutine_events_handled
+    ON coroutine_events(handled_at, id);
+CREATE INDEX IF NOT EXISTS idx_coroutine_events_room
+    ON coroutine_events(room_id, received_at);
+
+-- One row per (event, job): a single event may match several jobs, and each
+-- job needs its own fired/skipped/failed record.
+CREATE TABLE IF NOT EXISTS coroutine_event_deliveries (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id     INTEGER NOT NULL REFERENCES coroutine_events(id) ON DELETE CASCADE,
+    coroutine_id INTEGER NOT NULL REFERENCES coroutines(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'queued',  -- queued|fired|skipped|failed
+    run_uid      TEXT DEFAULT '',
+    error        TEXT DEFAULT '',
+    created_at   TEXT NOT NULL,
+    handled_at   TEXT DEFAULT '',
+    UNIQUE(event_id, coroutine_id)
+);
+CREATE INDEX IF NOT EXISTS idx_coroutine_deliveries_job
+    ON coroutine_event_deliveries(coroutine_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_coroutine_deliveries_pending
+    ON coroutine_event_deliveries(status, id);
+CREATE INDEX IF NOT EXISTS idx_coroutine_deliveries_created
+    ON coroutine_event_deliveries(status, created_at);
+
+-- Results a room-triggered job wants posted back. The scheduler may live in a
+-- different process from the PerunChat WebSocket, so this is a durable outbox
+-- drained by the bridge (same idea as attention_outbox).
+CREATE TABLE IF NOT EXISTS coroutine_room_outbox (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    coroutine_id INTEGER NOT NULL REFERENCES coroutines(id) ON DELETE CASCADE,
+    run_uid      TEXT DEFAULT '',
+    room_id      TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    in_reply_to  TEXT DEFAULT '',
+    dedupe_key   TEXT NOT NULL UNIQUE,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT DEFAULT '',
+    created_at   TEXT NOT NULL,
+    delivered_at TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_coroutine_room_outbox_open
+    ON coroutine_room_outbox(delivered_at, id);
+
+-- Scheduler observability: one row, heartbeat updated every tick. It is not a
+-- distributed lease (the PID file already enforces one server); it lets the
+-- dashboard tell "running" from "thread is dead".
+CREATE TABLE IF NOT EXISTS coroutine_heartbeat (
+    id              INTEGER PRIMARY KEY,
+    owner           TEXT DEFAULT '',
+    pid             INTEGER DEFAULT 0,
+    started_at      TEXT DEFAULT '',
+    last_tick_epoch REAL DEFAULT 0,
+    last_tick_ms    INTEGER DEFAULT 0,
+    due_count       INTEGER DEFAULT 0,
+    version         TEXT DEFAULT ''
+);
 """
 
 
@@ -475,6 +647,16 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # In-memory options that used to vanish on a restart (`skip_instructions`,
         # `use_prompt_file`), so a resumed run is the run the caller asked for.
         ("run_options", "TEXT DEFAULT '{}'"),
+        # Coroutine attribution (v0.11). A fire is a normal run; these columns
+        # let the scheduler account it exactly once and the UI link it back.
+        ("coroutine_id", "INTEGER"),
+        ("coroutine_cycle_id", "TEXT DEFAULT ''"),
+        ("coroutine_iteration", "INTEGER DEFAULT 0"),
+        ("coroutine_fire_key", "TEXT DEFAULT ''"),
+        ("coroutine_trigger", "TEXT DEFAULT ''"),
+        ("coroutine_outcome", "TEXT DEFAULT ''"),
+        ("coroutine_accounting_at", "TEXT DEFAULT ''"),
+        ("coroutine_accounted_at", "TEXT DEFAULT ''"),
     ],
     # Per-session token/cost snapshot from the OpenCode service. A session total
     # is authoritative, so it is stored (overwritten), never accumulated.
@@ -524,6 +706,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # belonged to another room).
     "package_transfers": [
         ("room_id", "TEXT DEFAULT ''"),
+    ],
+    # Coroutine scheduling parks the next cycle slot separately while a loop
+    # spends next_fire_epoch on its iterations.
+    "coroutines": [
+        ("next_cycle_epoch", "REAL DEFAULT 0"),
+        ("dispatch_failures", "INTEGER DEFAULT 0"),
     ],
 }
 
@@ -610,7 +798,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 21
 
 
 def init_db() -> None:

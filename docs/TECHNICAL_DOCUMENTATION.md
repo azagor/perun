@@ -126,8 +126,13 @@ can all write concurrently.
 |---|---|---|
 | `projects` | registry | `slug` unique, `path` unique, `root`, `kind` ∈ {opencode,git,dir}, `favorite`, `enabled`, `model`, `agent`, `agent_models` (JSON map of agent id → model id), `color`, `manifest` (JSON snapshot), `manifest_path`, `manifest_loaded_at`, `git_remote`, `git_branch`, `git_provider`, `last_seen_at` |
 | `sessions` | Perun's record of OpenCode sessions | `opencode_session_id`, `title`, `status`, `message_count`, `last_error` |
-| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 whenever a model was resolved and is forwarded as `--model`), `agent`, `prompt`, `exit_code`, `output`, `error` |
+| `runs` | one agent invocation | `run_uid` unique, `status` ∈ {queued,running,done,failed,cancelled,timeout,provider_error}, `model` (resolved), `model_explicit` (1 whenever a model was resolved and is forwarded as `--model`), `agent`, `prompt`, `exit_code`, `output`, `error`; coroutine attribution in `coroutine_id`, `coroutine_cycle_id`, `coroutine_iteration`, `coroutine_fire_key` (unique), `coroutine_trigger`, `coroutine_outcome`, `coroutine_accounted_at` |
 | `tasks` | reusable per-project tasks | `kind` (default `prompt`), `prompt`, `tools`/`skills` (JSON arrays), `enabled`, `sort_order`; re-runnable presets surfaced in the dashboard |
+| `coroutines` | durable scheduled/event-triggered agent jobs | trigger (`interval`/`cron`/`once`/`manual`/`event`), `next_fire_epoch`, parked `next_cycle_epoch`, prompt/model/agent, loop and safety caps, `event_source`/`event_room_id`, room-result flags, status (`active`/`paused`/`stopped`/`completed`/`failed`) |
+| `coroutine_events` | durable event inbox | `source`, unique `dedupe_key`, `room_id`, `sender`, JSON `payload`, `handled_at`, `expires_at` |
+| `coroutine_event_deliveries` | event → job matching | unique `(event_id, coroutine_id)`, `status` (`queued`/`fired`/`skipped`/`failed`), `run_uid`, `error` |
+| `coroutine_room_outbox` | room result posting | redacted/truncated `text`, `in_reply_to`, unique `dedupe_key`, `attempts`, `delivered_at`; drained by the PerunChat bridge |
+| `coroutine_heartbeat` | scheduler observability | one row: owner, pid, `last_tick_epoch`, `last_tick_ms`, due count, version |
 | `activity` | event feed | `kind`, `message`, `meta` JSON |
 | `memory` | facts | `scope` ∈ {global,project}; **`scope='global'` rows use `project_id=0`**; `UNIQUE(scope,project_id,content_hash)` |
 | `doc_chunks` | document vectors | `UNIQUE(project_id,source_file,section)`, `embedded_hash` (which content the stored vector was computed from) |
@@ -148,7 +153,7 @@ Column additions after the first release are applied idempotently by
 existing databases migrate in place. Columns retired in v0.6.4 (`projects.instructions`,
 `projects.instructions_path`) are dropped idempotently by `db._REMOVED_COLUMNS` on next start, so
 fresh and upgraded schemas converge. Instruction text is never stored in the database.
-`db.SCHEMA_VERSION` (currently `19`) is written to `PRAGMA user_version` on every
+`db.SCHEMA_VERSION` (currently `21`) is written to `PRAGMA user_version` on every
 start, so future non-additive migrations can tell what already ran.
 
 **Why `project_id=0` for global facts:** SQLite treats `NULL`s as distinct, so a
@@ -821,6 +826,83 @@ start_run → create/reuse session → record admitted_at + msg_<run_uid>
   model loop; it does not. Durability here is admission + session resume +
   observation, which covers process crashes but cannot replay a half-finished
   model turn.
+
+### Coroutines (scheduled and event-triggered agent jobs)
+
+A **coroutine** is a durable job definition, not a second execution engine.
+Every fire creates a normal `runs` row through `Orchestrator.start_run`, so the
+existing queue, streaming, cancellation, leases, usage capture and restart
+recovery all apply.
+
+Scope is either **project** or **global**. A global coroutine is a user-wide
+job (a reminder, a digest, a machine-health report); it always runs in the
+**control plane** as the orchestrator, not in a user-selected project. The
+backend resolves `control.ensure()` and ignores any client-supplied execution
+project for a global job. Event triggers are **project-scoped because the event
+is project or room context**; a global job must be interval, cron, one-shot, or
+manual. An event job also may not run in the orchestrator control plane under a
+project scope: untrusted event content must never reach the orchestrator's tool
+access. Event jobs default to the read-only `plan` agent
+(`coroutine_event_default_agent`) and may not name `perun-orchestrator`; the
+wizard says so and picks `plan` when Event is selected. Rows created before that
+default with an empty `agent` are filled in at startup (an explicitly chosen
+agent is never overwritten). Legacy global event rows
+and control-plane event rows are paused at startup with a migration note, and
+resuming a global event job is rejected.
+
+Webhook ingress lives at `/hooks/coroutines/{uid}`, outside the `/api/` token
+middleware (external providers cannot send the local token). It is authenticated
+by the per-job secret in `X-Perun-Webhook-Secret` and applies the same Host /
+Origin checks as `/api/`, so it is not a DNS-rebinding or cross-origin hole.
+
+- `perun/coroutines.py` — store, validation, state machine, schedule helpers,
+  event matching, room-result outbox, and `Scheduler`.
+- `perun/cron.py` - a thin `croniter` adapter with timezone handling and a
+  DST fall-back guard (a daily 02:00 job fires once, not twice; a sub-daily
+  schedule still fires in the repeated hour).
+- `perun/domain_events.py` — the durable event inbox. Publishers (run
+  completion, proposal approval/execution, operator-inbox creation, git
+  commit/push, PerunChat room messages, webhooks) write a row; the scheduler
+  matches it to active jobs.
+- `Scheduler` runs as one daemon thread in `serve` (5 s tick) and is started
+  from `lifespan`. It is skipped under pytest. The dashboard heartbeat row
+  turns "the thread died" into a visible warning.
+- Crash safety is database-backed: a unique `runs.coroutine_fire_key` makes a
+  slot/iteration/event delivery fire at most once, and
+  `coroutine_accounted_at` makes completion accounting exactly-once.
+- Scheduling: interval, five-field cron (calendar semantics in the job's
+  timezone), one-shot, manual, and event. Missed slots are skipped by default
+  (`catch_up='once'` opts into a single catch-up); overlap is skipped; a
+  restart re-arms schedules and accounts runs that finished while down.
+- Loops: `execution_mode='loop'` with `max_iterations` (0 = unlimited). Each
+  iteration is a run in the same session; a completion marker on the final line
+  or the iteration cap ends the cycle. Unlimited loops require a daily run cap
+  and a cycle wall-clock cap. A stall guard pauses a loop that keeps producing
+  the same output.
+- Per-job timeouts are enforced by a scheduler watchdog because the global
+  `run_timeout` is not per-run configurable in the runner.
+- The event inbox is bounded (`coroutine_max_pending_events`) and aged
+  (`coroutine_event_max_age_minutes`): a long scheduler outage cannot replay a
+  burst of old runs/proposals into agent cycles. A delivery that was already
+  queued (a crash mid-pass or an explicit retry) is still honoured. Room
+  messages additionally honour the sender timestamp and the job's
+  `event_listen_since`.
+- PerunChat: the bridge publishes `room.message` events before the auto-reply
+  gate, so a job can listen while conversational replies are off. A job that
+  sets `post_result_to_room` posts its cycle result through
+  `coroutine_room_outbox` (the bridge drains it on connect and every 10 s); a
+  job that sets `suppress_auto_reply` owns the message and the bridge stays
+  quiet, so the room never receives two answers.
+- API: `/api/coroutines` (list/create/status/preview), `/api/coroutines/{uid}`
+  (detail/patch/delete), lifecycle actions (`pause`, `resume`, `stop`, `run`,
+  `duplicate`), `runs`, `events`, `test-event`, `rotate-secret`, and
+  `/hooks/coroutines/{uid}` (outside `/api/`, so the local-token middleware is
+  not bypassed; the per-job SHA-256 secret travels in
+  `X-Perun-Webhook-Secret`, never in the logged URL).
+- UI: a **Coroutines** tab with a quick-create path (daily **or one-shot**) and a
+  five-step advanced wizard, a list with next-fire/health/progress, a detail view
+  with the live run stream and event/outbox history, and
+  Pause/Stop/Resume/Run-now/Edit/Duplicate/Delete controls.
 
 ## 8. HTTP API
 

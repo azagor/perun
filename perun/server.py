@@ -39,9 +39,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
-from . import (__version__, action_proposals, config, context, control, db,
-               discovery, git, manifest, memory, projects, providers, registry,
-               scaffold, shared_projects, shared_project_sync)
+from . import (__version__, action_proposals, config, context, control, coroutines,
+               db, discovery, git, manifest, memory, projects, providers,
+               registry, scaffold, shared_projects, shared_project_sync)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -59,6 +59,11 @@ _SSE_HEADERS = {
 SETTINGS = config.Settings.load()
 ORCH = orchestrator.Orchestrator(SETTINGS)
 PERUNCHAT_BRIDGE = _attach_perunchat_bridge(ORCH)
+COROUTINES = coroutines.Scheduler(ORCH, SETTINGS)
+# FastAPI runs these sync endpoints in the thread pool. Serialize the
+# check-then-start in a manual run, so two dashboard clicks cannot start two
+# overlapping runs for one job.
+_COROUTINE_RUN_LOCK = threading.Lock()
 
 logger = logging.getLogger("perun.server")
 
@@ -165,6 +170,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ORCH.reconcile_runs()
     except Exception:  # pragma: no cover - startup must not depend on this
         logging.getLogger("perun.server").exception("could not reconcile runs")
+    # Coroutines: normalise schedules after the run pipeline has settled, then
+    # start the single scheduler thread. A failure here must not prevent the
+    # dashboard/API from serving.
+    try:
+        COROUTINES.reconcile_startup()
+    except Exception:  # pragma: no cover - best effort
+        logging.getLogger("perun.server").exception(
+            "could not reconcile coroutines")
     reconcile_stop = threading.Event()
 
     def _reconcile_loop() -> None:
@@ -231,6 +244,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     threading.Thread(target=_backfill_usage, name="perun-usage-backfill",
                      daemon=True).start()
+    # Start the coroutine scheduler before the bridge: the bridge publishes
+    # room events into the durable inbox the scheduler drains.
+    try:
+        COROUTINES.start()
+    except Exception:  # pragma: no cover - a scheduler failure must not stop serve
+        logging.getLogger("perun.server").exception("could not start coroutines")
     # Start the autonomous PerunChat agent bridge when a key is configured.
     if PERUNCHAT_BRIDGE is not None:
         PERUNCHAT_BRIDGE.start()
@@ -242,6 +261,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         reconcile_stop.set()
         if reembed_stop is not None:
             reembed_stop.set()
+        try:
+            COROUTINES.stop()
+        except Exception:  # pragma: no cover - best effort
+            pass
         if PERUNCHAT_BRIDGE is not None:
             PERUNCHAT_BRIDGE.stop()
     # Shutdown: stop the agent runs Perun itself started. Tracked TUI terminals
@@ -1768,6 +1791,26 @@ def api_delete_project(slug: str) -> dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail="the Perun orchestrator project cannot be removed")
+    # Cancel coroutine runs before their project/rows are deleted; otherwise a
+    # scheduled agent could keep working with no run record to account or stop.
+    try:
+        for job in coroutines.list_jobs(project=slug, limit=500,
+                                        include_deleted=True):
+            # Pause first so the scheduler cannot start another cycle between
+            # the cancel and the row deletion.
+            try:
+                coroutines.pause(job["uid"], "project deleted")
+            except Exception:  # pragma: no cover - best effort
+                pass
+            active = coroutines.active_run(int(job["id"]))
+            if active:
+                try:
+                    ORCH.cancel(active["run_uid"])
+                except Exception:  # pragma: no cover - best effort
+                    pass
+    except Exception:  # pragma: no cover - deletion must still proceed
+        logger.debug("could not stop coroutine runs before project deletion",
+                     exc_info=True)
     try:
         shared_project_sync.delete_project_chat(project)
     except Exception:  # pragma: no cover - lifecycle best-effort
@@ -2195,6 +2238,15 @@ def api_git_commit(slug: str, payload: dict[str, Any] = Body(default={})) -> dic
     res = _git_call(git.commit, project, message)
     if res.get("committed"):
         registry.log_activity(project["id"], "git", f"Committed {res.get('sha')}")
+        try:
+            coroutines.domain_events.publish(
+                "git.commit",
+                f"git.commit:{project['id']}:{res.get('sha') or uuid.uuid4().hex}",
+                {"project_id": project["id"], "branch": project.get("git_branch", ""),
+                 "sha": res.get("sha", ""), "message": message},
+            )
+        except Exception:  # pragma: no cover - telemetry is best effort
+            pass
     return _ok(**res)
 
 
@@ -2207,6 +2259,15 @@ def api_git_push(slug: str, payload: dict[str, Any] = Body(default={})) -> dict[
                     set_upstream=payload.get("set_upstream", True))
     registry.log_activity(project["id"], "git",
                           f"Pushed {res.get('branch')} → {res.get('remote')}")
+    try:
+        coroutines.domain_events.publish(
+            "git.push",
+            f"git.push:{project['id']}:{uuid.uuid4().hex}",
+            {"project_id": project["id"], "branch": res.get("branch", branch),
+             "remote": res.get("remote", "")},
+        )
+    except Exception:  # pragma: no cover - telemetry is best effort
+        pass
     return _ok(**res)
 
 
@@ -2382,6 +2443,318 @@ def api_delete_task(slug: str, task_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="no such task")
     registry.delete_task(task_id)
     return _ok(deleted=True)
+
+
+# --------------------------------------------------------------------------- #
+# Coroutines (scheduled / event-triggered agent jobs)
+# --------------------------------------------------------------------------- #
+def _coroutine_or_404(uid: str) -> dict[str, Any]:
+    job = coroutines.get(uid)
+    if not job or job.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="no such coroutine")
+    return job
+
+
+def _coroutine_view(job: dict[str, Any]) -> dict[str, Any]:
+    """API-safe copy: never expose the webhook hash."""
+    view = dict(job)
+    options = dict(view.get("options") or {})
+    view["webhook_configured"] = bool(options.get("webhook_hash"))
+    options.pop("webhook_hash", None)
+    view["options"] = options
+    # Reserved columns from the first schema draft; not a supported feature yet.
+    view.pop("max_cost_usd_per_cycle", None)
+    view.pop("max_cost_usd_per_day", None)
+    return view
+
+
+def _coroutine_validation(exc: coroutines.ValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"message": str(exc), "errors": exc.errors},
+    )
+
+
+def _webhook_url(uid: str) -> str:
+    """The webhook URL is safe to log; the secret travels in a header."""
+    return f"/hooks/coroutines/{uid}"
+
+
+@app.get("/api/coroutines")
+def api_list_coroutines(scope: str = "", project: str = "", status: str = "",
+                        trigger: str = "", q: str = "", limit: int = 100,
+                        include_deleted: bool = False) -> dict[str, Any]:
+    jobs = coroutines.list_jobs(
+        scope=scope, project=project, status=status, trigger=trigger, q=q,
+        limit=_clamp(limit, 1, 500, "limit"),
+        include_deleted=bool(include_deleted),
+    )
+    return _ok(coroutines=[_coroutine_view(j) for j in jobs],
+               counts=COROUTINES.status().get("counts", {}))
+
+
+@app.get("/api/coroutines/status")
+def api_coroutines_status() -> dict[str, Any]:
+    return _ok(**COROUTINES.status())
+
+
+@app.post("/api/coroutines/preview")
+def api_coroutines_preview(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    return _ok(**coroutines.preview(payload))
+
+
+@app.post("/api/coroutines")
+def api_create_coroutine(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        job = coroutines.create(payload, activate=bool(payload.get("activate")))
+    except coroutines.ValidationError as exc:
+        raise _coroutine_validation(exc) from exc
+    secret = coroutines.ensure_webhook_secret(job)
+    view = _coroutine_view(coroutines.detail(job["uid"]) or job)
+    if secret:
+        view["webhook_url"] = _webhook_url(job["uid"])
+        view["webhook_secret"] = secret
+    COROUTINES.wake()
+    return _ok(coroutine=view)
+
+
+@app.get("/api/coroutines/{uid}")
+def api_get_coroutine(uid: str) -> dict[str, Any]:
+    job = coroutines.detail(uid)
+    if not job or job.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="no such coroutine")
+    return _ok(coroutine=_coroutine_view(job))
+
+
+@app.patch("/api/coroutines/{uid}")
+def api_update_coroutine(uid: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    _coroutine_or_404(uid)
+    immutable = {
+        "uid", "created_at", "updated_at", "deleted_at", "next_fire_epoch",
+        "next_trigger", "last_fire_at", "last_run_uid", "active_cycle_id",
+        "active_cycle_started_epoch", "active_iteration", "active_trigger_ref",
+        "claim_token", "last_error", "status",
+    }
+    data = {k: v for k, v in payload.items()
+            if k in coroutines._FIELDS and k not in immutable}
+    try:
+        job = coroutines.update(uid, data)
+        if payload.get("activate") is True:
+            job = coroutines.resume(uid)
+    except coroutines.ValidationError as exc:
+        raise _coroutine_validation(exc) from exc
+    secret = coroutines.ensure_webhook_secret(job)
+    view = _coroutine_view(coroutines.detail(uid) or job)
+    if secret:
+        view["webhook_url"] = _webhook_url(uid)
+        view["webhook_secret"] = secret
+    COROUTINES.wake()
+    return _ok(coroutine=view)
+
+
+@app.delete("/api/coroutines/{uid}")
+def api_delete_coroutine(uid: str, purge: bool = False) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    # Cancel before a purge removes the run row; otherwise ORCH has nothing to
+    # look up and the agent would keep running after its record vanished.
+    active = coroutines.active_run(int(job["id"]))
+    if active:
+        try:
+            ORCH.cancel(active["run_uid"])
+        except Exception:  # pragma: no cover - best effort
+            pass
+    coroutines.delete(uid, purge=bool(purge))
+    COROUTINES.wake()
+    return _ok(deleted=True, purged=bool(purge))
+
+
+@app.post("/api/coroutines/{uid}/pause")
+def api_pause_coroutine(uid: str, payload: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
+    _coroutine_or_404(uid)
+    reason = str((payload or {}).get("reason") or "")
+    job = coroutines.pause(uid, reason)
+    COROUTINES.wake()
+    return _ok(coroutine=_coroutine_view(job))
+
+
+@app.post("/api/coroutines/{uid}/resume")
+def api_resume_coroutine(uid: str, payload: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    try:
+        job = coroutines.resume(uid, str((payload or {}).get("reason") or ""))
+    except coroutines.ValidationError as exc:
+        raise _coroutine_validation(exc) from exc
+    COROUTINES.wake()
+    return _ok(coroutine=_coroutine_view(job))
+
+
+@app.post("/api/coroutines/{uid}/stop")
+def api_stop_coroutine(uid: str) -> dict[str, Any]:
+    _coroutine_or_404(uid)
+    job = coroutines.stop(uid)
+    active = job.pop("_active_run", None)
+    if active:
+        try:
+            ORCH.cancel(active["run_uid"])
+        except Exception:  # pragma: no cover - best effort
+            pass
+    COROUTINES.wake()
+    return _ok(coroutine=_coroutine_view(job), cancelled=bool(active),
+               run_uid=(active or {}).get("run_uid", ""))
+
+
+@app.post("/api/coroutines/{uid}/run")
+def api_run_coroutine(uid: str, payload: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
+    _coroutine_or_404(uid)
+    force = bool((payload or {}).get("force"))
+    try:
+        with _COROUTINE_RUN_LOCK:
+            run_uid = COROUTINES.run_now(uid, force=force)
+    except (coroutines.ActiveRunError, coroutines.CapacityError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="no such coroutine") from exc
+    if not run_uid:
+        raise HTTPException(status_code=500, detail="could not start the coroutine")
+    COROUTINES.wake()
+    return _ok(run_uid=run_uid, run=registry.get_run(run_uid))
+
+
+@app.post("/api/coroutines/{uid}/duplicate")
+def api_duplicate_coroutine(uid: str) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    drop = {
+        "uid", "created_at", "updated_at", "deleted_at", "next_fire_epoch",
+        "next_trigger", "last_fire_at", "last_run_uid", "active_cycle_id",
+        "active_cycle_started_epoch", "active_iteration", "active_trigger_ref",
+        "claim_token", "last_error", "status", "session_pk",
+        "opencode_session_id", "event_listen_since", "next_cycle_epoch",
+        "dispatch_failures",
+    }
+    fields = {k: job.get(k) for k in coroutines._FIELDS if k not in drop}
+    fields["name"] = (str(job.get("name") or "Coroutine") + " copy")[:120]
+    fields["options"] = {
+        k: v for k, v in (job.get("options") or {}).items()
+        if k != "webhook_hash"
+    }
+    try:
+        new = coroutines.create(fields, activate=False)
+    except coroutines.ValidationError as exc:
+        raise _coroutine_validation(exc) from exc
+    secret = coroutines.ensure_webhook_secret(new)
+    view = _coroutine_view(coroutines.detail(new["uid"]) or new)
+    if secret:
+        view["webhook_url"] = _webhook_url(new["uid"])
+        view["webhook_secret"] = secret
+    return _ok(coroutine=view)
+
+
+@app.get("/api/coroutines/{uid}/runs")
+def api_coroutine_runs(uid: str, limit: int = 50, before: int = 0) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    return _ok(runs=coroutines.list_runs(
+        int(job["id"]), limit=_clamp(limit, 1, 200, "limit"),
+        before_id=max(0, int(before)),
+    ))
+
+
+@app.get("/api/coroutines/{uid}/events")
+def api_coroutine_events(uid: str, limit: int = 50) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    return _ok(events=coroutines.domain_events.recent(
+        _clamp(limit, 1, 200, "limit"), coroutine_id=int(job["id"])))
+
+
+@app.post("/api/coroutines/{uid}/events/{delivery_id}/retry")
+def api_coroutine_event_retry(uid: str, delivery_id: int) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    ok = coroutines.retry_delivery(int(job["id"]), int(delivery_id))
+    if ok:
+        COROUTINES.wake()
+    return _ok(retried=ok)
+
+
+@app.post("/api/coroutines/{uid}/test-event")
+def api_coroutine_test_event(uid: str,
+                             payload: dict[str, Any] | None = Body(None)) -> dict[str, Any]:
+    _coroutine_or_404(uid)
+    try:
+        event_id = coroutines.publish_test_event(uid, payload or {})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="no such coroutine") from exc
+    COROUTINES.wake()
+    return _ok(event_id=event_id)
+
+
+@app.post("/api/coroutines/{uid}/rotate-secret")
+def api_coroutine_rotate_secret(uid: str) -> dict[str, Any]:
+    job = _coroutine_or_404(uid)
+    if job.get("trigger_type") != "event" or job.get("event_source") != "webhook":
+        raise HTTPException(status_code=400,
+                            detail="only webhook coroutines have a secret")
+    secret = coroutines.rotate_webhook(job)
+    return _ok(webhook_url=_webhook_url(uid), webhook_secret=secret)
+
+
+@app.post("/api/coroutines/room-outbox/{outbox_id}/retry")
+def api_coroutine_room_retry(outbox_id: int) -> dict[str, Any]:
+    ok = coroutines.retry_room_outbox(int(outbox_id))
+    return _ok(retried=ok)
+
+
+@app.post("/hooks/coroutines/{uid}")
+async def api_coroutine_webhook(uid: str, request: Request) -> dict[str, Any]:
+    """Webhook ingress. Deliberately outside /api/ so the local-token middleware
+    is not bypassed; the per-job secret is sent in ``X-Perun-Webhook-Secret``
+    (never in the URL, which uvicorn writes to the access log)."""
+    supplied = (request.headers.get("x-perun-webhook-secret")
+                or _bearer(request.headers.get("authorization", "")))
+    # /hooks deliberately sits outside the /api/ middleware (providers cannot
+    # send the local API token), so apply the same anti-DNS-rebinding and
+    # cross-origin checks here.
+    host_header = request.headers.get("host", "")
+    if not _host_allowed(host_header):
+        raise HTTPException(
+            status_code=403,
+            detail="blocked: unexpected Host header (possible DNS rebinding)")
+    origin = request.headers.get("origin")
+    if origin and not _origin_ok(origin, host_header, request.url.scheme):
+        raise HTTPException(status_code=403, detail="blocked: cross-origin request")
+    job = coroutines.verify_webhook(uid, supplied)
+    if not job:
+        raise HTTPException(status_code=401, detail="invalid webhook secret")
+    if not coroutines.webhook_allowed(uid):
+        raise HTTPException(status_code=429, detail="webhook rate limit reached")
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > 64 * 1024:
+                raise HTTPException(status_code=413, detail="webhook body too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid Content-Length")
+    raw = await request.body()
+    if len(raw) > 64 * 1024:
+        raise HTTPException(status_code=413, detail="webhook body too large")
+    try:
+        payload = json.loads(raw.decode("utf-8")) if raw else {}
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="webhook body must be JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="webhook body must be a JSON object")
+    payload["_target_uid"] = uid
+    # A provider retry must not start a second cycle. Reuse its delivery id
+    # when one is supplied; otherwise each request is intentionally distinct.
+    delivery = (request.headers.get("x-perun-delivery")
+                or request.headers.get("x-request-id") or "").strip()
+    dedupe = f"webhook:{uid}:{delivery or uuid.uuid4().hex}"
+    event_id = coroutines.domain_events.publish(
+        "webhook",
+        dedupe,
+        payload,
+        sender=str(payload.get("sender") or ""),
+    )
+    COROUTINES.wake()
+    return _ok(accepted=True, event_id=event_id)
 
 
 @app.post("/api/runs/tui")
@@ -3177,9 +3550,16 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "attention_replay_open_minutes", "attention_max_per_hour",
         "attention_digest_seconds",
         "run_resume_window_minutes", "tui_run_stale_hours",
+        "coroutine_tick_seconds", "coroutine_max_concurrent_loops",
+        "coroutine_max_pending_events", "coroutine_event_max_age_minutes",
+        "coroutine_room_event_max_per_minute", "coroutine_webhook_max_per_minute",
+        "coroutine_event_retention_days", "coroutine_run_history_limit",
+        "coroutine_default_max_runs_per_day",
+        "coroutine_default_cycle_max_seconds",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
+        "perunchat_ingest_events", "coroutines_enabled", "coroutines_paused",
         "routing_enabled", "routing_shadow",
         "attention_enabled", "attention_shadow", "attention_show_paths",
         "attention_plain_text_confirm", "attention_ingest_events",
@@ -3196,7 +3576,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "telegram_bot_name", "terminal", "perunchat_api_key", "perunchat_api_endpoint",
         "perunchat_chat_model", "perunchat_chat_agent", "perun_owner_name",
         "perun_hitl_secret", "attention_quiet_hours", "attention_default_delivery",
-        "provider_budgets",
+        "provider_budgets", "coroutine_default_timezone",
     }
     if key in int_fields:
         try:
@@ -3210,8 +3590,16 @@ def _coerce_setting(key: str, value: Any) -> Any:
                    "attention_replay_open_minutes", "attention_max_per_hour",
                    "run_resume_window_minutes", "tui_run_stale_hours") and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1")
-        if key == "attention_poll_seconds" and v < 2:
+        if key in ("attention_poll_seconds", "coroutine_tick_seconds") and v < 2:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 2")
+        if key in ("coroutine_max_concurrent_loops", "coroutine_max_pending_events",
+                   "coroutine_event_max_age_minutes",
+                   "coroutine_room_event_max_per_minute",
+                   "coroutine_webhook_max_per_minute",
+                   "coroutine_event_retention_days", "coroutine_run_history_limit",
+                   "coroutine_default_max_runs_per_day",
+                   "coroutine_default_cycle_max_seconds") and v < 0:
+            raise HTTPException(status_code=400, detail=f"{key} must be 0 or more")
         if key == "attention_digest_seconds" and v < 0:
             raise HTTPException(status_code=400, detail=f"{key} must be 0 (off) or more")
         if key == "external_execution_package_ttl" and v < 60:

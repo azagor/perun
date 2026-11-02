@@ -820,6 +820,7 @@ const routes = {
     '#/dashboard': viewDashboard,
     '#/orchestrator': viewOrchestrator,
     '#/projects': viewProjects,
+    '#/coroutines': viewCoroutines,
     '#/console': viewConsole,
     '#/memory': viewMemory,
     '#/activity': viewActivity,
@@ -842,6 +843,7 @@ function closeStreams() {
     if (state.runSource) { state.runSource.close(); state.runSource = null; }
     if (state.activitySource) { state.activitySource.close(); state.activitySource = null; }
     stopUpdatePoll();
+    if (typeof stopCoroutinePoll === 'function') stopCoroutinePoll();
 }
 
 async function router() {
@@ -851,6 +853,7 @@ async function router() {
     let args = [];
     if (base === '#/project') { fn = viewProject; args = [sub, rest]; }
     else if (base === '#/console' && sub) { args = [sub]; }
+    else if (base === '#/coroutines' && sub) { args = [sub]; }
     if (!fn) { location.hash = '#/dashboard'; return; }
     currentRoute = location.hash;
     document.querySelectorAll('.nav-item').forEach((n) => {
@@ -1716,6 +1719,7 @@ function renderProjectTab(name, detail) {
         for (const r of (detail.runs || []).slice(0, 8)) {
             list.appendChild(el('div', { class: 'list-row' },
                 `<span class="badge ${STATUS_BADGE[r.status] || 'muted'}">${esc(r.status)}</span>
+                 ${r.coroutine_id ? '<span class="badge gold" title="Started by a coroutine">coroutine</span>' : ''}
                  <span class="grow msg truncate">${esc(r.prompt)}</span>
                  <span class="ts">${esc(timeAgo(r.started_at))}</span>`));
         }
@@ -4069,6 +4073,8 @@ async function viewPerunChat() {
              <input type="text" id="pc-endpoint" value="${esc(settings.perunchat_api_endpoint || 'wss://peruninthemachine.com/v1/chat/ws')}"></label>
          <label class="field"><span class="lab">Autonomous mode</span>
              <label class="row"><input type="checkbox" id="pc-auto-reply" ${settings.perunchat_auto_reply ? 'checked' : ''}> <span>Let the Orchestrator reply to incoming chat messages</span></label></label>
+         <label class="field"><span class="lab">Event ingestion</span>
+             <label class="row"><input type="checkbox" id="pc-ingest-events" ${settings.perunchat_ingest_events !== false ? 'checked' : ''}> <span>Receive room messages for coroutine triggers even when replies are off</span></label></label>
          <label class="field"><span class="lab">Auto-join rooms <span class="muted">(joined by the Orchestrator on startup)</span></span>
              <span id="pc-autojoin-host"></span></label>
          <div class="form-row">
@@ -4180,12 +4186,14 @@ async function viewPerunChat() {
         const password = $('#pc-password').value.trim();
         const endpoint = $('#pc-endpoint').value.trim();
         const autoReply = $('#pc-auto-reply').checked;
+        const ingestEvents = $('#pc-ingest-events').checked;
         const autoJoin = joinSel.getValue();
         const chatModel = chatModelSel.getValue();
         const chatAgent = chatAgentSel.getValue();
         const body = {
             perunchat_api_endpoint: endpoint,
             perunchat_auto_reply: autoReply,
+            perunchat_ingest_events: ingestEvents,
             perunchat_auto_join: autoJoin,
             perunchat_chat_model: chatModel,
             perunchat_chat_agent: chatAgent,
@@ -6247,6 +6255,1389 @@ async function promptForUnlockPassword(force = false) {
     ]);
     $('#unlock-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
     $('#unlock-password').focus();
+}
+
+/* ========================================================== COROUTINES ==== */
+const CS = window.CoroutineSchedule || {
+    humanTrigger: () => 'Manual',
+    modeHuman: () => 'Single run',
+    triggerSentence: () => '',
+    fmtDate: (e) => (e ? new Date(e * 1000).toLocaleString() : '—'),
+    countdown: () => '',
+    validateStep: () => null,
+    presetCron: () => '',
+    quickTrigger: (when, time, onceAt) => {
+        if (when === 'once') {
+            const ms = new Date(onceAt).getTime();
+            if (!Number.isFinite(ms) || ms <= Date.now()) return null;
+            return { trigger_type: 'once', trigger_expr: '', run_at_epoch: Math.floor(ms / 1000) };
+        }
+        const [h, m] = String(time || '12:00').split(':').map(Number);
+        return { trigger_type: 'cron', trigger_expr: `${m || 0} ${h || 0} * * *` };
+    },
+    cronHuman: (e) => `Cron ${e}`,
+    DAYS: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+};
+
+let coroutinePollTimer = null;
+let coroutineFilters = { scope: '', status: '', trigger: '', q: '' };
+let _coroutineRooms = null;
+let _coroutinePreviewTimer = null;
+let _coroutinePreviewSeq = 0;
+
+function stopCoroutinePoll() {
+    if (coroutinePollTimer) { clearInterval(coroutinePollTimer); coroutinePollTimer = null; }
+    if (_coroutinePreviewTimer) { clearTimeout(_coroutinePreviewTimer); _coroutinePreviewTimer = null; }
+}
+
+function corPad(n) { return String(n).padStart(2, '0'); }
+
+function corStateBadge(status) {
+    const map = { active: 'green', paused: 'amber', stopped: 'muted', completed: 'blue', failed: 'red' };
+    return `<span class="badge ${map[status] || 'muted'}">${esc(status || 'unknown')}</span>`;
+}
+
+function corProjectLabel(job) {
+    if (job.scope === 'global') return `<span class="badge gold">global</span>`;
+    return `<span class="badge muted">${esc(job.project_name || job.execution_project_name || 'project')}</span>`;
+}
+
+function corRunBadge(run) {
+    if (!run) return '<span class="badge muted">never run</span>';
+    const map = { done: 'green', running: 'amber', queued: 'muted', failed: 'red', timeout: 'red', cancelled: 'muted', interrupted: 'red' };
+    return `<span class="badge ${map[run.status] || 'muted'}">${esc(run.status)}</span>`;
+}
+
+function corNextText(job) {
+    if (job.active_run) return `running · ${esc(job.active_run.status)}`;
+    if (job.trigger_type === 'event') return 'Listening for events';
+    if (job.trigger_type === 'manual') return 'Manual — run on demand';
+    if (job.status === 'paused') return 'Paused';
+    if (job.status === 'stopped') return 'Stopped';
+    if (job.status === 'failed') return 'Paused after failures';
+    if (job.is_unlimited) return 'Worker — running until stopped';
+    const next = (job.next_fires || [])[0];
+    if (!next) return 'No upcoming fire';
+    return `Next ${esc(CS.fmtDate(next.epoch, job.timezone))} · ${esc(CS.countdown(next.epoch))}`;
+}
+
+function corDuration(run) {
+    if (!run || !run.started_at) return '—';
+    const start = new Date(run.started_at).getTime();
+    const end = run.ended_at ? new Date(run.ended_at).getTime() : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return '—';
+    const s = Math.max(0, Math.round((end - start) / 1000));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ${s % 60}s`;
+    return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+async function coroutineCall(uid, action, refresh, opts = {}) {
+    try {
+        if (action === 'run') {
+            try {
+                await api(`/api/coroutines/${uid}/run`, { method: 'POST', body: { force: false } });
+            } catch (e) {
+                if (e.status !== 409) throw e;
+                if (!confirm('This coroutine is already running. Stop that run and start a new one?')) return;
+                await api(`/api/coroutines/${uid}/run`, { method: 'POST', body: { force: true } });
+            }
+            toast('Coroutine run started', 'ok');
+        } else if (action === 'pause') {
+            await api(`/api/coroutines/${uid}/pause`, { method: 'POST', body: {} });
+            toast('Coroutine paused', 'ok');
+        } else if (action === 'resume') {
+            await api(`/api/coroutines/${uid}/resume`, { method: 'POST', body: {} });
+            toast('Coroutine resumed', 'ok');
+        } else if (action === 'stop') {
+            const res = await api(`/api/coroutines/${uid}/stop`, { method: 'POST', body: {} });
+            toast(res.cancelled ? 'Coroutine run stopped' : 'Coroutine stopped', 'ok');
+        } else if (action === 'delete') {
+            if (!confirm('Delete this coroutine? Its run history is kept unless you purge it from the detail view.')) return;
+            await api(`/api/coroutines/${uid}`, { method: 'DELETE' });
+            toast('Coroutine deleted', 'ok');
+            goto('#/coroutines');
+            return;
+        } else if (action === 'duplicate') {
+            const res = await api(`/api/coroutines/${uid}/duplicate`, { method: 'POST' });
+            toast('Coroutine duplicated (paused)', 'ok');
+            if (res.coroutine && res.coroutine.webhook_url) showCoroutineWebhook(res.coroutine);
+        } else if (action === 'test-event') {
+            await api(`/api/coroutines/${uid}/test-event`, { method: 'POST', body: {} });
+            toast('Test event sent', 'ok');
+        } else if (action === 'rotate-secret') {
+            const res = await api(`/api/coroutines/${uid}/rotate-secret`, { method: 'POST' });
+            showCoroutineWebhook({ ...(opts.job || {}), webhook_url: res.webhook_url,
+                                   webhook_secret: res.webhook_secret });
+        }
+        if (refresh) await refresh();
+    } catch (e) {
+        toast(e.message || 'Coroutine action failed', 'err');
+    }
+}
+
+async function coroutineRooms() {
+    if (_coroutineRooms) return _coroutineRooms;
+    const rooms = new Set();
+    try {
+        const res = await api('/api/perunchat/rooms');
+        const list = Array.isArray(res) ? res : (res.rooms || []);
+        for (const item of list) {
+            const id = typeof item === 'string' ? item : (item.room_id || item.id || '');
+            if (id) rooms.add(id);
+        }
+    } catch (_) { /* gateway offline; manual room entry still works */ }
+    try {
+        const st = await api('/api/perunchat/bridge/status');
+        for (const id of (st.rooms || [])) if (id) rooms.add(id);
+    } catch (_) { /* ignore */ }
+    _coroutineRooms = Array.from(rooms).sort();
+    return _coroutineRooms;
+}
+
+function showCoroutineWebhook(job) {
+    const url = job.webhook_url ? (location.origin + job.webhook_url) : '';
+    const secret = job.webhook_secret || '';
+    const body = el('div', {},
+        `<p class="secondary">Send a JSON object to this URL to trigger <b>${esc(job.name || 'this coroutine')}</b>.</p>
+         <p class="muted">The URL is safe to keep in scripts and logs. The secret is shown once and must be sent as the <span class="mono">X-Perun-Webhook-Secret</span> header.</p>
+         <label class="field"><span class="lab">URL</span>
+           <input class="mono" readonly value="${esc(url)}" style="width:100%" onclick="this.select()"></label>
+         ${secret ? `<label class="field"><span class="lab">Secret (shown once)</span>
+           <input class="mono" readonly value="${esc(secret)}" style="width:100%" onclick="this.select()"></label>` : ''}
+         <p class="muted">Example:<br><span class="mono">curl -X POST -H "X-Perun-Webhook-Secret: &lt;secret&gt;" -H "Content-Type: application/json" -d '{}</span></p>`);
+    const actions = [
+        {
+            label: 'Copy URL', class: 'primary', onClick: async () => {
+                try { await navigator.clipboard.writeText(url); toast('URL copied', 'ok'); }
+                catch (_) { toast('Select the URL and copy it manually', 'err'); }
+            },
+        },
+    ];
+    if (secret) {
+        actions.push({
+            label: 'Copy secret', class: 'ghost', onClick: async () => {
+                try { await navigator.clipboard.writeText(secret); toast('Secret copied', 'ok'); }
+                catch (_) { toast('Select the secret and copy it manually', 'err'); }
+            },
+        });
+    }
+    actions.push({ label: 'Done', class: 'ghost', onClick: closeModal });
+    modal('Webhook URL & secret', body, actions);
+}
+
+/* ------------------------------------------------------------ list view -- */
+async function viewCoroutines(uid) {
+    $('#topbar-title').textContent = 'Coroutines';
+    stopCoroutinePoll();
+    if (uid) return viewCoroutineDetail(uid);
+    await Promise.all([loadProjects(), loadModels(), loadAgents(), loadSettings()]);
+    const v = $('#view');
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow">Automation</div><h1>Coroutines</h1>
+          <div class="sub">Scheduled and event-triggered agent jobs. Pause, stop, inspect, and control every one.</div></div>
+         <div class="row wrap">
+           <button class="btn ghost" id="cor-toggle">❚❚ Pause all</button>
+           <button class="btn ghost" id="cor-quick">⚡ Quick create</button>
+           <button class="btn primary" id="cor-new">＋ New coroutine</button>
+         </div>`));
+    v.querySelector('#cor-quick').addEventListener('click', openCoroutineQuickCreate);
+    v.querySelector('#cor-new').addEventListener('click', () => openCoroutineWizard(null));
+    const toggle = v.querySelector('#cor-toggle');
+    let globalPaused = false;
+    toggle.addEventListener('click', async () => {
+        try {
+            await api('/api/settings', { method: 'PATCH', body: { coroutines_paused: !globalPaused } });
+            toast(globalPaused ? 'Coroutines resumed' : 'All coroutines paused', 'ok');
+            await refresh();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    const alertHost = el('div', { id: 'cor-alert' });
+    v.appendChild(alertHost);
+    const stats = el('div', { id: 'cor-stats', class: 'grid stats-grid' });
+    v.appendChild(stats);
+
+    const filters = el('div', { class: 'card', style: 'margin-bottom:14px' });
+    filters.appendChild(el('div', { class: 'row wrap' },
+        `<span class="mselect-label">Scope</span>
+         <select id="cor-f-scope" style="width:auto"><option value="">Any</option><option value="project">Project</option><option value="global">Global</option></select>
+         <span class="mselect-label">Status</span>
+         <select id="cor-f-status" style="width:auto"><option value="">Any</option><option>active</option><option>paused</option><option>stopped</option><option>completed</option><option>failed</option></select>
+         <span class="mselect-label">Trigger</span>
+         <select id="cor-f-trigger" style="width:auto"><option value="">Any</option><option>interval</option><option>cron</option><option>once</option><option>manual</option><option>event</option></select>
+         <span class="grow"></span>
+         <input id="cor-f-q" type="text" placeholder="Search name…" style="max-width:240px">`));
+    v.appendChild(filters);
+    const list = el('div', { id: 'cor-list' });
+    v.appendChild(list);
+
+    const fScope = filters.querySelector('#cor-f-scope');
+    const fStatus = filters.querySelector('#cor-f-status');
+    const fTrigger = filters.querySelector('#cor-f-trigger');
+    const fQ = filters.querySelector('#cor-f-q');
+    fScope.value = coroutineFilters.scope;
+    fStatus.value = coroutineFilters.status;
+    fTrigger.value = coroutineFilters.trigger;
+    fQ.value = coroutineFilters.q;
+    const readFilters = () => {
+        coroutineFilters = {
+            scope: fScope.value, status: fStatus.value,
+            trigger: fTrigger.value, q: fQ.value.trim(),
+        };
+    };
+    for (const node of [fScope, fStatus, fTrigger]) {
+        node.addEventListener('change', () => { readFilters(); refresh(); });
+    }
+    fQ.addEventListener('input', () => { readFilters(); refresh(); });
+
+    const refresh = async () => {
+        if (!document.getElementById('cor-list')) { stopCoroutinePoll(); return; }
+        try {
+            const [data, status] = await Promise.all([
+                api('/api/coroutines?limit=500'),
+                api('/api/coroutines/status').catch(() => null),
+            ]);
+            if (status) {
+                globalPaused = !!status.paused;
+                toggle.textContent = globalPaused ? '▶ Resume all' : '❚❚ Pause all';
+                toggle.disabled = status.enabled === false;
+            }
+            renderCoroutineStats(stats, data.counts || {}, status);
+            renderCoroutineAlert(alertHost, status);
+            const jobs = (data.coroutines || []).filter((j) => {
+                if (coroutineFilters.scope && j.scope !== coroutineFilters.scope) return false;
+                if (coroutineFilters.status && j.status !== coroutineFilters.status) return false;
+                if (coroutineFilters.trigger && j.trigger_type !== coroutineFilters.trigger) return false;
+                if (coroutineFilters.q) {
+                    const q = coroutineFilters.q.toLowerCase();
+                    if (!(`${j.name} ${j.description} ${j.uid}`.toLowerCase().includes(q))) return false;
+                }
+                return true;
+            });
+            list.innerHTML = '';
+            if (!jobs.length) {
+                list.appendChild(el('div', { class: 'empty' },
+                    `<p>No coroutines match.</p>
+                     <p class="muted">Create one to run an agent every day, on a schedule, or when a PerunChat message arrives.</p>
+                     <button class="btn primary" id="cor-empty-new">＋ Create your first coroutine</button>`));
+                const b = list.querySelector('#cor-empty-new');
+                if (b) b.addEventListener('click', () => openCoroutineWizard(null));
+                return;
+            }
+            for (const job of jobs) list.appendChild(coroutineCard(job, refresh));
+        } catch (e) {
+            list.innerHTML = `<div class="empty">Could not load coroutines: ${esc(e.message)}</div>`;
+        }
+    };
+    await refresh();
+    coroutinePollTimer = setInterval(() => {
+        if (document.visibilityState === 'visible' && document.getElementById('cor-list')) refresh();
+        else if (!document.getElementById('cor-list')) stopCoroutinePoll();
+    }, 5000);
+}
+
+function renderCoroutineStats(host, counts, status) {
+    if (!host) return;
+    const hb = status && status.heartbeat ? status.heartbeat : {};
+    host.innerHTML = '';
+    const card = (label, value, foot) => el('div', { class: 'card stat' },
+        `<div class="stat-label">${esc(label)}</div><div class="stat-value">${esc(String(value))}</div><div class="stat-foot">${esc(foot || '')}</div>`);
+    host.appendChild(card('Active', counts.active || 0, 'eligible to fire or listen'));
+    host.appendChild(card('Running now', counts.running || 0, 'agent runs in flight'));
+    host.appendChild(card('Paused', (counts.paused || 0) + (counts.stopped || 0), 'waiting for you'));
+    host.appendChild(card('Failing', counts.failed || 0, 'auto-paused after failures'));
+    const next = status && status.next_fire_at ? status.next_fire_at : '';
+    host.appendChild(card('Scheduler', hb.stale ? 'stale' : (status && status.scheduler_running ? 'live' : 'off'),
+        next ? `next ${next}` : '5 s tick'));
+}
+
+function renderCoroutineAlert(host, status) {
+    if (!host) return;
+    if (!status) { host.innerHTML = ''; return; }
+    if (status.enabled === false) {
+        host.innerHTML = '<div class="cor-warn">Coroutines are disabled in Settings. Existing jobs will not fire.</div>';
+        return;
+    }
+    if (status.paused) {
+        host.innerHTML = '<div class="cor-warn">The scheduler is paused globally (Settings → Coroutines). No new cycles or events will start.</div>';
+        return;
+    }
+    if (status.heartbeat && status.heartbeat.stale) {
+        host.innerHTML = '<div class="cor-warn">The coroutine scheduler is not ticking. Check the service log (it should run inside <span class="mono">perun serve</span>).</div>';
+        return;
+    }
+    host.innerHTML = '';
+}
+
+function coroutineCard(job, refresh) {
+    const card = el('div', { class: 'card cor-card', dataset: { uid: job.uid } });
+    const head = el('div', { class: 'cor-head' });
+    head.appendChild(el('div', { class: 'grow' },
+        `<div class="cor-title"><a href="#/coroutines/${esc(job.uid)}">${esc(job.name)}</a>
+          ${corStateBadge(job.status)} ${corProjectLabel(job)}</div>
+         <div class="meta">${esc(CS.humanTrigger(job))} · ${esc(CS.modeHuman(job))}</div>`));
+    const actions = el('div', { class: 'cor-actions' });
+    const add = (label, cls, fn, title) => actions.appendChild(
+        el('button', { class: 'btn ' + cls + ' sm', title: title || null, onclick: fn }, label));
+    add('▶ Run now', 'primary', () => coroutineCall(job.uid, 'run', refresh));
+    if (job.status === 'active') add('❚❚ Pause', 'ghost', () => coroutineCall(job.uid, 'pause', refresh));
+    else add('▶ Resume', 'ghost', () => coroutineCall(job.uid, 'resume', refresh));
+    if (job.active_run) add('■ Stop', 'danger ghost', () => coroutineCall(job.uid, 'stop', refresh));
+    add('Edit', 'ghost', () => openCoroutineWizard(job, { onSaved: refresh }));
+    add('⋯', 'ghost', () => coroutineMenu(job, refresh), 'More actions');
+    head.appendChild(actions);
+    card.appendChild(head);
+
+    const meta = el('div', { class: 'cor-meta' });
+    meta.innerHTML =
+        `<div><span class="mselect-label">Next</span><div>${esc(corNextText(job))}</div></div>
+         <div><span class="mselect-label">Last run</span><div>${corRunBadge(job.last_run)} ${job.last_run ? esc(timeAgo(job.last_run.ended_at || job.last_run.started_at)) : '<span class="muted">never</span>'}</div></div>
+         <div><span class="mselect-label">7-day health</span><div>${job.stats && job.stats.total ? `${job.stats.done}/${job.stats.total} ok · ${job.stats.failed} failed` : '<span class="muted">no runs yet</span>'}</div></div>`;
+    card.appendChild(meta);
+
+    if (job.active_run) {
+        const run = job.active_run;
+        const bar = el('div', { class: 'cor-progress' });
+        bar.appendChild(el('i', { style: 'width:35%' }));
+        card.appendChild(el('div', { class: 'cor-running' },
+            `<span class="dot amber"></span> ${esc(run.status)} · iteration ${esc(String(run.coroutine_iteration || 1))} · ${esc(corDuration(run))}`));
+        card.appendChild(bar);
+    }
+    if (job.last_error) {
+        card.appendChild(el('div', { class: 'cor-error' }, esc(job.last_error)));
+    }
+    return card;
+}
+
+function coroutineMenu(job, refresh) {
+    const body = el('div', {},
+        `<p class="secondary">${esc(job.name)}</p>
+         <div class="wiz-options">
+           ${job.trigger_type === 'event' ? '<button class="btn ghost" id="cor-m-test">Send test event</button>' : ''}
+           ${job.trigger_type === 'event' && job.event_source === 'webhook' ? '<button class="btn ghost" id="cor-m-rotate">Rotate webhook secret</button>' : ''}
+           <button class="btn ghost" id="cor-m-duplicate">Duplicate</button>
+           <button class="btn danger ghost" id="cor-m-delete">Delete</button>
+         </div>`);
+    const box = modal('Coroutine actions', body, [{ label: 'Close', class: 'ghost', onClick: closeModal }]);
+    const bind = (id, fn) => {
+        const n = box.querySelector(id);
+        if (n) n.addEventListener('click', () => { closeModal(); fn(); });
+    };
+    bind('#cor-m-test', () => coroutineCall(job.uid, 'test-event', refresh, { job }));
+    bind('#cor-m-rotate', () => coroutineCall(job.uid, 'rotate-secret', refresh, { job }));
+    bind('#cor-m-duplicate', () => coroutineCall(job.uid, 'duplicate', refresh));
+    bind('#cor-m-delete', () => coroutineCall(job.uid, 'delete', refresh));
+}
+
+/* ---------------------------------------------------------- detail view -- */
+async function viewCoroutineDetail(uid, opts = {}) {
+    $('#topbar-title').textContent = 'Coroutine';
+    stopCoroutinePoll();
+    if (!opts.quiet) {
+        await Promise.all([loadProjects(), loadModels(), loadAgents(), loadSettings()]);
+    }
+    let data;
+    try { data = await api(`/api/coroutines/${encodeURIComponent(uid)}`); }
+    catch (e) {
+        $('#view').innerHTML = `<div class="empty">Could not load this coroutine: ${esc(e.message)}</div>`;
+        return;
+    }
+    const job = data.coroutine;
+    const status = await api('/api/coroutines/status').catch(() => null);
+    const v = $('#view');
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'view-head' },
+        `<div><div class="eyebrow"><a href="#/coroutines">Coroutines</a> / detail</div>
+          <h1>${esc(job.name)} ${corStateBadge(job.status)}</h1>
+          <div class="sub">${esc(CS.humanTrigger(job))} · ${esc(CS.modeHuman(job))} · ${esc(job.execution_project_name || job.execution_project_slug || '')}</div></div>
+         <div class="row wrap">
+           <button class="btn primary sm" id="cor-d-run">▶ Run now</button>
+           ${job.status === 'active'
+               ? '<button class="btn ghost sm" id="cor-d-pause">❚❚ Pause</button>'
+               : '<button class="btn ghost sm" id="cor-d-resume">▶ Resume</button>'}
+           ${job.active_run ? '<button class="btn danger ghost sm" id="cor-d-stop">■ Stop</button>' : ''}
+           <button class="btn ghost sm" id="cor-d-edit">Edit</button>
+           <button class="btn ghost sm" id="cor-d-menu">⋯</button>
+         </div>`));
+
+    const refresh = () => viewCoroutineDetail(uid, { quiet: true });
+    v.querySelector('#cor-d-run').addEventListener('click', () => coroutineCall(uid, 'run', refresh));
+    v.querySelector('#cor-d-pause')?.addEventListener('click', () => coroutineCall(uid, 'pause', refresh));
+    v.querySelector('#cor-d-resume')?.addEventListener('click', () => coroutineCall(uid, 'resume', refresh));
+    v.querySelector('#cor-d-stop')?.addEventListener('click', () => coroutineCall(uid, 'stop', refresh));
+    v.querySelector('#cor-d-edit').addEventListener('click', () => openCoroutineWizard(job, { onSaved: refresh }));
+    v.querySelector('#cor-d-menu').addEventListener('click', () => coroutineMenu(job, refresh));
+
+    renderCoroutineAlert(v, status);
+
+    const grid = el('div', { class: 'cor-detail' });
+    const main = el('div', {});
+    const side = el('div', {});
+    grid.appendChild(main);
+    grid.appendChild(side);
+    v.appendChild(grid);
+
+    main.appendChild(coroutineCurrentCycle(job, refresh));
+    main.appendChild(coroutineNextCard(job));
+    main.appendChild(coroutineRunsCard(job));
+    main.appendChild(coroutineEventsCard(job, refresh));
+    side.appendChild(coroutineConfigCard(job));
+    side.appendChild(coroutineHealthCard(job));
+    if (job.room_outbox && job.room_outbox.length) side.appendChild(coroutineOutboxCard(job, refresh));
+    side.appendChild(coroutineDangerCard(job, refresh));
+
+    // Refresh the detail on a slow timer only when no run is streaming; the
+    // stream itself calls back when the run ends.
+    if (!job.active_run) {
+        coroutinePollTimer = setInterval(() => {
+            if (!document.getElementById('cor-d-run')) { stopCoroutinePoll(); return; }
+            if (document.visibilityState === 'visible') refresh();
+        }, 8000);
+    }
+}
+
+function coroutineCurrentCycle(job, refresh) {
+    const card = el('div', { class: 'card' });
+    const run = job.active_run;
+    card.appendChild(el('div', { class: 'card-head' },
+        `<h4>Current cycle</h4><span class="meta">${run ? esc(run.status) : (job.active_cycle_id ? 'settling…' : 'idle')}</span>`));
+    if (!run) {
+        card.appendChild(el('div', { class: 'muted' },
+            job.active_cycle_id
+                ? 'The cycle is completing; accounting will schedule the next step.'
+                : 'No run is active right now.'));
+        return card;
+    }
+    const meta = el('div', { class: 'cor-run-meta' },
+        `Iteration ${esc(String(run.coroutine_iteration || 1))} · started ${esc(timeAgo(run.started_at))} · ${esc(corDuration(run))}`);
+    card.appendChild(meta);
+    const log = el('pre', { class: 'cor-log' }, '');
+    log.textContent = run.output || '';
+    card.appendChild(log);
+    const stop = el('button', { class: 'btn danger ghost sm', onclick: () => coroutineCall(job.uid, 'stop', refresh) }, '■ Stop run');
+    card.appendChild(stop);
+
+    let started = false;
+    const stream = () => {
+        if (started) return;
+        started = true;
+        streamOrchestrator(run.run_uid, (ev) => {
+            if (ev.type === 'text') {
+                log.textContent += ev.text || '';
+                log.scrollTop = log.scrollHeight;
+            } else if (ev.type === 'error') {
+                log.textContent += `\n[error] ${ev.text || ''}`;
+                log.scrollTop = log.scrollHeight;
+            }
+        }, () => {
+            stopCoroutinePoll();
+            refresh();
+        });
+    };
+    stream();
+    return card;
+}
+
+function coroutineNextCard(job) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' },
+        `<h4>Next fires</h4><span class="meta">${esc(job.timezone || 'local time')}</span>`));
+    const fires = job.next_fires || [];
+    if (!fires.length) {
+        card.appendChild(el('div', { class: 'muted' },
+            job.trigger_type === 'event' ? 'Listening for events — no timed fires.'
+                : job.trigger_type === 'manual' ? 'Manual only — use Run now.'
+                : 'No upcoming fire.'));
+        return card;
+    }
+    const rows = fires.map((f) =>
+        `<div class="cor-next"><span>${esc(CS.fmtDate(f.epoch, job.timezone))}</span><span class="muted">${esc(CS.countdown(f.epoch))}</span></div>`).join('');
+    card.appendChild(el('div', {}, rows));
+    return card;
+}
+
+function coroutineRunsCard(job) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' },
+        `<h4>Run history</h4><span class="meta">last ${esc(String((job.runs || []).length))}</span>`));
+    if (!job.runs || !job.runs.length) {
+        card.appendChild(el('div', { class: 'muted' }, 'No runs yet.'));
+        return card;
+    }
+    const box = el('div', { class: 'cor-runs' });
+    for (const run of job.runs) {
+        const row = el('div', { class: 'cor-run' });
+        row.innerHTML =
+            `<div>${corRunBadge(run)} <span class="mono">${esc(run.run_uid)}</span>
+                ${run.coroutine_iteration ? `<span class="chip">iter ${esc(String(run.coroutine_iteration))}</span>` : ''}</div>
+             <div class="meta">${esc(timeAgo(run.started_at || run.created_at))} · ${esc(corDuration(run))}
+                ${run.coroutine_trigger ? ` · ${esc(run.coroutine_trigger)}` : ''}</div>
+             <div class="cor-run-out">${esc((run.output || run.error || '').slice(0, 320))}</div>`;
+        box.appendChild(row);
+    }
+    card.appendChild(box);
+    return card;
+}
+
+function coroutineEventsCard(job, refresh) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' },
+        `<h4>Event inbox</h4><span class="meta">${esc(String((job.events || []).length))}</span>`));
+    if (job.trigger_type !== 'event') {
+        card.appendChild(el('div', { class: 'muted' }, 'This coroutine uses a timed trigger.'));
+        return card;
+    }
+    if (!job.events || !job.events.length) {
+        card.appendChild(el('div', { class: 'muted' }, 'No events received yet.'));
+    } else {
+        const box = el('div', { class: 'cor-events' });
+        for (const ev of job.events) {
+            let payload = {};
+            try { payload = JSON.parse(ev.payload || '{}'); } catch (_) { payload = {}; }
+            const text = payload.text || payload.intent || payload.question || ev.source;
+            const status = ev.delivery_status || 'queued';
+            const cls = { fired: 'green', skipped: 'muted', failed: 'red', queued: 'amber' }[status] || 'muted';
+            const row = el('div', { class: 'cor-event' },
+                `<span class="badge ${cls}">${esc(status)}</span>
+                 <span class="grow">${esc(String(text).slice(0, 180))}</span>
+                 ${status === 'failed' && ev.delivery_id ? '<button class="btn ghost sm" data-retry>Retry</button>' : ''}
+                 <span class="muted">${esc(timeAgo(ev.received_at))}</span>`);
+            const retry = row.querySelector('[data-retry]');
+            if (retry) retry.addEventListener('click', async () => {
+                try {
+                    await api(`/api/coroutines/${job.uid}/events/${ev.delivery_id}/retry`, { method: 'POST', body: {} });
+                    toast('Event delivery requeued', 'ok');
+                    refresh();
+                } catch (e) { toast(e.message, 'err'); }
+            });
+            box.appendChild(row);
+        }
+        card.appendChild(box);
+    }
+    const actions = el('div', { class: 'row wrap' });
+    actions.appendChild(el('button', { class: 'btn ghost sm', onclick: () => coroutineCall(job.uid, 'test-event', refresh, { job }) }, 'Send test event'));
+    if (job.event_source === 'webhook') {
+        actions.appendChild(el('button', { class: 'btn ghost sm', onclick: () => coroutineCall(job.uid, 'rotate-secret', refresh, { job }) }, 'Rotate secret'));
+    }
+    card.appendChild(actions);
+    return card;
+}
+
+function coroutineConfigCard(job) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' }, '<h4>Configuration</h4>'));
+    const rows = [
+        ['Trigger', CS.humanTrigger(job)],
+        ['Mode', CS.modeHuman(job)],
+        ['Execution project', job.execution_project_name || job.execution_project_slug || '—'],
+        ['Scope', job.scope],
+        ['Model', job.model || 'project default'],
+        ['Agent', job.agent || 'project default'],
+        ['Session', job.session_mode],
+        ['Timeout', job.run_timeout_seconds ? `${job.run_timeout_seconds}s` : 'global default'],
+        ['Failure policy', `${job.failure_policy} after ${job.failure_threshold}`],
+        ['Overlap', job.overlap_policy],
+        ['Catch-up', job.catch_up],
+    ];
+    card.appendChild(el('div', { class: 'cor-kv' },
+        rows.map(([k, v]) => `<div><span class="mselect-label">${esc(k)}</span><div>${esc(String(v ?? ''))}</div></div>`).join('')));
+    card.appendChild(el('div', { class: 'cor-prompt' }, esc((job.prompt || '').slice(0, 600))));
+    return card;
+}
+
+function coroutineHealthCard(job) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' }, '<h4>Health</h4>'));
+    const runs = job.runs || [];
+    const done = runs.filter((r) => r.status === 'done').length;
+    const failed = runs.filter((r) => ['failed', 'timeout', 'provider_error'].includes(r.status)).length;
+    card.appendChild(el('div', { class: 'cor-kv' },
+        `<div><span class="mselect-label">Runs today</span><div>${esc(String(job.runs_today || 0))}</div></div>
+         <div><span class="mselect-label">Recent success</span><div>${done}/${done + failed || 0}</div></div>
+         <div><span class="mselect-label">Failure streak</span><div>${esc(String(job.failure_streak || 0))}</div></div>
+         <div><span class="mselect-label">Last error</span><div>${esc(job.last_error || '—')}</div></div>`));
+    return card;
+}
+
+function coroutineOutboxCard(job, refresh) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' }, '<h4>Room deliveries</h4>'));
+    const box = el('div', { class: 'cor-events' });
+    for (const row of job.room_outbox) {
+        const state = row.delivered_at ? 'delivered' : (Number(row.attempts) >= 10 ? 'failed' : 'queued');
+        const cls = { delivered: 'green', failed: 'red', queued: 'amber' }[state];
+        const line = el('div', { class: 'cor-event' },
+            `<span class="badge ${cls}">${esc(state)}</span>
+             <span class="grow">${esc(String(row.text || '').slice(0, 160))}</span>
+             ${state === 'failed' ? '<button class="btn ghost sm" data-retry>Retry</button>' : ''}`);
+        const retry = line.querySelector('[data-retry]');
+        if (retry) retry.addEventListener('click', async () => {
+            try {
+                await api(`/api/coroutines/room-outbox/${row.id}/retry`, { method: 'POST', body: {} });
+                toast('Room delivery requeued', 'ok');
+                refresh();
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        box.appendChild(line);
+    }
+    card.appendChild(box);
+    return card;
+}
+
+function coroutineDangerCard(job, refresh) {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-head' }, '<h4>Danger zone</h4>'));
+    const row = el('div', { class: 'row wrap' });
+    row.appendChild(el('button', {
+        class: 'btn danger ghost sm',
+        onclick: async () => {
+            if (!confirm(`Delete "${job.name}"? Run history is kept.`)) return;
+            try {
+                await api(`/api/coroutines/${job.uid}`, { method: 'DELETE' });
+                toast('Coroutine deleted', 'ok');
+                goto('#/coroutines');
+            } catch (e) { toast(e.message, 'err'); }
+        },
+    }, 'Delete coroutine'));
+    row.appendChild(el('button', {
+        class: 'btn danger sm',
+        onclick: async () => {
+            if (!confirm(`Purge "${job.name}" and all of its run history? This cannot be undone.`)) return;
+            try {
+                await api(`/api/coroutines/${job.uid}?purge=true`, { method: 'DELETE' });
+                toast('Coroutine purged', 'ok');
+                goto('#/coroutines');
+            } catch (e) { toast(e.message, 'err'); }
+        },
+    }, 'Purge history'));
+    card.appendChild(row);
+    return card;
+}
+
+/* --------------------------------------------------------------- wizard -- */
+function corTimezone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+    catch (_) { return ''; }
+}
+
+function corModalShell(title) {
+    const root = $('#modal-root');
+    root.innerHTML = '';
+    const back = el('div', { class: 'modal-back' });
+    const box = el('div', { class: 'modal wide' });
+    box.appendChild(el('h3', {}, esc(title)));
+    const body = el('div', { class: 'wizard' });
+    const actions = el('div', { class: 'modal-actions' });
+    box.appendChild(body);
+    box.appendChild(actions);
+    back.appendChild(box);
+    root.appendChild(back);
+    back.addEventListener('click', (e) => { if (e.target === back) closeModal(); });
+    return { box, body, actions };
+}
+
+function corWizardDefaults(existing) {
+    const tz = corTimezone();
+    if (existing) {
+        return {
+            ...existing,
+            timezone: existing.timezone || tz,
+            run_at_epoch: Number(existing.run_at_epoch || 0),
+            event_sender_allow: Array.isArray(existing.event_sender_allow) ? existing.event_sender_allow : [],
+            event_filter: existing.event_filter || {},
+            options: existing.options || {},
+            _activate: existing.status === 'active',
+            _step: 0,
+        };
+    }
+    return {
+        name: '', description: '', scope: 'project', project_id: null,
+        execution_project_id: null, trigger_type: 'cron', trigger_expr: '0 12 * * *',
+        timezone: tz, run_at_epoch: 0, prompt: '', model: '', agent: '',
+        session_mode: 'fresh', run_timeout_seconds: 0,
+        execution_mode: 'single', max_iterations: 1, iteration_delay_seconds: 5,
+        completion_marker: '', stall_iterations: 3, cycle_max_seconds: 0,
+        max_runs: 0, max_runs_per_day: 0,
+        failure_policy: 'pause', failure_threshold: 3,
+        restart_policy: 'resume', overlap_policy: 'skip', catch_up: 'skip',
+        jitter_seconds: 0, event_source: 'room.message', event_room_id: '',
+        event_mention_only: 0, event_sender_allow: [], event_min_interval_seconds: 5,
+        event_filter: {}, post_result_to_room: 0, suppress_auto_reply: 1,
+        post_on_failure: 0, options: {}, status: 'paused',
+        _activate: false, _step: 0,
+    };
+}
+
+function openCoroutineWizard(existing, opts = {}) {
+    const w = corWizardDefaults(existing);
+    if (!w.execution_project_id && state.projects && state.projects.length) {
+        w.execution_project_id = state.projects[0].id;
+        if (w.scope === 'project') w.project_id = w.execution_project_id;
+    }
+    const isEdit = !!existing;
+    const shell = corModalShell(isEdit ? `Edit ${existing.name}` : 'New coroutine');
+    const STEPS = ['Basics', 'Work', 'Trigger', 'Safety', 'Review'];
+    let saveBusy = false;
+
+    const field = (label, node, hint) => {
+        const wrap = el('label', { class: 'field' });
+        wrap.appendChild(el('span', { class: 'lab' }, esc(label)));
+        wrap.appendChild(node);
+        if (hint) wrap.appendChild(el('span', { class: 'meta' }, esc(hint)));
+        return wrap;
+    };
+    const text = (key, placeholder, type = 'text') => {
+        const node = el('input', { type, placeholder: placeholder || '' });
+        node.value = w[key] ?? '';
+        node.addEventListener('input', () => { w[key] = node.value; });
+        return node;
+    };
+    const num = (key, min, max, step = '1') => {
+        const node = el('input', { type: 'number', min: String(min), max: String(max), step: String(step) });
+        node.value = w[key] ?? '';
+        node.addEventListener('input', () => { w[key] = node.value === '' ? 0 : Number(node.value); });
+        return node;
+    };
+    const select = (key, options, onChange) => {
+        const node = el('select', {});
+        for (const [value, label] of options) {
+            const opt = el('option', { value }, esc(label));
+            if (String(w[key] ?? '') === String(value)) opt.selected = true;
+            node.appendChild(opt);
+        }
+        node.addEventListener('change', () => { w[key] = node.value; if (onChange) onChange(node.value); });
+        return node;
+    };
+    const check = (key, label, onChange) => {
+        const node = el('input', { type: 'checkbox' });
+        node.checked = !!w[key];
+        node.addEventListener('change', () => { w[key] = node.checked ? 1 : 0; if (onChange) onChange(node.checked); });
+        const wrap = el('label', { class: 'opt' });
+        wrap.appendChild(node);
+        wrap.appendChild(el('span', {}, esc(label)));
+        return { node, wrap };
+    };
+    const projectOptions = () => (state.projects || []).map((p) => [p.id, `${p.name} (${p.slug})`]);
+
+    const render = () => {
+        shell.body.innerHTML = '';
+        const steps = el('div', { class: 'wiz-steps' });
+        STEPS.forEach((s, i) => steps.appendChild(el('span', {
+            class: `wiz-step ${i === w._step ? 'active' : ''} ${i < w._step ? 'done' : ''}`,
+        }, `<b>${i + 1}</b> ${esc(s)}`)));
+        shell.body.appendChild(steps);
+        const pane = el('div', { class: 'wiz-pane' });
+        shell.body.appendChild(pane);
+        const err = el('div', { class: 'cor-warn', id: 'cor-wiz-err', style: 'display:none' });
+        shell.body.appendChild(err);
+        const showError = (msg) => {
+            if (!msg) { err.style.display = 'none'; err.textContent = ''; return; }
+            err.style.display = 'block';
+            err.textContent = msg;
+        };
+        // Defined before the step branches so the trigger form can schedule a
+        // preview immediately; ``previewHost`` is created inside step 2.
+        const preview = (host) => coroutinePreview(w, host);
+
+        if (w._step === 0) {
+            pane.appendChild(field('Name', text('name', 'e.g. Daily reminder')));
+            pane.appendChild(field('Description', text('description', 'optional')));
+            const scope = select('scope', [['project', 'Project'], ['global', 'Global']], () => {
+                if (w.scope === 'global' && w.trigger_type === 'event') {
+                    w.trigger_type = 'manual';
+                    w.event_source = '';
+                    w.event_room_id = '';
+                }
+                render();
+            });
+            pane.appendChild(field('Scope', scope,
+                'Project jobs run in one project. Global jobs run as the orchestrator in the Perun control plane and are not tied to a project. Event triggers are project-scoped.'));
+            if (w.scope === 'global') {
+                pane.appendChild(el('div', { class: 'cor-warn' },
+                    'Global coroutines are run by the orchestrator, not inside a project. Use them for reminders, digests, reports, and machine-wide housekeeping.'));
+            } else if (!state.projects || !state.projects.length) {
+                pane.appendChild(el('div', { class: 'cor-warn' },
+                    'No projects are registered. Add one from the Projects tab, or switch Scope to Global for an orchestrator job.'));
+            } else {
+                const exec = select('execution_project_id', projectOptions(), (value) => {
+                    w.execution_project_id = Number(value);
+                    if (w.scope === 'project') w.project_id = w.execution_project_id;
+                });
+                pane.appendChild(field('Execution project', exec,
+                    'The agent runs in this directory. Global jobs do not use a project; they run as the orchestrator.'));
+            }
+            const templates = el('div', { class: 'method-cards' });
+            const tpl = w.scope === 'global'
+                ? [
+                    ['Daily reminder', 'Send me a short reminder via perun_telegram_send if it is configured; otherwise reply with it here. Reminder: <what should I be reminded of?>', '0 9 * * *'],
+                    ['One-time reminder', 'Remind me once: <what should I be reminded of?>. Send it via perun_telegram_send if configured; otherwise reply here.', '', 'once'],
+                    ['Morning digest', 'Summarize the most important state across all projects: open work, recent activity, and anything that needs me today. Use the perun_* tools.', '0 8 * * *'],
+                    ['Machine health check', 'Check whether Perun, OpenCode, Ollama, the PerunChat bridge, and recent runs are healthy. Report anything that needs attention.', '0 */6 * * *'],
+                ]
+                : [
+                    ['Daily project digest', 'Summarize what changed in this project today. List the most important commits, open questions, and a short next-step plan.', '0 9 * * *'],
+                    ['Nightly dependency audit', 'Audit this project\'s dependencies for outdated, vulnerable, or unused packages. Do not modify files; write a short report.', '0 2 * * *'],
+                    ['Continuous docs refresh', 'Review the recent code changes and update the project documentation where it is stale. Keep the edit focused and safe.', '0 */6 * * *'],
+                    ['One-time task', 'Do this once: <what should be done?>.', '', 'once'],
+                ];
+            for (const [name, prompt, cron, triggerType] of tpl) {
+                const when = triggerType === 'once' ? 'once' : cron;
+                const b = el('button', { class: 'method-card', type: 'button', onclick: () => {
+                    w.name = w.name || name;
+                    w.prompt = prompt;
+                    if (triggerType === 'once') {
+                        w.trigger_type = 'once';
+                        w.trigger_expr = '';
+                        w.run_at_epoch = Math.floor(Date.now() / 1000) + 3600;
+                    } else {
+                        w.trigger_type = 'cron';
+                        w.trigger_expr = cron;
+                    }
+                    render();
+                } }, `<div class="mc-title">${esc(name)}</div><div class="mc-sub">${esc(when)}</div>`);
+                templates.appendChild(b);
+            }
+            pane.appendChild(el('div', { class: 'mselect-label', style: 'margin-top:14px' }, 'Start from a template'));
+            pane.appendChild(templates);
+        } else if (w._step === 1) {
+            const ta = el('textarea', { rows: '7', placeholder: 'What should the agent do on each run?' });
+            ta.value = w.prompt || '';
+            ta.addEventListener('input', () => { w.prompt = ta.value; });
+            pane.appendChild(field('Prompt', ta));
+            const modelHost = el('div', { class: 'select-host' });
+            const ms = modelSelect({ value: w.model || '', placeholder: w.scope === 'global' ? 'orchestrator default model' : 'project default model', onSelect: (id) => { w.model = id; } });
+            modelHost.appendChild(ms);
+            w._modelNode = ms;
+            pane.appendChild(field('Model', modelHost, 'Leave empty to use the project/agent default.'));
+            const agentHost = el('div', { class: 'select-host' });
+            const as = agentSelect({ value: w.agent || '', placeholder: w.scope === 'global' ? 'orchestrator default agent' : 'project default agent', onSelect: (id) => { w.agent = id; } });
+            agentHost.appendChild(as);
+            w._agentNode = as;
+            pane.appendChild(field('Agent', agentHost,
+                w.trigger_type === 'event'
+                    ? 'Event content is untrusted, so event jobs default to the read-only plan agent. Pick a write-capable agent only if you trust the source.'
+                    : 'Use a read-only/plan agent for reports if you do not want autonomous edits.'));
+            pane.appendChild(field('Session', select('session_mode', [['fresh', 'Fresh session each cycle'], ['continue', 'Continue the job\'s previous session']])));
+            pane.appendChild(field('Run timeout (seconds)', num('run_timeout_seconds', 0, 86400),
+                '0 uses the global run timeout. The scheduler also enforces this as a watchdog.'));
+        } else if (w._step === 2) {
+            const types = [
+                ['interval', 'Interval', 'Every N minutes, hours, or days'],
+                ['cron', 'Schedule', 'Daily, weekdays, weekly, monthly, or custom cron'],
+                ['once', 'Once', 'A single date and time'],
+                ['manual', 'Manual', 'Only when you click Run now'],
+                ['event', 'Event', 'Webhook, run, proposal, inbox, git, or room message'],
+            ].filter(([id]) => !(w.scope === 'global' && id === 'event'));
+            const grid = el('div', { class: 'method-cards' });
+            for (const [id, title, sub] of types) {
+                const b = el('button', {
+                    class: 'method-card' + (w.trigger_type === id ? ' selected' : ''),
+                    type: 'button',
+                    onclick: () => {
+                        w.trigger_type = id;
+                        if (id === 'event' && !w.agent) w.agent = 'plan';
+                        if (id === 'interval' && !w.trigger_expr) w.trigger_expr = '3600';
+                        if (id === 'cron' && !String(w.trigger_expr || '').includes(' ')) w.trigger_expr = '0 12 * * *';
+                        if (id === 'once' && !w.run_at_epoch) w.run_at_epoch = Math.floor(Date.now() / 1000) + 3600;
+                        render();
+                    },
+                }, `<div class="mc-title">${esc(title)}</div><div class="mc-sub">${esc(sub)}</div>`);
+                grid.appendChild(b);
+            }
+            pane.appendChild(grid);
+            if (w.scope === 'global') {
+                pane.appendChild(el('div', { class: 'cor-warn' },
+                    'Event triggers are project-scoped. Global jobs are scheduled, one-shot, or manual; create a project-scoped job when the trigger is a room message, run, proposal, git event, or webhook.'));
+            }
+            const host = el('div', { class: 'cor-trigger-form' });
+            pane.appendChild(host);
+            const previewHost = el('div', { class: 'cor-next', id: 'cor-preview' });
+            pane.appendChild(previewHost);
+            const tzInput = text('timezone', 'Europe/Warsaw');
+            tzInput.addEventListener('input', () => preview(previewHost));
+            const tzField = field('Timezone', tzInput, 'IANA name. Use the browser zone shown by default.');
+            if (w.trigger_type === 'interval') {
+                const seconds = Number(w.trigger_expr || 3600);
+                const unit = seconds >= 86400 && seconds % 86400 === 0 ? 'days' : (seconds >= 3600 && seconds % 3600 === 0 ? 'hours' : 'minutes');
+                const value = unit === 'days' ? seconds / 86400 : (unit === 'hours' ? seconds / 3600 : Math.max(1, Math.round(seconds / 60)));
+                const amount = el('input', { type: 'number', min: '1', max: '100000', value: String(value) });
+                const unitSel = el('select', {});
+                for (const [v, l] of [['minutes', 'minutes'], ['hours', 'hours'], ['days', 'days']]) unitSel.appendChild(el('option', { value: v }, l));
+                unitSel.value = unit;
+                const sync = () => {
+                    const n = Math.max(1, Number(amount.value) || 1);
+                    w.trigger_expr = String(n * (unitSel.value === 'days' ? 86400 : unitSel.value === 'hours' ? 3600 : 60));
+                    preview(previewHost);
+                };
+                amount.addEventListener('input', sync);
+                unitSel.addEventListener('change', sync);
+                const row = el('div', { class: 'row wrap' });
+                row.appendChild(el('span', { class: 'mselect-label' }, 'Every'));
+                row.appendChild(amount);
+                row.appendChild(unitSel);
+                host.appendChild(row);
+                host.appendChild(tzField);
+            } else if (w.trigger_type === 'cron') {
+                let parts = { preset: 'daily', time: '12:00', day: 1 };
+                const p = String(w.trigger_expr || '').trim().split(/\s+/);
+                if (p.length === 5) {
+                    const [min, hour, dom, mon, dow] = p;
+                    if (/^\d+$/.test(min) && /^\d+$/.test(hour)) {
+                        parts.time = `${corPad(Number(hour))}:${corPad(Number(min))}`;
+                    }
+                    if (mon === '*' && dom === '*' && dow === '*') parts.preset = 'daily';
+                    else if (mon === '*' && dom === '*' && dow === '1-5') parts.preset = 'weekdays';
+                    else if (mon === '*' && dom === '*' && /^\d+$/.test(dow)) { parts.preset = 'weekly'; parts.day = Number(dow); }
+                    else if (mon === '*' && /^\d+$/.test(dom) && dow === '*') { parts.preset = 'monthly'; parts.day = Number(dom); }
+                    else parts.preset = 'custom';
+                }
+                const preset = el('select', {});
+                for (const [v, l] of [['daily', 'Every day'], ['weekdays', 'Every weekday'], ['weekly', 'Every week'], ['monthly', 'Every month'], ['custom', 'Custom cron']]) preset.appendChild(el('option', { value: v }, l));
+                preset.value = parts.preset;
+                const time = el('input', { type: 'time', value: parts.time });
+                const day = el('select', {});
+                for (let i = 0; i < 7; i++) day.appendChild(el('option', { value: String(i) }, CS.DAYS[i]));
+                for (let i = 1; i <= 28; i++) day.appendChild(el('option', { value: String(i) }, `day ${i}`));
+                day.value = String(parts.day || 1);
+                const custom = el('input', { type: 'text', placeholder: '0 12 * * *', value: w.trigger_expr || '' });
+                const apply = () => {
+                    if (preset.value === 'custom') w.trigger_expr = custom.value.trim();
+                    else w.trigger_expr = CS.presetCron(preset.value, time.value, Number(day.value));
+                    preview(previewHost);
+                };
+                for (const n of [preset, time, day]) n.addEventListener('change', () => { updateCronVisibility(); apply(); });
+                custom.addEventListener('input', apply);
+                const updateCronVisibility = () => {
+                    time.style.display = preset.value === 'custom' ? 'none' : '';
+                    day.style.display = preset.value === 'weekly' || preset.value === 'monthly' ? '' : 'none';
+                    custom.style.display = preset.value === 'custom' ? '' : 'none';
+                };
+                const row = el('div', { class: 'row wrap' });
+                row.appendChild(preset);
+                row.appendChild(time);
+                row.appendChild(day);
+                host.appendChild(row);
+                host.appendChild(custom);
+                host.appendChild(tzField);
+                updateCronVisibility();
+            } else if (w.trigger_type === 'once') {
+                const dt = el('input', { type: 'datetime-local' });
+                const epoch = Number(w.run_at_epoch || 0);
+                if (epoch) {
+                    const d = new Date(epoch * 1000);
+                    dt.value = `${d.getFullYear()}-${corPad(d.getMonth() + 1)}-${corPad(d.getDate())}T${corPad(d.getHours())}:${corPad(d.getMinutes())}`;
+                }
+                dt.addEventListener('change', () => {
+                    const ms = new Date(dt.value).getTime();
+                    w.run_at_epoch = Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+                    preview(previewHost);
+                });
+                host.appendChild(field('Date and time', dt));
+                host.appendChild(tzField);
+            } else if (w.trigger_type === 'manual') {
+                host.appendChild(el('p', { class: 'muted' },
+                    'Manual jobs never fire on a schedule. Start them with Run now, or from an API/script.'));
+            } else if (w.trigger_type === 'event') {
+                const sources = [
+                    ['room.message', 'PerunChat room message'],
+                    ['webhook', 'Webhook'],
+                    ['run.finished', 'A run finishes'],
+                    ['proposal.approved', 'A proposal is approved'],
+                    ['proposal.executed', 'A proposal is executed'],
+                    ['attention.created', 'An operator-inbox item is created'],
+                    ['git.commit', 'A git commit'],
+                    ['git.push', 'A git push'],
+                ];
+                host.appendChild(field('Event source', select('event_source', sources, () => render())));
+                if (w.event_source === 'room.message') {
+                    const rooms = el('input', { type: 'text', list: 'cor-rooms', placeholder: 'grp:…' });
+                    rooms.value = w.event_room_id || '';
+                    rooms.addEventListener('input', () => { w.event_room_id = rooms.value.trim(); });
+                    const dl = el('datalist', { id: 'cor-rooms' });
+                    coroutineRooms().then((list) => {
+                        dl.innerHTML = list.map((r) => `<option value="${esc(r)}"></option>`).join('');
+                    });
+                    host.appendChild(field('Room', rooms, 'Only rooms this PerunChat bridge has joined can deliver events.'));
+                    host.appendChild(dl);
+                    const bridge = el('div', { class: 'meta' }, 'Checking the PerunChat bridge…');
+                    api('/api/perunchat/bridge/status').then((st) => {
+                        bridge.textContent = st.running ? `Bridge running as ${st.agent_id || 'Perun'} · ${(st.rooms || []).length} room(s)` : 'Bridge is not running. Messages will not arrive until it is started.';
+                    }).catch(() => { bridge.textContent = 'Bridge status unavailable.'; });
+                    host.appendChild(bridge);
+                    const mention = check('event_mention_only', 'Only when the message mentions @perun, @overseer, or an operator');
+                    host.appendChild(mention.wrap);
+                    const allow = el('input', { type: 'text', placeholder: 'alice, bob (empty = any sender)' });
+                    allow.value = (w.event_sender_allow || []).join(', ');
+                    allow.addEventListener('input', () => {
+                        w.event_sender_allow = allow.value.split(',').map((x) => x.trim()).filter(Boolean);
+                    });
+                    host.appendChild(field('Allowed senders', allow));
+                } else if (w.event_source === 'webhook') {
+                    host.appendChild(el('p', { class: 'muted' },
+                        'After you create the job you will see a one-time webhook URL. Send a JSON object to it to trigger a cycle.'));
+                } else {
+                    const project = el('select', {});
+                    project.appendChild(el('option', { value: '' }, 'Any project'));
+                    for (const p of (state.projects || [])) project.appendChild(el('option', { value: String(p.id) }, `${p.name} (${p.slug})`));
+                    project.value = String((w.event_filter || {}).project_id || '');
+                    project.addEventListener('change', () => {
+                        w.event_filter = { ...(w.event_filter || {}) };
+                        if (project.value) w.event_filter.project_id = Number(project.value);
+                        else delete w.event_filter.project_id;
+                    });
+                    host.appendChild(field('Project filter', project));
+                    if (w.event_source === 'run.finished') {
+                        const st = el('select', {});
+                        st.appendChild(el('option', { value: '' }, 'Any status'));
+                        for (const s of ['done', 'failed', 'timeout']) st.appendChild(el('option', { value: s }, s));
+                        st.value = String((w.event_filter || {}).status?.[0] || '');
+                        st.addEventListener('change', () => {
+                            w.event_filter = { ...(w.event_filter || {}) };
+                            if (st.value) w.event_filter.status = [st.value];
+                            else delete w.event_filter.status;
+                        });
+                        host.appendChild(field('Run status', st));
+                    }
+                }
+                host.appendChild(el('p', { class: 'muted' },
+                    'The prompt receives the event as untrusted data. You can also use {{event.text}}, {{event.sender}}, {{event.room_id}}, {{event.message_id}}, {{event.kind}}, or {{event.payload}}.'));
+            }
+            pane.appendChild(host);
+            preview(previewHost);
+        } else if (w._step === 3) {
+            const modes = [
+                ['single', 'Single run', 'One agent run per cycle'],
+                ['loop', 'Loop', 'Re-run in the same session until done'],
+                ['continuous', 'Continuous', 'Loop until you stop it (with hard caps)'],
+            ];
+            const grid = el('div', { class: 'method-cards' });
+            const current = w.execution_mode === 'loop' && Number(w.max_iterations) === 0 ? 'continuous'
+                : (w.execution_mode === 'loop' ? 'loop' : 'single');
+            for (const [id, title, sub] of modes) {
+                const b = el('button', {
+                    class: 'method-card' + (current === id ? ' selected' : ''), type: 'button',
+                    onclick: () => {
+                        if (id === 'single') { w.execution_mode = 'single'; w.max_iterations = 1; }
+                        else if (id === 'loop') { w.execution_mode = 'loop'; w.max_iterations = w.max_iterations && Number(w.max_iterations) > 0 ? w.max_iterations : 10; }
+                        else {
+                            w.execution_mode = 'loop'; w.max_iterations = 0;
+                            if (!Number(w.max_runs_per_day)) w.max_runs_per_day = 200;
+                            if (!Number(w.cycle_max_seconds)) w.cycle_max_seconds = 21600;
+                            w.restart_policy = 'pause';
+                        }
+                        render();
+                    },
+                }, `<div class="mc-title">${esc(title)}</div><div class="mc-sub">${esc(sub)}</div>`);
+                grid.appendChild(b);
+            }
+            pane.appendChild(grid);
+            if (w.execution_mode === 'loop') {
+                pane.appendChild(field('Max iterations', num('max_iterations', 0, 100000),
+                    '0 means unlimited (worker). Unlimited requires a daily cap and a cycle wall-clock cap.'));
+                pane.appendChild(field('Delay between iterations (seconds)', num('iteration_delay_seconds', 0, 86400)));
+                pane.appendChild(field('Completion marker', text('completion_marker', 'COROUTINE_COMPLETE'),
+                    'The loop ends when the final line of a reply is exactly this text. Empty means run until the cap.'));
+                pane.appendChild(field('Stall guard (iterations)', num('stall_iterations', 0, 20),
+                    'Pause when this many consecutive iterations produce identical or empty output. 0 disables.'));
+            }
+            const caps = el('div', { class: 'form-row' });
+            caps.appendChild(field('Max runs (lifetime, 0=∞)', num('max_runs', 0, 1000000)));
+            caps.appendChild(field('Max runs per day (0=∞)', num('max_runs_per_day', 0, 100000)));
+            pane.appendChild(caps);
+            pane.appendChild(field('Cycle wall-clock cap (seconds, 0=∞)', num('cycle_max_seconds', 0, 604800),
+                'Mandatory for unlimited loops; recommended for every loop.'));
+            const fail = el('div', { class: 'form-row' });
+            fail.appendChild(field('Failure policy', select('failure_policy', [['pause', 'Pause after threshold'], ['continue', 'Continue the schedule']])));
+            fail.appendChild(field('Failure threshold', num('failure_threshold', 1, 100)));
+            pane.appendChild(fail);
+            pane.appendChild(field('Restart behaviour', select('restart_policy', [['resume', 'Resume after a restart'], ['pause', 'Pause after a restart']])));
+            const opts = el('div', { class: 'form-row' });
+            opts.appendChild(field('Catch up missed runs', select('catch_up', [['skip', 'Skip missed slots'], ['once', 'Run once after downtime']])));
+            opts.appendChild(field('Jitter (seconds)', num('jitter_seconds', 0, 3600)));
+            pane.appendChild(opts);
+            if (w.scope === 'global' && w.trigger_type === 'event') {
+                pane.appendChild(el('div', { class: 'cor-warn' },
+                    'Global event jobs run as the orchestrator with its tool access on untrusted event content. Prefer a trusted room or webhook; for reminders, a scheduled global job is safer than an event-triggered one.'));
+            }
+            if (w.trigger_type === 'event' && w.event_source === 'room.message') {
+                pane.appendChild(el('div', { class: 'mselect-label', style: 'margin-top:12px' }, 'Room result'));
+                const post = check('post_result_to_room', 'Post the final result back into the room');
+                pane.appendChild(post.wrap);
+                const suppress = check('suppress_auto_reply', 'Suppress the bridge\'s automatic conversational reply');
+                pane.appendChild(suppress.wrap);
+                const onFail = check('post_on_failure', 'Also post a short failure note');
+                pane.appendChild(onFail.wrap);
+            }
+            if (w.execution_mode === 'loop' && Number(w.max_iterations) === 0) {
+                pane.appendChild(el('div', { class: 'cor-warn' },
+                    'Unlimited loops are real workers: they consume an execution slot and can be expensive. The daily cap and cycle cap are enforced by the scheduler.'));
+            }
+        } else if (w._step === 4) {
+            pane.appendChild(el('div', { class: 'cor-summary' },
+                `<div class="eyebrow">Review</div><h3>${esc(w.name || 'Coroutine')}</h3>
+                 <p>${esc(CS.triggerSentence(w))}</p>`));
+            const rows = [
+                ['Scope', w.scope],
+                ['Execution project', w.scope === 'global'
+                    ? 'Orchestrator (control plane)'
+                    : ((state.projects.find((p) => Number(p.id) === Number(w.execution_project_id)) || {}).name || '—')],
+                ['Trigger', CS.humanTrigger(w)],
+                ['Mode', CS.modeHuman(w)],
+                ['Model', w.model || 'project default'],
+                ['Agent', w.agent || 'project default'],
+                ['Daily cap', Number(w.max_runs_per_day) ? `${w.max_runs_per_day} runs` : 'unlimited'],
+                ['Failure policy', `${w.failure_policy} after ${w.failure_threshold}`],
+            ];
+            pane.appendChild(el('div', { class: 'cor-kv' },
+                rows.map(([k, v]) => `<div><span class="mselect-label">${esc(k)}</span><div>${esc(String(v))}</div></div>`).join('')));
+            if (w.trigger_type === 'event' && w.event_source === 'webhook') {
+                pane.appendChild(el('div', { class: 'cor-warn' },
+                    'The webhook URL and secret will be shown once after you create the job.'));
+            }
+            if (!isEdit) {
+                const activate = check('_activate', 'Activate immediately (otherwise the job is created paused)');
+                pane.appendChild(activate.wrap);
+            } else {
+                pane.appendChild(el('p', { class: 'muted' },
+                    'Use Pause or Resume on the detail page to change the schedule state; editing does not activate a paused job automatically.'));
+            }
+            pane.appendChild(el('p', { class: 'muted' },
+                'You can always run a paused job once with Run now, inspect the output, and activate it when you are happy.'));
+        }
+
+        shell.actions.innerHTML = '';
+        if (w._step > 0) shell.actions.appendChild(el('button', {
+            class: 'btn ghost', type: 'button',
+            onclick: () => { w._step -= 1; render(); },
+        }, '◀ Back'));
+        shell.actions.appendChild(el('button', {
+            class: 'btn ghost', type: 'button', onclick: closeModal,
+        }, 'Cancel'));
+        if (w._step < STEPS.length - 1) {
+            shell.actions.appendChild(el('button', {
+                class: 'btn primary', type: 'button',
+                onclick: () => {
+                    if (w._modelNode) w.model = w._modelNode.getValue();
+                    if (w._agentNode) w.agent = w._agentNode.getValue();
+                    const problem = CS.validateStep(w._step, w);
+                    if (problem) { showError(problem); return; }
+                    if (w._step === 2 && w._preview && w._preview.valid === false) {
+                        showError(w._preview.error || 'The trigger is not valid.'); return;
+                    }
+                    w._step += 1;
+                    render();
+                },
+            }, 'Next ▶'));
+        } else {
+            shell.actions.appendChild(el('button', {
+                class: 'btn primary', type: 'button',
+                onclick: async () => {
+                    if (saveBusy) return;
+                    if (w._modelNode) w.model = w._modelNode.getValue();
+                    if (w._agentNode) w.agent = w._agentNode.getValue();
+                    const problem = CS.validateStep(3, w) || CS.validateStep(2, w) || CS.validateStep(1, w) || CS.validateStep(0, w);
+                    if (problem) { showError(problem); return; }
+                    saveBusy = true;
+                    try {
+                        const payload = corWizardPayload(w);
+                        let res;
+                        if (isEdit) {
+                            payload.activate = !!w._activate && existing.status !== 'active';
+                            res = await api(`/api/coroutines/${existing.uid}`, { method: 'PATCH', body: payload });
+                        } else {
+                            res = await api('/api/coroutines', { method: 'POST', body: { ...payload, activate: !!w._activate } });
+                        }
+                        const job = res.coroutine;
+                        closeModal();
+                        if (job && job.webhook_url) showCoroutineWebhook(job);
+                        else toast(isEdit ? 'Coroutine saved' : 'Coroutine created', 'ok');
+                        if (opts.onSaved) await opts.onSaved();
+                        else goto(`#/coroutines/${job.uid}`);
+                    } catch (e) {
+                        const detail = e.message || 'Could not save the coroutine.';
+                        showError(detail);
+                        toast(detail, 'err');
+                    } finally {
+                        saveBusy = false;
+                    }
+                },
+            }, isEdit ? 'Save changes' : 'Create coroutine'));
+        }
+
+    };
+    render();
+}
+
+function coroutinePreview(w, host) {
+    if (!host) return;
+    if (w._previewTimer) clearTimeout(w._previewTimer);
+    const seq = ++_coroutinePreviewSeq;
+    w._previewTimer = setTimeout(async () => {
+        try {
+            const res = await api('/api/coroutines/preview', {
+                method: 'POST',
+                body: {
+                    trigger_type: w.trigger_type,
+                    trigger_expr: w.trigger_expr,
+                    timezone: w.timezone,
+                    run_at_epoch: w.run_at_epoch,
+                },
+            });
+            if (seq !== _coroutinePreviewSeq || !document.body.contains(host)) return;
+            w._preview = res;
+            host.innerHTML = res.valid
+                ? `<div class="meta">${res.next_fires && res.next_fires.length
+                    ? 'Next: ' + res.next_fires.map((x) => esc(CS.fmtDate(x.epoch, w.timezone))).join(' · ')
+                    : 'No timed fire (manual/event).'}</div>`
+                : `<div class="err">${esc(res.error)}</div>`;
+        } catch (e) {
+            if (document.body.contains(host)) host.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+        }
+    }, 250);
+}
+
+function corWizardPayload(w) {
+    return {
+        name: String(w.name || '').trim(),
+        description: String(w.description || '').trim(),
+        scope: w.scope,
+        project_id: w.scope === 'project' ? Number(w.execution_project_id) : null,
+        // Global jobs are resolved to the control plane by the backend; never
+        // send a user project for them.
+        execution_project_id: w.scope === 'global' ? 0 : Number(w.execution_project_id),
+        trigger_type: w.trigger_type,
+        trigger_expr: String(w.trigger_expr || ''),
+        timezone: String(w.timezone || ''),
+        run_at_epoch: Number(w.run_at_epoch || 0),
+        prompt: String(w.prompt || '').trim(),
+        model: String(w.model || '').trim(),
+        agent: String(w.agent || '').trim(),
+        session_mode: w.session_mode,
+        run_timeout_seconds: Number(w.run_timeout_seconds || 0),
+        execution_mode: w.execution_mode,
+        max_iterations: Number(w.max_iterations || 0),
+        iteration_delay_seconds: Number(w.iteration_delay_seconds || 0),
+        completion_marker: String(w.completion_marker || '').trim(),
+        stall_iterations: Number(w.stall_iterations || 0),
+        cycle_max_seconds: Number(w.cycle_max_seconds || 0),
+        max_runs: Number(w.max_runs || 0),
+        max_runs_per_day: Number(w.max_runs_per_day || 0),
+        overlap_policy: w.overlap_policy || 'skip',
+        catch_up: w.catch_up || 'skip',
+        jitter_seconds: Number(w.jitter_seconds || 0),
+        failure_policy: w.failure_policy || 'pause',
+        failure_threshold: Number(w.failure_threshold || 3),
+        restart_policy: w.restart_policy || 'resume',
+        post_result_to_room: Number(w.post_result_to_room || 0),
+        suppress_auto_reply: Number(w.suppress_auto_reply || 0),
+        post_on_failure: Number(w.post_on_failure || 0),
+        event_source: w.trigger_type === 'event' ? (w.event_source || '') : '',
+        event_room_id: w.trigger_type === 'event' && w.event_source === 'room.message' ? String(w.event_room_id || '') : '',
+        event_mention_only: Number(w.event_mention_only || 0),
+        event_sender_allow: Array.isArray(w.event_sender_allow) ? w.event_sender_allow : [],
+        event_min_interval_seconds: Number(w.event_min_interval_seconds || 5),
+        event_filter: w.event_filter || {},
+        options: w.options || {},
+    };
+}
+
+function openCoroutineQuickCreate() {
+    const shell = corModalShell('Quick create a coroutine');
+    const field = (label, node) => {
+        const wrap = el('label', { class: 'field' });
+        wrap.appendChild(el('span', { class: 'lab' }, esc(label)));
+        wrap.appendChild(node);
+        return wrap;
+    };
+    const name = el('input', { type: 'text', placeholder: 'Daily reminder' });
+    const scope = el('select', {});
+    scope.appendChild(el('option', { value: 'project' }, 'Project'));
+    scope.appendChild(el('option', { value: 'global' }, 'Global (orchestrator)'));
+    const project = el('select', {});
+    for (const p of (state.projects || [])) project.appendChild(el('option', { value: String(p.id) }, `${p.name} (${p.slug})`));
+    const projectField = field('Execution project', project);
+    const globalNote = el('div', { class: 'cor-warn' },
+        'Global coroutines run as the orchestrator in the Perun control plane, not inside a project. Use them for reminders, digests, and machine-wide tasks.');
+    globalNote.style.display = 'none';
+    const prompt = el('textarea', { rows: '5', placeholder: 'e.g. Remind me to …' });
+    const when = el('select', {});
+    when.appendChild(el('option', { value: 'daily' }, 'Every day'));
+    when.appendChild(el('option', { value: 'once' }, 'Once'));
+    const time = el('input', { type: 'time', value: '12:00' });
+    const onceAt = el('input', { type: 'datetime-local' });
+    const defaultOnce = new Date(Date.now() + 3600 * 1000);
+    onceAt.value = `${defaultOnce.getFullYear()}-${corPad(defaultOnce.getMonth() + 1)}-${corPad(defaultOnce.getDate())}T${corPad(defaultOnce.getHours())}:${corPad(defaultOnce.getMinutes())}`;
+    const dailyField = field('Run every day at', time);
+    const onceField = field('Run once at', onceAt);
+    const whenHint = el('p', { class: 'muted' },
+        'Runs every day at the chosen local time. The timezone is your browser zone.');
+    const syncWhen = () => {
+        const once = when.value === 'once';
+        dailyField.style.display = once ? 'none' : '';
+        onceField.style.display = once ? '' : 'none';
+        whenHint.textContent = once
+            ? 'Runs once at the chosen local time, then completes. The timezone is your browser zone.'
+            : 'Runs every day at the chosen local time. The timezone is your browser zone.';
+    };
+    when.addEventListener('change', syncWhen);
+    const syncScope = () => {
+        const isGlobal = scope.value === 'global';
+        projectField.style.display = isGlobal ? 'none' : '';
+        globalNote.style.display = isGlobal ? '' : 'none';
+    };
+    scope.addEventListener('change', syncScope);
+    shell.body.appendChild(field('Name', name));
+    shell.body.appendChild(field('Scope', scope));
+    shell.body.appendChild(projectField);
+    shell.body.appendChild(globalNote);
+    shell.body.appendChild(field('Prompt', prompt));
+    shell.body.appendChild(field('Repeat', when));
+    shell.body.appendChild(dailyField);
+    shell.body.appendChild(onceField);
+    shell.body.appendChild(whenHint);
+    syncWhen();
+    shell.body.appendChild(el('p', { class: 'muted' },
+        'Creates a paused job. Review the next fire and activate it from the detail view.'));
+    shell.actions.appendChild(el('button', { class: 'btn ghost', onclick: closeModal }, 'Cancel'));
+    shell.actions.appendChild(el('button', {
+        class: 'btn primary',
+        onclick: async () => {
+            if (!name.value.trim()) { toast('Give it a name', 'err'); return; }
+            if (!prompt.value.trim()) { toast('Write a prompt', 'err'); return; }
+            const isGlobal = scope.value === 'global';
+            if (!isGlobal && (!state.projects || !state.projects.length)) {
+                toast('Add a project, or choose Global', 'err');
+                return;
+            }
+            const trigger = CS.quickTrigger(when.value, time.value, onceAt.value);
+            if (!trigger) {
+                toast('Choose a future date and time', 'err');
+                return;
+            }
+            try {
+                const res = await api('/api/coroutines', {
+                    method: 'POST',
+                    body: {
+                        name: name.value.trim(),
+                        scope: isGlobal ? 'global' : 'project',
+                        project_id: isGlobal ? null : Number(project.value),
+                        execution_project_id: isGlobal ? 0 : Number(project.value),
+                        ...trigger,
+                        timezone: corTimezone(),
+                        prompt: prompt.value.trim(),
+                        execution_mode: 'single',
+                        activate: false,
+                    },
+                });
+                closeModal();
+                toast('Created paused — review it, then activate', 'ok');
+                goto(`#/coroutines/${res.coroutine.uid}`);
+            } catch (e) { toast(e.message, 'err'); }
+        },
+    }, 'Create paused'));
 }
 
 async function boot() {

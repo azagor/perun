@@ -10,7 +10,10 @@ Human operators remain in control:
 - Registration / API-key management is manual.
 - State-changing actions proposed by the Orchestrator still go through the
   normal HITL approval pipeline (``PERUN_ACTION_PROPOSAL`` tokens).
-- The bridge can be disabled with ``perunchat_auto_reply = false``.
+- ``perunchat_auto_reply`` controls whether Perun answers conversationally;
+  it does not control whether room messages are ingested for coroutine event
+  triggers. Set both ``perunchat_auto_reply`` and
+  ``perunchat_ingest_events`` to false to disable the bridge entirely.
 """
 
 from __future__ import annotations
@@ -604,6 +607,7 @@ class PerunChatBridge:
         self._package_transfers: Dict[str, Dict[str, Any]] = self._load_package_transfers()
         self._package_transfers_lock = threading.RLock()
         self._next_package_sweep = 0.0
+        self._next_room_outbox = 0.0
 
     @property
     def settings(self) -> Any:
@@ -624,7 +628,12 @@ class PerunChatBridge:
         if not self.available:
             return False
         key, _ = self.settings.perunchat()
-        return bool(key) and bool(getattr(self.settings, "perunchat_auto_reply", False))
+        auto_reply = bool(getattr(self.settings, "perunchat_auto_reply", False))
+        # Coroutine event triggers need the receive loop even when Perun is not
+        # answering chat messages. Auto-reply stays a per-message decision in
+        # ``_on_frame``; ingestion is a separate capability.
+        ingest = bool(getattr(self.settings, "perunchat_ingest_events", True))
+        return bool(key) and (auto_reply or ingest)
 
     @property
     def running(self) -> bool:
@@ -956,10 +965,22 @@ class PerunChatBridge:
         """
         merged: List[str] = []
         seen: Set[str] = set()
+        # A coroutine can listen to a room even if it is not a project chat and
+        # not in perunchat_auto_join. Join those rooms too; the refresh loop
+        # re-reads this list, so a job created while connected is picked up
+        # without a reconnect.
+        listener_rooms: List[str] = []
+        try:
+            from . import coroutines as _coroutines
+
+            listener_rooms = list(_coroutines.listener_rooms())
+        except Exception:
+            listener_rooms = []
         for room in (
             self._configured_rooms()
             + self._project_rooms()
             + list(self._discovered_private_rooms)
+            + listener_rooms
         ):
             room = (room or "").strip()
             if room and room.lower() not in seen:
@@ -1476,6 +1497,15 @@ class PerunChatBridge:
                     attention.drain_outbox()
                 except Exception:  # pragma: no cover - never block the connection
                     logger.debug("could not drain queued operator answers", exc_info=True)
+                # Results a room-triggered coroutine produced while the socket
+                # was down (or while the bridge ran in another process).
+                try:
+                    from . import coroutines as _coroutines
+
+                    _coroutines.drain_room_outbox()
+                except Exception:  # pragma: no cover - never block the connection
+                    logger.debug("could not drain the coroutine room outbox",
+                                 exc_info=True)
                 # State the operator-contact protocol once per project room.
                 try:
                     self._welcome_project_rooms()
@@ -1514,6 +1544,16 @@ class PerunChatBridge:
                     if now >= self._next_package_sweep:
                         self._sweep_package_transfers()
                         self._next_package_sweep = time.time() + _PACKAGE_SWEEP_INTERVAL_SECONDS
+
+                    if now >= self._next_room_outbox:
+                        try:
+                            from . import coroutines as _coroutines
+
+                            _coroutines.drain_room_outbox()
+                        except Exception:
+                            logger.debug("could not drain the coroutine room outbox",
+                                         exc_info=True)
+                        self._next_room_outbox = time.time() + 10.0
 
                     try:
                         opcode, data = ws.recv_data(control_frame=True)
@@ -1646,6 +1686,16 @@ class PerunChatBridge:
         if not is_chat:
             logger.info("PerunChat ignoring frame from %s: not a chat message", sender)
             return
+        # Coroutine event triggers consume room messages even when Perun is not
+        # answering conversationally. This must run before the auto-reply gate;
+        # the durable inbox dedupes gateway replays by message id.
+        if getattr(self.settings, "perunchat_ingest_events", True):
+            try:
+                from . import coroutines as _coroutines
+
+                _coroutines.ingest_room_message(frame, agent_id=self._agent_id)
+            except Exception:
+                logger.debug("could not publish a room event", exc_info=True)
         if not getattr(self.settings, "perunchat_auto_reply", False):
             logger.info("PerunChat auto_reply disabled; skipping frame from %s", sender)
             return
@@ -1711,6 +1761,30 @@ class PerunChatBridge:
                 if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
                     self._own_message_ids = set(list(self._own_message_ids)[-_REPLIED_TRIM_TO:])
             return
+
+        # A coroutine that owns this message suppresses the bridge's own reply.
+        # The durable event was published above; the job posts its result
+        # through the room outbox, so answering here would double-post. If
+        # event ingestion is off, no job can see the message, so never suppress.
+        if (room_id and isinstance(text, str) and text.strip()
+                and getattr(self.settings, "perunchat_ingest_events", True)):
+            try:
+                from . import coroutines as _coroutines
+
+                handler = (
+                    _coroutines.match_room_event(
+                        room_id, frame, agent_id=self._agent_id,
+                    )
+                    if _coroutines.has_room_listeners(room_id)
+                    else None
+                )
+                if handler and handler.get("suppress_auto_reply"):
+                    logger.info("PerunChat reply suppressed by coroutine %s",
+                                handler.get("uid"))
+                    return
+            except Exception:
+                logger.debug("could not check coroutine room ownership",
+                             exc_info=True)
 
         if not room_id or not isinstance(text, str) or not text.strip():
             return
@@ -4003,3 +4077,20 @@ def attach(orchestrator: "Orchestrator") -> PerunChatBridge:
 def get_bridge() -> Optional[PerunChatBridge]:
     """Return the attached bridge, if any."""
     return _BRIDGE
+
+
+def redact_for_room(text: str, room_id: str) -> str:
+    """Apply the bridge's room-aware redaction without requiring a live socket.
+
+    Coroutine results are redacted *before* they are stored in the room outbox,
+    so a raw path/credential never lands in that table. If no bridge is attached
+    (for example a test or a standalone worker), return the text unchanged; the
+    caller still truncates it.
+    """
+    bridge = _BRIDGE
+    if bridge is None:
+        return str(text or "")
+    try:
+        return str(bridge._redact_internal_info(str(text or ""), room_id))
+    except Exception:  # pragma: no cover - redaction is best effort
+        return str(text or "")

@@ -4,7 +4,44 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Coroutines: scheduled and event-triggered agent jobs
+
+* New **Coroutines** dashboard tab: a quick-create path and a five-step wizard
+  for interval, cron/calendar, one-shot, manual, and event-triggered jobs;
+  per-project and global scope; live progress, next-fire preview, run history,
+  event inbox, room-delivery status, and Pause/Stop/Resume/Run-now/Edit/
+  Duplicate/Delete controls. Global jobs are user-wide (reminders, digests,
+  machine health) and always run as the orchestrator in the control plane, not
+  inside a project.
+* Every fire is a normal `Orchestrator` run, so streaming, cancellation,
+  leases, usage capture and restart recovery are reused. A unique
+  `runs.coroutine_fire_key` makes a slot, loop iteration or event delivery
+  idempotent; `coroutine_accounted_at` makes accounting exactly-once.
+* Loops: single, capped, or unlimited with a daily run cap, cycle wall-clock
+  cap, stall guard, per-iteration timeout watchdog, and a worker presentation.
+  A cron loop parks its next cycle slot while iterations run, so it resumes on
+  schedule.
+* Events: webhook, `run.finished`, `proposal.approved`/`executed`,
+  `attention.created`, `git.commit`/`push`, and PerunChat `room.message`.
+  `room.message` is ingested even when conversational auto-reply is off; a job
+  can post its result back into the room through a durable, redacted outbox and
+  suppress the bridge's own reply so the room gets one answer. Event triggers
+  are project-scoped; global jobs are scheduled, one-shot, or manual, and an
+  event job may never run in the orchestrator control plane. Event jobs default
+  to the read-only `plan` agent and refuse the orchestrator agent; `/hooks/*`
+  enforces the same Host/Origin checks as `/api/`.
+* Quick create offers **Every day** or **Once** (and rejects a past time), and
+  the template list includes a one-time reminder for both scopes.
+* Retention also drops room-outbox rows that permanently failed
+  (`attempts>=10`) after 30 days, not only delivered ones. At startup, event
+  jobs with an empty `agent` are filled with the read-only default.
+* Safety: webhook secrets are stored as SHA-256 only; the URL is safe to log,
+  and the secret travels in `X-Perun-Webhook-Secret`. Event payloads are framed
+  as untrusted data; a scheduler heartbeat, global pause, per-job timeout and
+  capacity-failure classification are visible in the dashboard, and a job that
+  gives up raises one operator-inbox item.
+* New dependencies: `croniter` (cron parsing) and `tzdata` (Windows timezone
+  database).
 
 ## v0.10.50
 

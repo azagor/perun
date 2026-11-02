@@ -96,6 +96,22 @@ them all — no matter which folder you happened to open.
   project chat, and completed proposals move to a collapsed-by-default list in the
   dashboard. Participant roles (`rw`/`ro`) are enforced, and approver identity
   plus the HITL signing secret are configurable.
+* **Coroutines: scheduled and event-triggered agent jobs.** A new dashboard tab
+  creates durable jobs that run an agent on an interval, a calendar/cron
+  schedule, once, on demand, or when an event arrives (webhook, finished run,
+  approved/executed proposal, operator-inbox item, git commit/push, or a
+  PerunChat room message). Jobs can be project-scoped or **global**; global
+  jobs are user-wide (reminders, digests, machine health) and run as the
+  orchestrator in the control plane, not inside a project. Event triggers are
+  project-scoped; global jobs are scheduled, one-shot, or manual, and an event
+  job may never run in the orchestrator control plane. Event jobs default to the
+  read-only `plan` agent. Jobs can be single-run,
+  capped loops, or bounded continuous workers with a daily cap, a cycle
+  wall-clock cap, stall detection and a timeout watchdog. Pause lets the active run finish; Stop cancels it.
+  A room job can post its result back into the room through a durable, redacted
+  outbox and suppress the bridge's conversational reply, so the room gets one
+  answer. Every fire is a normal Perun run, so streaming, cancellation and
+  restart recovery are the same as everywhere else.
 * **Robust provider and MCP discovery.** Perun merges providers and MCP servers
   from every known OpenCode config directory (including `%APPDATA%`/`%LOCALAPPDATA%`
   on Windows) and tolerates wrapped `opencode auth list` output, so providers

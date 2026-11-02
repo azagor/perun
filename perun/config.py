@@ -229,6 +229,34 @@ class Settings:
     # A standalone TUI run (an external terminal) is kept "working" across a
     # restart; only one older than this is assumed closed and swept (hours).
     tui_run_stale_hours: int = 24
+
+    # --- Coroutines (scheduled/event-triggered agent jobs) ----------------- #
+    # Master switch for the dashboard tab and the scheduler. A paused scheduler
+    # still accounts finished runs and enforces timeouts.
+    coroutines_enabled: bool = True
+    # Emergency brake: no new cycles or event deliveries, but active runs finish.
+    coroutines_paused: bool = False
+    coroutine_tick_seconds: int = 5
+    # Empty means the browser/system local zone; the wizard sends an IANA name.
+    coroutine_default_timezone: str = ""
+    # Unlimited loops must not consume the last execution slot.
+    coroutine_max_concurrent_loops: int = 1
+    coroutine_max_pending_events: int = 5000
+    # Events older than this when the scheduler finally sees them are discarded
+    # instead of firing jobs for work that happened during a long outage.
+    coroutine_event_max_age_minutes: int = 60
+    coroutine_room_event_max_per_minute: int = 60
+    coroutine_webhook_max_per_minute: int = 60
+    coroutine_event_retention_days: int = 7
+    coroutine_run_history_limit: int = 100
+    coroutine_default_max_runs_per_day: int = 200
+    coroutine_default_cycle_max_seconds: int = 21600
+    # Event content is untrusted, so an event job that does not name an agent
+    # runs as this (read-only) agent instead of the project's default builder.
+    coroutine_event_default_agent: str = "plan"
+    # Let the PerunChat bridge receive room messages for event triggers even
+    # when conversational auto-reply is off.
+    perunchat_ingest_events: bool = True
     # PerunChat federation credentials. The API key is obtained from the company
     # website at peruninthemachine.com; the endpoint is the WebSocket ingress URL.
     perunchat_api_key: str = ""

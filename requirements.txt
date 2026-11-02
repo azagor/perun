@@ -8,3 +8,5 @@ pydantic>=2.5
 psutil>=5.9
 PyYAML>=6.0
 cryptography>=42.0
+croniter>=2.0
+tzdata>=2024.1

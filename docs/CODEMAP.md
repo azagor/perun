@@ -78,12 +78,55 @@ Server lifecycle helpers: PID file, running-check, graceful stop, restart.
   used by ``perun stop`` / ``perun restart`` for graceful replacement, with
   ``perun restart`` replaying the recorded flags.
 
+### `perun/cron.py`
+Five-field cron adapter for coroutine triggers (`croniter` + `zoneinfo`).
+* `CronError`, `resolve_tz()`, `validate()`, `next_after()`, `next_n()`,
+  `interval_seconds()`.
+* DST fall-back guard: a daily 02:00 job fires once on the night the clock
+  repeats; invalid/"never fires" expressions are rejected before saving.
+
+### `perun/domain_events.py`
+Durable domain-event inbox for coroutine triggers.
+* `publish(source, dedupe_key, payload, room_id=, sender=)`, `pending()`,
+  `mark_handled()`, `recent()`, `prune()`, `set_waker()`.
+* No import of `coroutines`, so `orchestrator`, `action_proposals`,
+  `attention`, the git endpoints and the PerunChat bridge can publish without
+  a cycle. The bridge may run in another process; SQLite is the transport.
+
+### `perun/coroutines.py`
+Coroutine store, validation, scheduler and safety rules.
+* Store: `create()`, `update()`, `get()`, `get_by_id()`, `list_jobs()`,
+  `detail()`, `list_runs()`, `pause()`, `resume()`, `stop()`, `delete()`,
+  `preview()`, `next_fires()`, `initial_next_fire()`. Global jobs are forced
+  onto `control.ensure()` (the orchestrator control plane) and ignore a
+  client-supplied execution project. Event triggers are project-scoped; global
+  jobs are interval/cron/once/manual only. An event job may never run in the
+  orchestrator control plane, and legacy control-plane event rows are paused.
+  Event jobs default to the read-only `plan` agent and refuse
+  `perun-orchestrator`.
+* Scheduler: `Scheduler.tick()` (watchdog → accounting → event matching → due
+  firing → retention → heartbeat), `run_now()`, `reconcile_startup()`,
+  `status()`, `heartbeat()`.
+* Idempotency: deterministic `run_uid`, unique `runs.coroutine_fire_key`,
+  compare-and-set `_claim_slot()`, `coroutine_accounted_at`.
+* Events: `ingest_room_message()`, `listener_rooms()`, `has_room_listeners()`,
+  `match_room_event()`, `_event_matches()`.
+* Room results: `enqueue_room_result()`, `pending_room_outbox()`,
+  `drain_room_outbox()`, `retry_room_outbox()`.
+* Webhooks: `ensure_webhook_secret()`, `verify_webhook()`,
+  `rotate_webhook()`, `webhook_allowed()`.
+* Retention: `prune()`. Validation errors: `ValidationError`; a manual run
+  conflict: `ActiveRunError`.
+
 ### `perun/db.py`
 SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 `activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`, `tasks`,
 `context_docs` (the Context layer — keyed reference docs, deliberately **not**
 `doc_chunks`, so project-scoped context never leaks into cross-project doc
-search), `secret_store` (encrypted secret values), plus the operator-inbox
+search), `secret_store` (encrypted secret values), the coroutine tables
+`coroutines` (job definitions), `coroutine_events` / `coroutine_event_deliveries`
+(durable event inbox + per-job deliveries), `coroutine_room_outbox` (room result
+posting), `coroutine_heartbeat` (scheduler liveness), plus the operator-inbox
 tables `attention_requests` (typed target + `dedupe_key` unique among open rows),
 `attention_deliveries` (chat → message id), `attention_outbox` (undelivered room
 replies) and `attention_mutes` (per-chat `/mute`), and `telegram_jobs` (the durable update
@@ -1403,6 +1446,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames) and
   `shouldSend(lastText, lastAt, text, now, windowMs)` (double Enter/click
   guard). Exposed as `window.ChatCore` and as a CommonJS module.
+* `web/js/coroutine_schedule.js` - pure coroutine UI logic, unit-tested with
+  `node --test`: `humanTrigger()`, `cronHuman()`, `intervalHuman()`,
+  `presetCron()`, `quickTrigger()` (quick-create daily/once payload),
+  `triggerSentence()`, `modeHuman()`, and `validateStep()` for the wizard.
+  Exposed as `window.CoroutineSchedule`.
 * `web/js/card_controls.js` - the project card's run-control decision, moved out
   of `perun.js` so `node --test` can cover it: `runControlSpec(run)` returns
   **Run** for no run and **Stop** for any active run (a headless cancel, or closing
@@ -1419,6 +1467,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `refreshPresence()`, `updateStormMeter()`), and the view renderers (`viewDashboard`,
   `viewOrchestrator` (chat plus model/agent pickers that PATCH the machine-wide
   orchestrator settings — the same fields as Settings → Orchestrator),
+  `viewCoroutines`, `viewCoroutineDetail`, `openCoroutineWizard`,
+  `openCoroutineQuickCreate`, `coroutineCard`, `coroutineCurrentCycle`,
   `viewProjects`, `projectWizard`, `browseFolder`, `viewProject`,
   `mountGit`, `mountManifest`, `manifestOverview`, `openManifestPath()`,
   `openManifestLink()`, `wireManifestLinks()`, `projectInstructionsForm`,
