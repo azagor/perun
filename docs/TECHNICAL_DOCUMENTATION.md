@@ -895,10 +895,12 @@ Origin checks as `/api/`, so it is not a DNS-rebinding or cross-origin hole.
   quiet, so the room never receives two answers.
 - API: `/api/coroutines` (list/create/status/preview), `/api/coroutines/{uid}`
   (detail/patch/delete), lifecycle actions (`pause`, `resume`, `stop`, `run`,
-  `duplicate`), `runs`, `events`, `test-event`, `rotate-secret`, and
+  `duplicate`), `runs`, `events`, `events/{delivery_id}/retry`, `test-event`,
+  `rotate-secret`, `room-outbox/{id}/retry`, and
   `/hooks/coroutines/{uid}` (outside `/api/`, so the local-token middleware is
   not bypassed; the per-job SHA-256 secret travels in
-  `X-Perun-Webhook-Secret`, never in the logged URL).
+  `X-Perun-Webhook-Secret`, never in the logged URL, and the endpoint applies the
+  same Host/Origin guards as `/api/`).
 - UI: a **Coroutines** tab with a quick-create path (daily **or one-shot**) and a
   five-step advanced wizard, a list with next-fire/health/progress, a detail view
   with the live run stream and event/outbox history, and
@@ -1314,7 +1316,17 @@ For Windows installer updates, the runner waits for any already-running
 `PerunSetup.exe` instance to finish, runs the installer with
 `/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTARTAPPLICATIONS`, and includes
 the installer log tail in the failure message if the installer returns a
-non-zero exit code.
+non-zero exit code. PerunSetup is an admin-only installer (`PrivilegesRequired=admin`,
+`{autopf}`), and `CreateProcess` cannot elevate — `subprocess` from a
+user-level dashboard fails with `WinError 740` and no UAC prompt is ever shown.
+So `_launch_installer()` starts the installer through `ShellExecuteEx` with the
+`runas` verb whenever Perun itself is not elevated; Windows shows the
+administrator prompt, and an already-elevated Perun keeps the plain subprocess
+path. The dashboard exposes this as `mode.requires_admin` / `mode.elevated` and
+warns before the update starts. The prompt appears **after** the dashboard
+closes, because the installer has to wait for the server to exit; a dismissed
+prompt is reported with the downloaded installer's path, so it can be run by
+hand. **The dashboard never has to be started as administrator just to update.**
 
 `GET /api/runs/active` is registered **before** `GET /api/runs/{run_uid}` so the
 literal path is not swallowed by the parameterised route.

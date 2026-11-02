@@ -4,7 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Self-update no longer needs Perun to be started as administrator
+
+* A Windows dashboard started normally can now install a newer release itself.
+  `PerunSetup.exe` is an admin-only installer, and `CreateProcess` cannot
+  elevate: launching it from a user-level Perun failed with `WinError 740` and
+  never showed a UAC prompt, so the only workaround was to run Perun elevated —
+  which in practice meant rebooting to replace the already-running dashboard
+  and starting it "as administrator". The update runner now starts the
+  installer through `ShellExecuteEx` with the `runas` verb, so Windows shows the
+  normal administrator prompt; an already-elevated Perun keeps the old
+  subprocess path. Dismissing the prompt is reported as a clear, retryable
+  message that names the downloaded installer, so it can also be run by hand
+  instead of surfacing an opaque exit code.
+* The Updates page reports the new `requires_admin` / `elevated` install-mode
+  facts and warns that the dashboard closes before the permission prompt that
+  Windows shows, both on the card and in the confirmation dialog.
 
 ## v0.10.51
 

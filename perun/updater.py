@@ -126,6 +126,158 @@ def _creationflags() -> int:
     return 0
 
 
+def _is_elevated() -> bool:
+    """True when this process already holds administrator rights.
+
+    Only meaningful on Windows; elsewhere it reports the POSIX equivalent so a
+    caller can keep a single condition.
+    """
+    if os.name != "nt":
+        try:
+            return os.geteuid() == 0
+        except AttributeError:  # pragma: no cover - non-POSIX, non-Windows
+            return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001 - never fail the updater over a probe
+        return False
+
+
+#: ``ShellExecuteEx`` flag: keep the process handle so we can wait for exit.
+_SEE_MASK_NOCLOSEPROCESS = 0x00000040
+#: Wait for the shell to finish creating the process before returning (we are
+#: not a GUI thread pumping messages, so no DDE hand-off is wanted).
+_SEE_MASK_NOASYNC = 0x00000100
+#: Never let the shell pop a modal error dialog (a hidden one blocks forever).
+_SEE_MASK_FLAG_NO_UI = 0x00000400
+_SW_HIDE = 0
+_ERROR_CANCELLED = 1223
+_ERROR_FILE_NOT_FOUND = 2
+_ERROR_PATH_NOT_FOUND = 3
+_WAIT_FAILED = 0xFFFFFFFF
+_WAIT_TIMEOUT = 0x00000102
+
+
+def _windows_error_text(code: int) -> str:
+    """Describe a Win32 error code, tolerating non-Windows hosts (tests)."""
+    try:
+        import ctypes
+
+        return ctypes.FormatError(code).strip()
+    except Exception:  # noqa: BLE001 - FormatError only exists on Windows
+        try:
+            return os.strerror(code)
+        except (ValueError, OverflowError):
+            return ""
+
+
+def _elevation_error(code: int, target: str = "") -> str:
+    """User-facing reason for a failed elevated launch (kept pure for tests)."""
+    if code == _ERROR_CANCELLED:
+        hint = f"; you can also run {target} yourself" if target else ""
+        return ("the Windows administrator prompt was dismissed; start the "
+                f"update again and approve the prompt to install it{hint}")
+    if code in (_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND):
+        return f"installer not found: {target}" if target else "installer not found"
+    detail = _windows_error_text(code)
+    return ("could not start the installer as administrator "
+            f"(Windows error {code}{': ' + detail if detail else ''})")
+
+
+def _run_as_admin(argv: list[str], *, timeout: float = 1800.0) -> int:
+    """Start *argv* elevated through the shell and return its exit code.
+
+    ``CreateProcess`` (and therefore ``subprocess``) cannot elevate: PerunSetup
+    is marked ``PrivilegesRequired=admin``, so launching it from a non-elevated
+    Perun fails with ``WinError 740`` and **no UAC prompt is ever shown**. The
+    ``runas`` verb is the only way to ask the user for permission — and it is a
+    no-op when the caller is already elevated.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _ShellExecuteInfoW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", wintypes.ULONG),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIcon", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(_ShellExecuteInfoW)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE,
+                                            ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    info = _ShellExecuteInfoW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = (_SEE_MASK_NOCLOSEPROCESS | _SEE_MASK_NOASYNC
+                  | _SEE_MASK_FLAG_NO_UI)
+    info.lpVerb = "runas"
+    info.lpFile = str(argv[0])
+    info.lpParameters = subprocess.list2cmdline([str(a) for a in argv[1:]]) or None
+    info.nShow = _SW_HIDE
+
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        raise UpdateError(_elevation_error(ctypes.get_last_error(), str(argv[0])))
+
+    handle = info.hProcess
+    if not handle:
+        raise UpdateError("the installer did not start (no process handle)")
+    try:
+        result = kernel32.WaitForSingleObject(handle, int(max(1.0, timeout) * 1000))
+        if result == _WAIT_TIMEOUT:
+            raise UpdateError(f"the installer did not finish within {timeout:.0f} s")
+        if result == _WAIT_FAILED:
+            code = ctypes.get_last_error()
+            raise UpdateError(
+                "could not wait for the installer "
+                f"(Windows error {code}: {_windows_error_text(code)})"
+            )
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            raise UpdateError("could not read the installer exit code")
+        return int(exit_code.value)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _launch_installer(argv: list[str], *, timeout: float = 1800.0) -> tuple[int, str]:
+    """Run the installer, elevating through the shell when Perun is not.
+
+    Returns ``(exit_code, output)``. An elevated Perun keeps using the plain
+    subprocess path (no prompt, captured output); a user-level Perun goes
+    through `ShellExecuteEx` so Windows can show the UAC prompt.
+    """
+    if os.name == "nt" and not _is_elevated():
+        return _run_as_admin(argv, timeout=timeout), ""
+    proc = subprocess.run(
+        argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, creationflags=_creationflags(),
+    )
+    return proc.returncode, (proc.stderr or proc.stdout or "")
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -274,6 +426,10 @@ def install_mode() -> dict[str, Any]:
     ``git``        — a checkout; update with ``git pull``.
     ``installer``  — an Inno Setup install; update with the release installer.
     ``unsupported``— neither shape is recognised; the user must update by hand.
+
+    The payload also reports ``requires_admin`` (the installer needs an elevated
+    install) and ``elevated`` (whether this process already holds administrator
+    rights), so the dashboard can warn before Windows shows its UAC prompt.
     """
     root = Path(config.REPO_ROOT)
     if (root / ".git").exists():
@@ -282,21 +438,32 @@ def install_mode() -> dict[str, Any]:
             "root": str(root),
             "label": "git checkout",
             "updatable": True,
+            "requires_admin": False,
+            "elevated": _is_elevated(),
             "detail": "Updates with git pull from origin.",
         }
     if os.name == "nt" and (root / "Perun.cmd").exists():
+        elevated = _is_elevated()
         return {
             "mode": "installer",
             "root": str(root),
             "label": "Windows installer",
             "updatable": True,
-            "detail": "Updates with the release installer (Windows may ask for administrator permission).",
+            "requires_admin": True,
+            "elevated": elevated,
+            "detail": (
+                "Updates with the release installer; Windows shows an "
+                "administrator prompt." if not elevated else
+                "Updates with the release installer."
+            ),
         }
     return {
         "mode": "unsupported",
         "root": str(root),
         "label": "manual update required",
         "updatable": False,
+        "requires_admin": False,
+        "elevated": _is_elevated(),
         "detail": ("This copy of Perun is neither a git checkout nor a Windows "
                    "installer. Update it with the tool that installed it."),
     }
@@ -690,6 +857,9 @@ def _prepare(job: str, info: dict[str, Any], mode: dict[str, Any], restart: bool
         if mode["mode"] == "installer":
             installer = _download_installer(job, info["release"] or {})
             plan["installer"] = str(installer)
+            if os.name == "nt" and not _is_elevated():
+                _log("Windows will ask for administrator permission after the "
+                     "dashboard restarts — approve the prompt to finish.", level="warn")
         else:
             _git_fetch(mode["root"])
 
@@ -861,22 +1031,31 @@ def _apply_installer(plan: dict[str, Any]) -> None:
         raise UpdateError(f"installer not found: {installer}")
     _wait_for_installer_mutex()
     log_file = updates_dir() / f"installer-{plan.get('job', 'update')}.log"
+    needs_admin = os.name == "nt" and not _is_elevated()
     _set_state(state="applying",
-               message="Running the installer (Windows may ask for permission)…")
+               message=("Waiting for administrator permission…" if needs_admin
+                        else "Running the installer…"))
+    if needs_admin:
+        _log("Perun is not elevated; Windows will ask for administrator permission.",
+             level="warn")
     # /CLOSEAPPLICATIONS and /FORCECLOSEAPPLICATIONS make the installer close
     # any running Perun processes that would otherwise keep files locked and
     # cause a code-1 failure. /NORESTARTAPPLICATIONS prevents the installer from
     # restarting the app itself; the update runner already restarts Perun after
     # the installer finishes. The runner already waits for the old server PID,
     # but child processes or a second console instance can still hold handles.
-    proc = subprocess.run(
-        [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-         "/SP-", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS",
-         "/NORESTARTAPPLICATIONS", f"/LOG={log_file}"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=1800, creationflags=_creationflags(),
-    )
-    if proc.returncode != 0:
+    # `_launch_installer` elevates through the shell when needed: a user-level
+    # Perun cannot start an admin-only setup with CreateProcess (WinError 740).
+    argv = [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+            "/SP-", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS",
+            "/NORESTARTAPPLICATIONS", f"/LOG={log_file}"]
+    try:
+        returncode, output = _launch_installer(argv)
+    except UpdateError:
+        raise  # already user-facing (dismissed prompt, missing file, timeout)
+    except Exception as exc:  # noqa: BLE001 - report a start failure as a job error
+        raise UpdateError(f"could not start the installer: {_short(exc)}") from exc
+    if returncode != 0:
         log_tail = ""
         try:
             if log_file.exists():
@@ -884,9 +1063,10 @@ def _apply_installer(plan: dict[str, Any]) -> None:
         except OSError:
             pass
         raise UpdateError(
-            f"installer exited with code {proc.returncode} "
+            f"installer exited with code {returncode} "
             f"(log: {log_file})"
             + (f"\n\n--- installer log tail ---\n{log_tail}" if log_tail else "")
+            + (f"\n\n--- installer output ---\n{output[-1000:]}" if output else "")
         )
     _log(f"Installer finished (log: {log_file}).", level="ok")
 

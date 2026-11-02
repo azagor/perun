@@ -6073,6 +6073,7 @@ async function viewUpdates() {
             </div>
         </div>
         <p class="secondary" id="update-message">${esc(job.message || infoMessage(info))}</p>
+        ${updateAdminNote(info)}
         <div class="form-actions">
             <button class="btn primary" id="btn-check-update">⟳ Check for updates</button>
             <button class="btn ${info.update_available ? 'primary' : 'ghost'}" id="btn-install-update" ${info.update_available ? '' : 'disabled'}>Install update</button>
@@ -6126,11 +6127,32 @@ function infoMessage(info) {
     return 'Perun is up to date.';
 }
 
+// The Windows installer lives in Program Files, so it always needs elevation.
+// A dashboard started normally cannot launch it with CreateProcess (Windows
+// refuses with "requires elevation" and never shows the UAC prompt); the server
+// elevates through the shell at apply time instead. Tell the user up front so
+// the prompt is expected rather than surprising.
+function updateNeedsAdmin(info) {
+    const mode = (info && info.mode) || {};
+    return Boolean(mode.requires_admin && !mode.elevated);
+}
+
+function updateAdminNote(info) {
+    if (!updateNeedsAdmin(info)) return '';
+    return `<p class="secondary" id="update-admin-note">Installing an update needs
+        administrator rights. The dashboard closes first and Windows then shows a
+        permission prompt — approve it to finish, and the dashboard comes back by
+        itself. You do not need to start Perun as administrator.</p>`;
+}
+
 function confirmUpdate(force = false) {
     const info = state.update;
     if (!info || !info.update_available) return;
+    const admin = updateNeedsAdmin(info)
+        ? ' Installing the release needs administrator rights: after the dashboard closes, Windows shows a permission prompt — approve it to finish.'
+        : '';
     confirmDialog('Install update',
-        `This will update Perun from v${info.current} to v${info.latest}. The dashboard will restart automatically when the update finishes.`,
+        `This will update Perun from v${info.current} to v${info.latest}. The dashboard will restart automatically when the update finishes.${admin}`,
         () => doUpdate(force),
         'Install update');
 }

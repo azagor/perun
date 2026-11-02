@@ -121,9 +121,19 @@ def test_install_mode_detects_windows_install(monkeypatch, tmp_path):
     (repo / "Perun.cmd").write_text("@echo off\n")
     monkeypatch.setattr(config, "REPO_ROOT", str(repo))
     monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(updater, "_is_elevated", lambda: False)
     mode = updater.install_mode()
     assert mode["mode"] == "installer"
     assert mode["updatable"]
+    # The installer lives in Program Files, so a user-level Perun must elevate.
+    assert mode["requires_admin"] is True
+    assert mode["elevated"] is False
+    assert "administrator prompt" in mode["detail"]
+
+    monkeypatch.setattr(updater, "_is_elevated", lambda: True)
+    elevated = updater.install_mode()
+    assert elevated["elevated"] is True
+    assert "administrator prompt" not in elevated["detail"]
 
 
 def test_apply_refuses_without_update(monkeypatch, tmp_path):
@@ -315,6 +325,74 @@ def test_apply_git_pull_and_installs_requirements(monkeypatch, tmp_path):
     assert any("pip" in str(a) for a in pip_calls)
 
 
+def test_launch_installer_elevates_when_not_admin(monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(updater, "_is_elevated", lambda: False)
+    seen = {}
+
+    def fake_run_as_admin(argv, *, timeout=1800.0):
+        seen["argv"] = argv
+        seen["timeout"] = timeout
+        return 42
+
+    monkeypatch.setattr(updater, "_run_as_admin", fake_run_as_admin)
+    code, output = updater._launch_installer(["C:/PerunSetup.exe", "/VERYSILENT"])
+    assert code == 42
+    assert output == ""
+    assert seen["argv"] == ["C:/PerunSetup.exe", "/VERYSILENT"]
+    assert seen["timeout"] == 1800.0
+
+
+def test_elevation_error_messages():
+    target = "C:/updates/PerunSetup.exe"
+    dismissed = updater._elevation_error(1223, target)
+    assert "dismissed" in dismissed
+    assert f"run {target} yourself" in dismissed
+    assert "not found" in updater._elevation_error(2, target)
+    assert "not found" in updater._elevation_error(3, target)
+    generic = updater._elevation_error(5, target)
+    assert "Windows error 5" in generic
+    # No target: still readable, without a dangling path hint.
+    assert "yourself" not in updater._elevation_error(1223)
+
+
+def test_apply_installer_surfaces_dismissed_prompt(monkeypatch, tmp_path):
+    installer = tmp_path / "PerunSetup.exe"
+    installer.write_text("fake")
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(updater, "updates_dir", lambda: tmp_path)
+    monkeypatch.setattr(updater, "_installer_mutex_running", lambda: False)
+    monkeypatch.setattr(updater, "_is_elevated", lambda: False)
+
+    def refuse(argv, *, timeout=1800.0):
+        raise updater.UpdateError(updater._elevation_error(1223, argv[0]))
+
+    monkeypatch.setattr(updater, "_run_as_admin", refuse)
+    plan = {"installer": str(installer), "job": "j1"}
+    with pytest.raises(updater.UpdateError) as exc:
+        updater._apply_installer(plan)
+    message = str(exc.value)
+    assert message.startswith("the Windows administrator prompt was dismissed")
+    assert str(installer) in message
+
+
+def test_launch_installer_uses_subprocess_when_elevated(monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(updater, "_is_elevated", lambda: True)
+
+    def fake_run(args, **kw):
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = "installed"
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    code, output = updater._launch_installer(["C:/PerunSetup.exe"])
+    assert code == 0
+    assert output == "installed"
+
+
 def test_apply_installer_fails_logs_error(monkeypatch, tmp_path):
     installer = tmp_path / "PerunSetup.exe"
     installer.write_text("fake")
@@ -326,6 +404,7 @@ def test_apply_installer_fails_logs_error(monkeypatch, tmp_path):
             stderr = "installer failed"
         return R()
 
+    monkeypatch.setattr(updater, "_is_elevated", lambda: True)
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(updater, "updates_dir", lambda: tmp_path)
     plan = {"installer": str(installer), "job": "j1"}

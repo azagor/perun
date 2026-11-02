@@ -83,7 +83,8 @@ Five-field cron adapter for coroutine triggers (`croniter` + `zoneinfo`).
 * `CronError`, `resolve_tz()`, `validate()`, `next_after()`, `next_n()`,
   `interval_seconds()`.
 * DST fall-back guard: a daily 02:00 job fires once on the night the clock
-  repeats; invalid/"never fires" expressions are rejected before saving.
+  repeats, while sub-daily schedules still fire in the repeated hour (it is real
+  elapsed time); invalid/"never fires" expressions are rejected before saving.
 
 ### `perun/domain_events.py`
 Durable domain-event inbox for coroutine triggers.
@@ -103,7 +104,7 @@ Coroutine store, validation, scheduler and safety rules.
   jobs are interval/cron/once/manual only. An event job may never run in the
   orchestrator control plane, and legacy control-plane event rows are paused.
   Event jobs default to the read-only `plan` agent and refuse
-  `perun-orchestrator`.
+  `perun-orchestrator`; empty-agent event rows are filled in at startup.
 * Scheduler: `Scheduler.tick()` (watchdog → accounting → event matching → due
   firing → retention → heartbeat), `run_now()`, `reconcile_startup()`,
   `status()`, `heartbeat()`.
@@ -1328,6 +1329,13 @@ before a final force-exit fallback.
   `/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTARTAPPLICATIONS` and waits
   for any already-running installer mutex before starting. On failure it includes
   the last 2,000 characters of the installer log in the error message.
+* `_launch_installer()` elevates through `_run_as_admin()` (ShellExecuteEx with
+  the `runas` verb) when Perun is not itself elevated: the release installer is
+  admin-only, so starting it with CreateProcess from a user-level process fails
+  with WinError 740 and no UAC prompt is shown. `_elevation_error()` turns the
+  Win32 code into a retryable message (dismissed prompt, missing installer) and
+  `install_mode()` reports `requires_admin` / `elevated` so the dashboard can
+  warn first; no restart as administrator is required.
 
 ### `perun/integrations/install_global.py`
 Idempotent, additive global install into `~/.config/opencode` (honours

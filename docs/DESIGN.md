@@ -82,6 +82,7 @@ screen maps to one of them.
 | `#/projects` | Registry | "What projects do I have?" |
 | `#/project/{slug}` | Project detail | "Everything about this one." |
 | `#/console[/{slug}]` | Agent launcher | "Run an agent and watch it work." |
+| `#/coroutines` | Scheduled jobs | "What runs on its own, and when?" |
 | `#/memory` | Memory explorer | "What do we know / have we decided?" |
 | `#/activity` | Live feed | "What is happening right now?" |
 | `#/mcp` | MCP server inventory | "Which MCP servers does OpenCode load, and are they healthy?" |
@@ -121,6 +122,20 @@ Console → pick project → (optional) pick session / model / agent → type pr
 → **Run**. Output streams line-by-line; tool calls and errors are color-coded;
 the run ends with a `[status]` line and the button re-enables. The project card
 and session list refresh automatically.
+
+### Coroutines (work that runs itself)
+`#/coroutines` lists durable jobs and their next fire, health and history. A job
+has exactly one trigger — interval, five-field cron, one-shot, manual, or a
+domain event (webhook, finished run, approved/executed proposal, operator-inbox
+item, git commit/push, PerunChat room message) — and either one run or a loop.
+**Pause** lets the active run finish and suppresses future cycles; **Stop**
+cancels it. Project jobs name their execution project; global jobs (reminders,
+digests, machine health) run as the orchestrator in the control plane. Event
+content is untrusted: event triggers are project-scoped, never run in the control
+plane, and default to the read-only `plan` agent. Quick create covers a daily or
+one-shot reminder; the five-step wizard exposes the full schedule, loop caps, and
+room-result options. Every fire is a normal Perun run, so streaming,
+cancellation, history and restart recovery behave exactly like every other run.
 
 ### Remember / recall
 Two entry points, one store. From a project: Memory tab → *Add fact* (global or

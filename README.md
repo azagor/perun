@@ -105,9 +105,9 @@ them all — no matter which folder you happened to open.
   orchestrator in the control plane, not inside a project. Event triggers are
   project-scoped; global jobs are scheduled, one-shot, or manual, and an event
   job may never run in the orchestrator control plane. Event jobs default to the
-  read-only `plan` agent. Jobs can be single-run,
-  capped loops, or bounded continuous workers with a daily cap, a cycle
-  wall-clock cap, stall detection and a timeout watchdog. Pause lets the active run finish; Stop cancels it.
+  read-only `plan` agent. Jobs can be single-run, capped loops, or bounded
+  continuous workers with a daily cap, a cycle wall-clock cap, stall detection
+  and a timeout watchdog. Pause lets the active run finish; Stop cancels it.
   A room job can post its result back into the room through a durable, redacted
   outbox and suppress the bridge's conversational reply, so the room gets one
   answer. Every fire is a normal Perun run, so streaming, cancellation and
