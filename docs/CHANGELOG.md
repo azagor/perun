@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.52
+
+*Released 2026-11-02.*
+
 ### Self-update no longer needs Perun to be started as administrator
 
 * A Windows dashboard started normally can now install a newer release itself.

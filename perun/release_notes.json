@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-02T18:44:31+00:00",
+  "generated": "2026-11-02T22:38:15+00:00",
   "releases": [
+    {
+      "version": "0.10.52",
+      "date": "2026-11-02",
+      "body": "### Self-update no longer needs Perun to be started as administrator\n\n* A Windows dashboard started normally can now install a newer release itself.\n  `PerunSetup.exe` is an admin-only installer, and `CreateProcess` cannot\n  elevate: launching it from a user-level Perun failed with `WinError 740` and\n  never showed a UAC prompt, so the only workaround was to run Perun elevated —\n  which in practice meant rebooting to replace the already-running dashboard\n  and starting it \"as administrator\". The update runner now starts the\n  installer through `ShellExecuteEx` with the `runas` verb, so Windows shows the\n  normal administrator prompt; an already-elevated Perun keeps the old\n  subprocess path. Dismissing the prompt is reported as a clear, retryable\n  message that names the downloaded installer, so it can also be run by hand\n  instead of surfacing an opaque exit code.\n* The Updates page reports the new `requires_admin` / `elevated` install-mode\n  facts and warns that the dashboard closes before the permission prompt that\n  Windows shows, both on the card and in the confirmation dialog."
+    },
     {
       "version": "0.10.51",
       "date": "2026-11-02",
@@ -45,11 +50,6 @@
       "version": "0.10.43",
       "date": "2026-11-01",
       "body": "### The control plane is reachable only from its own checkout\n\n* The MCP project resolver now includes **hidden** projects when it matches the\n  caller's working directory, so a session in the Perun checkout is scoped to\n  `perun` again (it used to fall through to a global fact because `perun` is\n  registered hidden). A hidden project named by slug from anywhere else resolves\n  to nothing: only the owner working inside `perun` can read, run, or store\n  against it. Telegram remains chat-ID-gated and `perun` has no project room, so\n  remote PerunChat participants cannot reach it either.\n* `perun_memory_store` no longer falls back to a **global** fact when the caller\n  named a project that does not resolve (a typo, or a denied hidden project); it\n  reports \"No accessible project\" and stores nothing."
-    },
-    {
-      "version": "0.10.42",
-      "date": "2026-11-01",
-      "body": "### The remaining audit items\n\n* A reattached run no longer seeds from the session transcript (it concatenated\n  every earlier turn into this run's answer). The terminal fallback uses only the\n  final assistant message, so the result cannot replay history regardless of the\n  service's message ordering. `_admission_landed()` heartbeats the run lease.\n* A digest that reaches some chats but not others keeps its items queued, records\n  which chats it served, and retries only the ones still missing them. A digest\n  delivery is recorded without a message id, so **Open** still posts a fresh\n  replyable card instead of editing the list.\n* `usage()` retries with a 200-message page when the service rejects `limit=1000`,\n  instead of losing the snapshot.\n* The docs audit waits up to 10 s for the command to start; a queued command is no\n  longer recorded as \"wrote nothing\".\n* PerunChat's reply budget is a rate limit anchored on Perun's own replies\n  (eight per room per minute): a room it only reads never trips it, and an\n  operator message resets it.\n* `PATCH /api/settings` stages the in-place re-encryption of an existing secret\n  too, so a rejected request no longer leaves the live key encrypted-but-unsaved.\n* Documentation: the message-ordering assumption behind the reattach fallback is\n  stated where it matters, and the sensitive-subtree audit is documented as\n  security-first (OpenCode keeps its own state outside the project)."
     }
   ]
 }
