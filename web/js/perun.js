@@ -31,6 +31,9 @@ const ChatCore = window.ChatCore || {
     shouldRender: () => true,
     // Keep the "never send empty text" guard even without the module.
     shouldSend: (_lastText, _lastAt, text) => String(text == null ? '' : text).trim() !== '',
+    // proposalIds is used by renderMessage; without it the fallback would throw
+    // and blank the whole log on exactly the stale-cache path it exists for.
+    proposalIds: () => [],
 };
 if (!window.ChatCore) {
     console.error('perun: chat_core.js did not load; chat dedupe is disabled');

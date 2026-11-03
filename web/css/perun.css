@@ -308,7 +308,7 @@ select { cursor: pointer; }
     border-radius: var(--radius);
     transition: background .3s ease;
 }
-.proposal-ref { font-family: var(--mono); }
+.proposal-ref { font-family: 'Cascadia Code', 'Consolas', monospace; }
 .proposal-ref.proposal-pending { border-color: var(--amber); color: var(--amber); }
 .proposal-ref.proposal-approved,
 .proposal-ref.proposal-executing,

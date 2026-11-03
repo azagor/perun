@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Chat fallback and chip font
+
+* When `chat_core.js` is missing (a stale cache or a truncated deploy), the
+  permissive shim now includes `proposalIds: () => []`. Without it
+  `renderMessage` threw on exactly the degraded path the fallback exists to keep
+  alive.
+* The proposal chip uses the real monospace stack; `var(--mono)` was undefined,
+  so the declaration was invalid.
 
 ## v0.10.64
 
