@@ -588,6 +588,76 @@ CREATE TABLE IF NOT EXISTS coroutine_heartbeat (
     due_count       INTEGER DEFAULT 0,
     version         TEXT DEFAULT ''
 );
+
+-- Operator-declared checks (v0.10.59). A check is the *only* command Perun may
+-- run without asking again. Declarations live here, in Perun's own store, never
+-- in the project tree: no room message, agent tool or approved proposal can add
+-- one. ``pin_path``/``pin_sha256`` optionally pin the reviewed script's content.
+CREATE TABLE IF NOT EXISTS project_checks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL,
+    name            TEXT NOT NULL,
+    command         TEXT NOT NULL,
+    cwd             TEXT NOT NULL DEFAULT '',
+    timeout_seconds INTEGER NOT NULL DEFAULT 120,
+    pin_path        TEXT NOT NULL DEFAULT '',
+    pin_sha256      TEXT NOT NULL DEFAULT '',
+    created_by      TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_project_checks_project ON project_checks(project_id, name);
+
+-- Every check execution, kept as an audit trail. A row is inserted as
+-- ``running`` before the process starts, so the partial unique index below is a
+-- cross-process single-flight lease (the Perun and guard MCP servers are
+-- different processes). A crashed run leaves a row that the next call reaps.
+CREATE TABLE IF NOT EXISTS check_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL,
+    check_name      TEXT NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'declared',
+    command         TEXT NOT NULL DEFAULT '',
+    requester       TEXT NOT NULL DEFAULT '',
+    trigger         TEXT NOT NULL DEFAULT '',
+    proposal_id     TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT '',
+    exit_code       INTEGER,
+    timeout_seconds INTEGER NOT NULL DEFAULT 120,
+    started_epoch   REAL NOT NULL DEFAULT 0,
+    duration_ms     INTEGER NOT NULL DEFAULT 0,
+    output          TEXT NOT NULL DEFAULT '',
+    output_truncated INTEGER NOT NULL DEFAULT 0,
+    content_sha256  TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_check_runs_project ON check_runs(project_id, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_check_runs_one_running
+    ON check_runs(project_id) WHERE status='running';
+
+-- A proposal verification asks the operator once and remembers the card. If the
+-- room's wait window closes first, the answer still arrives later; the next call
+-- reads this row instead of asking a second time. ``used_at`` makes it one-shot,
+-- and the sha256 binds the answer to the content the operator actually saw.
+CREATE TABLE IF NOT EXISTS check_confirmations (
+    id           TEXT PRIMARY KEY,
+    project_id   INTEGER NOT NULL,
+    proposal_id  TEXT NOT NULL,
+    target       TEXT NOT NULL,
+    sha256       TEXT NOT NULL,
+    attention_id INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    expires_at   REAL NOT NULL DEFAULT 0,
+    used_at      TEXT NOT NULL DEFAULT '',
+    UNIQUE(proposal_id, target, sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_check_confirmations_target
+    ON check_confirmations(proposal_id, sha256);
+-- An index, not only the table constraint: a database whose table was created
+-- by an earlier build gains the uniqueness on the next startup.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_check_confirmations_unique
+    ON check_confirmations(proposal_id, target, sha256);
 """
 
 
@@ -798,7 +868,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 23
 
 
 def init_db() -> None:

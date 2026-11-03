@@ -148,7 +148,14 @@ search), `secret_store` (encrypted secret values), the coroutine tables
 posting), `coroutine_heartbeat` (scheduler liveness), plus the operator-inbox
 tables `attention_requests` (typed target + `dedupe_key` unique among open rows),
 `attention_deliveries` (chat → message id), `attention_outbox` (undelivered room
-replies) and `attention_mutes` (per-chat `/mute`), and `telegram_jobs` (the durable update
+replies) and `attention_mutes` (per-chat `/mute`), the check tables
+`project_checks` (operator-declared name → command, optional `pin_path` /
+`pin_sha256`; never written by an MCP tool) and `check_runs` (one row per run,
+inserted as `running` before the process starts; the partial unique index
+`idx_check_runs_one_running` is the cross-process single-flight lease, and
+`reap_stale()` marks a crashed run `abandoned`), `check_confirmations` (the
+operator's durable "Run it" answer, unique per proposal/target/sha256 and
+one-shot) and `telegram_jobs` (the durable update
 queue: dedupe key, state, attempts, backoff), `runs.standalone` / `runs.pid` (an external TUI terminal: never killed on
 shutdown, kept while its pid lives, swept when it is gone; the age window is only
 a fallback) and
@@ -1137,7 +1144,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   directories, and falls back to pass-through when unset. When the per-run env
   is absent (`standalone=False`), `_active_targets()` derives the target scope
   from the project's `executing` proposal; multiple concurrent executions fail
-  closed.
+  closed. It also exposes `guard_list_checks` / `guard_run_check`: the room
+  persona's only execution path, restricted to names the operator declared.
 * `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
   Exposes `propose`, `approve`, `list_proposals` and `get_proposal`; uses
   `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` (requester) /
@@ -1168,6 +1176,27 @@ Autonomous PerunChat chat participant for the Orchestrator.
   (so `os.utime` cannot hide an edit); a target above the 256 MiB/file and
   512 MiB total budget is marked `unverifiable` and refused for external claims
   rather than checked more weakly. `null` means the target does not exist yet.
+* `perun/checks.py` — the bounded execution surface. `declare()` / `list_checks()`
+  / `remove()` own the operator-declared `project_checks` store (CLI and
+  dashboard only; no MCP tool can create a check, and a declaration never lives
+  in the project tree). `run_declared()` refuses an unknown name, refuses a
+  pinned script whose sha256 changed, and runs with the project root (or a
+  project-relative `cwd`) as working directory, a scrubbed environment
+  (`_env()` keeps only OS/PATH/`PYTHON*` basics), a capped timeout, and capped
+  merged stdout/stderr. `_begin_run()` inserts a `running` row guarded by the
+  partial unique index `idx_check_runs_one_running`, which makes a run a
+  cross-process single-flight lease; `reap_stale()` marks a crashed run
+  `abandoned`. `derive_proposal_verification()` builds the only command a
+  proposal may be verified with — the interpreter plus an approved
+  `.py`/`.ps1`/`.sh`/`.bat`/`.cmd` target — and `run_proposal_verification()`
+  refuses a hash that changed after the operator confirmed the card.
+  `get_confirmation()` / `record_confirmation()` / `claim_confirmation()` /
+  `release_confirmation()` / `drop_confirmation()` make the answer durable in
+  `check_confirmations`: a late answer to a card the room's wait closed is reused
+  by the next call, and `claim_confirmation()` is an atomic one-shot so two calls
+  cannot run the same confirmed script twice. Every run records exit code,
+  duration and output in `check_runs` and logs
+  `check_ok`/`check_failed`/`check_timeout`/`check_error` activity.
 * `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
   CAS approve/reject/cancel, atomic `approved → executing` claim, synchronous
   `execute`
@@ -1271,7 +1300,10 @@ FastAPI app + SSE + static dashboard.
   `/api/projects/{slug}/tasks…`, shared-project proposals
   (`/api/projects/{slug}/proposals…` incl. `claim`/`revoke-claim` for external
   execution handoff and `cancel` for withdrawing an approved-but-unclaimed
-  proposal; the list endpoint omits approval tokens/snapshots), routing
+  proposal; the list endpoint omits approval tokens/snapshots), declared checks
+  (`GET`/`POST /api/projects/{slug}/checks`, `DELETE .../{name}`,
+  `POST .../{name}/run` capped at the MCP timeout, `GET .../{name}/history`),
+  routing
   (`/api/routing/decisions` summary + panel rows, `POST
   /api/routing/decisions/{id}/misroute`), the operator inbox
   (`/api/attention` list, `/{id}`, `/{id}/reply`, `/{id}/choose`,
@@ -1451,7 +1483,7 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). 34 tools: `perun_list_projects`,
+stdio MCP server (`perun`). 37 tools: `perun_list_projects`,
 `perun_project_info`, `perun_create_project`, `perun_update_project`
 (also accepts `agent_models` as a JSON string),
 `perun_delete_project`, `perun_discover`, `perun_memory_search`,
@@ -1461,7 +1493,11 @@ stdio MCP server (`perun`). 34 tools: `perun_list_projects`,
 `perun_list_instruction_files`, `perun_grep`, `perun_ast_grep`,
 `perun_global_grep`, `perun_global_ast_grep`, `perun_unified_search`,
 `perun_file_exists`, `perun_list_directory`, `perun_read_file`,
-`perun_get_manifest`, `perun_set_manifest`, `perun_start_session`,
+`perun_get_manifest`, `perun_set_manifest`, `perun_list_checks`,
+`perun_run_check` (**run one operator-declared check by name; never a
+command**), `perun_verify_proposal` (**run an executed proposal's approved
+script after the operator confirms the command + sha256**),
+`perun_start_session`,
 `perun_ask`, `perun_run_status`, `perun_telegram_send`,
 `perun_ask_operator` (**ask the human and return their answer into this
 session**), `perun_await_operator` (**wait again on an already-asked question**),
@@ -1763,6 +1799,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `test_proposals_mcp.py` — the `perun-proposals` coordination MCP server:
   propose/approve/reject/claim, `execute=false` defaults, peer approval vs
   self-approval, policy auto-approve, actor-file fallbacks, and tool-name scope.
+* `test_checks.py` / `test_mcp_checks.py` — declared checks and proposal
+  verification: name validation, cwd escape, timeout clamp, env scrubbing,
+  output capture, process-tree timeout, pin drift, cross-process lease +
+  stale reap, derived command (never proposal text), operator confirmation,
+  hash drift after confirmation, and provenance in `check_runs`.
 * `test_mcp_filesystem.py` — the MCP filesystem helpers
   (`perun_file_exists` / `perun_list_directory` / `perun_read_file`): scope
   rejection, offsets, clamping, and repo reads.

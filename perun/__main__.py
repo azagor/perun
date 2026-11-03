@@ -41,8 +41,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import (config, context, daemon, db, discovery, handbook, memory,
-                   project_roots, registry, secret_store)
+    from . import (checks, config, context, daemon, db, discovery, handbook,
+                   memory, project_roots, registry, secret_store)
     from . import secrets as crypto
     from . import updater
 except ModuleNotFoundError as _exc:  # a runtime dependency is not installed
@@ -413,6 +413,90 @@ def cmd_projects(args: argparse.Namespace) -> int:
         fav = "*" if p.get("favorite") else " "
         print(f"{fav} {p['slug']:<24} {p['kind']:<9} {p['path']}")
     return 0
+
+
+def _check_project_line(project: dict[str, Any], check: dict[str, Any]) -> str:
+    bits = [f"{check['timeout_seconds']:>4}s", check["command"]]
+    if check.get("pin_path"):
+        bits.append(f"pin {check['pin_path']}@{check['pin_sha256'][:12]}")
+    if check.get("last_status"):
+        bits.append(f"last {check['last_status']} ({check.get('last_exit_code')})")
+    return f"{project['slug']:<20} {check['name']:<20} " + "  ".join(bits)
+
+
+def cmd_checks(args: argparse.Namespace) -> int:
+    _ensure()
+    action = args.checks_action or "list"
+    slug = (getattr(args, "project", "") or "").strip()
+    if not slug and action == "list":
+        rows = [(p, c) for p in registry.list_projects()
+                for c in checks.list_checks(p["id"])]
+        if not rows:
+            print("no checks declared; add one with: "
+                  "perun checks add <project> <name> \"<command>\"")
+            return 0
+        for project, check in rows:
+            print(_check_project_line(project, check))
+        return 0
+    project = registry.get_project(slug) if slug else None
+    if not project:
+        print(f"error: no such project: {slug or '(none)'}")
+        return 1
+
+    if action == "list":
+        rows = checks.list_checks(project["id"])
+        if not rows:
+            print(f"no checks declared for {project['slug']}")
+            return 0
+        for check in rows:
+            print(_check_project_line(project, check))
+        return 0
+
+    if action == "add":
+        try:
+            check = checks.declare(
+                project, args.name, args.command, cwd=args.cwd,
+                timeout_seconds=args.timeout, pin=args.pin,
+                created_by=os.environ.get("USERNAME") or "operator",
+            )
+        except checks.CheckError as exc:
+            print(f"error: {exc}")
+            return 1
+        print(f"declared '{check['name']}' for {project['slug']} "
+              f"({check['timeout_seconds']}s)")
+        return 0
+
+    if action == "remove":
+        if checks.remove(project["id"], args.name):
+            print(f"removed '{args.name}' from {project['slug']}")
+            return 0
+        print(f"error: no check named '{args.name}' in {project['slug']}")
+        return 1
+
+    if action == "run":
+        try:
+            result = checks.run_declared(project, args.name, requester="cli",
+                                         trigger="cli")
+        except (checks.CheckError, checks.CheckBusy) as exc:
+            print(f"error: {exc}")
+            return 1
+        print(checks.format_result(result, max_output=checks.MAX_OUTPUT))
+        return 0 if result.get("status") == "ok" else 1
+
+    if action == "history":
+        rows = checks.history(project["id"], args.name or "", limit=args.limit)
+        if not rows:
+            print("no check runs recorded")
+            return 0
+        for row in rows:
+            print(f"#{row['id']:<6} {row['created_at'][:19]}  "
+                  f"{row['check_name']:<20} {row['source']:<9} "
+                  f"{row['status']:<9} exit={row['exit_code']}  "
+                  f"{int(row['duration_ms']) / 1000:.1f}s")
+        return 0
+
+    print(f"error: unknown checks action: {action}")
+    return 1
 
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -2010,6 +2094,48 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("projects", help="list registered projects")
     p.set_defaults(func=cmd_projects)
+
+    p = sub.add_parser(
+        "checks", help="manage operator-declared checks Perun may run unattended")
+    checks_sub = p.add_subparsers(dest="checks_action")
+    p.set_defaults(func=cmd_checks, checks_action="list", project="")
+
+    cp = checks_sub.add_parser("list", help="list declared checks")
+    cp.add_argument("project", nargs="?", default="",
+                    help="project slug (omit for every project)")
+    cp.set_defaults(func=cmd_checks)
+
+    cp = checks_sub.add_parser("add", help="declare (or replace) a check")
+    cp.add_argument("project")
+    cp.add_argument("name", help="lowercase identifier, e.g. check-manifest")
+    cp.add_argument("command",
+                    help="the command, quoted as one argument; it runs with the "
+                         "project root as cwd and a scrubbed environment. It is "
+                         "stored in Perun's database and activity log: never put "
+                         "a credential in it")
+    cp.add_argument("--cwd", default="", help="project-relative working directory")
+    cp.add_argument("--timeout", type=int, default=checks.DEFAULT_TIMEOUT,
+                    help=f"seconds (default {checks.DEFAULT_TIMEOUT}, "
+                         f"max {checks.MAX_TIMEOUT})")
+    cp.add_argument("--pin", default="",
+                    help="project-relative script whose sha256 must not change")
+    cp.set_defaults(func=cmd_checks)
+
+    cp = checks_sub.add_parser("remove", help="remove a declared check")
+    cp.add_argument("project")
+    cp.add_argument("name")
+    cp.set_defaults(func=cmd_checks)
+
+    cp = checks_sub.add_parser("run", help="run a declared check")
+    cp.add_argument("project")
+    cp.add_argument("name")
+    cp.set_defaults(func=cmd_checks)
+
+    cp = checks_sub.add_parser("history", help="recent check runs")
+    cp.add_argument("project")
+    cp.add_argument("name", nargs="?", default="")
+    cp.add_argument("--limit", type=int, default=20)
+    cp.set_defaults(func=cmd_checks)
 
     p = sub.add_parser("add", help="register a project")
     p.add_argument("name")

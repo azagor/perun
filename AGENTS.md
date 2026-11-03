@@ -107,6 +107,17 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
+* **Execution is declared, never improvised.** The only command Perun runs on
+  its own is a check the operator declared (`project_checks`, written by
+  `perun checks add` / the dashboard, never by an MCP tool and never from the
+  project tree). A room may run a declared check **by name**
+  (`guard_run_check`) and may verify an **executed** proposal's approved script
+  only after the operator confirms the exact derived command and its sha256
+  (`perun_verify_proposal`); the run is refused if the file changed. Never add a
+  tool that accepts a command string, never let a proposal's free text become
+  argv, and never widen the guard allowlist so the room persona gets shell.
+  Every run is cross-process single-flight per project, gets a scrubbed
+  environment, caps timeout/output, and records `check_runs` + activity.
 * **Docs are part of the proposal pipeline.** The executor is sandboxed to the
   approved targets, so it cannot write `docs/`; never widen the allowlist to let
   it. `docs_sync.after_execution()` runs the installed `/update-docs` command once

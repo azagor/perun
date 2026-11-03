@@ -37,6 +37,11 @@ def test_shared_agent_uses_v2_permissions_array(tmp_path, monkeypatch):
     # Write/edit guard tools stay allowed for the shared executor.
     assert "guard_write_file" not in actions or fm["permissions"][actions.index("guard_write_file")]["effect"] == "allow"
     assert "guard_edit_file" not in actions or fm["permissions"][actions.index("guard_edit_file")]["effect"] == "allow"
+    # Declared checks are not an approved target: the executor may not run them.
+    for denied in ("*guard_run_check", "*guard_list_checks"):
+        assert denied in actions
+        assert fm["permissions"][actions.index(denied)]["effect"] == "deny"
+        assert actions.index(denied) > actions.index("guard_*")
 
 
 def test_ensure_shared_agent_gracefully_fails_when_parent_dir_is_not_writable(

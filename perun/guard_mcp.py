@@ -26,9 +26,27 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastmcp import FastMCP  # noqa: E402
 
-from perun import path_guard, shared_projects  # noqa: E402
+from perun import checks, path_guard, registry, shared_projects  # noqa: E402
 
 mcp = FastMCP("PerunGuard")
+
+
+def _project() -> dict[str, Any]:
+    """The registered project this guard server runs inside."""
+    raw = os.environ.get("PERUN_PROJECT_PATH", "").strip()
+    if not raw:
+        try:
+            raw = os.getcwd()
+        except OSError:
+            raw = "."
+    project = registry.get_project_by_path(str(Path(raw).resolve()))
+    if project is None:
+        raise ValueError(f"project is not registered: {raw}")
+    return project
+
+
+def _requester() -> str:
+    return os.environ.get("PERUN_CHAT_SENDER", "").strip() or "perun"
 
 
 def _active_targets(project_path: Path) -> tuple[list[Path], bool]:
@@ -198,6 +216,50 @@ def guard_edit_file(path: str, old_string: str, new_string: str) -> str:
     text = text.replace(old_string, new_string, 1)
     target.write_text(text, encoding="utf-8")
     return f"edited {target}"
+
+
+@mcp.tool()
+def guard_list_checks() -> list[dict[str, Any]]:
+    """List the operator-declared checks for this project.
+
+    A check is the only command Perun may run without asking the operator
+    again. The declaration is owned by the operator (``perun checks add``);
+    this tool can list and run them, never create one.
+    """
+    project = _project()
+    return [
+        {
+            "name": check["name"],
+            "command": check["command"],
+            "cwd": check["cwd"],
+            "timeout_seconds": check["timeout_seconds"],
+            "pinned": bool(check["pin_path"]),
+            "last_status": check.get("last_status"),
+            "last_exit_code": check.get("last_exit_code"),
+        }
+        for check in checks.list_checks(project["id"])
+    ]
+
+
+@mcp.tool()
+def guard_run_check(name: str) -> str:
+    """Run one operator-declared check and report its exit code and output.
+
+    Use this to verify a change instead of saying you have no shell access.
+    Only checks the operator declared with ``perun checks add`` exist; this
+    tool cannot add one and never accepts a command as an argument.
+    """
+    project = _project()
+    try:
+        result = checks.run_declared(
+            project, name, requester=_requester(), trigger="room-check",
+            max_timeout=checks.MCP_MAX_TIMEOUT,
+        )
+    except checks.CheckBusy as exc:
+        return f"[perun] {exc}; try again when it finishes."
+    except checks.CheckError as exc:
+        return f"[perun] {exc}"
+    return checks.format_result(result)
 
 
 @mcp.tool()

@@ -1714,7 +1714,7 @@ async function viewProject(slug, tab) {
     }, USAGE_REFRESH_MS);
 
     const tabDefs = [
-        ['overview', 'Overview'], ['shared', 'Shared'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
+        ['overview', 'Overview'], ['shared', 'Shared'], ['checks', 'Checks'], ['tasks', 'Tasks'], ['console', 'Console'], ['sessions', 'Sessions'],
         ['memory', 'Memory'], ['activity', 'Activity'], ['git', 'Git'],
         ['manifest', 'Manifest'], ['instructions', 'Instructions'], ['config', 'Config'],
     ];
@@ -1748,6 +1748,112 @@ async function viewProject(slug, tab) {
     });
     $('#pj-index').addEventListener('click', () => indexProject(p));
     $('#pj-ask').addEventListener('click', () => goto('#/console/' + slug));
+}
+
+/* Checks: the only commands Perun may run without asking the operator again.
+   The store lives in Perun, not in the project, so a room participant or an
+   approved proposal can never add one — this form is the operator's. */
+async function mountChecks(wrap, p) {
+    const card = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Checks</h4><span class="badge gold">operator-owned</span></div>
+         <p class="secondary">A check is a command <b>you</b> allow Perun to run without asking again.
+         Declarations live in Perun's own store, never in the repository, so an agent or a proposal
+         cannot add one. A pinned check is refused when the pinned file changes.</p>
+         <div id="ck-list"><div class="empty"><span class="spinner"></span> loading checks…</div></div>
+         <div id="ck-output"></div>
+         <hr>
+         <h4>Declare a check</h4>
+         <div class="form-row"><label>Name</label><input id="ck-name" placeholder="check-manifest"></div>
+         <div class="form-row"><label>Command</label><input id="ck-command" placeholder="python tests/check_manifest.py"></div>
+         <div class="form-row"><label>Working directory</label><input id="ck-cwd" placeholder="(project root)"></div>
+         <div class="form-row"><label>Timeout (s)</label><input id="ck-timeout" type="number" min="1" max="600" value="120"></div>
+         <div class="form-row"><label>Pin file</label><input id="ck-pin" placeholder="tests/check_manifest.py (optional)"></div>
+         <button class="btn primary" id="ck-add">Declare</button>`);
+    wrap.appendChild(card);
+    const list = card.querySelector('#ck-list');
+    const output = card.querySelector('#ck-output');
+
+    const load = async () => {
+        list.innerHTML = '<div class="empty"><span class="spinner"></span> loading checks…</div>';
+        try {
+            const data = await api(`/api/projects/${p.slug}/checks`);
+            const rows = data.checks || [];
+            if (!rows.length) {
+                list.innerHTML = '<div class="empty">No checks declared. Add one below.</div>';
+                return;
+            }
+            list.innerHTML = '';
+            for (const c of rows) {
+                const badge = c.last_status === 'ok' ? 'green' : (c.last_status ? 'red' : 'muted');
+                const row = el('div', { class: 'list-row' },
+                    `<span class="badge ${badge}">${esc(c.last_status || 'never')}</span>
+                     <span class="grow"><div class="mono">${esc(c.name)}</div>
+                     <div class="muted mono truncate">${esc(c.command)}</div>
+                     ${c.pin_path ? `<div class="muted" style="font-size:.72rem">pinned ${esc(String(c.pin_sha256 || '').slice(0, 12))} · ${esc(c.pin_path)}</div>` : ''}</span>
+                     <span class="ts">${esc(String(c.timeout_seconds || 120))}s</span>`);
+                const run = el('button', { class: 'btn sm primary' }, 'Run');
+                run.addEventListener('click', async () => {
+                    run.disabled = true;
+                    run.textContent = 'Running…';
+                    output.innerHTML = '';
+                    try {
+                        const res = await api(`/api/projects/${p.slug}/checks/${encodeURIComponent(c.name)}/run`, { method: 'POST' });
+                        const r = res.result || {};
+                        const ok = r.status === 'ok';
+                        output.innerHTML = `<div class="card" style="margin-top:10px">
+                            <div class="card-head"><h4>${esc(c.name)}</h4>
+                            <span class="badge ${ok ? 'green' : 'red'}">${esc(r.status || '?')}</span></div>
+                            <div class="muted mono" style="font-size:.78rem">exit ${esc(String(r.exit_code))} · ${(Number(r.duration_ms || 0) / 1000).toFixed(1)}s${r.truncated ? ' · output truncated' : ''}</div>
+                            <pre class="mono" style="background:var(--bg-inset);padding:12px;border-radius:8px;margin-top:8px;white-space:pre-wrap">${esc(r.output || '(no output)')}</pre></div>`;
+                        toast(ok ? 'Check passed' : 'Check failed', ok ? 'ok' : 'err');
+                    } catch (e) {
+                        output.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+                    } finally {
+                        run.disabled = false;
+                        run.textContent = 'Run';
+                        load();
+                    }
+                });
+                const del = el('button', { class: 'btn sm ghost danger' }, 'Remove');
+                del.addEventListener('click', async () => {
+                    if (!confirm(`Remove the check "${c.name}"?`)) return;
+                    try {
+                        await api(`/api/projects/${p.slug}/checks/${encodeURIComponent(c.name)}`, { method: 'DELETE' });
+                        toast('Check removed', 'ok');
+                        load();
+                    } catch (e) { toast(e.message, 'err'); }
+                });
+                row.appendChild(run);
+                row.appendChild(del);
+                list.appendChild(row);
+            }
+        } catch (e) {
+            list.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+        }
+    };
+
+    card.querySelector('#ck-add').addEventListener('click', async () => {
+        const name = card.querySelector('#ck-name').value.trim();
+        const command = card.querySelector('#ck-command').value.trim();
+        const cwd = card.querySelector('#ck-cwd').value.trim();
+        const pin = card.querySelector('#ck-pin').value.trim();
+        const timeout = Number(card.querySelector('#ck-timeout').value || 120);
+        if (!name || !command) { toast('Name and command are required', 'err'); return; }
+        try {
+            await api(`/api/projects/${p.slug}/checks`, {
+                method: 'POST',
+                body: { name, command, cwd, pin, timeout_seconds: timeout },
+            });
+            card.querySelector('#ck-name').value = '';
+            card.querySelector('#ck-command').value = '';
+            card.querySelector('#ck-cwd').value = '';
+            card.querySelector('#ck-pin').value = '';
+            toast('Check declared', 'ok');
+            load();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    load();
 }
 
 function renderProjectTab(name, detail) {
@@ -1816,6 +1922,8 @@ function renderProjectTab(name, detail) {
         // mounted separately
     } else if (name === 'config') {
         wrap.appendChild(projectConfigForm(p));
+    } else if (name === 'checks') {
+        mountChecks(wrap, p);
     } else if (name === 'shared') {
         const sharedPlaceholder = el('div', { class: 'card' }, '<div class="empty"><span class="spinner"></span> loading shared settings…</div>');
         const proposalsPlaceholder = el('div', { class: 'card' }, '<div class="empty"><span class="spinner"></span> loading proposals…</div>');

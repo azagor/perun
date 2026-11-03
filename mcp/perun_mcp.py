@@ -32,6 +32,9 @@ Tools
 ``perun_read_file``      Read a text file with line numbers.
 ``perun_get_manifest``   Read a project's perun.md manifest (data + body).
 ``perun_set_manifest``   Write a project's perun.md manifest.
+``perun_list_checks``    List the operator-declared checks for a project.
+``perun_run_check``      Run one declared check (exit code + output).
+``perun_verify_proposal`` Verify an executed proposal's script, after the operator confirms.
 ``perun_start_session``  Start an agent run in a project (returns run id).
 ``perun_ask``            Run a prompt in a project and wait for the reply.
 ``perun_run_status``     Status / output of a run.
@@ -59,7 +62,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastmcp import Context, FastMCP  # noqa: E402
 
-from perun import config, context, control, db, discovery, grep, handbook, memory, orchestrator, projects, registry, secret_store  # noqa: E402
+from perun import checks, config, context, control, db, discovery, grep, handbook, memory, orchestrator, projects, registry, secret_store  # noqa: E402
 
 mcp = FastMCP("Perun")
 
@@ -1227,6 +1230,194 @@ def perun_set_manifest(data: dict, body: str = "", project: str | None = None,
     projects.sync_manifest(p)
     registry.log_activity(p["id"], "config", "Manifest updated via MCP")
     return f"[perun] Wrote manifest for {p['slug']} ({target})."
+
+
+@mcp.tool
+def perun_list_checks(project: str | None = None) -> str:
+    """List the operator-declared checks for a project.
+
+    A check is a named command the operator approved for unattended execution
+    (``perun checks add <project> <name> "<command>"``). Checks live in Perun's
+    own store, never in the project tree, so no proposal or room message can add
+    one.
+
+    Args:
+        project: Project slug/path. Omit for the current project.
+    """
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    declared = checks.list_checks(p["id"])
+    if not declared:
+        return (f"[perun] No checks declared for {p['slug']}. The operator can add "
+                "one with `perun checks add <project> <name> \"<command>\"`.")
+    lines = [f"[perun] Checks for {p['slug']}:"]
+    for check in declared:
+        bits = [check["command"], f"{check['timeout_seconds']}s"]
+        if check["pin_path"]:
+            bits.append(f"pinned {check['pin_sha256'][:12]}")
+        last = check.get("last_status")
+        if last:
+            bits.append(f"last {last} ({check.get('last_exit_code')})")
+        lines.append(f"  {check['name']}: " + ", ".join(bits))
+    return "\n".join(lines)
+
+
+@mcp.tool
+def perun_run_check(name: str, project: str | None = None) -> str:
+    """Run one operator-declared check and report its exit code and output.
+
+    Only a declared name is accepted: this tool never takes a command, so it
+    cannot be used to run arbitrary shell. A pinned check is refused when its
+    reviewed file changed.
+
+    Args:
+        name: The check name (see ``perun_list_checks``).
+        project: Project slug/path. Omit for the current project.
+    """
+    p = _resolve_project(project)
+    if not p:
+        return "[perun] No project resolved; pass `project`."
+    try:
+        result = checks.run_declared(
+            p, name, requester="mcp", trigger="mcp",
+            max_timeout=checks.MCP_MAX_TIMEOUT,
+        )
+    except checks.CheckBusy as exc:
+        return f"[perun] {exc}; try again when it finishes."
+    except checks.CheckError as exc:
+        return f"[perun] {exc}"
+    return checks.format_result(result)
+
+
+@mcp.tool
+def perun_verify_proposal(proposal_id: str, target: str = "",
+                          wait_seconds: int = 120, project: str | None = None,
+                          ctx: Context = None) -> str:
+    """Run an executed proposal's approved script, after the operator confirms.
+
+    This is the one ad-hoc path: the command is *derived* from an approved
+    script target (``.py``, ``.ps1``, ``.sh``, ``.bat``, ``.cmd``), never from
+    free text in the proposal. The operator sees the exact command and the
+    file's sha256, and the run is refused if the file changed after they
+    answered. Nothing runs when they decline or do not answer.
+
+    Args:
+        proposal_id: The proposal to verify (it must be ``executed``).
+        target: Optional target path when the proposal has several scripts.
+        wait_seconds: How long to wait for the operator (default 120).
+        project: Project slug/path. Omit to use the proposal's project.
+    """
+    from perun import action_proposals, attention
+
+    proposal = action_proposals.get(proposal_id)
+    if not proposal:
+        return f"[perun] No such proposal: {proposal_id}"
+    p = _resolve_project(project) or registry.get_project(proposal["project_id"])
+    if not p or int(p["id"]) != int(proposal["project_id"]):
+        return "[perun] That proposal belongs to a project this session cannot access."
+    try:
+        derived = checks.derive_proposal_verification(p, proposal, target)
+    except checks.CheckError as exc:
+        return f"[perun] Cannot verify: {exc}"
+
+    session_id = _attention_session_id(ctx)
+
+    def accepted(answer: str) -> bool:
+        return str(answer).strip().lower() in {
+            "run", "run it", "yes", "approve", "ok"}
+
+    def run(confirmation_id: str) -> str:
+        # The claim is atomic: a second tool call that saw the same answer cannot
+        # run the script twice.
+        if not checks.claim_confirmation(confirmation_id):
+            return "[perun] Not run: that confirmation was already used."
+        try:
+            result = checks.run_proposal_verification(
+                p, proposal, target=target, expected_sha256=derived["sha256"],
+                requester=session_id or "mcp", trigger="proposal-verify",
+                max_timeout=checks.MCP_MAX_TIMEOUT,
+            )
+        except checks.CheckBusy as exc:
+            checks.release_confirmation(confirmation_id)
+            return f"[perun] Not run: {exc}"
+        except checks.CheckError as exc:
+            return f"[perun] Not run: {exc}"
+        return checks.format_result(result)
+
+    # Reuse the earlier card. The room's tool call has a short wait window; when
+    # the operator answers after it closed, the next call must not ask again.
+    confirmation = checks.get_confirmation(
+        int(p["id"]), proposal_id, derived["target"], derived["sha256"])
+    if confirmation:
+        item = (registry.get_attention(int(confirmation["attention_id"]))
+                if confirmation.get("attention_id") else None)
+        if item is None:
+            checks.drop_confirmation(confirmation["id"])
+        elif item["state"] == "open":
+            answer = attention.wait(
+                item["id"], max(30, min(int(wait_seconds or 120), 600)))
+            if answer is None:
+                return (f"[perun] Not run: still waiting for the operator "
+                        f"(att_{item['id']}). Call perun_await_operator({item['id']}) "
+                        "to wait again; the same card stays valid.")
+            if not accepted(answer):
+                return f"[perun] Not run: the operator chose '{answer}'."
+            return run(confirmation["id"])
+        else:
+            answer = str(item.get("answer") or "")
+            if not answer:
+                # The card expired or was withdrawn without an answer: drop it
+                # and ask once more.
+                checks.drop_confirmation(confirmation["id"])
+            elif not accepted(answer):
+                return f"[perun] Not run: the operator chose '{answer}'."
+            else:
+                return run(confirmation["id"])
+
+    # The card belongs to this OpenCode session when we have one; a tool call
+    # from a room reply always does. Without it, fall back to the project room so
+    # the operator can still answer (the card is what gates the run).
+    if session_id:
+        target_kind, target_id = "session", session_id
+    else:
+        chat = registry.get_project_chat(int(p["id"])) or {}
+        room_id = str(chat.get("room_id") or "").strip()
+        if not room_id:
+            return ("[perun] Verification needs the operator's confirmation, but "
+                    "this call has no session and the project has no chat room. "
+                    "Ask the operator to run a declared check instead.")
+        target_kind, target_id = "room", room_id
+    question = (
+        "Run this delivered script once?\n"
+        f"  command: {derived['display']}\n"
+        f"  target:  {derived['target']} ({derived['size']} bytes)\n"
+        f"  sha256:  {derived['sha256']}\n"
+        "Perun refuses if the file changes after you answer."
+    )
+    item = attention.request(
+        p, target_kind, target_id, "check", question,
+        options=[{"id": "run", "label": "Run it"},
+                 {"id": "cancel", "label": "Cancel"}],
+        ref={"session_id": session_id, "proposal_id": proposal_id,
+             "sha256": derived["sha256"]},
+        dedupe_key=registry.attention_dedupe_key(
+            target_kind, target_id, "check",
+            f"{proposal_id}:{derived['sha256']}"),
+    )
+    if item is None:
+        return ("[perun] Could not record the confirmation request "
+                "(attention store unavailable).")
+    confirmation = checks.record_confirmation(
+        int(p["id"]), proposal_id, derived["target"], derived["sha256"], item["id"])
+    answer = attention.wait(item["id"], max(30, min(int(wait_seconds or 120), 600)))
+    if answer is None:
+        return (f"[perun] Not run: waiting for the operator (att_{item['id']}). "
+                f"Call perun_await_operator({item['id']}) to wait again; the same "
+                "card stays valid.")
+    if not accepted(answer):
+        return f"[perun] Not run: the operator chose '{answer}'."
+    return run(confirmation["id"])
 
 
 @mcp.tool

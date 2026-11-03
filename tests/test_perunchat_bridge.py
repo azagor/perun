@@ -772,6 +772,13 @@ def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
     assert _resolve_permission(perms, "perun-proposals_approve") == "allow"
     assert _resolve_permission(perms, "perun_perunchat_room_memory") == "allow"
 
+    # The bounded execution path must be reachable: declared checks by name and
+    # operator-confirmed proposal verification. Writes stay denied above.
+    assert _resolve_permission(perms, "perun-guard_guard_run_check") == "allow"
+    assert _resolve_permission(perms, "perun-guard_guard_list_checks") == "allow"
+    assert _resolve_permission(perms, "perun_perun_verify_proposal") == "allow"
+    assert _resolve_permission(perms, "perun_perun_run_check") == "allow"
+
     # Native tools must stay denied.
     for tool in ("shell", "edit", "write", "webfetch", "subagent"):
         assert _resolve_permission(perms, tool) == "deny"

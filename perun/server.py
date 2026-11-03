@@ -39,9 +39,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool
 
-from . import (__version__, action_proposals, config, context, control, coroutines,
-               db, discovery, git, manifest, memory, projects, providers,
-               registry, scaffold, shared_projects, shared_project_sync)
+from . import (__version__, action_proposals, checks, config, context, control,
+               coroutines, db, discovery, git, manifest, memory, projects,
+               providers, registry, scaffold, shared_projects,
+               shared_project_sync)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -1841,6 +1842,76 @@ def api_delete_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _ok(deleted=True)
+
+
+# --------------------------------------------------------------------------- #
+# Operator-declared checks
+# --------------------------------------------------------------------------- #
+@app.get("/api/projects/{slug}/checks")
+def api_list_checks(slug: str) -> dict[str, Any]:
+    """List the operator-declared checks and their last run."""
+    project = _project_or_404(slug)
+    return _ok(checks=list_checks_or_empty(project["id"]))
+
+
+def list_checks_or_empty(project_id: int) -> list[dict[str, Any]]:
+    try:
+        return checks.list_checks(project_id)
+    except Exception:  # pragma: no cover - an unreadable schema must not 500
+        return []
+
+
+@app.post("/api/projects/{slug}/checks")
+def api_declare_check(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Declare (or replace) a check. Operator-only: it needs the API token."""
+    project = _project_or_404(slug)
+    try:
+        check = checks.declare(
+            project,
+            str(payload.get("name") or ""),
+            str(payload.get("command") or ""),
+            cwd=str(payload.get("cwd") or ""),
+            timeout_seconds=payload.get("timeout_seconds", checks.DEFAULT_TIMEOUT),
+            pin=str(payload.get("pin") or ""),
+            created_by=_approver_identity(),
+        )
+    except checks.CheckError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(check=check)
+
+
+@app.delete("/api/projects/{slug}/checks/{name}")
+def api_remove_check(slug: str, name: str) -> dict[str, Any]:
+    project = _project_or_404(slug)
+    if not checks.remove(project["id"], name):
+        raise HTTPException(status_code=404, detail="check not found")
+    return _ok(deleted=True)
+
+
+@app.post("/api/projects/{slug}/checks/{name}/run")
+def api_run_check(slug: str, name: str) -> dict[str, Any]:
+    """Run a declared check synchronously and return its result.
+
+    The HTTP path is capped at the MCP timeout so a stuck build cannot hold a
+    request for ten minutes; the CLI keeps the full cap.
+    """
+    project = _project_or_404(slug)
+    try:
+        result = checks.run_declared(
+            project, name, requester=_approver_identity(), trigger="dashboard",
+            max_timeout=checks.MCP_MAX_TIMEOUT,
+        )
+    except checks.CheckBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except checks.CheckError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(result=result)
+
+
+@app.get("/api/projects/{slug}/checks/{name}/history")
+def api_check_history(slug: str, name: str, limit: int = 20) -> dict[str, Any]:
+    project = _project_or_404(slug)
+    return _ok(runs=checks.history(project["id"], name, limit=limit))
 
 
 @app.delete("/api/projects/{slug}")

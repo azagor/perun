@@ -212,3 +212,46 @@ def test_shared_project_derives_allowlist(tmp_path, monkeypatch):
     outside.write_text("bad")
     with pytest.raises(ValueError, match="outside the project allowlist"):
         guard_mcp.guard_read_file(str(outside))
+
+
+# --------------------------------------------------------------------------- #
+# Declared checks (the room persona's only execution path)
+# --------------------------------------------------------------------------- #
+def _registered_check_project(tmp_path, monkeypatch):
+    import sys
+
+    from perun import checks, registry
+
+    project = registry.add_project("guard-checks", str(tmp_path), kind="opencode")
+    checks.declare(project, "hello", f'"{sys.executable}" -c "print(42)"')
+    monkeypatch.chdir(tmp_path)
+    os.environ["PERUN_PROJECT_PATH"] = str(tmp_path)
+    monkeypatch.delenv("PERUN_ALLOWLIST", raising=False)
+    return project
+
+
+def test_guard_lists_the_operator_declared_checks(tmp_path, monkeypatch):
+    _registered_check_project(tmp_path, monkeypatch)
+
+    listed = guard_mcp.guard_list_checks()
+
+    assert [c["name"] for c in listed] == ["hello"]
+    assert "print(42)" in listed[0]["command"]
+
+
+def test_guard_runs_a_declared_check(tmp_path, monkeypatch):
+    _registered_check_project(tmp_path, monkeypatch)
+
+    text = guard_mcp.guard_run_check("hello")
+
+    assert "ok" in text
+    assert "42" in text
+
+
+def test_guard_cannot_run_a_command_that_is_not_declared(tmp_path, monkeypatch):
+    _registered_check_project(tmp_path, monkeypatch)
+
+    text = guard_mcp.guard_run_check("echo pwned")
+
+    assert "no check named" in text
+    assert "declared: hello" in text

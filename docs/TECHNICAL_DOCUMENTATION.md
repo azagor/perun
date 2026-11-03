@@ -2064,6 +2064,66 @@ The Shared tab also separates active proposals
 a collapsed-by-default section with a count, keeping the active queue visible
 and uncluttered.
 
+## 10.1 Bounded execution: declared checks and proposal verification
+
+A chat persona has no shell, and that stays true. What it gained is a **bounded
+verification path**, because "I have no shell access" made an agent unable to
+confirm that the script it just reviewed actually runs.
+
+Two sources, with different trust anchors:
+
+1. **Operator-declared checks** (`perun/checks.py`, `project_checks`). The
+   operator names a command in Perun's own store:
+
+   ```
+   perun checks add ai-playground check-manifest "python tests/check_manifest.py" \
+       --pin tests/check_manifest.py
+   perun checks list / run / remove / history
+   ```
+
+   The declaration lives in `PERUN_HOME`, never in the project tree, so a room
+   message, an MCP tool or an approved proposal cannot add one. `--pin` freezes
+   the reviewed script's sha256; a later edit refuses the run until the operator
+   re-declares it. The room persona sees `guard_list_checks` and
+   `guard_run_check(name)`; the Perun MCP server exposes `perun_list_checks` and
+   `perun_run_check(name)`. Both take a *name*, never a command.
+
+2. **Proposal verification** (`perun_verify_proposal`). After a shared-project
+   proposal reaches `executed`, Perun may verify the delivered script:
+
+   * the command is **derived** from an approved target — `sys.executable` plus
+     a `.py` target, PowerShell for `.ps1`, bash/sh for `.sh`, `cmd /c` for
+     `.bat`/`.cmd` — never taken from proposal text;
+   * the operator sees the exact command, the target, its size and its sha256 in
+     an attention card and must choose **Run it**; declining or not answering
+     runs nothing;
+   * the target is re-hashed after the answer and the run is refused if it
+     changed (the same approval-pins-content rule the external handoff uses);
+   * the run is recorded with its `proposal_id` and `content_sha256`.
+
+   The confirmation itself is durable in `check_confirmations`: a room's tool
+   call waits only a couple of minutes, so if the operator answers later the
+   same card is reused by the next call instead of asking again. The row is
+   unique per `(proposal, target, sha256)` and `claim_confirmation()` is an
+   atomic one-shot, so a late answer cannot run the same script twice; a
+   declined answer is returned as-is and is not re-asked until it expires.
+
+Execution rules for both paths: cwd is the project root (or a validated
+project-relative subdirectory), the environment is scrubbed to OS/PATH/`PYTHON*`
+basics so a delivered script cannot read Perun's or a provider's credentials,
+the timeout is capped (600 s CLI, 300 s MCP/HTTP), merged stdout+stderr is capped
+at 16 KiB with an explicit truncation marker, and a timeout kills the whole
+process tree. A `running` row guarded by a partial unique index makes a run a
+cross-process single-flight lease per project; a crashed run is reaped as
+`abandoned` by the next call. Every run logs `check_ok` / `check_failed` /
+`check_timeout` / `check_error` to the activity feed and keeps its exit code,
+duration and output tail in `check_runs`.
+
+The dashboard endpoints are `GET`/`POST /api/projects/{slug}/checks`,
+`DELETE .../{name}`, `POST .../{name}/run` and `GET .../{name}/history`; the
+state-changing ones require the local API token like every other operator
+action.
+
 ---
 
 ## 11. Global installation

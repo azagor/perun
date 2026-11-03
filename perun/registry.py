@@ -410,6 +410,11 @@ def delete_project(slug: str) -> bool:
         conn.execute("DELETE FROM runs WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM sessions WHERE project_id=?", (pid,))
         conn.execute("DELETE FROM project_chats WHERE project_id=?", (pid,))
+        # Declared checks are operator configuration, not project content: the
+        # rows go with the project, and the history with them.
+        conn.execute("DELETE FROM check_runs WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM project_checks WHERE project_id=?", (pid,))
+        conn.execute("DELETE FROM check_confirmations WHERE project_id=?", (pid,))
         conn.execute("UPDATE bridge_links SET project_id=NULL, session_pk=NULL WHERE project_id=?", (pid,))
         # Operator-inbox rows for this project (children first: cascades are off).
         conn.execute("DELETE FROM attention_requests WHERE project_id=?", (pid,))

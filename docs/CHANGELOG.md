@@ -4,7 +4,34 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Checks: a bounded way to run a verification
+
+* Perun can now run a **verification command** instead of answering "I have no
+  shell access". Two paths exist, both deliberately narrow:
+  * **Operator-declared checks** live in Perun's own store (`perun checks add
+    <project> <name> "<command>"`), never in the project tree, so no room
+    message, agent tool or approved proposal can add one. `perun checks list /
+    run / remove / history` manage them; the guard MCP server exposes
+    `guard_list_checks` and `guard_run_check` (a name, never a command), and the
+    Perun MCP server exposes `perun_list_checks` and `perun_run_check`. A check
+    may pin a script's sha256 (`--pin tests/check_manifest.py`): the run is
+    refused when the reviewed file changed.
+  * **Proposal verification** (`perun_verify_proposal`) runs an *executed*
+    proposal's approved script (`.py`, `.ps1`, `.sh`, `.bat`, `.cmd`). The
+    command is derived from the target, never taken from proposal text; the
+    operator sees the exact command and sha256 in the attention card and must
+    confirm; the run is refused if the file changes after they answer.
+* The operator's confirmation is durable: `check_confirmations` remembers the
+  card, so an answer that lands after the room's short wait window is reused by
+  the next call instead of asking a second time. A confirmation is one-shot and
+  bound to the sha256 the operator saw.
+* Every run is cross-process single-flight per project, records its exit code,
+  duration and capped output in `check_runs`, logs a `check_ok` / `check_failed`
+  / `check_timeout` activity row, runs with the project root as cwd, and gets a
+  scrubbed environment (no Perun or provider credentials).
+* New HTTP endpoints (`GET/POST /api/projects/{slug}/checks`, `DELETE .../{name}`,
+  `POST .../{name}/run`, `GET .../{name}/history`) expose the same store to the
+  dashboard.
 
 ## v0.10.58
 

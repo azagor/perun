@@ -308,6 +308,7 @@ python -m perun restart [--host H] [--port P] [--reload] [--bridge] [--detach|--
 python -m perun bridge
 python -m perun discover [--roots a;b] [--depth N] [--index]
 python -m perun projects
+python -m perun checks <list|add|remove|run|history> ...   # verification Perun may run
 python -m perun add <name> <path> [--model M] [--agent A]
 python -m perun project-roots [--list] [--add NAME PATH] [--remove NAME]
 python -m perun status [--json]

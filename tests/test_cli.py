@@ -602,3 +602,49 @@ def test_missing_dependency_prints_a_fix_instead_of_a_traceback(tmp_path):
     assert "missing Python package:" in res.stderr
     assert "pip install" in res.stderr
     assert "Traceback" not in res.stderr
+
+
+# --------------------------------------------------------------------------- #
+# perun checks
+# --------------------------------------------------------------------------- #
+def _ns(**kwargs):
+    import argparse
+
+    return argparse.Namespace(**kwargs)
+
+
+def test_checks_add_list_run_and_remove(tmp_path, capsys):
+    import sys
+
+    from perun import registry
+
+    root = tmp_path / "cli-checks"
+    root.mkdir()
+    project = registry.add_project("cli-checks", str(root), kind="opencode")
+    command = f'"{sys.executable}" -c "print(11)"'
+
+    assert cli.cmd_checks(_ns(checks_action="add", project=project["slug"],
+                              name="smoke", command=command, cwd="",
+                              timeout=30, pin="")) == 0
+    assert cli.cmd_checks(_ns(checks_action="list", project=project["slug"])) == 0
+    listed = capsys.readouterr().out
+    assert "smoke" in listed and "30s" in listed
+
+    assert cli.cmd_checks(_ns(checks_action="run", project=project["slug"],
+                              name="smoke")) == 0
+    ran = capsys.readouterr().out
+    assert "ok" in ran and "11" in ran
+
+    assert cli.cmd_checks(_ns(checks_action="history", project=project["slug"],
+                              name="smoke", limit=5)) == 0
+    assert "smoke" in capsys.readouterr().out
+
+    assert cli.cmd_checks(_ns(checks_action="remove", project=project["slug"],
+                              name="smoke")) == 0
+    assert cli.cmd_checks(_ns(checks_action="list", project=project["slug"])) == 0
+    assert "no checks declared" in capsys.readouterr().out
+
+
+def test_checks_reject_an_unknown_project(capsys):
+    assert cli.cmd_checks(_ns(checks_action="list", project="nope")) == 1
+    assert "no such project" in capsys.readouterr().out

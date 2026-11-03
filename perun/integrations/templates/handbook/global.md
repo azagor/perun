@@ -43,6 +43,9 @@ regardless of which folder this repository lives in:
 | `perun_file_exists` | Check whether one or more paths exist in the allowed roots. |
 | `perun_list_directory` | List entries in a directory in the allowed roots. |
 | `perun_read_file` | Read a text file with line numbers. |
+| `perun_list_checks` | List the operator-declared checks for a project. A check is a named command the operator allows Perun to run unattended; declarations live in Perun's store, never in the repo. |
+| `perun_run_check` | Run one declared check **by name** (never a command string) and return its exit code + output. |
+| `perun_verify_proposal` | Verify an `executed` proposal by running its approved script: the command is derived from the target, the operator confirms the command + sha256, and the run is refused if the file changed. |
 | `perun_start_session` | Start an agent run in a project; returns a run id. |
 | `perun_ask` | Run a prompt in a project and wait for the reply. |
 | `perun_run_status` | Status / output of a previously started run. |

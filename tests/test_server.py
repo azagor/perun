@@ -2748,3 +2748,56 @@ def test_attention_digest_setting_accepts_zero_and_rejects_negatives(client):
                         json={"attention_digest_seconds": "soon"}).status_code == 400
 
     client.patch("/api/settings", json={"attention_digest_seconds": 30})
+
+
+# --------------------------------------------------------------------------- #
+# Operator-declared checks
+# --------------------------------------------------------------------------- #
+def _check_project(tmp_path, slug="checks-api"):
+    from perun import registry
+
+    root = tmp_path / slug
+    root.mkdir(exist_ok=True)
+    return registry.add_project(slug, str(root), kind="opencode")
+
+
+def test_checks_can_be_declared_listed_run_and_removed(client, tmp_path):
+    import sys
+
+    project = _check_project(tmp_path)
+    command = f'"{sys.executable}" -c "print(7)"'
+
+    created = client.post(f"/api/projects/{project['slug']}/checks",
+                          json={"name": "smoke", "command": command})
+    assert created.status_code == 200, created.text
+    assert created.json()["check"]["name"] == "smoke"
+
+    listed = client.get(f"/api/projects/{project['slug']}/checks")
+    assert [c["name"] for c in listed.json()["checks"]] == ["smoke"]
+
+    ran = client.post(f"/api/projects/{project['slug']}/checks/smoke/run")
+    assert ran.status_code == 200, ran.text
+    assert ran.json()["result"]["status"] == "ok"
+    assert "7" in ran.json()["result"]["output"]
+
+    history = client.get(
+        f"/api/projects/{project['slug']}/checks/smoke/history")
+    assert history.json()["runs"][0]["status"] == "ok"
+
+    removed = client.delete(f"/api/projects/{project['slug']}/checks/smoke")
+    assert removed.status_code == 200
+    assert client.get(f"/api/projects/{project['slug']}/checks").json()["checks"] == []
+
+
+def test_an_invalid_check_name_is_rejected(client, tmp_path):
+    project = _check_project(tmp_path, "checks-bad")
+    r = client.post(f"/api/projects/{project['slug']}/checks",
+                    json={"name": "Not A Name", "command": "echo hi"})
+    assert r.status_code == 400
+
+
+def test_running_an_undeclared_check_is_a_400(client, tmp_path):
+    project = _check_project(tmp_path, "checks-missing")
+    r = client.post(f"/api/projects/{project['slug']}/checks/nope/run")
+    assert r.status_code == 400
+    assert "no check named" in r.json()["detail"]

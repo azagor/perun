@@ -34,6 +34,15 @@ permissions:
   - action: "guard_*"
     resource: "*"
     effect: allow
+  # Declared checks are operator configuration, not a target of an approved
+  # proposal: the sandboxed executor must not be able to run one. Last match
+  # wins, so these denies come after the broad guard allow.
+  - action: "*guard_run_check"
+    resource: "*"
+    effect: deny
+  - action: "*guard_list_checks"
+    resource: "*"
+    effect: deny
 ---
 You are a restricted shared-project executor. Use only these prefixed guard MCP
 tools: perun-guard_guard_read_file, perun-guard_guard_write_file,
