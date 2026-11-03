@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.52 (see §15). Self-update no longer needs an elevated Perun: the Windows installer is started through the UAC prompt.
+**Latest release:** v0.10.53 (see §15). The operator inbox lands in the global kernel, and Perun survives a missing dependency: the launcher repairs requirements, paths with spaces work, and the daemon degrades instead of crashing.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2420,6 +2420,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.53: The operator inbox lands in the global kernel, and Perun survives a missing dependency: the launcher repairs requirements, paths with spaces work, and the daemon degrades instead of crashing.
+
 ### 2026-11-02 — v0.10.52: Self-update no longer needs an elevated Perun: the Windows installer is started through the UAC prompt.
 
 ### 2026-11-02 — v0.10.51: Coroutines: scheduled, event-driven and looped agent jobs, dashboard wizard, PerunChat room triggers, and a hardened global-job policy.

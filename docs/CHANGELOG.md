@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.53
+
+*Released 2026-11-03.*
+
 ### A missing dependency no longer kills the launcher, and paths with spaces work
 
 * `Perun.cmd` wrapped the interpreter in a `for /f` backtick command for its
