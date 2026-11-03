@@ -125,6 +125,19 @@ function confirmDialog(title, message, onConfirm, confirmLabel = 'Confirm') {
 // Set before navigating to a project's Shared tab so the card can reveal and
 // flash the exact row a chat message referenced.
 let pendingProposalFocus = null;
+// Chat history is re-rendered on reconnect/restore; one lookup per id is enough
+// to colour the chips. The peek itself always fetches fresh state.
+const proposalLookupCache = new Map();
+function proposalLookup(proposalId) {
+    if (!proposalLookupCache.has(proposalId)) {
+        proposalLookupCache.set(
+            proposalId,
+            api(`/api/proposals/${encodeURIComponent(proposalId)}`)
+                .catch(() => null),
+        );
+    }
+    return proposalLookupCache.get(proposalId);
+}
 
 // Reveal an already-rendered proposal row (the Shared card may already be on
 // screen when another chat chip is clicked). Returns false when it is not there.
@@ -163,8 +176,16 @@ async function openProposalPeek(proposalId) {
             onClick: () => {
                 if (!loaded) return;
                 closeModal();
-                const hash = `#/project/${loaded.project.slug}/shared`;
-                if (location.hash === hash && focusProposalInShared(proposalId)) return;
+                const slug = loaded.project.slug;
+                const hash = `#/project/${slug}/shared`;
+                if (location.hash === hash) {
+                    if (focusProposalInShared(proposalId)) return;
+                    // The Shared card is still loading: re-render it; the card's
+                    // insertion hook consumes the pending focus.
+                    pendingProposalFocus = proposalId;
+                    viewProject(slug, 'shared');
+                    return;
+                }
                 pendingProposalFocus = proposalId;
                 goto(hash);
             },
@@ -2033,7 +2054,16 @@ function renderProjectTab(name, detail) {
         sharedProjectCard(detail).then((card) => sharedPlaceholder.replaceWith(card)).catch((e) => {
             sharedPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
         });
-        proposalsCard(detail).then((card) => proposalsPlaceholder.replaceWith(card)).catch((e) => {
+        proposalsCard(detail).then((card) => {
+            proposalsPlaceholder.replaceWith(card);
+            // The card is in the document only now; only here can a chat chip's
+            // pending focus find its row.
+            if (pendingProposalFocus) {
+                const id = pendingProposalFocus;
+                pendingProposalFocus = null;
+                focusProposalInShared(id);
+            }
+        }).catch((e) => {
             proposalsPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
         });
     }
@@ -2432,7 +2462,10 @@ async function proposalsCard(detail) {
             actions.push(`<button class="btn sm primary" data-retry="${esc(prop.id)}">Retry</button>`);
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         }
-        let meta = `${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
+        // Show the id in the row: a chat reference can be matched to it, and the
+        // operator can copy it back to the room.
+        const idChip = `<button class="chip chip-link proposal-id" data-copy="${esc(prop.id)}" type="button" title="Copy this proposal id">${esc(prop.id)}</button>`;
+        let meta = `${idChip} · ${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
         if (prop.status === 'executing') {
             meta += ' · headless run in progress…';
         }
@@ -2478,6 +2511,15 @@ async function proposalsCard(detail) {
                 e.stopPropagation();
                 openManifestPath(p.path, btn.dataset.target);
             });
+        });
+        row.querySelector('.proposal-id')?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                await navigator.clipboard.writeText(prop.id);
+                toast('Proposal id copied', 'ok');
+            } catch (_) {
+                toast(prop.id, 'ok');
+            }
         });
         row.querySelector('[data-approve-run]')?.addEventListener('click', async () => {
             try {
@@ -2558,11 +2600,6 @@ async function proposalsCard(detail) {
         completedWrap.appendChild(completedList);
         card.appendChild(completedWrap);
     }
-
-    // A chat chip may have sent us here for one specific proposal.
-    const focusId = pendingProposalFocus;
-    pendingProposalFocus = null;
-    if (focusId) focusProposalInShared(focusId);
 
     if (proposals.some((prop) => prop.status === 'executing' || prop.status === 'claimed')) scheduleSharedPoll(p.slug);
     return card;
@@ -5222,13 +5259,14 @@ async function viewPerunChat() {
             });
             // Colour the chip by status and name the project in the tooltip, so
             // the operator can triage a long message without opening each one.
-            api(`/api/proposals/${encodeURIComponent(id)}`).then((res) => {
-                const prop = (res && res.proposal) || {};
-                const project = (res && res.project) || {};
+            proposalLookup(id).then((res) => {
+                if (!res) return;
+                const prop = res.proposal || {};
+                const project = res.project || {};
                 if (prop.status) chip.classList.add(`proposal-${prop.status}`);
                 chip.title = `Proposal ${id} — ${prop.status || 'unknown'}`
                     + (project.name ? ` · ${project.name}` : '');
-            }).catch(() => { /* leave the neutral chip */ });
+            });
         });
     }
 

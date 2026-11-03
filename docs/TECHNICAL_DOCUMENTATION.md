@@ -1957,9 +1957,13 @@ fetches `GET /api/proposals/{id}` once to colour it by status and put the projec
 in its tooltip. Clicking the chip opens a peek card (project, status, requester,
 intent, targets, result) whose **Open in project** action navigates to
 `#/project/<slug>/shared`, expands the completed section when necessary, scrolls
-to the row and flashes it. The lookup is read-only and strips approval tokens and
-snapshots exactly like the per-project list; the chip is dashboard-only — a room
-participant never receives it.
+to the row and flashes it. The focus runs in the card's **insertion** callback
+(not inside `proposalsCard`, where the card is not in the document yet); clicking
+a second chip on the already-open tab re-renders when the card is still loading.
+Each Shared row shows its own `prop_…` id as a copy chip, so the operator can
+verify the match. Lookups are cached per id across chat re-renders. The lookup is
+read-only and strips approval tokens and snapshots exactly like the per-project
+list; the chip is dashboard-only — a room participant never receives it.
 
 **One identity, two voices.** A frame carries `sender.agent_id` (who) and
 `sender.runtime` (which voice). The bridge posts as `<agent>` with runtime

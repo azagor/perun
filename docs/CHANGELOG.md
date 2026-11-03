@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The exact proposal is visible and reachable
+
+* The Shared tab now shows each proposal's `prop_…` id as a copy chip, so a chat
+  reference can be matched to the exact row (and copied back into the room).
+* **Open in project** now really lands on that row: the focus ran before the card
+  was inserted into the DOM, so the lookup found nothing and the pending id was
+  consumed. It focuses after insertion, re-renders when the Shared tab is already
+  open and the card is still loading, expands the completed section, and scrolls
+  and flashes the row. Chip status lookups are cached for the chat re-renders.
 
 ## v0.10.63
 
