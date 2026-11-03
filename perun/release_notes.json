@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T14:58:31+00:00",
+  "generated": "2026-11-03T15:13:11+00:00",
   "releases": [
+    {
+      "version": "0.10.58",
+      "date": "2026-11-03",
+      "body": "### Focus lookup hardening\n\n* The session-title lookup is capped at 1 s per call and cached for 30 s, so a\n  Focus click stays responsive even when the OpenCode service is slow; a failing\n  lookup simply falls back to the project-name hint.\n* `config.is_internal_path()` compares real paths, so a symlinked companion repo\n  is still recognised; the two startup sweeps are isolated, so one failing cannot\n  skip the other; and the terminal-title fallback ignores hints shorter than\n  three characters (a project named \"ai\" cannot select an \"ai-playground\"\n  terminal)."
+    },
     {
       "version": "0.10.57",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.49",
       "date": "2026-11-02",
       "body": "### Stop now closes the TUI terminal, including after a restart\n\n* Pressing Stop on a card whose project had an open TUI terminal only marked the\n  run `cancelled`; the window stayed open. Two defects: `/api/runs/{uid}/cancel`\n  called `ProcessTracker.terminate()` only when the in-memory entry existed — after\n  a server restart it does not — so the persisted `runs.pid` + `PERUN_RUN_UID`\n  marker were never consulted; and the kill target was whatever the marker scan\n  returned first, usually the *agent* process inside the terminal.\n* The endpoint now always offers the run to the tracker (which no-ops to\n  `finalize()` when nothing is attributable). `terminate()` resolves the **shell\n  that owns the terminal** via `_terminal_owner()` — the outermost\n  `cmd`/`pwsh`/`sh` carrying the marker in its command line — because `cmd /k` and\n  `pwsh -NoExit` keep the window at a prompt after the agent exits. Liveness still\n  follows the agent process, so an agent that exits still ends its run.\n* Regression tests: the kill target is the shell, not its child; a stop after a\n  restart kills the shell around the persisted agent pid; `/cancel` reaches the\n  tracker with an empty in-memory map."
-    },
-    {
-      "version": "0.10.48",
-      "date": "2026-11-01",
-      "body": "### Stop never guesses which process to kill\n\n* `ProcessTracker.terminate()` now resolves its target through `_kill_pid()`: a\n  pid carrying the run's `PERUN_RUN_UID` marker, or Perun's own live `Popen`\n  handle. The launch-time Windows Terminal heuristic in `_resolve_child_pid()` is\n  skipped on that path (`heuristic=False`) — it matches \"a terminal window that\n  appeared around launch time\", and closing it could take down tabs belonging to\n  other runs. It stays available for `is_alive()`, where it only decides liveness.\n  With nothing attributable, Stop finalizes the row and reports `cancelled: false`\n  instead of killing an unrelated process; `kill_all_explicit()` uses the same\n  rule.\n* Regression tests: a live Stop never asks the resolver for a heuristic match, an\n  unattributable live pid survives a Stop while the run row is finalized, and the\n  existing marker/restart cases still pass.\n* `_watch_loop()` now guards each run's liveness/finalize step. A DB hiccup (a\n  lock, a closed handle) used to raise inside the watcher thread and silently stop\n  auto-finalization, which is the only thing that clears a run row when the user\n  closes the terminal.\n* Docs (AGENTS, CODEMAP, TECHNICAL) state the exact rule, so \"Stop closes the TUI\n  terminal\" and \"never kill a process Perun cannot attribute\" are both true.\n* Test/doc drift fixed: `tests/test_js_card_controls.py` no longer mentions the\n  withdrawn Finish action, and its rename assertion matches what it checks."
     }
   ]
 }

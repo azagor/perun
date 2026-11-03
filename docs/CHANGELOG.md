@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.58
+
+*Released 2026-11-03.*
+
 ### Focus lookup hardening
 
 * The session-title lookup is capped at 1 s per call and cached for 30 s, so a

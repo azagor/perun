@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.57 (see §15). Focus finds the Windows Terminal tab by its OpenCode session title, and the private companion repo is never listed as a project.
+**Latest release:** v0.10.58 (see §15). Focus lookups are capped and cached, and the companion repo stays out of every listing.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2472,6 +2472,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.58: Focus lookups are capped and cached, and the companion repo stays out of every listing.
+
 ### 2026-11-03 — v0.10.57: Focus finds the Windows Terminal tab by its OpenCode session title, and the private companion repo is never listed as a project.
 
 ### 2026-11-03 — v0.10.56: The release pipeline verifies the owner-workspace marker, and dashboard presence filtering is unit-tested.
