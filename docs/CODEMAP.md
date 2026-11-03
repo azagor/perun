@@ -1552,8 +1552,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `perun.js` so `node --test` can cover them: `shouldRender(existing, msg,
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames),
   `shouldSend(lastText, lastAt, text, now, windowMs)` (double Enter/click
-  guard), and `proposalIds(text)` (the `prop_…` ids named in a message, unique
-  and in first-seen order, used to render actionable chips). Exposed as
+  guard), `proposalIds(text)` (the `prop_…` ids named in a message, unique and in
+  first-seen order, used to render actionable chips), and `proposalActions(status)`
+  (the management actions the peek offers for a state). Exposed as
   `window.ChatCore` and as a CommonJS module.
 * `web/js/coroutine_schedule.js` - pure coroutine UI logic, unit-tested with
   `node --test`: `humanTrigger()`, `cronHuman()`, `intervalHuman()`,

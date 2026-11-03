@@ -31,9 +31,10 @@ const ChatCore = window.ChatCore || {
     shouldRender: () => true,
     // Keep the "never send empty text" guard even without the module.
     shouldSend: (_lastText, _lastAt, text) => String(text == null ? '' : text).trim() !== '',
-    // proposalIds is used by renderMessage; without it the fallback would throw
-    // and blank the whole log on exactly the stale-cache path it exists for.
+    // proposalIds / proposalActions are used by the chat and peek; without them
+    // the fallback would throw on exactly the stale-cache path it exists for.
     proposalIds: () => [],
+    proposalActions: () => [],
 };
 if (!window.ChatCore) {
     console.error('perun: chat_core.js did not load; chat dedupe is disabled');
@@ -170,7 +171,8 @@ function focusProposalInShared(proposalId) {
     }
     target.classList.add('proposal-focus');
     target.scrollIntoView({ block: 'center' });
-    setTimeout(() => target.classList.remove('proposal-focus'), 3000);
+    // Keep the marker: the URL keeps the proposal id, so the row is still the
+    // one the operator came for while the card lives. Switching tabs clears it.
     return true;
 }
 
@@ -178,13 +180,114 @@ function proposalBadge(status) {
     const name = String(status || 'unknown');
     const cls = name === 'executed' ? 'green' : name === 'failed' ? 'red'
         : ['approved', 'executing', 'claimed'].includes(name) ? 'blue'
-        : ['rejected', 'cancelled', 'expired'].includes(name) ? 'muted' : 'amber';
+        : ['rejected', 'cancelled', 'expired', 'deleted'].includes(name) ? 'muted' : 'amber';
     return `<span class="badge ${cls}">${esc(name)}</span>`;
+}
+
+function syncProposalChip(proposalId, status, projectName) {
+    document.querySelectorAll(
+        `.proposal-ref[data-proposal="${CSS.escape(proposalId)}"]`,
+    ).forEach((chip) => {
+        for (const cls of [...chip.classList]) {
+            if (cls.startsWith('proposal-') && cls !== 'proposal-ref') {
+                chip.classList.remove(cls);
+            }
+        }
+        if (status) chip.classList.add(`proposal-${status}`);
+        chip.title = `Proposal ${proposalId} — ${status || 'unknown'}`
+            + (projectName ? ` · ${projectName}` : '');
+    });
+}
+
+const PROPOSAL_ACTION_META = {
+    'approve-run': ['Approve & run', 'primary', ''],
+    'approve': ['Approve only', 'ghost', ''],
+    'reject': ['Reject', 'ghost', ''],
+    'delete': ['Delete', 'ghost danger', ''],
+    'execute': ['Run now', 'primary', ''],
+    'withdraw': ['Withdraw', 'ghost',
+                 'Withdraw this approval; the record stays in the audit trail'],
+    'revoke-claim': ['Revoke claim', 'ghost', ''],
+    'cancel-run': ['Cancel', 'ghost', ''],
+    'retry': ['Retry', 'primary', ''],
+};
+
+function proposalActionButtons(prop) {
+    return ChatCore.proposalActions(prop && prop.status).map((act) => {
+        const [label, cls, title] = PROPOSAL_ACTION_META[act] || [act, 'ghost', ''];
+        return `<button class="btn sm ${cls}" data-act="${act}" type="button" title="${esc(title)}">${esc(label)}</button>`;
+    });
+}
+
+async function runProposalAction(loaded, action, refresh, proposalId) {
+    const prop = loaded.proposal || {};
+    const project = loaded.project || {};
+    const id = prop.id || proposalId;
+    const slug = project.slug || '';
+    const base = `/api/projects/${encodeURIComponent(slug)}/proposals/${encodeURIComponent(id)}`;
+    const targets = (prop.targets || []).join(', ') || '(none)';
+    const plans = {
+        'approve-run': { url: `${base}/approve-and-execute`, method: 'POST',
+                         ok: 'Approved — headless run started' },
+        'approve': { url: `${base}/approve`, method: 'POST',
+                     confirm: `Approve this proposal without starting it?\n\n${prop.intent}\n\nTargets: ${targets}`,
+                     ok: 'Approved' },
+        'reject': { url: `${base}/reject`, method: 'POST',
+                    confirm: `Reject this proposal?\n\n${prop.intent}`,
+                    ok: 'Rejected' },
+        'withdraw': { url: `${base}/cancel`, method: 'POST',
+                      body: { reason: 'withdrawn from chat peek' },
+                      confirm: `Withdraw this approval?\n\n${prop.intent}\n\nThe proposal is cancelled for good; it stays in the audit trail.`,
+                      ok: 'Withdrawn' },
+        'execute': { url: `${base}/execute`, method: 'POST', ok: 'Headless run started' },
+        'revoke-claim': { url: `${base}/revoke-claim`, method: 'POST', ok: 'Claim revoked' },
+        'cancel-run': { url: `/api/runs/${encodeURIComponent(id)}/cancel`, method: 'POST',
+                        confirm: `Cancel the running agent for this proposal?\n\n${prop.intent}`,
+                        ok: 'Cancelling…' },
+    };
+    if (action === 'retry') {
+        // Retry creates a *new* proposal; show that one rather than refreshing a
+        // terminal card that the operator can no longer advance.
+        try {
+            const res = await api(`${base}/retry`, { method: 'POST' });
+            toast('Retry proposal created', 'ok');
+            proposalLookupCache.delete(id);
+            const newId = ((res || {}).proposal || {}).id;
+            closeModal();
+            if (newId) openProposalPeek(newId);
+        } catch (e) { toast(e.message, 'err'); }
+        return;
+    }
+    if (action === 'delete') {
+        if (!confirm(`Delete this proposal permanently?\n\n${prop.intent}`)) return;
+        try {
+            await api(base, { method: 'DELETE' });
+            toast('Proposal deleted', 'ok');
+            proposalLookupCache.delete(id);
+            syncProposalChip(id, 'deleted', project.name);
+            closeModal();
+        } catch (e) { toast(e.message, 'err'); }
+        return;
+    }
+    const plan = plans[action];
+    if (!plan) return;
+    if (plan.confirm && !confirm(plan.confirm)) return;
+    try {
+        await api(plan.url, { method: plan.method, body: plan.body });
+        toast(plan.ok, 'ok');
+        proposalLookupCache.delete(id);
+        const fresh = await refresh();
+        if (fresh) {
+            syncProposalChip(id, (fresh.proposal || {}).status,
+                             (fresh.project || {}).name);
+        }
+    } catch (e) { toast(e.message, 'err'); }
 }
 
 async function openProposalPeek(proposalId) {
     const body = el('div', {}, '<div class="empty"><span class="spinner"></span> loading proposal…</div>');
     let loaded = null;
+    let firstLoad = true;
     const box = modal(`Proposal ${proposalId}`, body, [
         {
             label: 'Open in project',
@@ -193,17 +296,16 @@ async function openProposalPeek(proposalId) {
                 if (!loaded) return;
                 closeModal();
                 const slug = loaded.project.slug;
-                const hash = `#/project/${slug}/shared`;
-                if (location.hash === hash) {
-                    if (focusProposalInShared(proposalId)) return;
+                const target = `#/project/${slug}/shared/${proposalId}`;
+                if (location.hash === target && focusProposalInShared(proposalId)) return;
+                pendingProposalFocus = proposalId;
+                if (location.hash === target) {
                     // The Shared card is still loading: re-render it; the card's
                     // insertion hook consumes the pending focus.
-                    pendingProposalFocus = proposalId;
                     viewProject(slug, 'shared');
-                    return;
+                } else {
+                    goto(target);
                 }
-                pendingProposalFocus = proposalId;
-                goto(hash);
             },
         },
         { label: 'Close', class: 'ghost', onClick: closeModal },
@@ -213,43 +315,74 @@ async function openProposalPeek(proposalId) {
         openButton.disabled = true;
         openButton.title = 'Waiting for the proposal…';
     }
-    try {
-        loaded = await api(`/api/proposals/${encodeURIComponent(proposalId)}`);
-    } catch (e) {
-        body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
-        return;
-    }
-    if (openButton) {
-        openButton.disabled = false;
-        openButton.title = '';
-    }
-    const prop = loaded.proposal || {};
-    const project = loaded.project || {};
-    const targets = prop.targets || [];
-    const targetHtml = targets.length
-        ? targets.map((t) => `<span class="chip">${esc(String(t))}</span>`).join(' ')
-        : '<span class="muted">(none)</span>';
-    const lines = [
-        `<span class="k">Project</span><span class="v">${esc(project.name || project.slug || '?')}</span>`,
-        `<span class="k">Status</span><span class="v">${proposalBadge(prop.status)}</span>`,
-        `<span class="k">Requested by</span><span class="v">${esc(prop.requester || '?')}</span>`,
-        `<span class="k">Intent</span><span class="v">${esc(prop.intent || '')}</span>`,
-        `<span class="k">Targets</span><span class="v">${targetHtml}</span>`,
-        `<span class="k">Created</span><span class="v">${esc(timeAgo(prop.created_at))}</span>`,
-    ];
-    if (prop.approved_by) {
-        lines.push(`<span class="k">Approved by</span><span class="v">${esc(prop.approved_by)}</span>`);
-    }
-    if (prop.executed_by || prop.execution_mode) {
-        lines.push(`<span class="k">Executed by</span><span class="v">${esc(prop.executed_by || prop.execution_mode)}</span>`);
-    }
-    if (prop.result) {
-        lines.push(`<span class="k">Result</span><span class="v">${esc(String(prop.result).slice(0, 500))}</span>`);
-    }
-    const details = prop.details && Object.keys(prop.details).length
-        ? JSON.stringify(prop.details) : '';
-    body.innerHTML = `<div class="kv">${lines.join('')}</div>`
-        + (details ? `<div class="meta" style="margin-top:10px;max-height:180px;overflow:auto;white-space:pre-wrap">${esc(details.slice(0, 3000))}</div>` : '');
+
+    const render = () => {
+        const prop = loaded.proposal || {};
+        const project = loaded.project || {};
+        const targets = prop.targets || [];
+        const targetHtml = targets.length
+            ? targets.map((t) => `<span class="chip">${esc(String(t))}</span>`).join(' ')
+            : '<span class="muted">(none)</span>';
+        const lines = [
+            `<span class="k">Project</span><span class="v">${esc(project.name || project.slug || '?')}</span>`,
+            `<span class="k">Status</span><span class="v">${proposalBadge(prop.status)}</span>`,
+            `<span class="k">Requested by</span><span class="v">${esc(prop.requester || '?')}</span>`,
+            `<span class="k">Intent</span><span class="v">${esc(prop.intent || '')}</span>`,
+            `<span class="k">Targets</span><span class="v">${targetHtml}</span>`,
+            `<span class="k">Created</span><span class="v">${esc(timeAgo(prop.created_at))}</span>`,
+        ];
+        if (prop.approved_by) {
+            lines.push(`<span class="k">Approved by</span><span class="v">${esc(prop.approved_by)}</span>`);
+        }
+        if (prop.executed_by || prop.execution_mode) {
+            lines.push(`<span class="k">Executed by</span><span class="v">${esc(prop.executed_by || prop.execution_mode)}</span>`);
+        }
+        if (prop.result) {
+            lines.push(`<span class="k">Result</span><span class="v">${esc(String(prop.result).slice(0, 500))}</span>`);
+        }
+        const details = prop.details && Object.keys(prop.details).length
+            ? JSON.stringify(prop.details) : '';
+        const actionButtons = proposalActionButtons(prop);
+        const actionsHtml = actionButtons.length
+            ? `<div class="row" style="gap:8px;margin-top:14px;flex-wrap:wrap">${actionButtons.join('')}</div>`
+            : '';
+        body.innerHTML = `<div class="kv">${lines.join('')}</div>` + actionsHtml
+            + (details ? `<div class="meta" style="margin-top:10px;max-height:180px;overflow:auto;white-space:pre-wrap">${esc(details.slice(0, 3000))}</div>` : '');
+        body.querySelectorAll('[data-act]').forEach((button) => {
+            button.addEventListener('click', async () => {
+                button.disabled = true;
+                try {
+                    await runProposalAction(loaded, button.dataset.act, refresh, proposalId);
+                } finally {
+                    if (button.isConnected) button.disabled = false;
+                }
+            });
+        });
+    };
+
+    const refresh = async () => {
+        try {
+            loaded = await api(`/api/proposals/${encodeURIComponent(proposalId)}`);
+        } catch (e) {
+            if (!firstLoad && e.status === 404) {
+                closeModal();
+                syncProposalChip(proposalId, 'deleted');
+                return null;
+            }
+            if (openButton) openButton.disabled = true;
+            body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+            return null;
+        }
+        firstLoad = false;
+        if (openButton) {
+            openButton.disabled = false;
+            openButton.title = '';
+        }
+        render();
+        return loaded;
+    };
+
+    await refresh();
 }
 
 /* --------------------------------------------------------- formatting --- */
@@ -1798,6 +1931,21 @@ async function browseFolder(startPath, onPick, onCancel) {
 /* ===================================================== PROJECT DETAIL === */
 async function viewProject(slug, tab) {
     if (!slug) { goto('#/projects'); return; }
+    // `#/project/<slug>/shared/<prop_…>` keeps the focus target in the URL, so a
+    // poll or reload re-focuses the same row instead of dropping it.
+    let focusId = '';
+    if (tab && tab.includes('/')) {
+        const [head, tail] = tab.split('/', 2);
+        tab = head;
+        if (/^prop_[0-9a-f]{12}$/.test(tail || '')) focusId = tail;
+    }
+    if (!focusId) {
+        const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const m = (location.hash || '').match(
+            new RegExp(`^#/project/${escaped}/shared/(prop_[0-9a-f]{12})$`));
+        if (m) focusId = m[1];
+    }
+    if (focusId) pendingProposalFocus = focusId;
     $('#topbar-title').textContent = slug;
     const detail = await api(`/api/projects/${slug}`);
     const p = detail.project;
@@ -1862,7 +2010,12 @@ async function viewProject(slug, tab) {
         if (name === 'git') mountGit(pane, p);
         if (name === 'manifest') mountManifest(pane, p);
         if (name === 'tasks') mountTasks(pane, p);
-        const expected = `#/project/${slug}/${name}`;
+        // Keep the proposal id in the URL while the Shared tab is rendering from
+        // a chat jump; a poll/reload then re-focuses the same row. A deliberate
+        // tab click has no pending focus and drops it.
+        if (name !== 'shared') pendingProposalFocus = null;
+        const focusId = name === 'shared' ? pendingProposalFocus : '';
+        const expected = `#/project/${slug}/${name}${focusId ? `/${focusId}` : ''}`;
         if (location.hash !== expected) {
             history.replaceState(null, '', expected);
             currentRoute = expected;
@@ -2076,20 +2229,25 @@ function renderProjectTab(name, detail) {
         const proposalsPlaceholder = el('div', { class: 'card' }, '<div class="empty"><span class="spinner"></span> loading proposals…</div>');
         wrap.appendChild(sharedPlaceholder);
         wrap.appendChild(proposalsPlaceholder);
-        sharedProjectCard(detail).then((card) => sharedPlaceholder.replaceWith(card)).catch((e) => {
+        // Wait for both cards before focusing: the settings card above the
+        // proposal list changes height after it loads, which used to move the
+        // row off-screen right after the scroll.
+        const sharedReady = sharedProjectCard(detail).catch((e) => {
             sharedPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+            return null;
         });
-        proposalsCard(detail).then((card) => {
-            proposalsPlaceholder.replaceWith(card);
-            // The card is in the document only now; only here can a chat chip's
-            // pending focus find its row.
+        const proposalsReady = proposalsCard(detail).catch((e) => {
+            proposalsPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+            return null;
+        });
+        Promise.all([sharedReady, proposalsReady]).then(([sharedCard, proposalsCardEl]) => {
+            if (sharedCard) sharedPlaceholder.replaceWith(sharedCard);
+            if (proposalsCardEl) proposalsPlaceholder.replaceWith(proposalsCardEl);
             if (pendingProposalFocus) {
                 const id = pendingProposalFocus;
                 pendingProposalFocus = null;
-                focusProposalInShared(id);
+                requestAnimationFrame(() => focusProposalInShared(id));
             }
-        }).catch((e) => {
-            proposalsPlaceholder.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
         });
     }
     return wrap;
@@ -2421,7 +2579,7 @@ function scheduleSharedPoll(slug) {
     if (sharedPollTimer) clearTimeout(sharedPollTimer);
     sharedPollTimer = setTimeout(async () => {
         sharedPollTimer = null;
-        if (location.hash !== `#/project/${slug}/shared`) return;
+        if (!location.hash.startsWith(`#/project/${slug}/shared`)) return;
         try {
             const res = await api(`/api/projects/${slug}/proposals`);
             if ((res.proposals || []).some((prop) => prop.status === 'executing' || prop.status === 'claimed')) {
@@ -5288,9 +5446,7 @@ async function viewPerunChat() {
                 if (!res) return;
                 const prop = res.proposal || {};
                 const project = res.project || {};
-                if (prop.status) chip.classList.add(`proposal-${prop.status}`);
-                chip.title = `Proposal ${id} — ${prop.status || 'unknown'}`
-                    + (project.name ? ` · ${project.name}` : '');
+                syncProposalChip(id, prop.status, project.name);
             });
         });
     }

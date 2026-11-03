@@ -317,7 +317,8 @@ select { cursor: pointer; }
 .proposal-ref.proposal-failed { border-color: var(--red); color: var(--red); }
 .proposal-ref.proposal-rejected,
 .proposal-ref.proposal-cancelled,
-.proposal-ref.proposal-expired { border-color: var(--border-strong); color: var(--text-muted); }
+.proposal-ref.proposal-expired,
+.proposal-ref.proposal-deleted { border-color: var(--border-strong); color: var(--text-muted); }
 .completed-proposals .card-head { margin-bottom: 0; padding: 8px 0; }
 .completed-proposals .card-head h4 { font-size: .9rem; color: var(--text-secondary); }
 .completed-proposals .list { border-top: 1px solid var(--border); padding-top: 4px; }

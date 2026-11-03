@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Manage a proposal from the chat peek, and keep the focus
+
+* The peek card now offers the state-appropriate actions directly: **Approve &
+  run / Approve only / Reject / Delete** (pending), **Run now / Withdraw /
+  Delete** (approved), **Revoke claim** (claimed), **Cancel** (executing), and
+  **Retry / Delete** (completed). Each action re-fetches the proposal, recolours
+  the chat chip and updates the card; Retry opens the new proposal.
+* The focus is encoded in the URL (`#/project/<slug>/shared/<prop_…>`) and
+  re-applied on every render, poll and reload, so the row is not lost when the
+  view refreshes. The Shared tab now waits for **both** cards (settings and
+  proposals) before scrolling — the settings card loading above the list used to
+  move the row off-screen. The gold highlight persists while the id is in the
+  URL and clears when another tab is opened.
 
 ## v0.10.66
 

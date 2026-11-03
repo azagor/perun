@@ -95,3 +95,17 @@ test('proposalIds tolerates null and non-string payloads', () => {
     assert.deepEqual(core.proposalIds(undefined), []);
     assert.deepEqual(core.proposalIds(42), []);
 });
+
+test('each proposal state offers the expected management actions', () => {
+    assert.deepEqual(core.proposalActions('pending'),
+        ['approve-run', 'approve', 'reject', 'delete']);
+    assert.deepEqual(core.proposalActions('approved'),
+        ['execute', 'withdraw', 'delete']);
+    assert.deepEqual(core.proposalActions('claimed'), ['revoke-claim']);
+    assert.deepEqual(core.proposalActions('executing'), ['cancel-run']);
+    for (const status of ['executed', 'failed', 'rejected', 'cancelled', 'expired']) {
+        assert.deepEqual(core.proposalActions(status), ['retry', 'delete']);
+    }
+    assert.deepEqual(core.proposalActions('unknown'), []);
+    assert.deepEqual(core.proposalActions(null), []);
+});

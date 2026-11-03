@@ -1955,19 +1955,26 @@ project. `ChatCore.proposalIds(text)` (unit-tested, deduped, first-seen order)
 extracts at most eight per message; `perun.js` turns each into a chip, then
 fetches `GET /api/proposals/{id}` once to colour it by status and put the project
 in its tooltip. Clicking the chip opens a peek card (project, status, requester,
-intent, targets, result) whose **Open in project** action navigates to
-`#/project/<slug>/shared`, expands the completed section when necessary, scrolls
-to the row and flashes it. The focus runs in the card's **insertion** callback
-(not inside `proposalsCard`, where the card is not in the document yet); clicking
-a second chip on the already-open tab re-renders when the card is still loading.
-Each Shared row shows its own `prop_…` id as a copy chip, so the operator can
-verify the match. Lookups are cached per id across chat re-renders, capped at 200
-entries, and failures are not cached (an old server or a transient outage
-retries); **Open in project** stays disabled until the card has loaded. The
-lookup is read-only and strips approval tokens and snapshots exactly like the
-per-project list; a hidden project's proposal is 404 unless the caller is in the
-owner workspace. The chip is dashboard-only — a room participant never receives
-it.
+intent, targets, result) with the state-appropriate management actions and an
+**Open in project** action that navigates to
+`#/project/<slug>/shared/<prop_…>`. The proposal id stays in the URL: `viewProject`
+parses it, `setTab` preserves it, and the Shared card re-applies the focus on
+every render, so a poll or hard reload lands on the same row. The shared card
+waits for **both** the settings card and the proposal list before scrolling (the
+settings card loading above the list used to move the row off-screen), expands the
+completed section when necessary, and keeps the gold marker while the id is in the
+URL. Each Shared row shows its own `prop_…` id as a copy chip, so the operator can
+verify the match.
+
+The peek's action row is driven by `ChatCore.proposalActions(status)` (unit-tested)
+and calls the same endpoints as the Shared tab; after an action it re-fetches the
+proposal, recolours every chat chip for that id, and Retry opens the newly created
+proposal. Lookups are cached per id across chat re-renders, capped at 200 entries,
+and failures are not cached (an old server or a transient outage retries);
+**Open in project** stays disabled until the card has loaded. The lookup is
+read-only and strips approval tokens and snapshots exactly like the per-project
+list; a hidden project's proposal is 404 unless the caller is in the owner
+workspace. The chip is dashboard-only — a room participant never receives it.
 
 **One identity, two voices.** A frame carries `sender.agent_id` (who) and
 `sender.runtime` (which voice). The bridge posts as `<agent>` with runtime

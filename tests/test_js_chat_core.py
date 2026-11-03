@@ -60,7 +60,7 @@ def test_proposal_focus_runs_after_the_card_is_inserted():
     card) silently consumed pendingProposalFocus and never landed on the row.
     """
     src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
-    insertion = src.index("proposalsPlaceholder.replaceWith(card);")
+    insertion = src.index("proposalsPlaceholder.replaceWith(proposalsCardEl);")
     focus = src.index("if (pendingProposalFocus)", insertion)
     assert focus > insertion
     card = src[src.index("async function proposalsCard("):

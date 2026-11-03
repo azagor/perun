@@ -52,5 +52,18 @@
         return out;
     }
 
-    return { shouldRender, shouldSend, proposalIds };
+    /** The actions the dashboard may offer for a proposal in each state. */
+    function proposalActions(status) {
+        const value = String(status == null ? '' : status);
+        if (value === 'pending') return ['approve-run', 'approve', 'reject', 'delete'];
+        if (value === 'approved') return ['execute', 'withdraw', 'delete'];
+        if (value === 'claimed') return ['revoke-claim'];
+        if (value === 'executing') return ['cancel-run'];
+        if (['executed', 'failed', 'rejected', 'cancelled', 'expired'].includes(value)) {
+            return ['retry', 'delete'];
+        }
+        return [];
+    }
+
+    return { shouldRender, shouldSend, proposalIds, proposalActions };
 });
