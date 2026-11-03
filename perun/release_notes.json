@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T20:25:08+00:00",
+  "generated": "2026-11-03T20:30:04+00:00",
   "releases": [
+    {
+      "version": "0.10.64",
+      "date": "2026-11-03",
+      "body": "### The exact proposal is visible and reachable\n\n* The Shared tab now shows each proposal's `prop_…` id as a copy chip, so a chat\n  reference can be matched to the exact row (and copied back into the room).\n* **Open in project** now really lands on that row: the focus ran before the card\n  was inserted into the DOM, so the lookup found nothing and the pending id was\n  consumed. It focuses after insertion, re-renders when the Shared tab is already\n  open and the card is still loading, expands the completed section, and scrolls\n  and flashes the row. Chip status lookups are cached for the chat re-renders."
+    },
     {
       "version": "0.10.63",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.55",
       "date": "2026-11-03",
       "body": "### The control project is listed only in the owner's workspace\n\n* v0.10.54 gated hidden projects on \"this installation has an owner\" (a name or a\n  paired Telegram chat). That was still per-install: once anyone named or paired,\n  the dashboard listed the Perun project. The gate is now a **workspace marker**,\n  `.perun/owner-workspace`, shipped by the private `perun_internal` overlay only.\n  A checkout carrying that overlay lists the control project; an installed copy\n  — and a plain clone of the public repo, which has no `.perun/` — lists user\n  projects only. `PERUN_SHOW_HIDDEN_PROJECTS=1` / `0` overrides per process.\n* The orchestrator is untouched: the control row stays registered (hidden),\n  `/api/health` still reports it, and a run without a project still targets it;\n  the Orchestrator page works with zero listed projects. The Agent Console\n  picker and the dashboard's \"Working now\" panel follow the same listing rule,\n  so a control-plane run no longer advertises itself there on an installed copy.\n* The release pipeline verifies the marker before writing anything and again\n  after the reverse sync (`tools/release.py`), so a release cannot silently\n  delete it and hide the project on the owner's own dashboard. The installer\n  excludes `.perun/`, so no installed copy ships the marker; nothing in the\n  installer or `.gitignore` changes."
-    },
-    {
-      "version": "0.10.54",
-      "date": "2026-11-03",
-      "body": "### The control project stays hidden on a fresh install\n\n* `GET /api/projects?include_hidden=true` (what the dashboard sends so the owner\n  can manage the control plane) now includes hidden projects only when this\n  installation has a configured operator: a `perun_owner_name` or a paired\n  Telegram chat (the static `telegram_allowed_chats` list written by `/pair`, or\n  a `TELEGRAM_CHAT_ID` override). A brand-new install has neither, so the\n  self-registered **Perun** control project no longer appears as a project card\n  there — a reachable loopback dashboard is not evidence of ownership. Once the\n  operator names themselves or pairs a chat, the card returns; the Orchestrator\n  page reaches the control plane either way.\n* Discovery no longer re-registers a hidden project as a **visible duplicate**.\n  Its path lookup was built from the visible list only, so the hidden control\n  project looked new; when the resolved path spelling differed (8.3 names,\n  junctions) `register()` created a second, visible \"Perun\" project instead of\n  updating the hidden row. The lookup now includes hidden projects, so the row\n  is updated in place and stays hidden; the server also hides any visible\n  duplicate such an older install already carries at startup (it is hidden, never\n  deleted, so its runs/memory stay with the operator).\n\n### Focus a project card's TUI terminal\n\n* A working card now offers **Focus** while a TUI run is active and has a\n  tracked terminal. It raises/restores that terminal's window (Windows with\n  `psutil`; the button is hidden where the server cannot do it) and flashes the\n  taskbar button when Windows refuses the foreground switch.\n* Attribution is the same rule Stop uses: only a pid carrying the run's\n  `PERUN_RUN_UID` marker is focused, so a recycled pid never points at an\n  unrelated program. Launches set a `Perun: <slug>` window/tab title as a\n  matching hint; several Windows Terminal windows share one process, so the\n  title (or the run's session title) picks the right one and repeated clicks\n  cycle equally good candidates.\n* `POST /api/runs/{uid}/terminal/focus` performs the raise and `/api/runs/active`\n  reports `focus_supported`."
     }
   ]
 }

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.64
+
+*Released 2026-11-03.*
+
 ### The exact proposal is visible and reachable
 
 * The Shared tab now shows each proposal's `prop_…` id as a copy chip, so a chat
