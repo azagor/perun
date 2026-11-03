@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.60 (see §15). Audit follow-ups for checks (hidden-project guard, untrusted output, env, retention, caps) and an Ollama-down memory search fix.
+**Latest release:** v0.10.61 (see §15). Search with a tool, never a shell pipeline: the global kernel rule now reaches every project.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2541,6 +2541,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.61: Search with a tool, never a shell pipeline: the global kernel rule now reaches every project.
+
 ### 2026-11-03 — v0.10.60: Audit follow-ups for checks (hidden-project guard, untrusted output, env, retention, caps) and an Ollama-down memory search fix.
 
 ### 2026-11-03 — v0.10.59: Perun can run a declared check or verify an executed proposal's approved script, with an operator-confirmed, hash-pinned command.

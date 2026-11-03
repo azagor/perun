@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.61
+
+*Released 2026-11-03.*
+
 ### Global kernel: search with a tool, not a shell pipeline
 
 * The managed global `AGENTS.md` block now tells every project to search with the

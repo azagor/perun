@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T17:55:00+00:00",
+  "generated": "2026-11-03T17:59:52+00:00",
   "releases": [
+    {
+      "version": "0.10.61",
+      "date": "2026-11-03",
+      "body": "### Global kernel: search with a tool, not a shell pipeline\n\n* The managed global `AGENTS.md` block now tells every project to search with the\n  `grep` / `perun_grep` tool and never with a `Select-String` / `findstr` /\n  shell-`grep` pipeline. On Windows the console rendering collapses match lines\n  into columns of `1`s or ANSI noise, so a search can look empty when it matched\n  and a misread costs a whole retry. The template change is applied by\n  `perun install` (the global block is refreshed without touching user content)."
+    },
     {
       "version": "0.10.60",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.52",
       "date": "2026-11-02",
       "body": "### Self-update no longer needs Perun to be started as administrator\n\n* A Windows dashboard started normally can now install a newer release itself.\n  `PerunSetup.exe` is an admin-only installer, and `CreateProcess` cannot\n  elevate: launching it from a user-level Perun failed with `WinError 740` and\n  never showed a UAC prompt, so the only workaround was to run Perun elevated —\n  which in practice meant rebooting to replace the already-running dashboard\n  and starting it \"as administrator\". The update runner now starts the\n  installer through `ShellExecuteEx` with the `runas` verb, so Windows shows the\n  normal administrator prompt; an already-elevated Perun keeps the old\n  subprocess path. Dismissing the prompt is reported as a clear, retryable\n  message that names the downloaded installer, so it can also be run by hand\n  instead of surfacing an opaque exit code.\n* The Updates page reports the new `requires_admin` / `elevated` install-mode\n  facts and warns that the dashboard closes before the permission prompt that\n  Windows shows, both on the card and in the confirmation dialog."
-    },
-    {
-      "version": "0.10.51",
-      "date": "2026-11-02",
-      "body": "### Coroutines: scheduled and event-triggered agent jobs\n\n* New **Coroutines** dashboard tab: a quick-create path and a five-step wizard\n  for interval, cron/calendar, one-shot, manual, and event-triggered jobs;\n  per-project and global scope; live progress, next-fire preview, run history,\n  event inbox, room-delivery status, and Pause/Stop/Resume/Run-now/Edit/\n  Duplicate/Delete controls. Global jobs are user-wide (reminders, digests,\n  machine health) and always run as the orchestrator in the control plane, not\n  inside a project.\n* Every fire is a normal `Orchestrator` run, so streaming, cancellation,\n  leases, usage capture and restart recovery are reused. A unique\n  `runs.coroutine_fire_key` makes a slot, loop iteration or event delivery\n  idempotent; `coroutine_accounted_at` makes accounting exactly-once.\n* Loops: single, capped, or unlimited with a daily run cap, cycle wall-clock\n  cap, stall guard, per-iteration timeout watchdog, and a worker presentation.\n  A cron loop parks its next cycle slot while iterations run, so it resumes on\n  schedule.\n* Events: webhook, `run.finished`, `proposal.approved`/`executed`,\n  `attention.created`, `git.commit`/`push`, and PerunChat `room.message`.\n  `room.message` is ingested even when conversational auto-reply is off; a job\n  can post its result back into the room through a durable, redacted outbox and\n  suppress the bridge's own reply so the room gets one answer. Event triggers\n  are project-scoped; global jobs are scheduled, one-shot, or manual, and an\n  event job may never run in the orchestrator control plane. Event jobs default\n  to the read-only `plan` agent and refuse the orchestrator agent; `/hooks/*`\n  enforces the same Host/Origin checks as `/api/`.\n* Quick create offers **Every day** or **Once** (and rejects a past time), and\n  the template list includes a one-time reminder for both scopes.\n* Retention also drops room-outbox rows that permanently failed\n  (`attempts>=10`) after 30 days, not only delivered ones. At startup, event\n  jobs with an empty `agent` are filled with the read-only default.\n* Safety: webhook secrets are stored as SHA-256 only; the URL is safe to log,\n  and the secret travels in `X-Perun-Webhook-Secret`. Event payloads are framed\n  as untrusted data; a scheduler heartbeat, global pause, per-job timeout and\n  capacity-failure classification are visible in the dashboard, and a job that\n  gives up raises one operator-inbox item.\n* New dependencies: `croniter` (cron parsing) and `tzdata` (Windows timezone\n  database)."
     }
   ]
 }
