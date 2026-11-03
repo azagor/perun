@@ -1294,6 +1294,7 @@ FastAPI app + SSE + static dashboard.
 * `api_get_proposal_by_id()` — the chat's global proposal lookup
   (`GET /api/proposals/{id}`); mirrors the per-project list's
   approval-token/snapshot redaction and returns the owning project's slug/name.
+  A hidden project's proposal is 404 unless `config.is_owner_workspace()`.
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
   structured `/api/models`), PerunChat (`/api/perunchat/status`, `/api/perunchat/key`
   kept for legacy loopback callers, and loopback-only `POST /api/perunchat/ws-ticket`

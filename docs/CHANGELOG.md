@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Proposal lookup hardening
+
+* `GET /api/proposals/{id}` now hides a hidden project's proposal unless the
+  caller is in the owner workspace (or `PERUN_SHOW_HIDDEN_PROJECTS`), so a
+  shared id cannot bypass the hidden-project rule.
+* The chat lookup cache is capped at 200 entries and no longer caches failures:
+  a transient outage, or a server still on an older build, retries instead of
+  pinning a neutral chip forever. **Open in project** is disabled until the peek
+  has loaded.
+* Regression tests now assert that the fallback shim covers every `ChatCore`
+  call and that the proposal focus runs after the card is inserted into the DOM
+  (the bug that landed on the tab but never on the row).
 
 ## v0.10.65
 

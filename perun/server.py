@@ -1641,6 +1641,10 @@ def api_get_proposal_by_id(proposal_id: str) -> dict[str, Any]:
     project = registry.get_project(proposal["project_id"])
     if not project:
         raise HTTPException(status_code=404, detail="proposal project not found")
+    # The global id must not become a side door around the hidden-project rule:
+    # only the owner workspace (or PERUN_SHOW_HIDDEN_PROJECTS) may read one.
+    if project.get("hidden") and not config.is_owner_workspace():
+        raise HTTPException(status_code=404, detail="proposal not found")
     hidden = {"approval_token", "approval_snapshot", "claim_snapshot"}
     return _ok(
         proposal={k: v for k, v in proposal.items() if k not in hidden},

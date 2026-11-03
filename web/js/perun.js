@@ -131,13 +131,26 @@ let pendingProposalFocus = null;
 // Chat history is re-rendered on reconnect/restore; one lookup per id is enough
 // to colour the chips. The peek itself always fetches fresh state.
 const proposalLookupCache = new Map();
+const PROPOSAL_CACHE_MAX = 200;
 function proposalLookup(proposalId) {
     if (!proposalLookupCache.has(proposalId)) {
-        proposalLookupCache.set(
-            proposalId,
-            api(`/api/proposals/${encodeURIComponent(proposalId)}`)
-                .catch(() => null),
-        );
+        // Oldest-first eviction keeps a long-lived tab bounded even if a room
+        // keeps inventing ids. Failures are not cached: a transient outage (or a
+        // server still on an older build) must not pin the chip neutral forever.
+        if (proposalLookupCache.size >= PROPOSAL_CACHE_MAX) {
+            const oldest = proposalLookupCache.keys().next().value;
+            proposalLookupCache.delete(oldest);
+        }
+        const pending = api(`/api/proposals/${encodeURIComponent(proposalId)}`)
+            .then((res) => {
+                proposalLookupCache.set(proposalId, Promise.resolve(res));
+                return res;
+            })
+            .catch(() => {
+                proposalLookupCache.delete(proposalId);
+                return null;
+            });
+        proposalLookupCache.set(proposalId, pending);
     }
     return proposalLookupCache.get(proposalId);
 }
@@ -172,7 +185,7 @@ function proposalBadge(status) {
 async function openProposalPeek(proposalId) {
     const body = el('div', {}, '<div class="empty"><span class="spinner"></span> loading proposal…</div>');
     let loaded = null;
-    modal(`Proposal ${proposalId}`, body, [
+    const box = modal(`Proposal ${proposalId}`, body, [
         {
             label: 'Open in project',
             class: 'primary',
@@ -195,11 +208,20 @@ async function openProposalPeek(proposalId) {
         },
         { label: 'Close', class: 'ghost', onClick: closeModal },
     ]);
+    const openButton = box.querySelector('.modal-actions .btn.primary');
+    if (openButton) {
+        openButton.disabled = true;
+        openButton.title = 'Waiting for the proposal…';
+    }
     try {
         loaded = await api(`/api/proposals/${encodeURIComponent(proposalId)}`);
     } catch (e) {
         body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
         return;
+    }
+    if (openButton) {
+        openButton.disabled = false;
+        openButton.title = '';
     }
     const prop = loaded.proposal || {};
     const project = loaded.project || {};

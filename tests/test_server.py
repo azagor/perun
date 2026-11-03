@@ -2877,3 +2877,30 @@ def test_a_proposal_can_be_looked_up_by_id_across_projects(client, tmp_path):
     assert "approval_token" not in body["proposal"]
     assert "approval_snapshot" not in body["proposal"]
     assert client.get("/api/proposals/prop_000000000000").status_code == 404
+
+def test_a_hidden_projects_proposal_lookup_needs_the_owner_workspace(
+        client, tmp_path, monkeypatch):
+    import json
+
+    from perun import config, db, registry
+
+    project = _check_project(tmp_path, "hidden-proposal")
+    proposal_id = "prop_abcdef654321"
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO action_proposals (id, project_id, requester, action_type, "
+            "intent, targets, details, status, expires_at, execution_mode, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (proposal_id, project["id"], "frambo", "edit", "hidden work",
+             json.dumps(["hidden.py"]), "{}", "approved", 9_999_999_999, "",
+             registry.now_iso(), registry.now_iso()),
+        )
+    registry.update_project(project["slug"], hidden=1)
+
+    monkeypatch.setattr(config, "is_owner_workspace", lambda: False)
+    assert client.get(f"/api/proposals/{proposal_id}").status_code == 404
+
+    monkeypatch.setattr(config, "is_owner_workspace", lambda: True)
+    allowed = client.get(f"/api/proposals/{proposal_id}")
+    assert allowed.status_code == 200
+    assert allowed.json()["project"]["slug"] == project["slug"]

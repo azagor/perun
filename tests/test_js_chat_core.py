@@ -43,3 +43,26 @@ def test_perun_js_has_no_private_copies_of_the_guards():
     assert "ChatCore.shouldSend(" in src
     # The old inline debounce: `text.trim() === _lastSentText && now - _lastSentAt`
     assert "_lastSentText && now" not in src
+
+
+def test_the_chat_fallback_covers_every_chat_core_method():
+    """A missing chat_core.js must not throw at a call the shim lacks."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    shim = src.split("const ChatCore = window.ChatCore || {", 1)[1].split("};", 1)[0]
+    for name in set(re.findall(r"ChatCore\.(\w+)\(", src)):
+        assert f"{name}:" in shim, name
+
+
+def test_proposal_focus_runs_after_the_card_is_inserted():
+    """The focus must run after replaceWith, or querySelector finds nothing.
+
+    Regression: focusing inside proposalsCard (before the caller inserts the
+    card) silently consumed pendingProposalFocus and never landed on the row.
+    """
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    insertion = src.index("proposalsPlaceholder.replaceWith(card);")
+    focus = src.index("if (pendingProposalFocus)", insertion)
+    assert focus > insertion
+    card = src[src.index("async function proposalsCard("):
+               src.index("function projectConfigForm(")]
+    assert "pendingProposalFocus = null" not in card
