@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.63
+
+*Released 2026-11-03.*
+
 ### Proposal references in chat are actionable
 
 * Every `prop_…` named in a PerunChat message is now a chip coloured by its
