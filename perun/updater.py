@@ -991,6 +991,35 @@ def _apply_git(plan: dict[str, Any]) -> None:
             raise UpdateError(f"pip install failed: {_short(pip.stderr or pip.stdout)}")
         _log("Dependencies installed.", level="ok")
 
+    # A pull replaces the code, not the generated global assets. Re-run the
+    # additive global install so the managed AGENTS.md kernel, the slash
+    # commands, and the MCP entry match the release that was just installed.
+    # The installer path does this through install-prereqs.ps1; without this
+    # step a git checkout would keep the old kernel rules forever. It backs up
+    # before writing and is best-effort: a read-only/locked config must not turn
+    # a successful update into a failure.
+    _set_state(state="applying", message="Refreshing the global OpenCode config…")
+    try:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+        installed = subprocess.run(
+            [sys.executable, "-m", "perun", "install", "--no-index"],
+            cwd=str(root), env=env, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=300,
+            creationflags=_creationflags(),
+        )
+        if installed.returncode != 0:
+            _log(
+                "Global config refresh failed "
+                f"({installed.returncode}): "
+                f"{_short(installed.stderr or installed.stdout)}",
+                level="warn",
+            )
+        else:
+            _log("Global OpenCode config refreshed.", level="ok")
+    except Exception as exc:  # noqa: BLE001 - the update itself already succeeded
+        _log(f"Global config refresh failed: {exc}", level="warn")
+
 
 def _installer_mutex_running() -> bool:
     """Return True if another PerunSetup installer instance is already running."""

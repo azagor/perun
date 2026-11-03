@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Updates refresh the global install
+
+* `perun update apply` on a git checkout now re-runs the additive global install
+  (`perun install --no-index`) after the pull, so the managed `AGENTS.md` kernel,
+  the slash commands and the MCP entry match the release that was just installed.
+  Previously only fresh installs and installer upgrades refreshed them, leaving
+  git users on old always-on rules. The step backs up before writing and is
+  best-effort: a locked or read-only config logs a warning and never fails a
+  successful update.
 
 ## v0.10.61
 

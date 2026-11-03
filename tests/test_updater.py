@@ -454,3 +454,38 @@ def test_apply_rejects_concurrent_update(monkeypatch, tmp_path):
         assert "already in progress" in str(exc.value)
     finally:
         updater._state_path = old_path
+
+def test_git_update_refreshes_the_global_install(tmp_path, monkeypatch):
+    """A pull replaces the code; the generated global assets must follow."""
+    root = tmp_path / "perun-update"
+    root.mkdir()
+    (root / "requirements.txt").write_text("requests\n", encoding="utf-8")
+    calls = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_git(*args, **kwargs):
+        return Result(0, "Already up to date.", "")
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return Result(0, "", "")
+
+    monkeypatch.setattr(updater, "_git", fake_git)
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+    monkeypatch.setattr(updater, "_set_state", lambda **kwargs: None)
+    monkeypatch.setattr(updater, "_log", lambda *args, **kwargs: None)
+
+    updater._apply_git({"root": str(root)})
+
+    installs = [call for call in calls
+                if call[0][1:4] == ["-m", "perun", "install"]]
+    assert installs, calls
+    argv, kwargs = installs[0]
+    assert argv[-1] == "--no-index"
+    assert kwargs["cwd"] == str(root)
+    assert str(root) in kwargs["env"]["PYTHONPATH"]
