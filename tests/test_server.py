@@ -2801,3 +2801,48 @@ def test_running_an_undeclared_check_is_a_400(client, tmp_path):
     r = client.post(f"/api/projects/{project['slug']}/checks/nope/run")
     assert r.status_code == 400
     assert "no check named" in r.json()["detail"]
+
+
+def test_a_check_can_declare_extra_environment(client, tmp_path):
+    import sys
+    from pathlib import Path
+
+    project = _check_project(tmp_path, "checks-env")
+    (Path(project["path"]) / "env_check.py").write_text(
+        "import os; print(os.environ.get('CK_TEST', 'MISSING'))\n",
+        encoding="utf-8",
+    )
+    created = client.post(
+        f"/api/projects/{project['slug']}/checks",
+        json={"name": "env", "command": f'"{sys.executable}" env_check.py',
+              "env": {"CK_TEST": "hello"}},
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["check"]["env"] == {"CK_TEST": "hello"}
+
+    ran = client.post(f"/api/projects/{project['slug']}/checks/env/run")
+    assert ran.status_code == 200, ran.text
+    assert "hello" in ran.json()["result"]["output"]
+
+
+def test_a_check_already_running_returns_409(client, tmp_path):
+    import time
+
+    from perun import db, registry
+
+    project = _check_project(tmp_path, "checks-busy")
+    client.post(f"/api/projects/{project['slug']}/checks",
+                json={"name": "smoke", "command": "echo hi"})
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO check_runs (project_id, check_name, source, command, "
+            "status, timeout_seconds, started_epoch, created_at) "
+            "VALUES (?,?,?,?, 'running', 120, ?, ?)",
+            (project["id"], "smoke", "declared", "x", time.time(),
+             registry.now_iso()),
+        )
+
+    r = client.post(f"/api/projects/{project['slug']}/checks/smoke/run")
+
+    assert r.status_code == 409
+    assert "already running" in r.json()["detail"]

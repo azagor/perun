@@ -1182,11 +1182,14 @@ Autonomous PerunChat chat participant for the Orchestrator.
   in the project tree). `run_declared()` refuses an unknown name, refuses a
   pinned script whose sha256 changed, and runs with the project root (or a
   project-relative `cwd`) as working directory, a scrubbed environment
-  (`_env()` keeps only OS/PATH/`PYTHON*` basics), a capped timeout, and capped
-  merged stdout/stderr. `_begin_run()` inserts a `running` row guarded by the
-  partial unique index `idx_check_runs_one_running`, which makes a run a
-  cross-process single-flight lease; `reap_stale()` marks a crashed run
-  `abandoned`. `derive_proposal_verification()` builds the only command a
+  (`_env()` keeps OS/PATH/`PYTHON*` and common toolchain roots; a check's
+  operator-declared `env` map adds the rest), a capped timeout, and capped
+  merged stdout/stderr (OSC/CSI/C0 stripped, UTF-8 with a console-codepage
+  fallback). `_begin_run()` inserts a `running` row guarded by the partial
+  unique index `idx_check_runs_one_running`, which makes a run a cross-process
+  single-flight lease, and refuses a fifth concurrent run machine-wide;
+  `reap_stale()` marks a crashed run `abandoned` and `_prune_runs()` keeps the
+  newest 200 finished runs per project. `derive_proposal_verification()` builds the only command a
   proposal may be verified with — the interpreter plus an approved
   `.py`/`.ps1`/`.sh`/`.bat`/`.cmd` target — and `run_proposal_verification()`
   refuses a hash that changed after the operator confirmed the card.

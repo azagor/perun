@@ -450,9 +450,11 @@ def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
     for r in rows:
         content = r["content"] or ""
         sem = 0.0
+        semantic = False
         if q_emb and r["embedding"]:
             try:
                 sem = cosine_similarity(q_emb, unpack_vector(r["embedding"]))
+                semantic = True
             except Exception:
                 sem = 0.0
         # Calibrated keyword boost: small additive, not a dominant signal.
@@ -466,7 +468,14 @@ def search_facts(query: str, project_id: int = 0, *, top_k: int = 6,
         score += 0.001 * freshness
         # Popularity tie-breaker.
         score += 0.0001 * min(r["hit_count"], 100)
-        if score > 0.15:
+        # The 0.15 cutoff filters *semantic* noise. A fact with no comparable
+        # embedding (Ollama was down when it was stored, or its vector is
+        # missing) has sem=0 by definition, so judging it by the semantic
+        # cutoff would discard every genuine multi-word keyword match (the
+        # lexical bonus is at most 0.25 for an exact phrase, 0.03 for two
+        # words). Fall back to a lexical cutoff for those rows.
+        cutoff = 0.15 if semantic else 0.02
+        if score > cutoff:
             import json as _json
             meta = {}
             try:
@@ -546,9 +555,11 @@ def search_room_facts(query: str, room_id: str, *, project_id: int = -1,
     for r in rows:
         content = r["content"] or ""
         sem = 0.0
+        semantic = False
         if q_emb and r["embedding"]:
             try:
                 sem = cosine_similarity(q_emb, unpack_vector(r["embedding"]))
+                semantic = True
             except Exception:
                 sem = 0.0
         kw = _keyword_boost(low_q, words, content, r["topic"])
@@ -565,7 +576,9 @@ def search_room_facts(query: str, room_id: str, *, project_id: int = -1,
             score += 0.03
         # Freshness is a tie-breaker, not a multiplier.
         score += 0.001 * _freshness_weight(r["ts"])
-        if score > 0.15:
+        # Same degradation rule as search_facts: a row without a comparable
+        # vector is judged lexically, not by a semantic cutoff it cannot reach.
+        if score > (0.15 if semantic else 0.02):
             scored.append({
                 "id": r["id"],
                 "source_type": "fact",
@@ -987,17 +1000,21 @@ def search_docs(query: str, project_id: int = 0, *, top_k: int = 6,
     for r in rows:
         content = r["content"] or ""
         sem = 0.0
+        semantic = False
         emb = r["embedding"]
         emb_hash = r["embedded_hash"] if "embedded_hash" in r.keys() else ""
         content_hash = r["content_hash"] if "content_hash" in r.keys() else ""
         if q_emb and emb and emb_hash and content_hash and emb_hash == content_hash:
             try:
                 sem = cosine_similarity(q_emb, unpack_vector(emb))
+                semantic = True
             except Exception:
                 sem = 0.0
         kw = _keyword_boost(low_q, words, content, "")
         score = sem + kw
-        if score > 0.15:
+        # A chunk indexed while Ollama was down has no comparable vector; its
+        # lexical match must not be filtered by the semantic cutoff.
+        if score > (0.15 if semantic else 0.02):
             meta = extract_metadata(content)
             scored.append({
                 "id": r["id"],

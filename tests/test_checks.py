@@ -337,3 +337,112 @@ def test_a_confirmation_expires(tmp_path):
 
     assert checks.get_confirmation(
         project["id"], "prop_x", "tests/v.py", "b" * 64) is None
+
+def test_terminal_control_sequences_are_stripped(tmp_path):
+    project = _project(tmp_path)
+    checks.declare(project, "ctl",
+                   _py("print('\\x1b]0;pwned\\x07ok\\x08')"))
+
+    result = checks.run_declared(project, "ctl")
+
+    assert "ok" in result["output"]
+    assert "\x1b" not in result["output"]
+    assert "\x07" not in result["output"]
+    assert "\x08" not in result["output"]
+
+
+def test_extra_environment_is_passed_to_the_check(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    monkeypatch.delenv("CHECK_EXTRA", raising=False)
+    checks.declare(
+        project, "env-plus",
+        _py("import os; print(os.environ.get('CHECK_EXTRA', 'MISSING'))"),
+        env={"CHECK_EXTRA": "from-declaration"},
+    )
+
+    result = checks.run_declared(project, "env-plus")
+
+    assert "from-declaration" in result["output"]
+
+
+def test_an_invalid_environment_key_is_rejected(tmp_path):
+    project = _project(tmp_path)
+    with pytest.raises(checks.CheckError, match="environment key"):
+        checks.declare(project, "bad-env", _py("print(1)"),
+                       env={"NOT A KEY": "x"})
+
+
+def test_old_runs_are_pruned_per_project(tmp_path):
+    project = _project(tmp_path)
+    with registry.db.db() as conn:
+        for i in range(checks.KEEP_RUNS + 5):
+            conn.execute(
+                "INSERT INTO check_runs (project_id, check_name, source, command, "
+                "status, timeout_seconds, started_epoch, created_at) "
+                "VALUES (?,?,?,?, 'ok', 120, ?, ?)",
+                (project["id"], "smoke", "declared", "x", time.time(),
+                 registry.now_iso()),
+            )
+
+    checks.reap_stale(project["id"])
+
+    with registry.db.db() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM check_runs WHERE project_id=?",
+            (project["id"],),
+        ).fetchone()["n"]
+    assert count == checks.KEEP_RUNS
+
+
+def test_a_machine_wide_cap_refuses_another_run(tmp_path):
+    project = _project(tmp_path)
+    checks.declare(project, "smoke", _py("print(1)"))
+    busy_projects = []
+    for i in range(checks.MAX_CONCURRENT_RUNS):
+        other = tmp_path / f"cap{i}"
+        other.mkdir()
+        busy_projects.append(registry.add_project(f"cap{i}", str(other)))
+    with registry.db.db() as conn:
+        for busy in busy_projects:
+            conn.execute(
+                "INSERT INTO check_runs (project_id, check_name, source, command, "
+                "status, timeout_seconds, started_epoch, created_at) "
+                "VALUES (?,?,?,?, 'running', 120, ?, ?)",
+                (busy["id"], "smoke", "declared", "x", time.time(),
+                 registry.now_iso()),
+            )
+
+    with pytest.raises(checks.CheckBusy, match="already running"):
+        checks.run_declared(project, "smoke")
+
+
+def test_powershell_and_batch_targets_derive_commands(tmp_path):
+    project = _project(tmp_path)
+    tests = tmp_path / "proj" / "tests"
+    tests.mkdir()
+    (tests / "v.ps1").write_text("Write-Output ok\n", encoding="utf-8")
+    (tests / "v.bat").write_text("@echo ok\n", encoding="utf-8")
+
+    ps = checks.derive_proposal_verification(
+        project, _proposal(targets=["tests/v.ps1"]))
+    bat = checks.derive_proposal_verification(
+        project, _proposal(targets=["tests/v.bat"]))
+
+    assert "powershell" in ps["argv"][0].lower()
+    assert "cmd" in bat["argv"][0].lower()
+
+def test_recording_the_same_confirmation_keeps_one_row(tmp_path):
+    project = _project(tmp_path)
+    first = checks.record_confirmation(
+        project["id"], "prop_x", "tests/v.py", "d" * 64, attention_id=1)
+    second = checks.record_confirmation(
+        project["id"], "prop_x", "tests/v.py", "d" * 64, attention_id=2)
+
+    assert first["id"] == second["id"]
+    assert second["attention_id"] == 2
+    with registry.db.db() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM check_confirmations WHERE proposal_id=?",
+            ("prop_x",),
+        ).fetchone()["n"]
+    assert count == 1

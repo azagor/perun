@@ -1768,6 +1768,7 @@ async function mountChecks(wrap, p) {
          <div class="form-row"><label>Working directory</label><input id="ck-cwd" placeholder="(project root)"></div>
          <div class="form-row"><label>Timeout (s)</label><input id="ck-timeout" type="number" min="1" max="600" value="120"></div>
          <div class="form-row"><label>Pin file</label><input id="ck-pin" placeholder="tests/check_manifest.py (optional)"></div>
+         <div class="form-row"><label>Environment</label><textarea id="ck-env" rows="2" placeholder="ONE_KEY=VALUE per line (paths only, never secrets)"></textarea></div>
          <button class="btn primary" id="ck-add">Declare</button>`);
     wrap.appendChild(card);
     const list = card.querySelector('#ck-list');
@@ -1792,6 +1793,12 @@ async function mountChecks(wrap, p) {
                      ${c.pin_path ? `<div class="muted" style="font-size:.72rem">pinned ${esc(String(c.pin_sha256 || '').slice(0, 12))} · ${esc(c.pin_path)}</div>` : ''}</span>
                      <span class="ts">${esc(String(c.timeout_seconds || 120))}s</span>`);
                 const run = el('button', { class: 'btn sm primary' }, 'Run');
+                if (c.last_status === 'running') {
+                    // The server refuses a second run; show that instead of
+                    // offering a button that can only fail.
+                    run.disabled = true;
+                    run.textContent = 'Running…';
+                }
                 run.addEventListener('click', async () => {
                     run.disabled = true;
                     run.textContent = 'Running…';
@@ -1839,15 +1846,24 @@ async function mountChecks(wrap, p) {
         const pin = card.querySelector('#ck-pin').value.trim();
         const timeout = Number(card.querySelector('#ck-timeout').value || 120);
         if (!name || !command) { toast('Name and command are required', 'err'); return; }
+        const env = {};
+        for (const line of card.querySelector('#ck-env').value.split('\n')) {
+            const text = line.trim();
+            if (!text) continue;
+            const split = text.indexOf('=');
+            if (split < 1) { toast(`Invalid env line: ${text}`, 'err'); return; }
+            env[text.slice(0, split).trim()] = text.slice(split + 1);
+        }
         try {
             await api(`/api/projects/${p.slug}/checks`, {
                 method: 'POST',
-                body: { name, command, cwd, pin, timeout_seconds: timeout },
+                body: { name, command, cwd, pin, env, timeout_seconds: timeout },
             });
             card.querySelector('#ck-name').value = '';
             card.querySelector('#ck-command').value = '';
             card.querySelector('#ck-cwd').value = '';
             card.querySelector('#ck-pin').value = '';
+            card.querySelector('#ck-env').value = '';
             toast('Check declared', 'ok');
             load();
         } catch (e) { toast(e.message, 'err'); }

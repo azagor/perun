@@ -648,3 +648,31 @@ def test_checks_add_list_run_and_remove(tmp_path, capsys):
 def test_checks_reject_an_unknown_project(capsys):
     assert cli.cmd_checks(_ns(checks_action="list", project="nope")) == 1
     assert "no such project" in capsys.readouterr().out
+
+def test_checks_add_stores_an_environment(tmp_path):
+    import sys
+
+    from perun import checks, registry
+
+    root = tmp_path / "cli-env"
+    root.mkdir()
+    project = registry.add_project("cli-env", str(root), kind="opencode")
+
+    assert cli.cmd_checks(_ns(checks_action="add", project=project["slug"],
+                              name="env", command=f'"{sys.executable}" -c "print(1)"',
+                              cwd="", timeout=30, pin="",
+                              env=["CK_CLI=yes"])) == 0
+    assert checks.get_check(project["id"], "env")["env"] == {"CK_CLI": "yes"}
+
+
+def test_checks_add_rejects_a_malformed_environment(tmp_path, capsys):
+    from perun import registry
+
+    root = tmp_path / "cli-env-bad"
+    root.mkdir()
+    project = registry.add_project("cli-env-bad", str(root), kind="opencode")
+
+    assert cli.cmd_checks(_ns(checks_action="add", project=project["slug"],
+                              name="env", command="echo hi", cwd="", timeout=30,
+                              pin="", env=["not-a-pair"])) == 1
+    assert "KEY=VALUE" in capsys.readouterr().out

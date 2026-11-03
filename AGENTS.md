@@ -116,8 +116,10 @@ with `python -m perun project-roots --add <name> <path>`.
   (`perun_verify_proposal`); the run is refused if the file changed. Never add a
   tool that accepts a command string, never let a proposal's free text become
   argv, and never widen the guard allowlist so the room persona gets shell.
-  Every run is cross-process single-flight per project, gets a scrubbed
-  environment, caps timeout/output, and records `check_runs` + activity.
+  Every run is cross-process single-flight per project (with a machine-wide
+  cap), gets a scrubbed environment (a per-check `env` map adds toolchain paths
+  only, never credentials), caps timeout/output, strips terminal control bytes,
+  prunes old history, and records `check_runs` + activity.
 * **Docs are part of the proposal pipeline.** The executor is sandboxed to the
   approved targets, so it cannot write `docs/`; never widen the allowlist to let
   it. `docs_sync.after_execution()` runs the installed `/update-docs` command once

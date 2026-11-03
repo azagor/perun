@@ -419,6 +419,8 @@ def _check_project_line(project: dict[str, Any], check: dict[str, Any]) -> str:
     bits = [f"{check['timeout_seconds']:>4}s", check["command"]]
     if check.get("pin_path"):
         bits.append(f"pin {check['pin_path']}@{check['pin_sha256'][:12]}")
+    if check.get("env"):
+        bits.append("env " + ",".join(sorted(check["env"])))
     if check.get("last_status"):
         bits.append(f"last {check['last_status']} ({check.get('last_exit_code')})")
     return f"{project['slug']:<20} {check['name']:<20} " + "  ".join(bits)
@@ -453,10 +455,17 @@ def cmd_checks(args: argparse.Namespace) -> int:
         return 0
 
     if action == "add":
+        env: dict[str, str] = {}
+        for item in getattr(args, "env", None) or []:
+            if "=" not in item:
+                print(f"error: --env must be KEY=VALUE, not {item!r}")
+                return 1
+            key, value = item.split("=", 1)
+            env[key.strip()] = value
         try:
             check = checks.declare(
                 project, args.name, args.command, cwd=args.cwd,
-                timeout_seconds=args.timeout, pin=args.pin,
+                timeout_seconds=args.timeout, pin=args.pin, env=env,
                 created_by=os.environ.get("USERNAME") or "operator",
             )
         except checks.CheckError as exc:
@@ -2105,20 +2114,26 @@ def build_parser() -> argparse.ArgumentParser:
                     help="project slug (omit for every project)")
     cp.set_defaults(func=cmd_checks)
 
-    cp = checks_sub.add_parser("add", help="declare (or replace) a check")
+    cp = checks_sub.add_parser(
+        "add", help="declare (or replace) a check; a replacement covers the "
+                    "whole declaration (command, cwd, timeout, pin and env)")
     cp.add_argument("project")
     cp.add_argument("name", help="lowercase identifier, e.g. check-manifest")
     cp.add_argument("command",
                     help="the command, quoted as one argument; it runs with the "
                          "project root as cwd and a scrubbed environment. It is "
                          "stored in Perun's database and activity log: never put "
-                         "a credential in it")
+                         "a credential in it. Use `--` before a command that "
+                         "starts with '-'")
     cp.add_argument("--cwd", default="", help="project-relative working directory")
     cp.add_argument("--timeout", type=int, default=checks.DEFAULT_TIMEOUT,
                     help=f"seconds (default {checks.DEFAULT_TIMEOUT}, "
                          f"max {checks.MAX_TIMEOUT})")
     cp.add_argument("--pin", default="",
                     help="project-relative script whose sha256 must not change")
+    cp.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                    help="extra environment variable for this check (repeatable; "
+                         "use paths, never secrets)")
     cp.set_defaults(func=cmd_checks)
 
     cp = checks_sub.add_parser("remove", help="remove a declared check")

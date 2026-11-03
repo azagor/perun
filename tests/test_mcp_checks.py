@@ -246,3 +246,38 @@ def test_a_late_decline_is_honoured_without_asking_again(project, monkeypatch):
 
     assert "Not run" in text and "Cancel" in text
     assert checks.history(project["id"]) == []
+
+
+def test_a_hidden_projects_proposal_is_not_a_side_door(project, tmp_path, monkeypatch):
+    other = tmp_path / "other-project"
+    other.mkdir()
+    registry.add_project("other-project", str(other))
+    _write_script(project)
+    proposal_id = _executed_proposal(project)
+    registry.update_project(project["slug"], hidden=1)
+    monkeypatch.chdir(other)
+
+    text = mcp_mod.perun_verify_proposal(proposal_id, ctx=_ctx())
+
+    assert "cannot access" in text
+    assert checks.history(project["id"]) == []
+
+
+def test_run_check_reports_a_busy_project(project):
+    import time
+
+    from perun import db
+
+    checks.declare(project, "smoke", f'"{sys.executable}" -c "print(1)"')
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO check_runs (project_id, check_name, source, command, "
+            "status, timeout_seconds, started_epoch, created_at) "
+            "VALUES (?,?,?,?, 'running', 120, ?, ?)",
+            (project["id"], "smoke", "declared", "x", time.time(),
+             registry.now_iso()),
+        )
+
+    text = mcp_mod.perun_run_check("smoke", project="checks-proj")
+
+    assert "already running" in text

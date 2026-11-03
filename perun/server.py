@@ -1858,6 +1858,8 @@ def list_checks_or_empty(project_id: int) -> list[dict[str, Any]]:
     try:
         return checks.list_checks(project_id)
     except Exception:  # pragma: no cover - an unreadable schema must not 500
+        logger.warning("could not list checks for project %s", project_id,
+                       exc_info=True)
         return []
 
 
@@ -1873,6 +1875,7 @@ def api_declare_check(slug: str, payload: dict[str, Any] = Body(...)) -> dict[st
             cwd=str(payload.get("cwd") or ""),
             timeout_seconds=payload.get("timeout_seconds", checks.DEFAULT_TIMEOUT),
             pin=str(payload.get("pin") or ""),
+            env=payload.get("env") if isinstance(payload.get("env"), dict) else None,
             created_by=_approver_identity(),
         )
     except checks.CheckError as exc:
@@ -1892,14 +1895,14 @@ def api_remove_check(slug: str, name: str) -> dict[str, Any]:
 def api_run_check(slug: str, name: str) -> dict[str, Any]:
     """Run a declared check synchronously and return its result.
 
-    The HTTP path is capped at the MCP timeout so a stuck build cannot hold a
-    request for ten minutes; the CLI keeps the full cap.
+    The HTTP path holds a thread-pool worker, so it is capped tighter than the
+    MCP path (and much tighter than the CLI); the result is still complete.
     """
     project = _project_or_404(slug)
     try:
         result = checks.run_declared(
             project, name, requester=_approver_identity(), trigger="dashboard",
-            max_timeout=checks.MCP_MAX_TIMEOUT,
+            max_timeout=checks.HTTP_MAX_TIMEOUT,
         )
     except checks.CheckBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc))

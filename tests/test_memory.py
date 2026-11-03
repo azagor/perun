@@ -504,3 +504,54 @@ def test_stats_reports_expiring_facts():
     stats = memory.stats()
     assert stats["facts_expiring_7d"] >= 1
     assert stats["facts_expiring_30d"] >= 1
+
+
+def test_a_multiword_keyword_match_survives_without_embeddings(monkeypatch):
+    """Ollama down means sem=0 for every row; lexical matches must still pass.
+
+    Regression: the semantic 0.15 cutoff discarded a two-word keyword hit
+    (0.03) whenever the query/fact embedding was unavailable, which made
+    `search_facts("deployment rule")` return nothing for an exact rule.
+    """
+    def no_embeddings(*args, **kwargs):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(memory, "embed_texts", no_embeddings)
+    p = registry.add_project("NoEmbed", r"C:\no-embed")
+    memory.remember("ancient global rule about deployment", scope="global", kind="rule")
+    memory.remember("unrelated project note", project_id=p["id"], scope="project")
+
+    results = memory.search_facts("deployment rule", p["id"], top_k=5,
+                                  include_global=True)
+
+    assert any(r["content"] == "ancient global rule about deployment"
+               for r in results)
+
+
+def test_room_search_survives_without_embeddings(monkeypatch):
+    def no_embeddings(*args, **kwargs):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(memory, "embed_texts", no_embeddings)
+    room = "priv:no-embed"
+    memory.remember("deployment rule for this room", project_id=-1, scope="room",
+                    topic="perunchat", source="perunchat",
+                    meta={"room": room, "type": "note"}, room_id=room)
+
+    results = memory.search_room_facts("deployment rule", room, project_id=-1)
+
+    assert results
+
+
+def test_doc_search_survives_without_embeddings(monkeypatch):
+    def no_embeddings(*args, **kwargs):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(memory, "embed_texts", no_embeddings)
+    p = registry.add_project("NoEmbedDocs", r"C:\no-embed-docs")
+    memory.index_text(p["id"], "docs/CODEMAP.md",
+                      "## Deploy\n\nThe deployment blueprint lives here.\n")
+
+    results = memory.search_docs("blueprint deployment", p["id"])
+
+    assert results

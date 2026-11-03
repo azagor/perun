@@ -4,7 +4,34 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Checks hardening (audit follow-up)
+
+* Proposal verification respects the hidden-project rule: a proposal id is no
+  longer a side door around `_visible()`, so a session outside a hidden project
+  cannot verify its script.
+* Check output is treated as untrusted terminal data: OSC/CSI sequences and C0
+  control bytes are stripped, and output is decoded as UTF-8 with a console
+  codepage fallback (UTF-16 BOM included) instead of a wall of replacement
+  characters.
+* `project_checks.env` lets the operator add toolchain paths (`JAVA_HOME`,
+  `GOROOT`, `NODE_PATH`, …) per check, from the CLI (`--env KEY=VALUE`), the API
+  and the dashboard. The runner still starts from a scrubbed base; the common
+  toolchain roots are now inherited too.
+* `check_runs` keeps the newest 200 finished runs per project; a machine-wide
+  cap of 4 concurrent checks prevents several projects from starting heavy
+  checks at once. The HTTP run path is capped at 120 s (MCP 300 s, CLI 600 s),
+  and a locked/busy check store degrades to a clear "busy" message.
+* The dashboard disables Run while a check is running, the confirmation TTL now
+  matches the attention card (4 h), and `perun checks add --help` documents
+  `--env` and the `--` escape for a command starting with `-`.
+* `memory.search_facts()`, `search_room_facts()` and `search_docs()` no longer
+  drop a genuine multi-word lexical match when no embedding is available
+  (Ollama down, or a row stored/indexed while it was down). The 0.15 semantic
+  cutoff now applies only when the row has a comparable vector; unembedded rows
+  use a 0.02 lexical cutoff, which admits a genuine two-word match but still
+  filters a single incidental word (the `LIKE` pre-filter can admit one). This
+  was the long-standing intermittent `test_memory` failure (a two-word hit
+  scored 0.03 against a 0.15 threshold).
 
 ## v0.10.59
 

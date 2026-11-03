@@ -1256,6 +1256,8 @@ def perun_list_checks(project: str | None = None) -> str:
         bits = [check["command"], f"{check['timeout_seconds']}s"]
         if check["pin_path"]:
             bits.append(f"pinned {check['pin_sha256'][:12]}")
+        if check.get("env"):
+            bits.append("env " + ",".join(sorted(check["env"])))
         last = check.get("last_status")
         if last:
             bits.append(f"last {last} ({check.get('last_exit_code')})")
@@ -1313,7 +1315,10 @@ def perun_verify_proposal(proposal_id: str, target: str = "",
     proposal = action_proposals.get(proposal_id)
     if not proposal:
         return f"[perun] No such proposal: {proposal_id}"
-    p = _resolve_project(project) or registry.get_project(proposal["project_id"])
+    # A hidden project is scoped to its own checkout: never let the proposal id
+    # be a side door around `_visible()`.
+    p = _resolve_project(project) or _visible(
+        registry.get_project(proposal["project_id"]))
     if not p or int(p["id"]) != int(proposal["project_id"]):
         return "[perun] That proposal belongs to a project this session cannot access."
     try:

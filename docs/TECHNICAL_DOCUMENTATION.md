@@ -199,7 +199,10 @@ Two stores, one search surface (`memory.unified_search`):
 
 **Ranking.** Cosine similarity over Ollama embeddings, plus keyword bonus, plus a
 small freshness tie-breaker. Chunks also pick up a small keyword bonus. Results
-with score ≤ 0.15 are dropped.
+with score ≤ 0.15 are dropped **when the row has a comparable vector**; a row
+without one (Ollama was down when it was stored) is judged by a lexical cutoff
+instead, so a genuine multi-word keyword match is not discarded by a semantic
+threshold it can never reach.
 
 **Degradation.** If Ollama is unreachable, `_embed()` returns `None`, rows store
 without an embedding, and search falls back to keyword + recency. `stats()`
@@ -2110,14 +2113,20 @@ Two sources, with different trust anchors:
 
 Execution rules for both paths: cwd is the project root (or a validated
 project-relative subdirectory), the environment is scrubbed to OS/PATH/`PYTHON*`
-basics so a delivered script cannot read Perun's or a provider's credentials,
-the timeout is capped (600 s CLI, 300 s MCP/HTTP), merged stdout+stderr is capped
-at 16 KiB with an explicit truncation marker, and a timeout kills the whole
-process tree. A `running` row guarded by a partial unique index makes a run a
-cross-process single-flight lease per project; a crashed run is reaped as
-`abandoned` by the next call. Every run logs `check_ok` / `check_failed` /
-`check_timeout` / `check_error` to the activity feed and keeps its exit code,
-duration and output tail in `check_runs`.
+and common toolchain roots so a delivered script cannot read Perun's or a
+provider's credentials; a check's operator-declared `env` map (from
+`--env KEY=VALUE`, the API or the dashboard) adds the rest without weakening the
+scrub. The timeout is capped (600 s CLI, 300 s MCP, 120 s HTTP — a dashboard
+request holds a thread-pool worker), merged stdout+stderr is decoded as UTF-8
+with a console-codepage/UTF-16 fallback, OSC/CSI sequences and C0 bytes are
+stripped, and the result is capped at 16 KiB with an explicit truncation marker;
+a timeout kills the whole process tree. A `running` row guarded by a partial
+unique index makes a run a cross-process single-flight lease per project, a
+machine-wide cap refuses a fifth concurrent run, and the newest 200 finished
+runs per project are kept; a crashed run is reaped as `abandoned` by the next
+call. Every run logs `check_ok` / `check_failed` / `check_timeout` /
+`check_error` to the activity feed and keeps its exit code, duration and output
+tail in `check_runs`.
 
 The dashboard endpoints are `GET`/`POST /api/projects/{slug}/checks`,
 `DELETE .../{name}`, `POST .../{name}/run` and `GET .../{name}/history`; the

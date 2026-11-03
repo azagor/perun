@@ -602,6 +602,9 @@ CREATE TABLE IF NOT EXISTS project_checks (
     timeout_seconds INTEGER NOT NULL DEFAULT 120,
     pin_path        TEXT NOT NULL DEFAULT '',
     pin_sha256      TEXT NOT NULL DEFAULT '',
+    -- Operator-supplied environment additions (a JSON object). The runner still
+    -- starts from a scrubbed base; this only adds paths like JAVA_HOME.
+    env             TEXT NOT NULL DEFAULT '{}',
     created_by      TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
@@ -783,6 +786,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("next_cycle_epoch", "REAL DEFAULT 0"),
         ("dispatch_failures", "INTEGER DEFAULT 0"),
     ],
+    # A database whose ``project_checks`` was created by the first checks build
+    # gains the operator-declared environment map on the next startup.
+    "project_checks": [
+        ("env", "TEXT NOT NULL DEFAULT '{}'"),
+    ],
 }
 
 # Columns retired after project instructions moved fully to files on disk
@@ -868,7 +876,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 
 def init_db() -> None:

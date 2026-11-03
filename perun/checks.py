@@ -29,6 +29,7 @@ run leaves an ``abandoned`` row for the next call to reap.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import uuid
@@ -46,13 +47,23 @@ from . import db, path_guard, registry
 
 #: Check names are stable identifiers, not prose.
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 600
 #: The MCP/room path is capped lower than the CLI: a room reply must not block
 #: for ten minutes on a hung build.
 MCP_MAX_TIMEOUT = 300
+#: A dashboard request holds a thread-pool worker, so it is capped tighter still.
+HTTP_MAX_TIMEOUT = 120
+#: A check is single-flight per project, but several projects could otherwise
+#: start heavy checks at once. This is the machine-wide advisory cap.
+MAX_CONCURRENT_RUNS = 4
+#: Rows kept per project; older runs are pruned (the output would otherwise
+#: accumulate forever).
+KEEP_RUNS = 200
 MAX_COMMAND = 2000
 MAX_OUTPUT = 16_000
+MAX_ENV_VALUE = 2000
 SCRIPT_SUFFIXES = (".py", ".ps1", ".sh", ".bat", ".cmd")
 
 #: Environment kept for a check. Everything else is dropped, so a delivered
@@ -66,9 +77,18 @@ _ENV_ALLOW = {
     "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
     "OS", "USERNAME", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL",
     "LC_CTYPE", "TZ", "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV",
+    # Toolchain roots are paths, not credentials. Without them a declared
+    # Maven/Gradle/Go/Rust/.NET check fails on a correctly configured machine.
+    "JAVA_HOME", "JRE_HOME", "MAVEN_HOME", "M2_HOME", "GRADLE_HOME",
+    "GOROOT", "GOPATH", "GOBIN", "CARGO_HOME", "RUSTUP_HOME", "DOTNET_ROOT",
+    "NVM_HOME", "NVM_SYMLINK", "NODE_PATH", "GEM_HOME", "GEM_PATH",
+    "PHP_HOME", "PERL5LIB", "R_LIBS",
 }
 
-_ANSI = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+_ANSI_CSI = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+#: Operating-system command (window title, hyperlink): ends with BEL or ST.
+_ANSI_OSC = re.compile(r"\x1B\].*?(?:\x07|\x1B\\)", re.DOTALL)
+_C0 = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 class CheckError(ValueError):
@@ -85,7 +105,7 @@ class CheckBusy(RuntimeError):
 #: How long an operator's "Run it" answer stays usable. Long enough to survive a
 #: room's short wait window, short enough that a stale confirmation cannot be
 #: replayed the next day.
-CONFIRM_TTL_SECONDS = 3600
+CONFIRM_TTL_SECONDS = 240 * 60  # match the attention card's default TTL
 
 
 def get_confirmation(project_id: int, proposal_id: str, target: str,
@@ -210,6 +230,11 @@ def _pin_digest(root: Path, pin: str) -> tuple[str, str]:
 def _check_row(row: sqlite3.Row) -> dict[str, Any]:
     out = dict(row)
     out["timeout_seconds"] = int(out.get("timeout_seconds") or DEFAULT_TIMEOUT)
+    try:
+        env = json.loads(out.get("env") or "{}")
+    except (TypeError, ValueError):
+        env = {}
+    out["env"] = env if isinstance(env, dict) else {}
     return out
 
 
@@ -221,6 +246,7 @@ def declare(
     cwd: str = "",
     timeout_seconds: Any = DEFAULT_TIMEOUT,
     pin: str = "",
+    env: dict[str, str] | None = None,
     created_by: str = "",
 ) -> dict[str, Any]:
     """Declare (or replace) an operator-owned check. CLI/dashboard only.
@@ -246,17 +272,30 @@ def declare(
     cwd = (cwd or "").strip().replace("\\", "/")
     _resolve_cwd(root, cwd)
     pin_path, pin_sha256 = _pin_digest(root, pin)
+    clean_env: dict[str, str] = {}
+    for key, value in (env or {}).items():
+        key = str(key or "").strip()
+        if not ENV_KEY_RE.fullmatch(key):
+            raise CheckError(
+                f"environment key '{key}' must match [A-Za-z_][A-Za-z0-9_]*")
+        value = str(value)
+        if "\x00" in value or "\n" in value or "\r" in value:
+            raise CheckError(f"environment value for {key} must be one line")
+        if len(value) > MAX_ENV_VALUE:
+            raise CheckError(f"environment value for {key} is too long")
+        clean_env[key] = value
     ts = registry.now_iso()
     with db.db() as conn:
         conn.execute(
             "INSERT INTO project_checks (project_id, name, command, cwd, "
-            "timeout_seconds, pin_path, pin_sha256, created_by, created_at, "
-            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "timeout_seconds, pin_path, pin_sha256, env, created_by, created_at, "
+            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(project_id, name) DO UPDATE SET command=excluded.command, "
             "cwd=excluded.cwd, timeout_seconds=excluded.timeout_seconds, "
             "pin_path=excluded.pin_path, pin_sha256=excluded.pin_sha256, "
-            "updated_at=excluded.updated_at",
+            "env=excluded.env, updated_at=excluded.updated_at",
             (project_id, name, command, cwd, timeout, pin_path, pin_sha256,
+             json.dumps(clean_env, ensure_ascii=False, sort_keys=True),
              created_by or "operator", ts, ts),
         )
         row = db.one(
@@ -266,7 +305,7 @@ def declare(
     registry.log_activity(
         project_id, "check_declared", f"Check '{name}' declared for {slug}",
         {"name": name, "command": command, "pin": pin_path,
-         "timeout_seconds": timeout},
+         "timeout_seconds": timeout, "env_keys": sorted(clean_env)},
     )
     return _check_row(row)
 
@@ -344,9 +383,43 @@ def _env() -> dict[str, str]:
     return out
 
 
+def _decode_output(raw: bytes) -> str:
+    """Decode a child's bytes, favouring UTF-8 but accepting the console codec.
+
+    Windows tools still write cp1252 (or UTF-16 for PowerShell), and a command
+    that prints a failure message in the local encoding must not turn into a
+    wall of replacement characters.
+    """
+    if not raw:
+        return ""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            import locale
+
+            return raw.decode(locale.getpreferredencoding(False) or "utf-8",
+                              errors="replace")
+        except Exception:  # pragma: no cover - defensive
+            return raw.decode("utf-8", errors="replace")
+
+
 def _clean_output(text: str) -> str:
-    text = _ANSI.sub("", text or "")
-    text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    """Remove terminal control sequences; keep newlines and tabs.
+
+    A check may run a delivered script, so its output is untrusted data. The
+    dashboard escapes it, but ``perun checks run`` prints it to the operator's
+    terminal: an OSC title change or a bare C0 byte must not survive.
+    """
+    text = _ANSI_OSC.sub("", text or "")
+    text = _ANSI_CSI.sub("", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _C0.sub("", text)
     return text.rstrip()
 
 
@@ -378,12 +451,15 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         pass
 
 
-def _execute(command: str | list[str], *, cwd: Path,
-             timeout_seconds: int) -> dict[str, Any]:
+def _execute(command: str | list[str], *, cwd: Path, timeout_seconds: int,
+             extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     """Run one command, capture merged stdout/stderr, never raise for exit!=0."""
     started = time.monotonic()
     shell = isinstance(command, str)
     argv: str | list[str] = command if shell else list(command)
+    environment = _env()
+    if extra_env:
+        environment.update({str(k): str(v) for k, v in extra_env.items()})
     extra: dict[str, Any] = {}
     if os.name == "nt":
         extra["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -391,9 +467,9 @@ def _execute(command: str | list[str], *, cwd: Path,
         extra["start_new_session"] = True
     try:
         proc = subprocess.Popen(
-            argv, shell=shell, cwd=str(cwd), env=_env(), stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            encoding="utf-8", errors="replace", **extra,
+            argv, shell=shell, cwd=str(cwd), env=environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, **extra,
         )
     except OSError as exc:
         return {
@@ -410,9 +486,9 @@ def _execute(command: str | list[str], *, cwd: Path,
         try:
             raw, _ = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:  # pragma: no cover - stubborn child
-            raw = ""
+            raw = b""
     duration_ms = int((time.monotonic() - started) * 1000)
-    text = _clean_output(raw or "")
+    text = _clean_output(_decode_output(raw or b""))
     truncated = len(text) > MAX_OUTPUT
     if truncated:
         text = text[:MAX_OUTPUT] + f"\n... [truncated at {MAX_OUTPUT} characters]"
@@ -429,17 +505,35 @@ def _execute(command: str | list[str], *, cwd: Path,
     }
 
 
+def _prune_runs(project_id: int, keep: int = KEEP_RUNS) -> None:
+    """Keep the newest *keep* finished runs for a project, drop the rest."""
+    keep = max(1, int(keep))
+    with db.db() as conn:
+        conn.execute(
+            "DELETE FROM check_runs WHERE project_id=? AND status!='running' AND id < "
+            "(SELECT id FROM check_runs WHERE project_id=? AND status!='running' "
+            "ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (int(project_id), int(project_id), keep - 1),
+        )
+
+
 def reap_stale(project_id: int | None = None) -> int:
-    """Mark runs whose process died without finishing as ``abandoned``."""
+    """Mark runs whose process died without finishing as ``abandoned``.
+
+    The sweep covers every project (a stale row elsewhere must not occupy the
+    machine-wide concurrency count). When a project is given, its old history is
+    pruned too, so a frequently run check cannot grow the database without bound.
+    """
     cutoff = time.time()
     sql = ("UPDATE check_runs SET status='abandoned' WHERE status='running' "
            "AND started_epoch + timeout_seconds + 120 < ?")
+    # Always sweep every project: a crashed run in another project would
+    # otherwise sit in the machine-wide concurrency count forever.
     with db.db() as conn:
-        if project_id is None:
-            cur = conn.execute(sql, (cutoff,))
-        else:
-            cur = conn.execute(sql + " AND project_id=?", (cutoff, int(project_id)))
-        return cur.rowcount
+        cur = conn.execute(sql, (cutoff,))
+    if project_id is not None:
+        _prune_runs(int(project_id))
+    return cur.rowcount
 
 
 def _begin_run(project: dict[str, Any], *, check_name: str, source: str,
@@ -449,6 +543,13 @@ def _begin_run(project: dict[str, Any], *, check_name: str, source: str,
     ts = registry.now_iso()
     try:
         with db.db() as conn:
+            running = db.one(
+                conn, "SELECT COUNT(*) AS n FROM check_runs WHERE status='running'")
+            count = int(running["n"] or 0) if running else 0
+            if count >= MAX_CONCURRENT_RUNS:
+                raise CheckBusy(
+                    f"{MAX_CONCURRENT_RUNS} checks are already running on this "
+                    "machine; try again when one finishes")
             cur = conn.execute(
                 "INSERT INTO check_runs (project_id, check_name, source, command, "
                 "requester, trigger, proposal_id, status, timeout_seconds, "
@@ -462,6 +563,9 @@ def _begin_run(project: dict[str, Any], *, check_name: str, source: str,
     except sqlite3.IntegrityError as exc:
         raise CheckBusy(
             f"another check is already running in {project.get('slug')}") from exc
+    except sqlite3.OperationalError as exc:
+        raise CheckBusy(
+            "the check store is busy; try again in a moment") from exc
 
 
 def _finish_run(run_id: int, result: dict[str, Any]) -> None:
@@ -478,7 +582,8 @@ def _finish_run(run_id: int, result: dict[str, Any]) -> None:
 def _run(project: dict[str, Any], *, name: str, source: str,
          command: str | list[str], cwd: str, timeout_seconds: int,
          requester: str, trigger: str, proposal_id: str = "",
-         content_sha256: str = "") -> dict[str, Any]:
+         content_sha256: str = "",
+         extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     root = _project_root(project)
     workdir = _resolve_cwd(root, cwd)
     command_text = command if isinstance(command, str) else shlex.join(command)
@@ -488,7 +593,8 @@ def _run(project: dict[str, Any], *, name: str, source: str,
         timeout_seconds=timeout_seconds, content_sha256=content_sha256,
     )
     try:
-        result = _execute(command, cwd=workdir, timeout_seconds=timeout_seconds)
+        result = _execute(command, cwd=workdir, timeout_seconds=timeout_seconds,
+                          extra_env=extra_env)
     except Exception as exc:  # pragma: no cover - defensive
         result = {
             "status": "error", "exit_code": None, "timed_out": False,
@@ -546,6 +652,7 @@ def run_declared(project: dict[str, Any], name: str, *, requester: str = "",
         project, name=check["name"], source="declared", command=check["command"],
         cwd=check["cwd"], timeout_seconds=min(check["timeout_seconds"], max_timeout),
         requester=requester, trigger=trigger, content_sha256=check["pin_sha256"],
+        extra_env=check.get("env") or None,
     )
 
 
