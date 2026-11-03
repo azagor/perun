@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.55
+
+*Released 2026-11-03.*
+
 ### The control project is listed only in the owner's workspace
 
 * v0.10.54 gated hidden projects on "this installation has an owner" (a name or a

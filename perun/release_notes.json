@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T13:32:16+00:00",
+  "generated": "2026-11-03T14:20:13+00:00",
   "releases": [
+    {
+      "version": "0.10.55",
+      "date": "2026-11-03",
+      "body": "### The control project is listed only in the owner's workspace\n\n* v0.10.54 gated hidden projects on \"this installation has an owner\" (a name or a\n  paired Telegram chat). That was still per-install: once anyone named or paired,\n  the dashboard listed the Perun project. The gate is now a **workspace marker**,\n  `.perun/owner-workspace`, shipped by the private `perun_internal` overlay only.\n  A checkout carrying that overlay lists the control project; an installed copy\n  — and a plain clone of the public repo, which has no `.perun/` — lists user\n  projects only. `PERUN_SHOW_HIDDEN_PROJECTS=1` / `0` overrides per process.\n* The orchestrator is untouched: the control row stays registered (hidden),\n  `/api/health` still reports it, and a run without a project still targets it;\n  the Orchestrator page works with zero listed projects. The Agent Console\n  picker and the dashboard's \"Working now\" panel follow the same listing rule,\n  so a control-plane run no longer advertises itself there on an installed copy.\n* The release pipeline verifies the marker before writing anything and again\n  after the reverse sync (`tools/release.py`), so a release cannot silently\n  delete it and hide the project on the owner's own dashboard. The installer\n  excludes `.perun/`, so no installed copy ships the marker; nothing in the\n  installer or `.gitignore` changes."
+    },
     {
       "version": "0.10.54",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.46",
       "date": "2026-11-01",
       "body": "### A working project card offers its run's control, never Run\n\n* After a browser refresh, a card whose project had an active session showed a\n  \"working\" pip and banner but still rendered **▶ Run**. A standalone TUI run had\n  its Stop button suppressed (\"Perun cannot stop it\") while Run was hardcoded, so\n  the card invited a second session next to the working one. The first card\n  action now comes from `web/js/card_controls.js` (`runControlSpec`, unit-tested\n  with `node --test`): **Run** when idle, **Stop** for a headless run Perun owns,\n  **Finish** for a standalone TUI run — which calls\n  `POST /api/runs/{uid}/finish`, marks it done and captures usage, and never kills\n  the terminal.\n* `applyCardStates()` re-syncs that control on every 4 s presence poll (so a card\n  that lights up, finishes or is swept changes its action in place), and\n  `openProjectTui()` swaps it immediately for the run it just started. The button\n  is only rebuilt when its kind or run id actually changed.\n* The card's `Run` no longer goes through the Agent Console: its tooltip and doc\n  text now match what it does (OpenCode launched in the project directory).\n\n### Usage cards refresh on their own\n\n* The dashboard's **Usage · captured in the last 24h** card and the project\n  page's usage line now re-fetch every 60 seconds while their view is open,\n  instead of only on first render (a browser reload or a tab switch was the only\n  way to see a run's new numbers). The timer stops itself when the view changes,\n  is replaced on re-render, and never overlaps a request. 60 s matches the data:\n  open TUI runs are captured every 5 minutes, headless runs at finalize."
-    },
-    {
-      "version": "0.10.45",
-      "date": "2026-11-01",
-      "body": "### Audit follow-ups from the v0.10.44 review\n\n* `tools/release.py` puts the checkout on `sys.path` before importing\n  `perun.release_notes`, so bundling the notes no longer depends on\n  `PYTHONPATH` or an installed copy (a failed import there would have left a\n  half-prepared release).\n* A test covers `GET /api/update/notes?version=<unknown>`: an unknown version\n  reports `source: \"unavailable\"` and an empty body instead of inventing notes.\n* The Shared tab says that hiding a project does not disable sharing — turn the\n  toggle off to tear its room down."
     }
   ]
 }
