@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T15:13:11+00:00",
+  "generated": "2026-11-03T15:41:06+00:00",
   "releases": [
+    {
+      "version": "0.10.59",
+      "date": "2026-11-03",
+      "body": "### Checks: a bounded way to run a verification\n\n* Perun can now run a **verification command** instead of answering \"I have no\n  shell access\". Two paths exist, both deliberately narrow:\n  * **Operator-declared checks** live in Perun's own store (`perun checks add\n    <project> <name> \"<command>\"`), never in the project tree, so no room\n    message, agent tool or approved proposal can add one. `perun checks list /\n    run / remove / history` manage them; the guard MCP server exposes\n    `guard_list_checks` and `guard_run_check` (a name, never a command), and the\n    Perun MCP server exposes `perun_list_checks` and `perun_run_check`. A check\n    may pin a script's sha256 (`--pin tests/check_manifest.py`): the run is\n    refused when the reviewed file changed.\n  * **Proposal verification** (`perun_verify_proposal`) runs an *executed*\n    proposal's approved script (`.py`, `.ps1`, `.sh`, `.bat`, `.cmd`). The\n    command is derived from the target, never taken from proposal text; the\n    operator sees the exact command and sha256 in the attention card and must\n    confirm; the run is refused if the file changes after they answer.\n* The operator's confirmation is durable: `check_confirmations` remembers the\n  card, so an answer that lands after the room's short wait window is reused by\n  the next call instead of asking a second time. A confirmation is one-shot and\n  bound to the sha256 the operator saw.\n* Every run is cross-process single-flight per project, records its exit code,\n  duration and capped output in `check_runs`, logs a `check_ok` / `check_failed`\n  / `check_timeout` activity row, runs with the project root as cwd, and gets a\n  scrubbed environment (no Perun or provider credentials).\n* New HTTP endpoints (`GET/POST /api/projects/{slug}/checks`, `DELETE .../{name}`,\n  `POST .../{name}/run`, `GET .../{name}/history`) expose the same store to the\n  dashboard."
+    },
     {
       "version": "0.10.58",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.50",
       "date": "2026-11-02",
       "body": "### Stop is consistent everywhere, and its blast radius is documented\n\n* Telegram's `/stop` and `/cancel` now use the same path as the dashboard: after\n  `ORCH.cancel` they call `ProcessTracker.terminate(uid)`, so a phone-initiated\n  stop also closes the terminal Perun opened (or does nothing beyond finalizing the\n  row when nothing is attributable). A tracker failure is logged, never allowed to\n  swallow the reply.\n* `_terminal_owner()` matches the literal `PERUN_RUN_UID=<uid>` assignment (and its\n  quoted `cmd`/`pwsh`/POSIX forms) instead of the bare run id, so a command line\n  that merely mentions the uid can never become a kill target.\n* Tests: a running headless run cancelled over HTTP ends `cancelled` (never\n  `done`, which would mean `finalize()` ran before `ORCH.cancel`); the bridge's\n  `/stop` reaches the tracker and still replies when the tracker fails.\n* AGENTS and TECHNICAL now state the blast radius: closing the shell ends every\n  process started in that window — identical to closing it by hand, including a\n  nested `opencode serve` shared with other sessions."
-    },
-    {
-      "version": "0.10.49",
-      "date": "2026-11-02",
-      "body": "### Stop now closes the TUI terminal, including after a restart\n\n* Pressing Stop on a card whose project had an open TUI terminal only marked the\n  run `cancelled`; the window stayed open. Two defects: `/api/runs/{uid}/cancel`\n  called `ProcessTracker.terminate()` only when the in-memory entry existed — after\n  a server restart it does not — so the persisted `runs.pid` + `PERUN_RUN_UID`\n  marker were never consulted; and the kill target was whatever the marker scan\n  returned first, usually the *agent* process inside the terminal.\n* The endpoint now always offers the run to the tracker (which no-ops to\n  `finalize()` when nothing is attributable). `terminate()` resolves the **shell\n  that owns the terminal** via `_terminal_owner()` — the outermost\n  `cmd`/`pwsh`/`sh` carrying the marker in its command line — because `cmd /k` and\n  `pwsh -NoExit` keep the window at a prompt after the agent exits. Liveness still\n  follows the agent process, so an agent that exits still ends its run.\n* Regression tests: the kill target is the shell, not its child; a stop after a\n  restart kills the shell around the persisted agent pid; `/cancel` reaches the\n  tracker with an empty in-memory map."
     }
   ]
 }

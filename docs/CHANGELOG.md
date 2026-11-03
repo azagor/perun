@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.59
+
+*Released 2026-11-03.*
+
 ### Checks: a bounded way to run a verification
 
 * Perun can now run a **verification command** instead of answering "I have no
