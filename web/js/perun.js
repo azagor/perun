@@ -444,10 +444,9 @@ function computePresence() {
     // Only projects the UI is allowed to list may light up. An installed copy
     // never lists the hidden control plane, so its runs must not surface here
     // either (the Orchestrator page still shows its own chat).
-    const listed = new Set((state.projects || []).map((p) => p.slug));
     const working = new Set();
-    for (const r of (state.activeRuns || [])) {
-        if (r.project_slug && listed.has(r.project_slug)) working.add(r.project_slug);
+    for (const r of CardControls.visibleRuns(state.activeRuns, state.projects)) {
+        if (r.project_slug) working.add(r.project_slug);
     }
     const awake = new Set(working);
     const now = Date.now();
@@ -507,6 +506,13 @@ const CardControls = window.CardControls || {
         : { kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
             label: '\u25b6 Run', title: "Run OpenCode in this project's directory" }),
     focusControlSpec: () => null,
+    visibleRuns: (runs, projects) => {
+        const listed = new Set((projects || [])
+            .map((p) => p && p.slug)
+            .filter(Boolean));
+        return (runs || []).filter(
+            (r) => r && r.project_slug && listed.has(r.project_slug));
+    },
 };
 if (!window.CardControls) {
     console.error('perun: card_controls.js did not load; card actions are degraded');
@@ -590,9 +596,7 @@ function renderWorkingNow(container) {
     container.innerHTML = '';
     // Match the project grid: a run whose project the UI may not list (the
     // hidden control plane on an installed copy) is not advertised here.
-    const listed = new Set((state.projects || []).map((p) => p.slug));
-    const runs = (state.activeRuns || []).filter(
-        (r) => r.project_slug && listed.has(r.project_slug));
+    const runs = CardControls.visibleRuns(state.activeRuns, state.projects);
     if (!runs.length) return;
     container.appendChild(sectionTitle('Working now'));
     const box = el('div', { class: 'card' });

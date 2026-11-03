@@ -78,5 +78,25 @@
         };
     }
 
-    return { runControlSpec, runControlAttr, focusControlSpec };
+    /**
+     * Runs whose project the dashboard may list.
+     *
+     * Hidden projects (the control plane) are absent from the project list on
+     * an installed copy, so their runs must not light a card or appear in
+     * "Working now" either. The server keeps returning those runs: the restart
+     * guard reads them, and the Orchestrator page shows its own chat.
+     *
+     * @param {Array<object>|null|undefined} runs
+     * @param {Array<object>|null|undefined} projects
+     * @returns {Array<object>}
+     */
+    function visibleRuns(runs, projects) {
+        const listed = new Set((projects || [])
+            .map((p) => p && p.slug)
+            .filter(Boolean));
+        return (runs || []).filter(
+            (r) => r && r.project_slug && listed.has(r.project_slug));
+    }
+
+    return { runControlSpec, runControlAttr, focusControlSpec, visibleRuns };
 });

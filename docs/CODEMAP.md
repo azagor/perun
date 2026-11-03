@@ -1500,7 +1500,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   of `perun.js` so `node --test` can cover it: `runControlSpec(run)` returns
   **Run** for no run and **Stop** for any active run (a headless cancel, or closing
   the TUI terminal Perun opened via `/api/runs/{uid}/cancel`), plus
-  `runControlAttr(run)`. `perun.js` renders/syncs the button from it, so an active
+  `runControlAttr(run)`. `focusControlSpec(run)` gates the Focus button to a
+  tracked TUI run, and `visibleRuns(runs, projects)` drops runs whose project the
+  dashboard may not list (the hidden control plane on an installed copy).
+  `perun.js` renders/syncs the button from it, so an active
   card can never offer a second launch - the regression when Stop was suppressed
   for standalone runs while Run stayed hardcoded. Exposed as `window.CardControls`
   and as a CommonJS module.
@@ -1578,7 +1581,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   the dashboard prompts for the password once it is running.
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
-* `tools/release.py` — release pipeline: validates both repos, bumps every
+* `tools/release.py` - release pipeline: validates both repos, **refuses to run
+  without the private `.perun/owner-workspace` marker and re-verifies it after
+  the reverse sync** (it keeps the hidden control project listed on the owner's
+  dashboard), bumps every
   shipped version source (`perun/__init__.py`, `pyproject.toml`,
   `installer/PerunSetup.iss`, CODEMAP `__version__`), promotes `## Unreleased`
   entries into the new `## vX.Y.Z` section, updates the technical-doc
@@ -1796,12 +1802,15 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `web/js/chat_core.test.js` - the `node --test` suite for `chat_core.js`
   (room filter, id and identity dedupe, debounce inside/outside the window).
 * `test_js_card_controls.py` - runs `node --test web/js/card_controls.test.js`,
-  asserts `card_controls.js` loads before `perun.js`, and that `perun.js` keeps
-  no hardcoded Run button; skips when `node` is unavailable.
+  asserts `card_controls.js` loads before `perun.js`, that `perun.js` keeps
+  no hardcoded Run button, and that it uses the module's Focus and
+  `visibleRuns` gates (with safe fallbacks for a stale cached module); skips
+  when `node` is unavailable.
 * `web/js/card_controls.test.js` - the `node --test` suite for
   `card_controls.js`: a working card never yields the Run control, a headless run
   is stoppable, a standalone TUI run is stoppable too (Stop closes its terminal),
-  and `standalone` works as a number or a boolean.
+  `standalone` works as a number or a boolean, Focus needs a tracked TUI run, and
+  `visibleRuns` drops runs for projects the UI may not list.
 * `test_backups.py` — the config-copy helper: label sanitisation (a `.` or `..`
   label cannot escape the tree), second-resolution stamps never overwrite, a
   failed copy is swallowed, pruning keeps the newest N per stem and never touches

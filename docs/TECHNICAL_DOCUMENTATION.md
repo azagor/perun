@@ -577,6 +577,11 @@ be confused with — or deleted as — a user project.
   stays registered and hidden, and `POST /api/runs` without a project targets
   it). The dashboard's "Working now" panel filters by the same list, so a
   control-plane run does not advertise itself there on an installed copy.
+  Telegram keeps its own owner rule: a chat on the static
+  `telegram_allowed_chats` allow-list still sees the control project in
+  `/projects`, independent of this workspace listing. With the token, the raw
+  APIs (`GET /api/projects/{slug}`, `/api/runs/active`) remain reachable - the
+  rule removes the project from lists, it does not redact it.
 * `POST /api/runs` with no `project` targets the control slug, and `/api/health`
   reports it as `control`.
 

@@ -51,3 +51,11 @@ def test_perun_js_offers_the_focus_control_from_the_module():
     assert "data-focus" in src
     # A stale cached module must not crash the card renderer.
     assert "focusControlSpec: () => null" in src
+
+
+def test_perun_js_filters_presence_to_listed_projects():
+    """Hidden projects must not light a card or appear in "Working now"."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "CardControls.visibleRuns(" in src
+    # A stale cached module must not crash the presence renderer.
+    assert "visibleRuns: (runs, projects) =>" in src

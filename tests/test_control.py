@@ -162,6 +162,11 @@ def test_owner_workspace_marker_and_override(tmp_path, monkeypatch):
     monkeypatch.delenv("PERUN_SHOW_HIDDEN_PROJECTS", raising=False)
     assert config.is_owner_workspace() is False
 
+    # A plain clone of the public repo has .git but not the private overlay:
+    # a checkout alone must not be enough (that was option B1).
+    (tmp_path / ".git").mkdir()
+    assert config.is_owner_workspace() is False
+
     marker = tmp_path / ".perun" / "owner-workspace"
     marker.parent.mkdir(parents=True)
     marker.write_text("owner\n", encoding="utf-8")

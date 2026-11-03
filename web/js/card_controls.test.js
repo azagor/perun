@@ -74,3 +74,21 @@ test('standalone truthiness matches the Stop rule for Focus', () => {
     assert.ok(controls.focusControlSpec({ run_uid: 'x', standalone: true, pid: 1 }));
     assert.equal(controls.focusControlSpec({ run_uid: 'x', standalone: false, pid: 1 }), null);
 });
+
+test('only runs whose project is listed are visible', () => {
+    const projects = [{ slug: 'a' }];
+    const runs = [
+        { run_uid: '1', project_slug: 'a' },
+        { run_uid: '2', project_slug: 'perun' },  // hidden control plane
+        { run_uid: '3' },                          // no project
+        null,
+    ];
+    assert.deepEqual(
+        controls.visibleRuns(runs, projects).map((r) => r.run_uid), ['1']);
+});
+
+test('visibleRuns tolerates empty inputs', () => {
+    assert.deepEqual(controls.visibleRuns(null, null), []);
+    assert.deepEqual(controls.visibleRuns([{ run_uid: 'x', project_slug: 'a' }], []), []);
+    assert.deepEqual(controls.visibleRuns([null, undefined], [{ slug: 'a' }]), []);
+});

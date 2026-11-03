@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Release-pipeline and dashboard hardening
+
+* `tools/release.py` re-verifies the private owner-workspace marker after the
+  reverse sync (`verify_internal_marker()`), so a release cannot half-apply
+  version/docs changes and then discover it lost the marker; both checks are
+  unit-tested.
+* The dashboard's run filter is a pure `visibleRuns(runs, projects)` helper in
+  `card_controls.js` (unit-tested), and presence falls back safely when an old
+  cached module lacks it. A checkout with only `.git` (a plain public clone) is
+  explicitly tested as **not** an owner workspace.
+* Docs: the raw-API and Telegram visibility rules for the control project are
+  stated explicitly, and the marker file notes that copying it makes another
+  checkout an owner workspace.
 
 ## v0.10.55
 

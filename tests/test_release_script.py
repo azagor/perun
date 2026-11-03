@@ -128,3 +128,16 @@ def test_release_accepts_the_owner_workspace_marker(tmp_path, monkeypatch):
     marker.write_text("owner\n", encoding="utf-8")
 
     assert release.check_owner_marker() is True
+
+
+def test_verify_internal_marker_requires_the_synced_copy(tmp_path, monkeypatch, capsys):
+    """The reverse sync must leave the private marker in perun_internal."""
+    monkeypatch.setattr(release, "INTERNAL", tmp_path)
+
+    assert release.verify_internal_marker() is False
+    assert "did not survive" in capsys.readouterr().err
+
+    marker = tmp_path / ".perun" / "owner-workspace"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("owner\n", encoding="utf-8")
+    assert release.verify_internal_marker() is True

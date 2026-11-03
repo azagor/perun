@@ -71,6 +71,16 @@ def check_owner_marker() -> bool:
     return False
 
 
+def verify_internal_marker() -> bool:
+    """The reverse sync must have carried the owner marker into perun_internal."""
+    path = INTERNAL / OWNER_MARKER
+    if path.is_file():
+        return True
+    print(f"[ERR] {path} did not survive the sync; aborting before commit/tag.",
+          file=sys.stderr)
+    return False
+
+
 def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> str:
     """Run a command and return stdout."""
     result = subprocess.run(
@@ -319,9 +329,7 @@ def main() -> int:
 
     # 4. Sync to internal.
     sync_to_internal()
-    if not (INTERNAL / OWNER_MARKER).is_file():
-        print(f"[ERR] {INTERNAL / OWNER_MARKER} did not survive the sync; "
-              "aborting before commit/tag.", file=sys.stderr)
+    if not verify_internal_marker():
         return 1
 
     # 5. Commit public repo.
