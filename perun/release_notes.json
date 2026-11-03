@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T14:33:22+00:00",
+  "generated": "2026-11-03T14:58:31+00:00",
   "releases": [
+    {
+      "version": "0.10.57",
+      "date": "2026-11-03",
+      "body": "### The private companion repo is not a project\n\n* Discovery could register `perun_internal` — the owner-only companion repo, a\n  sibling of the public checkout — as a normal project once the control path\n  stopped aborting the scan, producing a second \"Perun\" card. The registry never\n  lists it now, not even with `include_hidden=true` (which the owner's workspace\n  uses), directory scans skip it (`config.is_internal_path()`,\n  `PERUN_INTERNAL_ROOT` overrides), and a startup sweep marks any row an earlier\n  scan created as hidden — never deleted, so its sessions and memory stay. It is\n  still addressable by slug.\n\n### Focus finds Windows Terminal sessions again\n\n* On Windows 11 the default terminal hosts a console in a pseudoconsole: the\n  terminal window is neither an ancestor nor a descendant of the shell, so the\n  project card's Focus button reported \"no terminal window found\". The run's\n  OpenCode **session title** — the text the Windows Terminal tab already shows —\n  is now a strong matching hint, and a terminal-class window may fall back to the\n  project name (a browser window with the same words never qualifies).\n* The session-title lookup uses the service only when discovery has already\n  resolved it (`OpenCodeAPI.ready`), so a Focus click never blocks on CLI\n  discovery."
+    },
     {
       "version": "0.10.56",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.48",
       "date": "2026-11-01",
       "body": "### Stop never guesses which process to kill\n\n* `ProcessTracker.terminate()` now resolves its target through `_kill_pid()`: a\n  pid carrying the run's `PERUN_RUN_UID` marker, or Perun's own live `Popen`\n  handle. The launch-time Windows Terminal heuristic in `_resolve_child_pid()` is\n  skipped on that path (`heuristic=False`) — it matches \"a terminal window that\n  appeared around launch time\", and closing it could take down tabs belonging to\n  other runs. It stays available for `is_alive()`, where it only decides liveness.\n  With nothing attributable, Stop finalizes the row and reports `cancelled: false`\n  instead of killing an unrelated process; `kill_all_explicit()` uses the same\n  rule.\n* Regression tests: a live Stop never asks the resolver for a heuristic match, an\n  unattributable live pid survives a Stop while the run row is finalized, and the\n  existing marker/restart cases still pass.\n* `_watch_loop()` now guards each run's liveness/finalize step. A DB hiccup (a\n  lock, a closed handle) used to raise inside the watcher thread and silently stop\n  auto-finalization, which is the only thing that clears a run row when the user\n  closes the terminal.\n* Docs (AGENTS, CODEMAP, TECHNICAL) state the exact rule, so \"Stop closes the TUI\n  terminal\" and \"never kill a process Perun cannot attribute\" are both true.\n* Test/doc drift fixed: `tests/test_js_card_controls.py` no longer mentions the\n  withdrawn Finish action, and its rename assertion matches what it checks."
-    },
-    {
-      "version": "0.10.47",
-      "date": "2026-11-01",
-      "body": "### A working project card shows Stop again\n\n* The card rendered **▶ Run** unconditionally and only *added* a Stop button for\n  runs that were not standalone. Every TUI session opened from the dashboard is\n  `standalone=1` for its whole life, so Stop was never rendered for it (since\n  v0.10.3, when the restart-marker fix suppressed it) — an active card showed\n  \"working\" plus a Run button that would have started a second session.\n* `web/js/card_controls.js` (`runControlSpec`, unit-tested with `node --test`) now\n  decides the first card action: **Run** when the project is idle, **Stop** for\n  any active run. Stop calls `POST /api/runs/{uid}/cancel`, which is already the\n  intended path — cancel a headless run, or close the terminal Perun opened for a\n  TUI run (it only kills a pid carrying that run's `PERUN_RUN_UID` marker, and it\n  still works after a restart from the persisted `runs.pid`).\n* `applyCardStates()` re-syncs that control on every 4 s presence poll, so a card\n  that lights up, is stopped or is swept swaps its button in place, and\n  `openProjectTui()` swaps it immediately for the run it just started. The button\n  is rebuilt only when its kind or run id actually changed.\n* The card's `Run` tooltip and doc text now match what it does (OpenCode launched\n  in the project directory, not the Agent Console)."
     }
   ]
 }

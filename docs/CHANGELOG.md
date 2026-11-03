@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.57
+
+*Released 2026-11-03.*
+
 ### The private companion repo is not a project
 
 * Discovery could register `perun_internal` — the owner-only companion repo, a

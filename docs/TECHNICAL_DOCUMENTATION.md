@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.56 (see §15). The release pipeline verifies the owner-workspace marker, and dashboard presence filtering is unit-tested.
+**Latest release:** v0.10.57 (see §15). Focus finds the Windows Terminal tab by its OpenCode session title, and the private companion repo is never listed as a project.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2470,6 +2470,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.57: Focus finds the Windows Terminal tab by its OpenCode session title, and the private companion repo is never listed as a project.
+
 ### 2026-11-03 — v0.10.56: The release pipeline verifies the owner-workspace marker, and dashboard presence filtering is unit-tested.
 
 ### 2026-11-03 — v0.10.55: The control project is listed only in the owner's workspace, and a project card can raise its TUI terminal.
