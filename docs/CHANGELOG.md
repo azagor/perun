@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.66
+
+*Released 2026-11-03.*
+
 ### Proposal lookup hardening
 
 * `GET /api/proposals/{id}` now hides a hidden project's proposal unless the

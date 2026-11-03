@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T20:36:24+00:00",
+  "generated": "2026-11-03T20:57:00+00:00",
   "releases": [
+    {
+      "version": "0.10.66",
+      "date": "2026-11-03",
+      "body": "### Proposal lookup hardening\n\n* `GET /api/proposals/{id}` now hides a hidden project's proposal unless the\n  caller is in the owner workspace (or `PERUN_SHOW_HIDDEN_PROJECTS`), so a\n  shared id cannot bypass the hidden-project rule.\n* The chat lookup cache is capped at 200 entries and no longer caches failures:\n  a transient outage, or a server still on an older build, retries instead of\n  pinning a neutral chip forever. **Open in project** is disabled until the peek\n  has loaded.\n* Regression tests now assert that the fallback shim covers every `ChatCore`\n  call and that the proposal focus runs after the card is inserted into the DOM\n  (the bug that landed on the tab but never on the row)."
+    },
     {
       "version": "0.10.65",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.57",
       "date": "2026-11-03",
       "body": "### The private companion repo is not a project\n\n* Discovery could register `perun_internal` — the owner-only companion repo, a\n  sibling of the public checkout — as a normal project once the control path\n  stopped aborting the scan, producing a second \"Perun\" card. The registry never\n  lists it now, not even with `include_hidden=true` (which the owner's workspace\n  uses), directory scans skip it (`config.is_internal_path()`,\n  `PERUN_INTERNAL_ROOT` overrides), and a startup sweep marks any row an earlier\n  scan created as hidden — never deleted, so its sessions and memory stay. It is\n  still addressable by slug.\n\n### Focus finds Windows Terminal sessions again\n\n* On Windows 11 the default terminal hosts a console in a pseudoconsole: the\n  terminal window is neither an ancestor nor a descendant of the shell, so the\n  project card's Focus button reported \"no terminal window found\". The run's\n  OpenCode **session title** — the text the Windows Terminal tab already shows —\n  is now a strong matching hint, and a terminal-class window may fall back to the\n  project name (a browser window with the same words never qualifies).\n* The session-title lookup uses the service only when discovery has already\n  resolved it (`OpenCodeAPI.ready`), so a Focus click never blocks on CLI\n  discovery."
-    },
-    {
-      "version": "0.10.56",
-      "date": "2026-11-03",
-      "body": "### Release-pipeline and dashboard hardening\n\n* `tools/release.py` re-verifies the private owner-workspace marker after the\n  reverse sync (`verify_internal_marker()`), so a release cannot half-apply\n  version/docs changes and then discover it lost the marker; both checks are\n  unit-tested.\n* The dashboard's run filter is a pure `visibleRuns(runs, projects)` helper in\n  `card_controls.js` (unit-tested), and presence falls back safely when an old\n  cached module lacks it. A checkout with only `.git` (a plain public clone) is\n  explicitly tested as **not** an owner workspace.\n* Docs: the raw-API and Telegram visibility rules for the control project are\n  stated explicitly, and the marker file notes that copying it makes another\n  checkout an owner workspace."
     }
   ]
 }

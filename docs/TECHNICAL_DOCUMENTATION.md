@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.65 (see §15). The chat fallback survives a missing chat_core.js, and proposal chips use the real monospace stack.
+**Latest release:** v0.10.66 (see §15). The global proposal lookup respects hidden projects, the chat cache is bounded, and the focus regression is locked by tests.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2561,6 +2561,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.66: The global proposal lookup respects hidden projects, the chat cache is bounded, and the focus regression is locked by tests.
+
 ### 2026-11-03 — v0.10.65: The chat fallback survives a missing chat_core.js, and proposal chips use the real monospace stack.
 
 ### 2026-11-03 — v0.10.64: The exact proposal is visible and reachable: the Shared row shows its id, and Open in project scrolls to and flashes it.
