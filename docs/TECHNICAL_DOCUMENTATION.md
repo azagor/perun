@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.59 (see §15). Perun can run a declared check or verify an executed proposal's approved script, with an operator-confirmed, hash-pinned command.
+**Latest release:** v0.10.60 (see §15). Audit follow-ups for checks (hidden-project guard, untrusted output, env, retention, caps) and an Ollama-down memory search fix.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2541,6 +2541,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.60: Audit follow-ups for checks (hidden-project guard, untrusted output, env, retention, caps) and an Ollama-down memory search fix.
+
 ### 2026-11-03 — v0.10.59: Perun can run a declared check or verify an executed proposal's approved script, with an operator-confirmed, hash-pinned command.
 
 ### 2026-11-03 — v0.10.58: Focus lookups are capped and cached, and the companion repo stays out of every listing.

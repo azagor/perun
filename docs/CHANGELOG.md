@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.60
+
+*Released 2026-11-03.*
+
 ### Checks hardening (audit follow-up)
 
 * Proposal verification respects the hidden-project rule: a proposal id is no
