@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T11:46:06+00:00",
+  "generated": "2026-11-03T13:32:16+00:00",
   "releases": [
+    {
+      "version": "0.10.54",
+      "date": "2026-11-03",
+      "body": "### The control project stays hidden on a fresh install\n\n* `GET /api/projects?include_hidden=true` (what the dashboard sends so the owner\n  can manage the control plane) now includes hidden projects only when this\n  installation has a configured operator: a `perun_owner_name` or a paired\n  Telegram chat (the static `telegram_allowed_chats` list written by `/pair`, or\n  a `TELEGRAM_CHAT_ID` override). A brand-new install has neither, so the\n  self-registered **Perun** control project no longer appears as a project card\n  there — a reachable loopback dashboard is not evidence of ownership. Once the\n  operator names themselves or pairs a chat, the card returns; the Orchestrator\n  page reaches the control plane either way.\n* Discovery no longer re-registers a hidden project as a **visible duplicate**.\n  Its path lookup was built from the visible list only, so the hidden control\n  project looked new; when the resolved path spelling differed (8.3 names,\n  junctions) `register()` created a second, visible \"Perun\" project instead of\n  updating the hidden row. The lookup now includes hidden projects, so the row\n  is updated in place and stays hidden; the server also hides any visible\n  duplicate such an older install already carries at startup (it is hidden, never\n  deleted, so its runs/memory stay with the operator).\n\n### Focus a project card's TUI terminal\n\n* A working card now offers **Focus** while a TUI run is active and has a\n  tracked terminal. It raises/restores that terminal's window (Windows with\n  `psutil`; the button is hidden where the server cannot do it) and flashes the\n  taskbar button when Windows refuses the foreground switch.\n* Attribution is the same rule Stop uses: only a pid carrying the run's\n  `PERUN_RUN_UID` marker is focused, so a recycled pid never points at an\n  unrelated program. Launches set a `Perun: <slug>` window/tab title as a\n  matching hint; several Windows Terminal windows share one process, so the\n  title (or the run's session title) picks the right one and repeated clicks\n  cycle equally good candidates.\n* `POST /api/runs/{uid}/terminal/focus` performs the raise and `/api/runs/active`\n  reports `focus_supported`."
+    },
     {
       "version": "0.10.53",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.45",
       "date": "2026-11-01",
       "body": "### Audit follow-ups from the v0.10.44 review\n\n* `tools/release.py` puts the checkout on `sys.path` before importing\n  `perun.release_notes`, so bundling the notes no longer depends on\n  `PYTHONPATH` or an installed copy (a failed import there would have left a\n  half-prepared release).\n* A test covers `GET /api/update/notes?version=<unknown>`: an unknown version\n  reports `source: \"unavailable\"` and an empty body instead of inventing notes.\n* The Shared tab says that hiding a project does not disable sharing — turn the\n  toggle off to tear its room down."
-    },
-    {
-      "version": "0.10.44",
-      "date": "2026-11-01",
-      "body": "### The self-update page shows what the installed release changed\n\n* `GET /api/update/notes` returns the changelog section for the running version,\n  and the Updates page renders it as **\"What changed in vX.Y.Z\"**. The Windows\n  installer excludes `docs/`, so the release pipeline now bundles the last ten\n  releases into `perun/release_notes.json`; a git checkout falls back to\n  `docs/CHANGELOG.md`. When an update is available, the GitHub notes are shown\n  separately as \"What's new in vX\" instead of replacing the installed summary.\n* `tools/release.py` regenerates the bundle on every release, and a test fails if\n  it is stale.\n\n### The hidden control project can be shared on purpose, and is reconciled like any other\n\n* `reconcile_all_project_chats()` now walks `list_projects(include_hidden=True)`.\n  Hiding a project only keeps it out of lists; if the owner explicitly shares\n  `perun` (`shared: true` plus participants on the `perunchat_trusted` list), its\n  room is created, joined and repaired after a reconnect exactly like a normal\n  shared project. Access is the participant list, not a special case, and HITL\n  approval, the guard allowlist and the post-run audit are unchanged.\n* Telegram remains optional: the CLI, TUI, dashboard (loopback + token) and MCP\n  work without it. The MCP cwd rule from 0.10.43 still applies to local sessions\n  (and does not affect a shared execution, which runs in the project directory)."
     }
   ]
 }

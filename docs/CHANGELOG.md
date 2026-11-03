@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.54
+
+*Released 2026-11-03.*
+
 ### The control project stays hidden on a fresh install
 
 * `GET /api/projects?include_hidden=true` (what the dashboard sends so the owner
