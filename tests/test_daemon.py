@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import psutil
@@ -233,3 +234,198 @@ def test_read_recorded_run_tolerates_garbage(tmp_path, monkeypatch):
 
     path.write_text('{"argv": ["serve", 5]}', encoding="utf-8")  # non-str item
     assert daemon.read_recorded_run() is None
+
+
+# --------------------------------------------------------------------------- #
+# Degraded mode: psutil missing (a failed pip install must not break the CLI)
+# --------------------------------------------------------------------------- #
+def _hide_psutil(monkeypatch):
+    """Simulate an installation where psutil was never installed."""
+    monkeypatch.setattr(daemon, "psutil", None)
+    monkeypatch.setattr(daemon, "HAS_PSUTIL", False)
+
+
+def test_pid_checks_work_without_psutil(monkeypatch):
+    _hide_psutil(monkeypatch)
+
+    assert daemon.is_running(os.getpid()) is True
+    assert daemon.is_running(99999999) is False
+
+
+def test_stop_works_without_psutil(monkeypatch):
+    _hide_psutil(monkeypatch)
+
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert daemon.is_running(proc.pid) is True
+        assert daemon.stop(proc.pid, timeout=10) is True
+        assert daemon.is_running(proc.pid) is False
+    finally:
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+def test_kill_works_without_psutil(monkeypatch):
+    _hide_psutil(monkeypatch)
+
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert daemon.kill(proc.pid) is True
+        assert daemon.is_running(proc.pid) is False
+    finally:
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+def test_port_owner_netstat_parses_listener(monkeypatch):
+    output = (
+        "  Proto  Local Address          Foreign Address        State           PID\n"
+        "  TCP    127.0.0.1:8760         0.0.0.0:0              LISTENING       4242\n"
+        "  TCP    127.0.0.1:9000         0.0.0.0:0              ESTABLISHED     99\n"
+    )
+    monkeypatch.setattr(
+        daemon.subprocess, "run",
+        lambda *a, **k: type("R", (), {"stdout": output})(),
+    )
+
+    assert daemon._port_owner_netstat(8760) == 4242
+    assert daemon._port_owner_netstat(1111) is None
+
+
+def test_port_owner_without_psutil_falls_back_to_netstat(monkeypatch):
+    _hide_psutil(monkeypatch)
+    monkeypatch.setattr(daemon.os, "name", "nt")
+    monkeypatch.setattr(daemon, "_port_owner_netstat",
+                        lambda p: 4242 if p == 8760 else None)
+
+    assert daemon._port_owner(8760) == 4242
+    assert daemon._port_owner(1111) is None
+
+
+def test_tasklist_matching_uses_the_pid_field(monkeypatch):
+    """CSV keeps a spaced image name intact; PID 123 must not match 1234."""
+    _hide_psutil(monkeypatch)
+    monkeypatch.setattr(daemon.os, "name", "nt")
+    table = (
+        '"python.exe","1234","Console","1","12,345 K"\n'
+        '"my app.exe","99","Console","1","1,000 K"\n'
+        "INFO: No tasks are running which match the specified criteria.\n"
+    )
+    monkeypatch.setattr(
+        daemon.subprocess, "run",
+        lambda *a, **k: type("R", (), {"stdout": table})(),
+    )
+
+    assert daemon.is_running(1234) is True
+    assert daemon.is_running(99) is True
+    assert daemon.is_running(123) is False
+
+
+def test_tasklist_matching_tolerates_garbage():
+    assert daemon._tasklist_pid_listed(7, "") is False
+    assert daemon._tasklist_pid_listed(7, "not a table at all") is False
+    assert daemon._tasklist_pid_listed(7, '"a.exe","7","Console\n') is True
+
+
+def test_proc_stat_state_reads_the_state_letter():
+    assert daemon._proc_stat_state("42 (python3) Z 1 2 3") == "Z"
+    assert daemon._proc_stat_state("42 (a b) S 1 2 3") == "S"
+    assert daemon._proc_stat_state("garbage") == ""
+
+
+def test_a_zombie_is_not_a_live_process(monkeypatch):
+    _hide_psutil(monkeypatch)
+    # Stub the POSIX module surface so no real signal is sent on Windows.
+    monkeypatch.setattr(
+        daemon, "os", types.SimpleNamespace(name="posix", kill=lambda pid, sig: None))
+
+    monkeypatch.setattr(daemon, "_posix_state", lambda pid: "Z")
+    assert daemon.is_running(424242) is False
+
+    monkeypatch.setattr(daemon, "_posix_state", lambda pid: "S")
+    assert daemon.is_running(424242) is True
+
+
+def test_cmdline_uses_cim_without_psutil(monkeypatch):
+    _hide_psutil(monkeypatch)
+    monkeypatch.setattr(daemon.os, "name", "nt")
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return type("R", (), {"stdout": r"  C:\Python312\python.exe -m perun serve  "})()
+
+    monkeypatch.setattr(daemon.subprocess, "run", fake_run)
+
+    assert daemon._cmdline(4242) == r"C:\Python312\python.exe -m perun serve"
+    assert captured["argv"][0] == "powershell"
+    assert "ProcessId=4242" in captured["argv"][-1]
+
+
+def test_is_perun_process_requires_a_matching_command_line(monkeypatch):
+    """Without psutil a live PID alone is not evidence: read the command line."""
+    _hide_psutil(monkeypatch)
+    monkeypatch.setattr(daemon, "_pid_alive", lambda pid: True)
+
+    monkeypatch.setattr(
+        daemon, "_cmdline",
+        lambda pid: r"C:\Python312\python.exe -m perun serve --port 8760")
+    assert daemon._is_perun_process(4242) is True
+
+    monkeypatch.setattr(daemon, "_cmdline", lambda pid: r"C:\Windows\explorer.exe")
+    assert daemon._is_perun_process(4242) is False
+
+    # Identity unknown: never treat it as Perun (perun stop must not kill it).
+    monkeypatch.setattr(daemon, "_cmdline", lambda pid: "")
+    assert daemon._is_perun_process(4242) is False
+
+
+def test_is_another_perun_running_ignores_a_recycled_pid_without_psutil(monkeypatch,
+                                                                       tmp_path):
+    """A stale PID file must not hand an unrelated process to perun stop."""
+    _hide_psutil(monkeypatch)
+    pid_file = tmp_path / "perun.pid"
+    monkeypatch.setattr(daemon, "PID_PATH", pid_file)
+    monkeypatch.setattr(daemon, "_port_owner", lambda p: None)
+    monkeypatch.setattr(daemon, "_cmdline",
+                        lambda pid: "python -c import time; time.sleep(60)")
+
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        time.sleep(0.2)
+        pid_file.write_text(str(proc.pid), encoding="utf-8")
+        assert daemon.is_another_perun_running() is None
+        assert not pid_file.exists()  # stale file cleared, process left alone
+        assert daemon.is_running(proc.pid) is True
+    finally:
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+def test_identity_is_confirmed_once_per_lookup(monkeypatch, tmp_path):
+    """PID file and port owner are the same process: confirm identity once."""
+    pid_file = tmp_path / "perun.pid"
+    monkeypatch.setattr(daemon, "PID_PATH", pid_file)
+    pid_file.write_text("4242", encoding="utf-8")
+
+    calls = []
+
+    def fake_confirm(pid):
+        calls.append(pid)
+        return True
+
+    monkeypatch.setattr(daemon, "_is_perun_process", fake_confirm)
+    monkeypatch.setattr(daemon, "_port_owner", lambda port: 4242)
+
+    settings = type("S", (), {"port": 8760})()
+    assert daemon.is_another_perun_running(settings) == 4242
+    assert calls == [4242]

@@ -40,10 +40,25 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from . import (config, context, daemon, db, discovery, handbook, memory,
-               project_roots, registry, secret_store)
-from . import secrets as crypto
-from . import updater
+try:
+    from . import (config, context, daemon, db, discovery, handbook, memory,
+                   project_roots, registry, secret_store)
+    from . import secrets as crypto
+    from . import updater
+except ModuleNotFoundError as _exc:  # a runtime dependency is not installed
+    _missing = _exc.name or "unknown"
+    _req = Path(__file__).resolve().parent.parent / "requirements.txt"
+    print(f"[perun] missing Python package: {_missing}", file=sys.stderr)
+    if _missing == "perun" or _missing.startswith("perun."):
+        print("[perun] the Perun installation looks incomplete; reinstall or repair it",
+              file=sys.stderr)
+    elif _req.exists():
+        print(f'[perun] install it with: "{sys.executable}" -m pip install -r "{_req}"',
+              file=sys.stderr)
+    else:
+        print(f'[perun] install it with: "{sys.executable}" -m pip install {_missing}',
+              file=sys.stderr)
+    raise SystemExit(1) from _exc
 
 
 # --------------------------------------------------------------------------- #
@@ -87,6 +102,13 @@ def _roots(arg: str | None) -> list[str]:
 # --------------------------------------------------------------------------- #
 def cmd_serve(args: argparse.Namespace) -> int:
     _ensure()
+    if not daemon.HAS_PSUTIL:
+        # Degrade, don't crash: process-tree tracking and the port check lose
+        # precision without psutil, and every run/TUI window is still stoppable.
+        print("[perun] warning: psutil is not installed; process tracking and"
+              " port checks are limited.")
+        print(f"[perun]          install it with: {sys.executable} -m pip install -r"
+              " requirements.txt")
     settings = config.Settings.load()
     existing = daemon.is_another_perun_running(settings)
     if existing:

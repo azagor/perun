@@ -333,22 +333,33 @@ python -m perun proposals-mcp
 ```
 perun/                     the Python package
   config.py                paths + persisted Settings (+ is_control_path)
+  daemon.py                server lifecycle: PID file, running check, graceful stop/restart
   db.py                    SQLite schema (registry + memory + vectors + shared projects + usage + inbox + routing)
   registry.py              projects / sessions / runs / activity / dependencies / bridge links
   control.py               the always-present orchestrator (control plane)
   routing.py               deterministic project/action router (advisory, never authoritative)
   projects.py              shared project creation (wizard + MCP)
+  scaffold.py              scaffold a new project directory from the dashboard wizard
   memory.py                unified facts + doc-chunk store + search
   context.py               keyed retrievable context docs (bounded AGENTS.md)
   context_map.py           losslessness map for AGENTS.md migrations
   docaudit.py              CODEMAP file/identifier/version traceability audit
   secret_store.py          encrypted named secrets (pulled on demand)
+  secrets.py               secret handling helpers for config values
   handbook.py              Perun reference material as context docs
   embeddings.py            Ollama transport + vector math
+  grep.py                  integrated code-search backends with Python fallbacks
+  search.py                unified search: RRF fusion of grep + ast-grep (+ memory)
   discovery.py             find projects under configured roots
   manifest.py              perun.md / perun.json parsing, anchors and dependencies
+  agents.py                discover the OpenCode agents available to a project
+  skills.py                discover the OpenCode skills and tools available to a project
+  git.py                   one git repository (and remote) per project
   orchestrator.py          start/stream/cancel `opencode run`
   session_runner.py        durable, session-admitted runs (leases, reattach, exactly-once replies)
+  coroutines.py            durable scheduled / event-triggered agent jobs
+  cron.py                  five-field cron helpers for coroutine schedules
+  domain_events.py         durable domain-event inbox for coroutine triggers
   process_tracker.py       live process/session accounting for runs and TUI launches
   attention.py             operator inbox: typed targets, cards, reply adapters
   attention_watcher.py     OpenCode permission/form detection (event stream + poll)
@@ -356,6 +367,8 @@ perun/                     the Python package
   server.py                FastAPI + SSE + static dashboard
   providers.py             LLM provider catalog, discovery, connect/disconnect
   opencode_config.py       safe read/write of the user's OpenCode config
+  opencode_api.py          minimal client for the local OpenCode HTTP API (v2)
+  mcp_servers.py           discover and probe the MCP servers OpenCode loads
   project_roots.py         explicit cross-project path resolution
   action_proposals.py      shared-project proposal lifecycle, claims, execution
   shared_projects.py       shared manifest schema and participant roles

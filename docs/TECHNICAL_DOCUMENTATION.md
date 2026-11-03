@@ -83,13 +83,26 @@ Ollama instance for embeddings.
 
 `Perun.cmd` at the repo root is the double-click entry point. It finds a Python
 interpreter (`PERUN_PYTHON` → `C:\Python314\python.exe` → `py -3` → `python`),
-resolves the port from `~/.perun/config.json` (`PERUN_PORT` overrides it), then:
+verifies the runtime packages listed in `requirements.txt` (installing them
+once, retrying per-user when the system location is not writable; skip with
+`PERUN_SKIP_DEP_CHECK=1`), resolves the port from `~/.perun/config.json`
+(`PERUN_PORT` overrides it), then:
 
 * if something is already listening on the port, opens the dashboard and exits —
   so repeated double-clicks never spawn a second server;
 * otherwise prints a banner, opens the browser, and runs
   `python -m perun serve --port <N>` in the foreground (close the window or
   Ctrl+C to stop).
+
+The dependency check is what keeps a partly installed machine usable: setup can
+legitimately skip `pip install`, and a machine-wide install lives under
+`C:\Program Files`, where the system Python needs an elevated install (hence the
+`--user` retry). If neither works, the launcher prints the exact `pip install`
+command and stops there instead of showing a banner and then a
+`ModuleNotFoundError` traceback. Every probe the launcher runs is a **direct**
+call whose answer is the exit code — never a `for /f` backtick command, because
+`cmd` strips the outer quotes of those: an interpreter at
+`C:\Program Files\Python312\python.exe` would run as `C:\Program`.
 
 For headless or scripted use, `python -m perun stop` and `python -m perun restart`
 manage the server via a PID file in `<PERUN_HOME>/perun.pid`. `perun serve` now
@@ -104,9 +117,10 @@ does not silently drop the Telegram/PerunChat bridges — explicit flags on the
 restart command line override the recorded ones.
 
 `Perun.cmd` starts the dashboard and the Telegram bridge **in-process**
-(`python -m perun serve --bridge`). It first checks `perun status --json` to see
-whether the bridge mutex is already held by a live process; only then does it
-skip the in-process bridge. This makes the launcher resilient to a crashed or
+(`python -m perun serve --bridge`). It first calls `PidLock.is_held()` for
+`<PERUN_HOME>/telegram.pid` (a one-line direct Python call, no JSON parsing) to
+see whether the bridge mutex is already held by a live process; only then does
+it skip the in-process bridge. This makes the launcher resilient to a crashed or
 stale `PerunBridge` scheduled task. By default there is no logon task; the
 bridge runs only while the dashboard is open. The optional `PerunBridge` logon
 task can be registered with `--task` (§10).
@@ -2200,7 +2214,7 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
 `db.init_db()`s, calls `control.ensure()` at import, calls
 `handbook.ensure_indexed()` at import (so the reference material is retrievable
-from the first call), and exposes **thirty-one** tools:
+from the first call), and exposes **thirty-four** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
@@ -2219,6 +2233,13 @@ from the first call), and exposes **thirty-one** tools:
   `perun_get_manifest`, `perun_set_manifest`.
 * **Runs & messaging:** `perun_start_session` (returns a run id immediately),
   `perun_ask` (blocking), `perun_run_status`, `perun_telegram_send`.
+* **Operator inbox:** `perun_ask_operator` (push a question — with optional
+  choices — to the operator's Telegram and the dashboard and wait briefly; the
+  reply lands in *this* session, or an `att_<id>` handle is returned when nobody
+  answers), `perun_await_operator` (wait again on that handle), and
+  `perun_attention_list` (what is waiting on the operator, or recent closed
+  items). The inbox is typed (`target_kind`/`target_id`), so a reply always goes
+  back to the session that asked.
 * **Code search:** `perun_grep` (regex content search) and `perun_ast_grep`
   (structural/AST search), plus the cross-project `perun_global_grep` and
   `perun_global_ast_grep`, so projects get code search without extra MCP

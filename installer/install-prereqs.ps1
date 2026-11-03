@@ -117,6 +117,49 @@ function Test-Python {
     return ''
 }
 
+function Test-PerunDependencies {
+    <#
+        Check that every runtime dependency in requirements.txt is importable.
+        A failed `pip install` during setup otherwise leaves a service that
+        dies at startup with `ModuleNotFoundError` in a hidden console.
+    #>
+    param([string]$PythonExe)
+    if (-not $PythonExe) { return $false }
+    $code = 'import importlib.metadata as md,sys; ns="fastapi uvicorn starlette httpx fastmcp numpy pydantic psutil PyYAML cryptography croniter tzdata".split(); miss=[n for n in ns if not any(d.metadata.get("Name","").lower()==n.lower() for d in md.distributions(name=n))]; print(" ".join(miss)); sys.exit(1 if miss else 0)'
+    try {
+        $missing = & $PythonExe -c $code 2>$null
+    } catch {
+        Write-Log "Could not run $PythonExe to verify dependencies" -Level 'ERROR'
+        return $false
+    }
+    if ($LASTEXITCODE -eq 0) { return $true }
+    Write-Log "Missing Python packages: $missing" -Level 'WARN'
+    return $false
+}
+
+function Invoke-Pip {
+    <#
+        Run `pip install` and record its output in the installer log. The
+        [Run] entry is hidden, so without this a failure only shows a bare
+        exit code.
+    #>
+    param([string]$PythonExe, [string]$Requirements, [switch]$User)
+    $pipArgs = @('-m', 'pip', 'install', '--no-input', '--disable-pip-version-check',
+                 '-r', $Requirements)
+    if ($User) { $pipArgs += '--user' }
+    try {
+        $output = & $PythonExe @pipArgs 2>&1
+        $rc = $LASTEXITCODE
+    } catch {
+        Write-Log "Could not run $PythonExe -m pip: $($_.Exception.Message)" -Level 'ERROR'
+        return 1
+    }
+    foreach ($line in @($output)) {
+        if ("$line".Trim()) { Write-Log "pip: $line" }
+    }
+    return $rc
+}
+
 function Install-Python {
     $url = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe'
     $installer = Join-Path $env:TEMP 'python-3.12.10-amd64.exe'
@@ -361,11 +404,18 @@ if (-not $pythonExe) {
 }
 
 Write-Log "Installing Python dependencies with $pythonExe ..."
-& $pythonExe -m pip install -r (Join-Path $PerunDir 'requirements.txt')
-if ($LASTEXITCODE -ne 0) {
-    Write-Log "pip install failed with exit code $LASTEXITCODE" -Level 'ERROR'
+$requirements = Join-Path $PerunDir 'requirements.txt'
+$pipRc = Invoke-Pip -PythonExe $pythonExe -Requirements $requirements
+if ($pipRc -ne 0) {
+    Write-Log "pip install failed with exit code $pipRc; retrying for the current user" -Level 'WARN'
+    $pipRc = Invoke-Pip -PythonExe $pythonExe -Requirements $requirements -User
+}
+if (-not (Test-PerunDependencies -PythonExe $pythonExe)) {
+    Write-Log "Perun dependencies are still missing. Install them with:" -Level 'ERROR'
+    Write-Log "    `"$pythonExe`" -m pip install -r `"$requirements`"" -Level 'ERROR'
     exit 1
 }
+Write-Log 'Python dependencies verified.'
 
 Write-Log "Running Perun machine installer ..."
 Push-Location -LiteralPath $PerunDir

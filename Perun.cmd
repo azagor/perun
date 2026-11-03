@@ -18,6 +18,7 @@ rem    PERUN_PORT=<n>                      dashboard port (default: config/8760)
 rem    PERUN_NO_BROWSER=1                  do not open a browser
 rem    PERUN_FORCE_BRIDGE=1                always start bridge in dashboard (debug)
 rem    PERUN_PASSWORD=<password>           decrypt encrypted config values
+rem    PERUN_SKIP_DEP_CHECK=1              do not verify/repair Python packages
 rem =====================================================================
 
 set "PERUN_DIR=%~dp0"
@@ -56,12 +57,47 @@ if defined PY (
     )
 )
 
+rem -- Python dependencies: verify, repair once, then explain -------------
+rem  A machine-wide install lives under "%ProgramFiles%\Perun" and runs the
+rem  system Python, so a skipped/failed `pip install` during setup leaves a
+rem  half-working service (typically `ModuleNotFoundError: psutil`). Check the
+rem  installed distributions and repair them here instead of crashing later.
+if not defined PERUN_SKIP_DEP_CHECK (
+    %PY% -c "import importlib.metadata as md,sys; ns='fastapi uvicorn starlette httpx fastmcp numpy pydantic psutil PyYAML cryptography croniter tzdata'.split(); miss=[n for n in ns if not any(d.metadata.get('Name','').lower()==n.lower() for d in md.distributions(name=n))]; (print('[Perun] Missing Python packages: ' + ', '.join(miss)) if miss else None); sys.exit(1 if miss else 0)"
+    if errorlevel 1 (
+        echo [Perun] Installing Python dependencies into %PY% ...
+        echo [Perun] This can take a few minutes on the first run.
+        %PY% -m pip install --quiet --no-input --disable-pip-version-check -r "%PERUN_DIR%\requirements.txt"
+        if errorlevel 1 (
+            echo [Perun] The system install failed; retrying for the current user ...
+            %PY% -m pip install --quiet --no-input --user --disable-pip-version-check -r "%PERUN_DIR%\requirements.txt"
+        )
+        %PY% -c "import importlib.metadata as md,sys; ns='fastapi uvicorn starlette httpx fastmcp numpy pydantic psutil PyYAML cryptography croniter tzdata'.split(); sys.exit(0 if all(any(d.metadata.get('Name','').lower()==n.lower() for d in md.distributions(name=n)) for n in ns) else 1)" >nul 2>nul
+        if errorlevel 1 (
+            echo.
+            echo [Perun] Required Python packages are still missing.
+            echo         Run this once in a terminal - as administrator if Perun is
+            echo         installed under Program Files - and then start Perun again:
+            echo.
+            echo             %PY% -m pip install -r "%PERUN_DIR%\requirements.txt"
+            echo.
+            echo         If that interpreter path is wrong, set PERUN_PYTHON to your
+            echo         python.exe and run this launcher again.
+            echo.
+            pause
+            exit /b 1
+        )
+        echo [Perun] Dependencies installed.
+    )
+)
+
 rem -- resolve the dashboard port (Settings.port, default 8760) ---------
 set "PORT=8760"
 set "CFG=%USERPROFILE%\.perun\config.json"
 if defined PERUN_HOME set "CFG=%PERUN_HOME%\config.json"
-if defined PERUN_PORT set "PORT=%PERUN_PORT%"
-if exist "%CFG%" for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$c=Get-Content -Raw '%CFG%' -ErrorAction SilentlyContinue; if($c){ (ConvertFrom-Json $c).port }" 2^>nul`) do if not "%%p"=="" set "PORT=%%p"
+if defined PERUN_PORT (
+    set "PORT=%PERUN_PORT%"
+) else if exist "%CFG%" for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$c=Get-Content -Raw '%CFG%' -ErrorAction SilentlyContinue; if($c){ (ConvertFrom-Json $c).port }" 2^>nul`) do if not "%%p"=="" set "PORT=%%p"
 set "URL=http://127.0.0.1:%PORT%"
 
 rem -- is the dashboard already up? then just show it -------------------
@@ -86,11 +122,15 @@ rem  definitive check: it is true only when a live process (the PerunBridge
 rem  task, if registered, or another dashboard) is actually polling Telegram.
 rem  A stale/crashed task will report "bridge_running: false" even if schtasks
 rem  claims it is "Running", so we always fall back to starting the bridge in-process.
+rem
+rem  NOTE: never wrap %PY% in a `for /f` backtick command here. cmd strips the
+rem  outer quotes of such a command line, so an interpreter at
+rem  "C:\Program Files\Python312\python.exe" would run as `C:\Program`. A
+rem  direct call preserves the quotes; the exit code carries the answer.
 set "BRIDGE_ALREADY_UP=0"
 if not defined PERUN_FORCE_BRIDGE (
-    for /f "usebackq delims=" %%j in (`%PY% -m perun status --json 2^>nul ^| powershell -NoProfile -Command "$in=$input -join '\n'; if($in -match 'bridge_running\s*:\s*true'){ '1' } else { '0' }"`) do (
-        set "BRIDGE_ALREADY_UP=%%j"
-    )
+    %PY% -c "import sys; from perun import config; from perun.telegram import PidLock; sys.exit(0 if PidLock.is_held(config.HOME / 'telegram.pid') else 1)" >nul 2>nul
+    if not errorlevel 1 set "BRIDGE_ALREADY_UP=1"
 )
 if "%BRIDGE_ALREADY_UP%"=="1" (
     set "BRIDGE=running (detected live bridge)"
@@ -119,11 +159,9 @@ if not defined PERUN_NO_BROWSER start "" /min powershell -NoProfile -WindowStyle
 if not defined PERUN_PASSWORD (
     rem  If config contains encrypted values, the dashboard will prompt for the
     rem  password once it is running. The bridge degrades gracefully until then.
-    for /f "usebackq delims=" %%e in (`%PY% -c "from perun import config,secrets; print('1' if secrets.is_encrypted(config.Settings.load().telegram_token or '') else '0')" 2^>nul`) do (
-        if "%%e"=="1" (
-            echo [Perun] Encrypted Telegram token found. The dashboard will ask for the password.
-        )
-    )
+    rem  Direct call (see the quoting note above) - never a `for /f` backtick.
+    %PY% -c "import sys; from perun import config, secrets; sys.exit(0 if secrets.is_encrypted(config.Settings.load().telegram_token or '') else 1)" >nul 2>nul
+    if not errorlevel 1 echo [Perun] Encrypted Telegram token found. The dashboard will ask for the password.
 )
 %PY% -m perun serve --port %PORT% %BRIDGE_ARGS%
 set "RC=%errorlevel%"

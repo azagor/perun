@@ -4,7 +4,48 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### A missing dependency no longer kills the launcher, and paths with spaces work
+
+* `Perun.cmd` wrapped the interpreter in a `for /f` backtick command for its
+  bridge and encrypted-token probes. `cmd` strips the outer quotes of such a
+  command line, so a machine-wide install at `C:\Program Files\Python312` ran
+  `C:\Program` and printed `C:\Program' is not recognized as an internal or
+  external command` on every launch. Both probes are now plain calls whose
+  answer is the exit code (no PowerShell/JSON piping), and the quoting trap is
+  documented where it bit us.
+* An explicit `PERUN_PORT` is no longer overridden by `config.json`; the
+  documented override used to be silently ignored.
+* The launcher verifies the runtime packages from `requirements.txt` before
+  starting (skippable with `PERUN_SKIP_DEP_CHECK=1`), installs them once —
+  retrying with `--user` when the system location is not writable — and
+  otherwise prints the exact `pip install` command, instead of serving the
+  banner and then dying with `ModuleNotFoundError`. pip runs with `--no-input`
+  so a prompt can never freeze a double-click launch.
+* `perun/daemon.py` no longer imports `psutil` unconditionally. Process
+  liveness, the listening-port owner, `stop` and `kill` fall back to
+  `tasklist`/`netstat`/`taskkill` (Windows) or `/proc`/`ps` and `os.kill`
+  (POSIX), and `perun serve` prints one warning instead of crashing, so a
+  failed `pip install` degrades process tracking rather than taking the whole
+  service down. A PID is still only treated as Perun after its command line
+  matches (CIM on Windows, `/proc`/`ps` on POSIX; `psutil` when present), so a
+  recycled PID in a stale `perun.pid` can never make `perun stop` kill an
+  unrelated process, and a zombie no longer looks like a live server. When the
+  command line cannot be read at all, the PID is treated as stale: `perun stop`
+  reports "not running" instead of guessing. Any other
+  missing runtime package now prints `[perun] missing Python package: <name>`
+  plus the command that fixes it.
+* The Windows installer retries `pip install` per-user after a failure, verifies
+  every package afterwards, and writes pip's own output to `installer.log`, so a
+  still-broken environment fails the install with the fix and the reason
+  available instead of appearing to succeed.
+
+### Operator questions in the global context kernel
+
+* The installed context kernel (`perun/integrations/templates/INSTRUCTIONS.md`)
+  now tells every agent to ask the operator with `perun_ask_operator` instead of
+  ending a turn on an open question, to keep waiting on an `att_<id>` handle with
+  `perun_await_operator`, and to check `perun_attention_list` for what is
+  pending. `python -m perun context sync` refreshes the managed block.
 
 ## v0.10.52
 

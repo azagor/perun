@@ -74,6 +74,17 @@ Server lifecycle helpers: PID file, running-check, graceful stop, restart.
   `record_run()`, `read_recorded_run()`, `read_recorded_argv()`, `is_running()`,
   `is_another_perun_running()`, `stop()`, `kill()`, `start_detached()`,
   `write_pid_for()` (entry point for detached starters).
+* `psutil` is optional (`HAS_PSUTIL`). Without it, liveness falls back to
+  `tasklist` (Windows) or `/proc`/`ps` and `os.kill(pid, 0)` (POSIX), the
+  listening-port owner to `netstat -ano`, and `stop()`/`kill()` to
+  `taskkill`/`os.kill`, so a failed `pip install` degrades precision instead of
+  taking the CLI and dashboard down. A missing dependency must never stop
+  `perun serve` from starting.
+* Attribution is still mandatory in degraded mode: `_is_perun_process()` reads
+  the command line (`psutil`, else CIM/`/proc`/`ps`) and refuses a PID it cannot
+  confirm, so a recycled PID in a stale `perun.pid` is never handed to
+  `stop()`/`kill()`. A zombie counts as dead (`_posix_state()`), so a crashed
+  server does not look alive forever.
 * Used by ``perun serve`` to avoid double-starts and record its launch flags;
   used by ``perun stop`` / ``perun restart`` for graceful replacement, with
   ``perun restart`` replaying the recorded flags.
@@ -1402,7 +1413,7 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). 31 tools: `perun_list_projects`,
+stdio MCP server (`perun`). 34 tools: `perun_list_projects`,
 `perun_project_info`, `perun_create_project`, `perun_update_project`
 (also accepts `agent_models` as a JSON string),
 `perun_delete_project`, `perun_discover`, `perun_memory_search`,
@@ -1638,7 +1649,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   and after a restart.
 * `test_agents.py` — OpenCode agent discovery (`perun/agents.py`).
 * `test_daemon.py` — PID file lifecycle, run record round-trip,
-  `is_another_perun_running()`, detached start, and `stop()`/`kill()`.
+  `is_another_perun_running()`, detached start, `stop()`/`kill()`, and the
+  degraded mode where `psutil` is absent (`tasklist`/`netstat` fallbacks, PID
+  verified against its command line, a recycled PID never adopted, zombies
+  treated as dead).
 * `test_project_roots.py` — the explicit cross-project path resolver:
   registration, lookup, removal, and rejection of paths outside the root.
 * `test_dependencies.py` — the cross-project dependency graph: manifest edges,

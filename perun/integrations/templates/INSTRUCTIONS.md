@@ -23,6 +23,11 @@ Always true, never retrieved away:
 - Resolve cross-project paths with `perun.project_roots.resolve(name, …)` —
   never hand-craft a relative path.
 - Never commit secrets; never paste credentials into a file or a prompt.
+- **Never leave a question for the operator unanswered.** Ask with
+  `perun_ask_operator` — it reaches them on Telegram and the dashboard and
+  returns the reply into *this* session; keep waiting on an `att_<id>` handle
+  with `perun_await_operator`, and use `perun_attention_list` to see what is
+  pending.
 - **Use Perun's bundled MCP tools for discovery, search, and file inspection.**
   Prefer `perun_unified_search`, `perun_grep`, `perun_ast_grep`,
   `perun_global_grep`, `perun_global_ast_grep`, and `perun_memory_search` over

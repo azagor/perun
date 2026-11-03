@@ -11,7 +11,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 from perun import __main__ as cli
 from perun import db
@@ -575,3 +577,28 @@ def test_is_owner_false_when_home_stat_fails(monkeypatch):
     monkeypatch.setattr(config, "HOME", FakeHome())
     assert cli._is_owner() is False
 
+
+
+# --------------------------------------------------------------------------- #
+# A missing runtime dependency must not surface as a traceback
+# --------------------------------------------------------------------------- #
+def test_missing_dependency_prints_a_fix_instead_of_a_traceback(tmp_path):
+    """`-S` hides site-packages, so the import guard must explain the fix."""
+    repo_root = Path(__file__).resolve().parent.parent
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo_root)
+    env.pop("PERUN_HOME", None)
+
+    res = subprocess.run(
+        [sys.executable, "-S", "-m", "perun", "status"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert res.returncode == 1
+    assert "missing Python package:" in res.stderr
+    assert "pip install" in res.stderr
+    assert "Traceback" not in res.stderr
