@@ -109,3 +109,22 @@ _No unreleased changes yet._
     path = _write_changelog(tmp_path, original)
     release.changelog_unreleased_to_version("0.9.0")
     assert path.read_text(encoding="utf-8") == original
+
+
+def test_release_refuses_without_the_owner_workspace_marker(tmp_path, monkeypatch, capsys):
+    """The private marker keeps the control project visible on the owner's dashboard."""
+    monkeypatch.setattr(release, "PUBLIC", tmp_path)
+
+    assert release.check_owner_marker() is False
+    err = capsys.readouterr().err
+    assert "owner-workspace" in err
+    assert "sync-internal.py" in err
+
+
+def test_release_accepts_the_owner_workspace_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "PUBLIC", tmp_path)
+    marker = tmp_path / ".perun" / "owner-workspace"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("owner\n", encoding="utf-8")
+
+    assert release.check_owner_marker() is True

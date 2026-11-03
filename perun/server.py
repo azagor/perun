@@ -1357,15 +1357,17 @@ def api_mcp_probe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @app.get("/api/projects")
 def api_list_projects(include_hidden: bool = False) -> dict[str, Any]:
-    """List projects. Hidden ones only for a configured operator.
+    """List projects. Hidden ones only in the owner's private workspace.
 
     ``include_hidden`` is what the dashboard sends so the owner can manage the
-    control plane. It is a listing convenience, not a privilege switch: a
-    brand-new install (no owner name, no paired chat) must not list the hidden
-    control project, because anyone who can reach the local dashboard would
-    then see the Perun project on a fresh machine.
+    control plane. It is a listing convenience, not a privilege switch: the
+    hidden control project is the Perun source tree, so it is listed only where
+    the private owner-workspace marker exists (see
+    ``config.is_owner_workspace``). Installed copies - including plain public
+    clones - list user projects only; the Orchestrator page still reaches the
+    control plane because that row remains registered.
     """
-    if include_hidden and not SETTINGS.owner_configured():
+    if include_hidden and not config.is_owner_workspace():
         include_hidden = False
     return {"ok": True, "projects": registry.list_projects(include_hidden=include_hidden)}
 

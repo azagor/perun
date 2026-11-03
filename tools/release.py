@@ -7,6 +7,12 @@ Steps covered:
 4. Sync internal project content to perun_internal via tools/sync-internal.py --reverse.
 5. Commit both repos, tag public, push public master+tag and internal master.
 
+The private owner-workspace marker (``.perun/owner-workspace``) is verified
+before anything is written and again after the reverse sync: it is what keeps
+the hidden Perun control project visible on the owner's dashboard. It travels
+through ``perun_internal`` only - the public repo gitignores it and every
+installer excludes ``.perun``.
+
 Usage:
     python tools/release.py 0.8.24 "Release summary here"
     python tools/release.py 0.8.24 --dry-run
@@ -38,6 +44,31 @@ INTERNAL_ITEMS = [
     ".opencode",
     ".github/workflows/release.yml",
 ]
+
+#: The private overlay's owner-workspace marker. The hidden control project is
+#: listed only where this file exists, so a release must never drop it. It is
+#: shipped by ``perun_internal``, gitignored in the public repo, and excluded
+#: from every installer (``.perun`` is in PerunSetup.iss's Excludes list).
+OWNER_MARKER = Path(".perun") / "owner-workspace"
+
+
+def check_owner_marker() -> bool:
+    """Abort the release when the owner-workspace marker would be lost.
+
+    ``sync_to_internal(..., --reverse --force)`` copies ``PUBLIC/.perun`` over
+    ``INTERNAL/.perun``; if the workspace marker is gone, the sync would delete
+    it in the private repo too and the owner's own dashboard would hide the
+    control project after the upgrade.
+    """
+    path = PUBLIC / OWNER_MARKER
+    if path.is_file():
+        return True
+    print(f"[ERR] Missing {path}", file=sys.stderr)
+    print("      This private marker keeps the hidden Perun control project on "
+          "the owner's dashboard.", file=sys.stderr)
+    print("      Restore it from perun_internal first: "
+          "python tools/sync-internal.py --force", file=sys.stderr)
+    return False
 
 
 def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> str:
@@ -247,6 +278,11 @@ def main() -> int:
         if not (repo / ".git").is_dir():
             print(f"[ERR] Not a git repo: {repo}", file=sys.stderr)
             return 1
+    # 1b. The owner-workspace marker must survive the release (it is what keeps
+    # the hidden control project visible on the owner's dashboard).
+    if not check_owner_marker():
+        return 1
+
     if not repo_is_clean(PUBLIC):
         print("[WARN] Public repo has uncommitted changes.")
         if not args.dry_run:
@@ -268,7 +304,7 @@ def main() -> int:
         print(f"[DRY-RUN] Would bump perun/__init__.py")
         print(f"[DRY-RUN] Would update docs/CHANGELOG.md and docs/TECHNICAL_DOCUMENTATION.md")
         print(f"[DRY-RUN] Would bundle perun/release_notes.json")
-        print(f"[DRY-RUN] Would sync to {INTERNAL}")
+        print(f"[DRY-RUN] Would sync to {INTERNAL} (owner marker: present)")
         print(f"[DRY-RUN] Would commit+tag public, commit internal, push both")
         return 0
 
@@ -283,6 +319,10 @@ def main() -> int:
 
     # 4. Sync to internal.
     sync_to_internal()
+    if not (INTERNAL / OWNER_MARKER).is_file():
+        print(f"[ERR] {INTERNAL / OWNER_MARKER} did not survive the sync; "
+              "aborting before commit/tag.", file=sys.stderr)
+        return 1
 
     # 5. Commit public repo.
     public_message = f"Release v{version}\n\n{summary}"

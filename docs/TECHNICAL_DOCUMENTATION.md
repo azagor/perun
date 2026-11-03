@@ -568,12 +568,15 @@ be confused with — or deleted as — a user project.
   button. `DELETE /api/projects/{slug}` and the MCP `perun_delete_project` tool
   refuse it.
 * Hiding is a **listing rule, not an access rule**. `/api/projects` omits hidden
-  rows; the dashboard sends `?include_hidden=true`, which returns them only when
-  the installation has a configured operator — `Settings.owner_configured()`
-  (a `perun_owner_name`, or a paired Telegram chat from
-  `telegram_allowed_chats`/`TELEGRAM_CHAT_ID`). A fresh install has no operator,
-  so it never lists the control project; a reachable loopback dashboard is not
-  evidence of ownership. The Orchestrator page works either way.
+  rows; the dashboard sends `?include_hidden=true`, which returns them only in
+  the owner's private workspace — `config.is_owner_workspace()` checks for
+  `.perun/owner-workspace`, shipped by the private `perun_internal` overlay and
+  absent from the public repo and every installer. `PERUN_SHOW_HIDDEN_PROJECTS=1`
+  / `0` overrides the marker per process. Installed copies therefore never list
+  the control project, while the Orchestrator page still reaches it (the row
+  stays registered and hidden, and `POST /api/runs` without a project targets
+  it). The dashboard's "Working now" panel filters by the same list, so a
+  control-plane run does not advertise itself there on an installed copy.
 * `POST /api/runs` with no `project` targets the control slug, and `/api/health`
   reports it as `control`.
 

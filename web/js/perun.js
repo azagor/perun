@@ -441,8 +441,14 @@ const presence = { working: new Set(), awake: new Set(), level: 'calm' };
 
 function computePresence() {
     const prevWorking = presence.working;
+    // Only projects the UI is allowed to list may light up. An installed copy
+    // never lists the hidden control plane, so its runs must not surface here
+    // either (the Orchestrator page still shows its own chat).
+    const listed = new Set((state.projects || []).map((p) => p.slug));
     const working = new Set();
-    for (const r of (state.activeRuns || [])) if (r.project_slug) working.add(r.project_slug);
+    for (const r of (state.activeRuns || [])) {
+        if (r.project_slug && listed.has(r.project_slug)) working.add(r.project_slug);
+    }
     const awake = new Set(working);
     const now = Date.now();
     for (const p of (state.projects || [])) {
@@ -582,11 +588,16 @@ function syncRunControl(card, run) {
 function renderWorkingNow(container) {
     if (!container) return;
     container.innerHTML = '';
-    if (!(state.activeRuns || []).length) return;
+    // Match the project grid: a run whose project the UI may not list (the
+    // hidden control plane on an installed copy) is not advertised here.
+    const listed = new Set((state.projects || []).map((p) => p.slug));
+    const runs = (state.activeRuns || []).filter(
+        (r) => r.project_slug && listed.has(r.project_slug));
+    if (!runs.length) return;
     container.appendChild(sectionTitle('Working now'));
     const box = el('div', { class: 'card' });
     const list = el('div', { class: 'list' });
-    for (const r of state.activeRuns) {
+    for (const r of runs) {
         const row = el('div', { class: 'list-row' },
             `<span class="badge amber">${esc(r.status)}</span>
              <span class="grow"><b>${esc(r.project_name || r.project_slug)}</b>

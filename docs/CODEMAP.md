@@ -57,8 +57,9 @@ Filesystem layout + persisted settings.
     `TELEGRAM_CHAT_ID` / `TG_CHAT_ID` chat fallback), `Settings.telegram_sources()`
     (which source is in force: `orchestrator` | `settings` | `settings-encrypted` |
     `env` | `""`, surfaced by the dashboard).
-  * `Settings.owner_configured()` reports whether this installation has a
-    known owner (a `perun_owner_name` or a paired Telegram chat) - the gate for
+  * `is_owner_workspace()` (with `OWNER_WORKSPACE_MARKER`) reports whether this
+    copy is the owner's private workspace - the `.perun/owner-workspace` marker
+    from the internal overlay; `PERUN_SHOW_HIDDEN_PROJECTS` overrides. It gates
     listing hidden projects such as the control plane.
   * `Settings.terminal_cmd(shell_hint=…)` returns the argv to launch the
     configured/default terminal emulator (on POSIX it prefers a real emulator and
@@ -1250,8 +1251,8 @@ FastAPI app + SSE + static dashboard.
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
   snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
   unified), projects
-  (`/api/projects…` — hidden rows (the control plane) only when
-  `Settings.owner_configured()`; incl. the creation wizard, `/api/projects/{slug}/instructions`
+  (`/api/projects…` - hidden rows (the control plane) only in the owner's
+  workspace (`config.is_owner_workspace()`); incl. the creation wizard, `/api/projects/{slug}/instructions`
   (legacy inline or project-local Markdown file), `/api/projects/{slug}/instruction-files`
   (multi-file project-local instructions with CRUD + toggle), `/api/projects/{slug}/manifest…`,
   `/api/projects/{slug}/git…`,

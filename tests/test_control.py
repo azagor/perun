@@ -109,12 +109,12 @@ def test_health_exposes_control_slug(control_repo):  # noqa: ARG001
         assert "control" in body and body["control"]
 
 
-def test_control_project_is_hidden_from_project_list(control_repo, monkeypatch):  # noqa: ARG001
-    """The API hides the Perun project unless this install has an operator.
+def test_control_project_is_hidden_unless_the_owner_workspace(control_repo, monkeypatch):  # noqa: ARG001
+    """The API lists the Perun project only in the owner's private workspace.
 
-    The dashboard asks for hidden projects so the owner can manage the control
-    plane, but a fresh install has no owner (no name, no paired chat) and must
-    not see it merely because the dashboard is reachable over loopback.
+    The dashboard asks for hidden projects, but an installed copy (and a plain
+    clone of the public repo) has no ``.perun/owner-workspace`` marker, so it
+    must not see the control project merely because the dashboard is reachable.
     """
     from fastapi.testclient import TestClient
 
@@ -122,52 +122,93 @@ def test_control_project_is_hidden_from_project_list(control_repo, monkeypatch):
 
     control.ensure()
     server.SETTINGS.auto_discover_on_start = False
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
-    monkeypatch.delenv("TG_CHAT_ID", raising=False)
-    saved = (list(server.SETTINGS.telegram_allowed_chats),
-             server.SETTINGS.perun_owner_name)
-    try:
-        server.SETTINGS.telegram_allowed_chats = []
-        server.SETTINGS.perun_owner_name = ""
-        with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
-            default = client.get("/api/projects").json()
-            assert "perun" not in {p["slug"] for p in default["projects"]}
+    monkeypatch.delenv("PERUN_SHOW_HIDDEN_PROJECTS", raising=False)
+    marker = control_repo / ".perun" / "owner-workspace"
+    if marker.exists():
+        marker.unlink()
 
-            # A brand-new install cannot ask its way into the hidden project.
-            asked = client.get("/api/projects?include_hidden=true").json()
-            assert "perun" not in {p["slug"] for p in asked["projects"]}
+    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+        default = client.get("/api/projects").json()
+        assert "perun" not in {p["slug"] for p in default["projects"]}
 
-        # Once an operator is configured, the owner's dashboard sees it again.
-        server.SETTINGS.telegram_allowed_chats = ["4242"]
-        with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
-            included = client.get("/api/projects?include_hidden=true").json()
-            assert "perun" in {p["slug"] for p in included["projects"]}
-    finally:
-        (server.SETTINGS.telegram_allowed_chats,
-         server.SETTINGS.perun_owner_name) = saved
+        # An installed copy cannot ask its way into the hidden project.
+        asked = client.get("/api/projects?include_hidden=true").json()
+        assert "perun" not in {p["slug"] for p in asked["projects"]}
+
+        # ... but the owner can force it per process (e.g. to inspect an install).
+        monkeypatch.setenv("PERUN_SHOW_HIDDEN_PROJECTS", "1")
+        forced = client.get("/api/projects?include_hidden=true").json()
+        assert "perun" in {p["slug"] for p in forced["projects"]}
+
+    # The private overlay's marker makes this the owner's workspace.
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("owner\n", encoding="utf-8")
+    monkeypatch.delenv("PERUN_SHOW_HIDDEN_PROJECTS", raising=False)
+    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+        included = client.get("/api/projects?include_hidden=true").json()
+        assert "perun" in {p["slug"] for p in included["projects"]}
+
+        # ... and the owner can force it off.
+        monkeypatch.setenv("PERUN_SHOW_HIDDEN_PROJECTS", "0")
+        hidden = client.get("/api/projects?include_hidden=true").json()
+        assert "perun" not in {p["slug"] for p in hidden["projects"]}
 
 
-def test_owner_configured_needs_a_name_or_a_paired_chat(monkeypatch):
-    """A fresh install is nobody's yet; naming/pairing makes it the owner's."""
+def test_owner_workspace_marker_and_override(tmp_path, monkeypatch):
+    """The gate is the private overlay marker, with a per-process override."""
     from perun import config
 
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
-    monkeypatch.delenv("TG_CHAT_ID", raising=False)
-    settings = config.Settings()
-    settings.telegram_allowed_chats = []
-    settings.perun_owner_name = ""
-    assert settings.owner_configured() is False
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("PERUN_SHOW_HIDDEN_PROJECTS", raising=False)
+    assert config.is_owner_workspace() is False
 
-    settings.perun_owner_name = "Lukasz"
-    assert settings.owner_configured() is True
+    marker = tmp_path / ".perun" / "owner-workspace"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("owner\n", encoding="utf-8")
+    assert config.is_owner_workspace() is True
 
-    settings.perun_owner_name = ""
-    settings.telegram_allowed_chats = ["4242"]
-    assert settings.owner_configured() is True
+    monkeypatch.setenv("PERUN_SHOW_HIDDEN_PROJECTS", "0")
+    assert config.is_owner_workspace() is False
 
-    settings.telegram_allowed_chats = []
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "4242")
-    assert settings.owner_configured() is True
+    monkeypatch.setenv("PERUN_SHOW_HIDDEN_PROJECTS", "1")
+    marker.unlink()
+    assert config.is_owner_workspace() is True
+
+
+def test_the_hidden_control_project_is_still_the_orchestrator_target(control_repo, monkeypatch):  # noqa: ARG001
+    """A listing rule must not break the orchestrator on an installed copy.
+
+    The row stays registered (hidden), ``/api/health`` reports it, and a run
+    without an explicit project still resolves to it.
+    """
+    from fastapi.testclient import TestClient
+
+    from perun import config, server
+
+    control.ensure()
+    server.SETTINGS.auto_discover_on_start = False
+    monkeypatch.setattr(config, "is_owner_workspace", lambda: False)
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+        health = client.get("/api/health").json()
+        slug = health.get("control") or ""
+        assert slug, health
+
+        listed = client.get("/api/projects?include_hidden=true").json()
+        assert slug not in {p["slug"] for p in listed["projects"]}
+
+        started: dict[str, str] = {}
+
+        def fake_start(project_ref, prompt, **kwargs):
+            started["ref"] = project_ref
+            return {"run_uid": "fake-run", "project_slug": project_ref,
+                    "status": "queued"}
+
+        monkeypatch.setattr(server.ORCH, "start_run", fake_start)
+        r = client.post("/api/runs", json={"prompt": "hello"})
+
+        assert r.status_code == 200
+        assert started["ref"] == slug
 
 
 def test_models_endpoint_is_structured(control_repo):  # noqa: ARG001

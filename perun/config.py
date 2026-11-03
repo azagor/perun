@@ -115,6 +115,33 @@ def is_control_path(path: "str | Path | None") -> bool:
         return False
 
 
+#: Marker shipped by the private ``perun_internal`` overlay; it never reaches the
+#: public repo or an installed copy. The hidden control project is listed only
+#: where this file exists.
+OWNER_WORKSPACE_MARKER: Path = Path(".perun") / "owner-workspace"
+
+
+def is_owner_workspace() -> bool:
+    """Whether this copy is the owner's private Perun workspace.
+
+    The hidden control project *is* the Perun source tree, so it is only
+    meaningful where that source lives: a checkout carrying the private
+    ``perun_internal`` overlay, which ships ``.perun/owner-workspace``. An
+    installed copy and a plain clone of the public repo have neither, so they
+    list user projects only. ``PERUN_SHOW_HIDDEN_PROJECTS=1`` / ``0`` overrides
+    the marker per process (e.g. to inspect an installed copy).
+    """
+    override = (os.environ.get("PERUN_SHOW_HIDDEN_PROJECTS") or "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    if override in ("0", "false", "no", "off"):
+        return False
+    try:
+        return (REPO_ROOT / OWNER_WORKSPACE_MARKER).is_file()
+    except OSError:  # pragma: no cover - unreadable install directory
+        return False
+
+
 def _default_roots() -> list[str]:
     env = os.environ.get("PERUN_ROOTS")
     if env and env.strip():
@@ -451,24 +478,6 @@ class Settings:
             if path:
                 return {"source": "os", "path": path}
         return {"source": "os", "path": os.environ.get("SHELL", shutil.which("bash") or shutil.which("sh") or "")}
-
-    def owner_configured(self) -> bool:
-        """Whether this installation has a named or paired human operator.
-
-        Perun has no login, so "the owner" is the person the installation was
-        set up for: an operator who named themselves (``perun_owner_name``) or
-        paired a Telegram chat (the static allow-list, persisted by ``/pair``,
-        or a ``TELEGRAM_CHAT_ID`` override). A brand-new install has none of
-        these, so its hidden control project must stay out of project lists -
-        a reachable local dashboard is not evidence of ownership.
-        """
-        if any(str(chat).strip() for chat in self.telegram_allowed_chats):
-            return True
-        if (self.perun_owner_name or "").strip():
-            return True
-        env_chats = (os.environ.get("TELEGRAM_CHAT_ID")
-                     or os.environ.get("TG_CHAT_ID") or "")
-        return bool(env_chats.strip())
 
     def telegram_sources(self) -> dict[str, str]:
         """Where the *effective* token/chats come from: ``settings`` | ``settings-encrypted`` | ``env`` | ``""``.

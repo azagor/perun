@@ -4,7 +4,25 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The control project is listed only in the owner's workspace
+
+* v0.10.54 gated hidden projects on "this installation has an owner" (a name or a
+  paired Telegram chat). That was still per-install: once anyone named or paired,
+  the dashboard listed the Perun project. The gate is now a **workspace marker**,
+  `.perun/owner-workspace`, shipped by the private `perun_internal` overlay only.
+  A checkout carrying that overlay lists the control project; an installed copy
+  — and a plain clone of the public repo, which has no `.perun/` — lists user
+  projects only. `PERUN_SHOW_HIDDEN_PROJECTS=1` / `0` overrides per process.
+* The orchestrator is untouched: the control row stays registered (hidden),
+  `/api/health` still reports it, and a run without a project still targets it;
+  the Orchestrator page works with zero listed projects. The Agent Console
+  picker and the dashboard's "Working now" panel follow the same listing rule,
+  so a control-plane run no longer advertises itself there on an installed copy.
+* The release pipeline verifies the marker before writing anything and again
+  after the reverse sync (`tools/release.py`), so a release cannot silently
+  delete it and hide the project on the owner's own dashboard. The installer
+  excludes `.perun/`, so no installed copy ships the marker; nothing in the
+  installer or `.gitignore` changes.
 
 ## v0.10.54
 

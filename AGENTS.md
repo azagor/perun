@@ -127,7 +127,11 @@ with `python -m perun project-roots --add <name> <path>`.
   activity row) and names *this project's* operator, not another agent's.
 * **The control project is local, and shareable only on purpose.** `perun` is
   registered **hidden** so it stays out of project lists and is never deleted;
-  hiding is a listing rule, not an access rule. If you want another Perun
+  hiding is a listing rule, not an access rule. The dashboard lists it only in
+  the owner's private workspace (the `.perun/owner-workspace` marker shipped by
+  the internal overlay; `PERUN_SHOW_HIDDEN_PROJECTS` overrides), so an installed
+  copy or a plain public clone never shows it while the Orchestrator page still
+  reaches it. If you want another Perun
   installation to work on it, share it like any project: `shared: true` plus
   participants on the `perunchat_trusted` list, with `rw`/`ro` roles, HITL
   approval and the guard/audit unchanged. `reconcile_all_project_chats()` includes
