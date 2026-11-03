@@ -301,6 +301,23 @@ select { cursor: pointer; }
 .proposal-list .list-row { align-items: flex-start; }
 .proposal-list .list-row .intent { flex: 1; min-width: 0; }
 .proposal-list .list-row .meta { color: var(--text-muted); font-size: .72rem; }
+.proposal-list .list-row.proposal-focus {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
+    background: rgba(212, 175, 55, .08);
+    border-radius: var(--radius);
+    transition: background .3s ease;
+}
+.proposal-ref { font-family: var(--mono); }
+.proposal-ref.proposal-pending { border-color: var(--amber); color: var(--amber); }
+.proposal-ref.proposal-approved,
+.proposal-ref.proposal-executing,
+.proposal-ref.proposal-claimed { border-color: var(--blue); color: var(--blue); }
+.proposal-ref.proposal-executed { border-color: var(--green); color: var(--green); }
+.proposal-ref.proposal-failed { border-color: var(--red); color: var(--red); }
+.proposal-ref.proposal-rejected,
+.proposal-ref.proposal-cancelled,
+.proposal-ref.proposal-expired { border-color: var(--border-strong); color: var(--text-muted); }
 .completed-proposals .card-head { margin-bottom: 0; padding: 8px 0; }
 .completed-proposals .card-head h4 { font-size: .9rem; color: var(--text-secondary); }
 .completed-proposals .list { border-top: 1px solid var(--border); padding-top: 4px; }

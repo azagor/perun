@@ -1626,6 +1626,28 @@ def api_list_proposals(slug: str, status: str | None = None) -> dict[str, Any]:
     )
 
 
+@app.get("/api/proposals/{proposal_id}")
+def api_get_proposal_by_id(proposal_id: str) -> dict[str, Any]:
+    """Resolve one proposal across projects (used by chat references).
+
+    Chat messages name proposals by id (`prop_…`), not by project. The dashboard
+    turns those ids into chips; this lookup supplies the project slug, status and
+    intent for the peek card. Tokens and snapshots stay server-side, exactly as
+    in the per-project list.
+    """
+    proposal = action_proposals.get(proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    project = registry.get_project(proposal["project_id"])
+    if not project:
+        raise HTTPException(status_code=404, detail="proposal project not found")
+    hidden = {"approval_token", "approval_snapshot", "claim_snapshot"}
+    return _ok(
+        proposal={k: v for k, v in proposal.items() if k not in hidden},
+        project={"slug": project["slug"], "name": project["name"]},
+    )
+
+
 @app.post("/api/projects/{slug}/proposals")
 def api_create_proposal(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Create an action proposal from an Action Envelope (used by the bridge)."""

@@ -121,6 +121,91 @@ function confirmDialog(title, message, onConfirm, confirmLabel = 'Confirm') {
     ]);
 }
 
+/* --------------------------------------------------- proposal references --- */
+// Set before navigating to a project's Shared tab so the card can reveal and
+// flash the exact row a chat message referenced.
+let pendingProposalFocus = null;
+
+// Reveal an already-rendered proposal row (the Shared card may already be on
+// screen when another chat chip is clicked). Returns false when it is not there.
+function focusProposalInShared(proposalId) {
+    const target = document.querySelector(
+        `.proposal-list [data-proposal="${CSS.escape(proposalId)}"]`);
+    if (!target) return false;
+    const completed = target.closest('.completed-proposals');
+    if (completed) {
+        const list = completed.querySelector('.list');
+        if (list) list.classList.remove('hidden');
+        const marker = completed.querySelector('.card-head span');
+        if (marker) marker.textContent = '▾';
+    }
+    target.classList.add('proposal-focus');
+    target.scrollIntoView({ block: 'center' });
+    setTimeout(() => target.classList.remove('proposal-focus'), 3000);
+    return true;
+}
+
+function proposalBadge(status) {
+    const name = String(status || 'unknown');
+    const cls = name === 'executed' ? 'green' : name === 'failed' ? 'red'
+        : ['approved', 'executing', 'claimed'].includes(name) ? 'blue'
+        : ['rejected', 'cancelled', 'expired'].includes(name) ? 'muted' : 'amber';
+    return `<span class="badge ${cls}">${esc(name)}</span>`;
+}
+
+async function openProposalPeek(proposalId) {
+    const body = el('div', {}, '<div class="empty"><span class="spinner"></span> loading proposal…</div>');
+    let loaded = null;
+    modal(`Proposal ${proposalId}`, body, [
+        {
+            label: 'Open in project',
+            class: 'primary',
+            onClick: () => {
+                if (!loaded) return;
+                closeModal();
+                const hash = `#/project/${loaded.project.slug}/shared`;
+                if (location.hash === hash && focusProposalInShared(proposalId)) return;
+                pendingProposalFocus = proposalId;
+                goto(hash);
+            },
+        },
+        { label: 'Close', class: 'ghost', onClick: closeModal },
+    ]);
+    try {
+        loaded = await api(`/api/proposals/${encodeURIComponent(proposalId)}`);
+    } catch (e) {
+        body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+        return;
+    }
+    const prop = loaded.proposal || {};
+    const project = loaded.project || {};
+    const targets = prop.targets || [];
+    const targetHtml = targets.length
+        ? targets.map((t) => `<span class="chip">${esc(String(t))}</span>`).join(' ')
+        : '<span class="muted">(none)</span>';
+    const lines = [
+        `<span class="k">Project</span><span class="v">${esc(project.name || project.slug || '?')}</span>`,
+        `<span class="k">Status</span><span class="v">${proposalBadge(prop.status)}</span>`,
+        `<span class="k">Requested by</span><span class="v">${esc(prop.requester || '?')}</span>`,
+        `<span class="k">Intent</span><span class="v">${esc(prop.intent || '')}</span>`,
+        `<span class="k">Targets</span><span class="v">${targetHtml}</span>`,
+        `<span class="k">Created</span><span class="v">${esc(timeAgo(prop.created_at))}</span>`,
+    ];
+    if (prop.approved_by) {
+        lines.push(`<span class="k">Approved by</span><span class="v">${esc(prop.approved_by)}</span>`);
+    }
+    if (prop.executed_by || prop.execution_mode) {
+        lines.push(`<span class="k">Executed by</span><span class="v">${esc(prop.executed_by || prop.execution_mode)}</span>`);
+    }
+    if (prop.result) {
+        lines.push(`<span class="k">Result</span><span class="v">${esc(String(prop.result).slice(0, 500))}</span>`);
+    }
+    const details = prop.details && Object.keys(prop.details).length
+        ? JSON.stringify(prop.details) : '';
+    body.innerHTML = `<div class="kv">${lines.join('')}</div>`
+        + (details ? `<div class="meta" style="margin-top:10px;max-height:180px;overflow:auto;white-space:pre-wrap">${esc(details.slice(0, 3000))}</div>` : '');
+}
+
 /* --------------------------------------------------------- formatting --- */
 function timeAgo(iso) {
     if (!iso) return '—';
@@ -2387,6 +2472,7 @@ async function proposalsCard(detail) {
              <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
              <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}</span>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
+        row.dataset.proposal = prop.id;
         row.querySelectorAll('.proposal-target').forEach((btn) => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -2401,7 +2487,7 @@ async function proposalsCard(detail) {
             } catch (e) { toast(e.message, 'err'); }
         });
         row.querySelector('[data-approve]')?.addEventListener('click', async () => {
-            if (!confirm(`Approve this proposal without starting it?\n\n${prop.intent}\n\nTargets: ${targets || '(none)'}`)) return;
+            if (!confirm(`Approve this proposal without starting it?\n\n${prop.intent}\n\nTargets: ${targetList.join(', ') || '(none)'}`)) return;
             try { await api(`/api/projects/${p.slug}/proposals/${prop.id}/approve`, { method: 'POST' }); toast('Approved', 'ok'); viewProject(p.slug, 'shared'); }
             catch (e) { toast(e.message, 'err'); }
         });
@@ -2472,6 +2558,11 @@ async function proposalsCard(detail) {
         completedWrap.appendChild(completedList);
         card.appendChild(completedWrap);
     }
+
+    // A chat chip may have sent us here for one specific proposal.
+    const focusId = pendingProposalFocus;
+    pendingProposalFocus = null;
+    if (focusId) focusProposalInShared(focusId);
 
     if (proposals.some((prop) => prop.status === 'executing' || prop.status === 'claimed')) scheduleSharedPoll(p.slug);
     return card;
@@ -5076,6 +5167,16 @@ async function viewPerunChat() {
             replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
         }
 
+        // Proposal ids are how the chat names work that needs the operator. Turn
+        // each one into a chip; clicking it opens a status/intent card with an
+        // "Open in project" jump to the exact Shared-tab row.
+        let payloadHtml = esc(String(msg.payload));
+        // Bound the fan-out: a hostile message could otherwise name hundreds of
+        // ids and make the dashboard issue that many lookups.
+        for (const id of ChatCore.proposalIds(msg.payload).slice(0, 8)) {
+            const chip = `<button class="chip chip-link proposal-ref" data-proposal="${esc(id)}" type="button" title="Open this proposal">${esc(id)}</button>`;
+            payloadHtml = payloadHtml.split(id).join(chip);
+        }
         const lineHtml = `<div style="margin-bottom:4px;">
             <div class="row" style="gap:10px; align-items:baseline;">
                 <span style="color:${ownColor}; font-weight:600;">@${own}</span>
@@ -5083,7 +5184,7 @@ async function viewPerunChat() {
                 <button class="btn ghost small" data-reply-id="${esc(msg.id)}" data-reply-sender="${own}">Reply</button>
             </div>
             ${replyHtml}
-            <div style="margin-left:12px; overflow-wrap:anywhere;">${esc(String(msg.payload))}</div>
+            <div style="margin-left:12px; overflow-wrap:anywhere;">${payloadHtml}</div>
         </div>`;
         // Insert the DOM line at the same position so the visual order matches
         // the sorted messageHistory. If we just evicted the oldest line, the
@@ -5113,6 +5214,22 @@ async function viewPerunChat() {
                 $('#pc-chat-msg').focus();
             });
         }
+        line.querySelectorAll('.proposal-ref').forEach((chip) => {
+            const id = chip.dataset.proposal;
+            chip.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openProposalPeek(id);
+            });
+            // Colour the chip by status and name the project in the tooltip, so
+            // the operator can triage a long message without opening each one.
+            api(`/api/proposals/${encodeURIComponent(id)}`).then((res) => {
+                const prop = (res && res.proposal) || {};
+                const project = (res && res.project) || {};
+                if (prop.status) chip.classList.add(`proposal-${prop.status}`);
+                chip.title = `Proposal ${id} — ${prop.status || 'unknown'}`
+                    + (project.name ? ` · ${project.name}` : '');
+            }).catch(() => { /* leave the neutral chip */ });
+        });
     }
 
     function clearReply() {

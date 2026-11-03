@@ -78,3 +78,20 @@ test('a different text inside the window still goes out', () => {
 test('surrounding whitespace does not defeat the guard', () => {
     assert.equal(core.shouldSend('hello', 1000, '  hello  ', 1100), false);
 });
+
+test('proposal ids are unique and keep first-seen order', () => {
+    const text = 'see prop_d72f771eee7e and prop_1dab87f5d014, then prop_d72f771eee7e again';
+    assert.deepEqual(core.proposalIds(text),
+        ['prop_d72f771eee7e', 'prop_1dab87f5d014']);
+});
+
+test('text that only looks like a proposal id is ignored', () => {
+    assert.deepEqual(core.proposalIds(
+        'prop_xyz prop_12345678901 PROP_d72f771eee7e xprop_d72f771eee7e'), []);
+});
+
+test('proposalIds tolerates null and non-string payloads', () => {
+    assert.deepEqual(core.proposalIds(null), []);
+    assert.deepEqual(core.proposalIds(undefined), []);
+    assert.deepEqual(core.proposalIds(42), []);
+});

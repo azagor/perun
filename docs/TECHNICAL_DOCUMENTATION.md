@@ -1095,6 +1095,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST/GET | `/api/perunchat/rooms/private` | create or list private rooms (bilateral or multi-party) |
 | GET/POST/DELETE | `/api/perunchat/rooms/{room_id}/members[/{agent_id}]` | list, invite, or remove participants of a private room |
 | GET | `/api/projects/{slug}/proposals` | List action proposals for a shared project; `approval_token`, `approval_snapshot` and `claim_snapshot` are stripped (the token is returned by the approval call) |
+| GET | `/api/proposals/{proposal_id}` | Resolve a chat's `prop_…` reference without knowing its project: returns the proposal (same token/snapshot stripping) plus the owning project's slug/name |
 | GET | `/api/routing/decisions` | Recent `routing_decision` rows for the dashboard panel: `total`, `by_action`, `unknown_share`, `shadow` count, `enabled`/`shadow_mode` from settings, and per-decision action/project/confidence/`matched_by`/candidates (never the message text) |
 | POST | `/api/routing/decisions/{id}/misroute` | Record that a routing decision was wrong (`routing_misroute` activity row, used for threshold tuning); idempotent per decision, and a note that looks like a credential is stored as `[redacted]` |
 | DELETE | `/api/routing/decisions/{id}/misroute` | Undo a misroute report (`reported: false` in the panel row again) |
@@ -1948,6 +1949,17 @@ joinedRoom)` (drop frames for another room, the same id, or the same
 runs through `tests/test_js_chat_core.py` (skipped when `node` is absent). If the
 module fails to load, `perun.js` logs one error and falls back to rendering
 everything, so a stale cache never blanks the log.
+
+**Proposal references in chat.** A room message names work by `prop_…`, not by
+project. `ChatCore.proposalIds(text)` (unit-tested, deduped, first-seen order)
+extracts at most eight per message; `perun.js` turns each into a chip, then
+fetches `GET /api/proposals/{id}` once to colour it by status and put the project
+in its tooltip. Clicking the chip opens a peek card (project, status, requester,
+intent, targets, result) whose **Open in project** action navigates to
+`#/project/<slug>/shared`, expands the completed section when necessary, scrolls
+to the row and flashes it. The lookup is read-only and strips approval tokens and
+snapshots exactly like the per-project list; the chip is dashboard-only — a room
+participant never receives it.
 
 **One identity, two voices.** A frame carries `sender.agent_id` (who) and
 `sender.runtime` (which voice). The bridge posts as `<agent>` with runtime

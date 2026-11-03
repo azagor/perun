@@ -211,7 +211,11 @@ it saw: Perun fingerprints every declared target, and a claim or apply is refuse
 if a target changed, appeared or disappeared in the meantime, so a stale package
 can never overwrite newer work. An approver can also **withdraw** an unused
 approval, which lands the proposal in a distinct `cancelled` state instead of
-leaving it claimable — or mislabelling it as a refusal.
+leaving it claimable — or mislabelling it as a refusal. In the dashboard chat,
+every `prop_…` named by a participant is a status-coloured chip: clicking it
+shows the project, status, intent and targets, and **Open in project** takes the
+operator straight to that row in the Shared tab. The operator never has to hunt
+for which project a chat mention belongs to.
 
 ### Context and secrets
 An agent that needs reference material calls `perun_context("<task>")` instead

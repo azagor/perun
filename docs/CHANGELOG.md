@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Proposal references in chat are actionable
+
+* Every `prop_…` named in a PerunChat message is now a chip coloured by its
+  status (the project is in the tooltip). Clicking it opens a peek card with the
+  project, status, requester, intent, targets and result; **Open in project**
+  jumps to the Shared tab, expands the completed section when needed, scrolls to
+  the row and flashes it. A new `GET /api/proposals/{id}` resolves a proposal
+  across projects, so the operator no longer has to guess which project a chat
+  mention belongs to.
+* Fixed the **Approve only** confirmation: it referenced an undefined `targets`
+  variable and threw before sending the approval.
+
+### Updates refresh the global install
 
 ## v0.10.62
 

@@ -208,6 +208,11 @@ external) are readable/writable.
   the headless run immediately. Confirmation dialogs remain for destructive or
   irreversible actions (`Approve only`, `Reject`, `Withdraw` an approved
   proposal, `Cancel` a running one, `Delete`).
+- **FR-31** Chat proposal references are actionable: a `prop_…` in a room message
+  becomes a status-coloured chip (project in the tooltip); clicking it opens a
+  peek card and **Open in project** jumps to that row in the Shared tab,
+  expanding the completed section and flashing it. `GET /api/proposals/{id}`
+  resolves the id across projects without exposing approval tokens or snapshots.
 
 ### 3.9 Non-Functional Requirements
 

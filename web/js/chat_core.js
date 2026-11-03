@@ -38,5 +38,19 @@
         return !(value === lastText && now - lastAt < window);
     }
 
-    return { shouldRender, shouldSend };
+    /** Proposal ids named in a message, unique and in first-seen order. */
+    function proposalIds(text) {
+        const seen = new Set();
+        const out = [];
+        const pattern = /\bprop_[0-9a-f]{12}\b/g;
+        for (const match of String(text == null ? '' : text).matchAll(pattern)) {
+            if (!seen.has(match[0])) {
+                seen.add(match[0]);
+                out.push(match[0]);
+            }
+        }
+        return out;
+    }
+
+    return { shouldRender, shouldSend, proposalIds };
 });

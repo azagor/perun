@@ -1291,6 +1291,9 @@ FastAPI app + SSE + static dashboard.
   JS/CSS/HTML), `_post_proposal_started()`,
   `_post_proposal_rejected()`, `_post_proposal_digest()` (best-effort lifecycle
   notices to the bound project chat, redacted before leaving the process).
+* `api_get_proposal_by_id()` — the chat's global proposal lookup
+  (`GET /api/proposals/{id}`); mirrors the per-project list's
+  approval-token/snapshot redaction and returns the owning project's slug/name.
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
   structured `/api/models`), PerunChat (`/api/perunchat/status`, `/api/perunchat/key`
   kept for legacy loopback callers, and loopback-only `POST /api/perunchat/ws-ticket`
@@ -1308,7 +1311,9 @@ FastAPI app + SSE + static dashboard.
   `/api/projects/{slug}/tasks…`, shared-project proposals
   (`/api/projects/{slug}/proposals…` incl. `claim`/`revoke-claim` for external
   execution handoff and `cancel` for withdrawing an approved-but-unclaimed
-  proposal; the list endpoint omits approval tokens/snapshots), declared checks
+  proposal; the list endpoint omits approval tokens/snapshots), a global
+  `GET /api/proposals/{id}` (chat references resolve a proposal without knowing
+  its project; tokens/snapshots stay server-side), declared checks
   (`GET`/`POST /api/projects/{slug}/checks`, `DELETE .../{name}`,
   `POST .../{name}/run` capped at the MCP timeout, `GET .../{name}/history`),
   routing
@@ -1544,9 +1549,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   composition, unit-testable).
 * `web/js/chat_core.js` — pure dashboard-chat decisions, moved out of
   `perun.js` so `node --test` can cover them: `shouldRender(existing, msg,
-  joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames) and
+  joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames),
   `shouldSend(lastText, lastAt, text, now, windowMs)` (double Enter/click
-  guard). Exposed as `window.ChatCore` and as a CommonJS module.
+  guard), and `proposalIds(text)` (the `prop_…` ids named in a message, unique
+  and in first-seen order, used to render actionable chips). Exposed as
+  `window.ChatCore` and as a CommonJS module.
 * `web/js/coroutine_schedule.js` - pure coroutine UI logic, unit-tested with
   `node --test`: `humanTrigger()`, `cronHuman()`, `intervalHuman()`,
   `presetCron()`, `quickTrigger()` (quick-create daily/once payload),

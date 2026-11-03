@@ -2846,3 +2846,34 @@ def test_a_check_already_running_returns_409(client, tmp_path):
 
     assert r.status_code == 409
     assert "already running" in r.json()["detail"]
+
+def test_a_proposal_can_be_looked_up_by_id_across_projects(client, tmp_path):
+    import json
+
+    from perun import db, registry
+
+    project = _check_project(tmp_path, "proposal-lookup")
+    proposal_id = "prop_abcdef123456"
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO action_proposals (id, project_id, requester, action_type, "
+            "intent, targets, details, status, expires_at, execution_mode, "
+            "approval_token, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (proposal_id, project["id"], "frambo", "edit",
+             "tighten the deploy script", json.dumps(["deploy.py"]), "{}",
+             "approved", 9_999_999_999, "", "secret-token",
+             registry.now_iso(), registry.now_iso()),
+        )
+
+    r = client.get(f"/api/proposals/{proposal_id}")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["project"]["slug"] == project["slug"]
+    assert body["proposal"]["intent"] == "tighten the deploy script"
+    assert body["proposal"]["targets"] == ["deploy.py"]
+    # Server-side approval state never leaves the server.
+    assert "approval_token" not in body["proposal"]
+    assert "approval_snapshot" not in body["proposal"]
+    assert client.get("/api/proposals/prop_000000000000").status_code == 404
