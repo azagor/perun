@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.61 (see §15). Search with a tool, never a shell pipeline: the global kernel rule now reaches every project.
+**Latest release:** v0.10.62 (see §15). Git updates now refresh the global install, so the managed kernel, commands and MCP entry follow the release.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2541,6 +2541,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.62: Git updates now refresh the global install, so the managed kernel, commands and MCP entry follow the release.
+
 ### 2026-11-03 — v0.10.61: Search with a tool, never a shell pipeline: the global kernel rule now reaches every project.
 
 ### 2026-11-03 — v0.10.60: Audit follow-ups for checks (hidden-project guard, untrusted output, env, retention, caps) and an Ollama-down memory search fix.

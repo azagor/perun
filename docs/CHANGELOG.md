@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.62
+
+*Released 2026-11-03.*
+
 ### Updates refresh the global install
 
 * `perun update apply` on a git checkout now re-runs the additive global install

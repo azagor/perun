@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T17:59:52+00:00",
+  "generated": "2026-11-03T18:03:28+00:00",
   "releases": [
+    {
+      "version": "0.10.62",
+      "date": "2026-11-03",
+      "body": "### Updates refresh the global install\n\n* `perun update apply` on a git checkout now re-runs the additive global install\n  (`perun install --no-index`) after the pull, so the managed `AGENTS.md` kernel,\n  the slash commands and the MCP entry match the release that was just installed.\n  Previously only fresh installs and installer upgrades refreshed them, leaving\n  git users on old always-on rules. The step backs up before writing and is\n  best-effort: a locked or read-only config logs a warning and never fails a\n  successful update."
+    },
     {
       "version": "0.10.61",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.53",
       "date": "2026-11-03",
       "body": "### A missing dependency no longer kills the launcher, and paths with spaces work\n\n* `Perun.cmd` wrapped the interpreter in a `for /f` backtick command for its\n  bridge and encrypted-token probes. `cmd` strips the outer quotes of such a\n  command line, so a machine-wide install at `C:\\Program Files\\Python312` ran\n  `C:\\Program` and printed `C:\\Program' is not recognized as an internal or\n  external command` on every launch. Both probes are now plain calls whose\n  answer is the exit code (no PowerShell/JSON piping), and the quoting trap is\n  documented where it bit us.\n* An explicit `PERUN_PORT` is no longer overridden by `config.json`; the\n  documented override used to be silently ignored.\n* The launcher verifies the runtime packages from `requirements.txt` before\n  starting (skippable with `PERUN_SKIP_DEP_CHECK=1`), installs them once —\n  retrying with `--user` when the system location is not writable — and\n  otherwise prints the exact `pip install` command, instead of serving the\n  banner and then dying with `ModuleNotFoundError`. pip runs with `--no-input`\n  so a prompt can never freeze a double-click launch.\n* `perun/daemon.py` no longer imports `psutil` unconditionally. Process\n  liveness, the listening-port owner, `stop` and `kill` fall back to\n  `tasklist`/`netstat`/`taskkill` (Windows) or `/proc`/`ps` and `os.kill`\n  (POSIX), and `perun serve` prints one warning instead of crashing, so a\n  failed `pip install` degrades process tracking rather than taking the whole\n  service down. A PID is still only treated as Perun after its command line\n  matches (CIM on Windows, `/proc`/`ps` on POSIX; `psutil` when present), so a\n  recycled PID in a stale `perun.pid` can never make `perun stop` kill an\n  unrelated process, and a zombie no longer looks like a live server. When the\n  command line cannot be read at all, the PID is treated as stale: `perun stop`\n  reports \"not running\" instead of guessing. Any other\n  missing runtime package now prints `[perun] missing Python package: <name>`\n  plus the command that fixes it.\n* The Windows installer retries `pip install` per-user after a failure, verifies\n  every package afterwards, and writes pip's own output to `installer.log`, so a\n  still-broken environment fails the install with the fix and the reason\n  available instead of appearing to succeed.\n\n### Operator questions in the global context kernel\n\n* The installed context kernel (`perun/integrations/templates/INSTRUCTIONS.md`)\n  now tells every agent to ask the operator with `perun_ask_operator` instead of\n  ending a turn on an open question, to keep waiting on an `att_<id>` handle with\n  `perun_await_operator`, and to check `perun_attention_list` for what is\n  pending. `python -m perun context sync` refreshes the managed block."
-    },
-    {
-      "version": "0.10.52",
-      "date": "2026-11-02",
-      "body": "### Self-update no longer needs Perun to be started as administrator\n\n* A Windows dashboard started normally can now install a newer release itself.\n  `PerunSetup.exe` is an admin-only installer, and `CreateProcess` cannot\n  elevate: launching it from a user-level Perun failed with `WinError 740` and\n  never showed a UAC prompt, so the only workaround was to run Perun elevated —\n  which in practice meant rebooting to replace the already-running dashboard\n  and starting it \"as administrator\". The update runner now starts the\n  installer through `ShellExecuteEx` with the `runas` verb, so Windows shows the\n  normal administrator prompt; an already-elevated Perun keeps the old\n  subprocess path. Dismissing the prompt is reported as a clear, retryable\n  message that names the downloaded installer, so it can also be run by hand\n  instead of surfacing an opaque exit code.\n* The Updates page reports the new `requires_admin` / `elevated` install-mode\n  facts and warns that the dashboard closes before the permission prompt that\n  Windows shows, both on the card and in the confirmation dialog."
     }
   ]
 }
