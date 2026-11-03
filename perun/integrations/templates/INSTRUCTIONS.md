@@ -34,4 +34,9 @@ Always true, never retrieved away:
   raw filesystem `grep` or the OpenCode built-in `grep` tool. For confined
   environments without direct filesystem access, use `perun_file_exists`,
   `perun_list_directory`, and `perun_read_file`.
+- **Never search by parsing shell output.** Use the `grep` tool (or
+  `perun_grep`), never a `Select-String` / `findstr` / shell-`grep` pipeline.
+  The Windows console mangles match lines into columns of `1`s or ANSI noise,
+  so a search can look empty when it matched — and a misread costs a whole
+  retry. Reserve the shell for commands and tests.
 - Read the project's `perun.md` manifest before acting on its structure.

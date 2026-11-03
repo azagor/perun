@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Global kernel: search with a tool, not a shell pipeline
+
+* The managed global `AGENTS.md` block now tells every project to search with the
+  `grep` / `perun_grep` tool and never with a `Select-String` / `findstr` /
+  shell-`grep` pipeline. On Windows the console rendering collapses match lines
+  into columns of `1`s or ANSI noise, so a search can look empty when it matched
+  and a misread costs a whole retry. The template change is applied by
+  `perun install` (the global block is refreshed without touching user content).
 
 ## v0.10.60
 
