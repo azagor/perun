@@ -111,6 +111,36 @@ class ProcessTracker:
         except Exception:  # pragma: no cover - tracking is best effort
             pass
 
+    def run_terminal_pid(self, run_uid: str) -> int | None:
+        """The shell pid whose window hosts this run's terminal, or ``None``.
+
+        Read-only sibling of :meth:`terminate`: it resolves the same pid Stop
+        would close, but never kills, finalizes or writes a run row. The same
+        attribution rule applies, because raising the window of a recycled pid
+        would point the operator at an unrelated program.
+        """
+        entry = self.get(run_uid)
+        if not entry:
+            # After a restart the in-memory entry is gone; the persisted pid is
+            # usable only while it still carries this run's marker.
+            run = registry.get_run(run_uid) or {}
+            pid = int(run.get("pid") or 0)
+            if not pid or not registry.pid_alive(pid):
+                return None
+            if not self._belongs_to_run(pid, run_uid):
+                return None
+            return self._terminal_owner(pid, run_uid) or pid
+        pid = self._kill_pid(entry)
+        if not pid:
+            return None
+        proc = entry.get("proc")
+        try:
+            if proc is not None and getattr(proc, "pid", None) == pid and proc.poll() is None:
+                return pid  # the handle Perun itself launched is attribution enough
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return pid if self._belongs_to_run(pid, run_uid) else None
+
     def _belongs_to_run(self, pid: int, run_uid: str) -> bool:
         """Whether *pid* (or a descendant) carries ``PERUN_RUN_UID=<run_uid>``.
 

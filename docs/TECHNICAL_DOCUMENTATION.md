@@ -567,6 +567,13 @@ be confused with — or deleted as — a user project.
   `orchestrator`, links its card to `#/orchestrator`, and hides its delete
   button. `DELETE /api/projects/{slug}` and the MCP `perun_delete_project` tool
   refuse it.
+* Hiding is a **listing rule, not an access rule**. `/api/projects` omits hidden
+  rows; the dashboard sends `?include_hidden=true`, which returns them only when
+  the installation has a configured operator — `Settings.owner_configured()`
+  (a `perun_owner_name`, or a paired Telegram chat from
+  `telegram_allowed_chats`/`TELEGRAM_CHAT_ID`). A fresh install has no operator,
+  so it never lists the control project; a reachable loopback dashboard is not
+  evidence of ownership. The Orchestrator page works either way.
 * `POST /api/runs` with no `project` targets the control slug, and `/api/health`
   reports it as `control`.
 
@@ -710,6 +717,21 @@ is `1`); `--agent` is passed only when an agent value is set. With `cwd` set to 
 positional directory argument. stdout is streamed line-by-line to
 `~/.perun/runs/<uid>.log`, parsed by `parse_event()`, and fanned out through
 `EventBus` as normalized events:
+
+**Focusing a TUI terminal.** While a TUI run is active the project card also
+offers **Focus** (`POST /api/runs/{uid}/terminal/focus`). The pid comes from
+`ProcessTracker.run_terminal_pid()` — the same `PERUN_RUN_UID`-verified
+resolution Stop uses, so a recycled pid's window is never raised. On Windows
+with `psutil` available, `perun/terminal_focus.py` enumerates top-level windows,
+matches the shell, an ancestor (Windows Terminal) or a descendant
+(conhost/OpenConsole), and activates it (`ShowWindow`/`SetForegroundWindow`, an
+`AttachThreadInput` retry, then `SwitchToThisWindow`); if Windows still refuses,
+the taskbar button is flashed and the UI says so. Launches write a
+`Perun: <slug>` window/tab title as a matching hint (the `cmd` builtin inside
+the tab, so old Windows Terminal builds work too), and repeated clicks cycle
+equally good candidates because several Windows Terminal windows share one
+process. `/api/runs/active` carries `focus_supported` so other platforms never
+render a dead button.
 
 | event | meaning |
 |---|---|

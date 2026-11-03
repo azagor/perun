@@ -41,6 +41,9 @@ const state = {
     settings: null,
     health: null,
     activeRuns: [],
+    // The server says whether it can raise another process's terminal window
+    // (Windows-only today); older servers omit it, so default to "show".
+    focusSupported: true,
     models: [],
     agents: [],
     skills: [],
@@ -171,8 +174,9 @@ const STATUS_BADGE = { done: 'green', queued: 'muted', running: 'amber', failed:
 
 /* --------------------------------------------------------------- data --- */
 async function loadProjects() {
-    // The local dashboard is owner-only, so include the hidden control plane
-    // project (Perun itself) in the project list.
+    // Ask for the hidden control plane too; the server includes it only when
+    // this installation has a configured operator (a name or a paired chat).
+    // A fresh install therefore lists just the user's own projects.
     state.projects = (await api('/api/projects?include_hidden=true')).projects || [];
     // Projects drive which cards are awake; recompute so the pips update too.
     if (typeof computePresence === 'function') computePresence();
@@ -496,6 +500,7 @@ const CardControls = window.CardControls || {
             label: '\u25a0 Stop', title: 'Cancel this run' }
         : { kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
             label: '\u25b6 Run', title: "Run OpenCode in this project's directory" }),
+    focusControlSpec: () => null,
 };
 if (!window.CardControls) {
     console.error('perun: card_controls.js did not load; card actions are degraded');
@@ -552,10 +557,26 @@ function syncRunControl(card, run) {
     const current = actions.querySelector('[data-tui], [data-stop]');
     const matches = current && current.hasAttribute(spec.attr)
         && (current.dataset.runUid || '') === spec.uid;
-    if (matches) return;
-    const fresh = runControlButton(spec);
-    if (current) current.replaceWith(fresh);
-    else actions.insertBefore(fresh, actions.firstElementChild || null);
+    if (!matches) {
+        const fresh = runControlButton(spec);
+        if (current) current.replaceWith(fresh);
+        else actions.insertBefore(fresh, actions.firstElementChild || null);
+    }
+    // Focus is only offered for a tracked TUI run with a window to raise.
+    const focusSpec = CardControls.focusControlSpec(run, { focusSupported: state.focusSupported });
+    const currentFocus = actions.querySelector('[data-focus]');
+    if (!focusSpec) {
+        if (currentFocus) currentFocus.remove();
+    } else if (!currentFocus || (currentFocus.dataset.runUid || '') !== focusSpec.uid) {
+        const fresh = runControlButton(focusSpec);
+        if (currentFocus) {
+            currentFocus.replaceWith(fresh);
+        } else {
+            const anchor = actions.querySelector('[data-tui], [data-stop]');
+            if (anchor) anchor.insertAdjacentElement('afterend', fresh);
+            else actions.insertBefore(fresh, actions.firstElementChild || null);
+        }
+    }
 }
 
 function renderWorkingNow(container) {
@@ -596,8 +617,13 @@ function updateStormMeter() {
 }
 
 async function refreshPresence() {
-    try { state.activeRuns = (await api('/api/runs/active')).runs || []; }
-    catch (_) { state.activeRuns = []; }
+    try {
+        const res = await api('/api/runs/active');
+        state.activeRuns = res.runs || [];
+        state.focusSupported = res.focus_supported !== false;
+    } catch (_) {
+        state.activeRuns = [];
+    }
     computePresence();
 }
 
@@ -1028,6 +1054,9 @@ function projectCard(p) {
     const running = run ? `<div class="pc-running">${run.standalone ? '🖥' : '⚡'} <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span>${run.standalone ? ' <span class="muted">TUI session</span>' : ''}</div>` : '';
     // Never render Run next to a working card: the control belongs to the run.
     const runBtn = runControlButton(CardControls.runControlSpec(run)).outerHTML;
+    // Focus is only meaningful for a tracked TUI run (it raises its window).
+    const focusSpec = CardControls.focusControlSpec(run, { focusSupported: state.focusSupported });
+    const focusBtn = focusSpec ? runControlButton(focusSpec).outerHTML : '';
     const card = el('div', { class: 'card clickable proj-card' + stateCls, dataset: { slug: p.slug } },
         `<div class="pc-top">
             <div><div class="pc-name">${fav}${esc(p.name)}</div><div class="pc-path">${esc(p.path)}</div></div>
@@ -1043,6 +1072,7 @@ function projectCard(p) {
          </div>
          <div class="pc-actions">
             ${runBtn}
+            ${focusBtn}
             <button class="btn sm" data-open>Open</button>
             <button class="btn sm ghost" data-index>Index docs</button>
             ${delBtn}
@@ -1050,6 +1080,8 @@ function projectCard(p) {
     card.addEventListener('click', (e) => {
         const stop = e.target.closest('[data-stop]');
         if (stop) { e.stopPropagation(); cancelProjectRun(stop.dataset.runUid); return; }
+        const focus = e.target.closest('[data-focus]');
+        if (focus) { e.stopPropagation(); focusProjectTerminal(focus.dataset.runUid); return; }
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
         if (e.target.closest('[data-tui]')) {
@@ -1096,6 +1128,18 @@ async function openProjectTui(p) {
     } catch (e) { toast(e.message, 'err'); }
 }
 
+async function focusProjectTerminal(runUid) {
+    if (!runUid) return;
+    try {
+        const r = await api(`/api/runs/${runUid}/terminal/focus`, { method: 'POST' });
+        if (!r.focused) {
+            toast(r.reason || 'Could not focus that terminal', 'err');
+        } else if (r.ambiguous) {
+            toast('Several terminals match - click Focus again for the next one');
+        }
+    } catch (e) { toast(e.message, 'err'); }
+}
+
 async function cancelProjectRun(runUid) {
     if (!runUid) return;
     // Find the card that owns this run so we update the right one when multiple
@@ -1117,6 +1161,8 @@ async function cancelProjectRun(runUid) {
         if (banner) banner.remove();
         const stopBtn = card.querySelector('[data-stop]');
         if (stopBtn) stopBtn.remove();
+        const focusBtn = card.querySelector('[data-focus]');
+        if (focusBtn) focusBtn.remove();
     }
     try {
         // /cancel ends both kinds of run: it cancels the orchestrator's run and,

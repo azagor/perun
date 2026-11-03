@@ -315,3 +315,46 @@ def test_a_stop_after_a_restart_closes_the_shell_hosting_the_agent(project):
         assert registry.get_run(uid)["status"] == "done"
     finally:
         _kill_tree_now(shell.pid)
+
+
+# --------------------------------------------------------------------------- #
+# Focus: resolve the window's shell pid without ever killing anything
+# --------------------------------------------------------------------------- #
+def test_run_terminal_pid_resolves_the_shell_and_never_kills(fresh_tracker, monkeypatch):
+    fresh_tracker._entries["focus-live"] = {
+        "run_uid": "focus-live", "proc": None, "pid": 111,
+    }
+    monkeypatch.setattr(fresh_tracker, "_kill_pid", lambda entry: 4242)
+    monkeypatch.setattr(fresh_tracker, "_belongs_to_run", lambda pid, uid: True)
+    killed = []
+    monkeypatch.setattr(fresh_tracker, "_kill_tree", lambda pid: killed.append(pid))
+
+    assert fresh_tracker.run_terminal_pid("focus-live") == 4242
+    assert killed == []  # Focus is read-only
+
+
+def test_run_terminal_pid_refuses_an_unmarked_pid(fresh_tracker, monkeypatch):
+    fresh_tracker._entries["focus-bad"] = {
+        "run_uid": "focus-bad", "proc": None, "pid": 111,
+    }
+    monkeypatch.setattr(fresh_tracker, "_kill_pid", lambda entry: 4242)
+    monkeypatch.setattr(fresh_tracker, "_belongs_to_run", lambda pid, uid: False)
+
+    assert fresh_tracker.run_terminal_pid("focus-bad") is None
+
+
+def test_run_terminal_pid_after_a_restart_requires_the_marker(project, monkeypatch):
+    proc = _sleeper()
+    try:
+        run = registry.create_run("focus-restart", project["id"], "TUI", standalone=True)
+        registry.update_run(run["run_uid"], status="running", pid=proc.pid)
+        restarted = ProcessTracker()  # empty in-memory map: the server restarted
+
+        monkeypatch.setattr(restarted, "_belongs_to_run", lambda pid, uid: True)
+        monkeypatch.setattr(restarted, "_terminal_owner", lambda pid, uid: 555)
+        assert restarted.run_terminal_pid(run["run_uid"]) == 555
+
+        monkeypatch.setattr(restarted, "_belongs_to_run", lambda pid, uid: False)
+        assert restarted.run_terminal_pid(run["run_uid"]) is None
+    finally:
+        proc.kill()

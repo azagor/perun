@@ -4,7 +4,40 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The control project stays hidden on a fresh install
+
+* `GET /api/projects?include_hidden=true` (what the dashboard sends so the owner
+  can manage the control plane) now includes hidden projects only when this
+  installation has a configured operator: a `perun_owner_name` or a paired
+  Telegram chat (the static `telegram_allowed_chats` list written by `/pair`, or
+  a `TELEGRAM_CHAT_ID` override). A brand-new install has neither, so the
+  self-registered **Perun** control project no longer appears as a project card
+  there — a reachable loopback dashboard is not evidence of ownership. Once the
+  operator names themselves or pairs a chat, the card returns; the Orchestrator
+  page reaches the control plane either way.
+* Discovery no longer re-registers a hidden project as a **visible duplicate**.
+  Its path lookup was built from the visible list only, so the hidden control
+  project looked new; when the resolved path spelling differed (8.3 names,
+  junctions) `register()` created a second, visible "Perun" project instead of
+  updating the hidden row. The lookup now includes hidden projects, so the row
+  is updated in place and stays hidden; the server also hides any visible
+  duplicate such an older install already carries at startup (it is hidden, never
+  deleted, so its runs/memory stay with the operator).
+
+### Focus a project card's TUI terminal
+
+* A working card now offers **Focus** while a TUI run is active and has a
+  tracked terminal. It raises/restores that terminal's window (Windows with
+  `psutil`; the button is hidden where the server cannot do it) and flashes the
+  taskbar button when Windows refuses the foreground switch.
+* Attribution is the same rule Stop uses: only a pid carrying the run's
+  `PERUN_RUN_UID` marker is focused, so a recycled pid never points at an
+  unrelated program. Launches set a `Perun: <slug>` window/tab title as a
+  matching hint; several Windows Terminal windows share one process, so the
+  title (or the run's session title) picks the right one and repeated clicks
+  cycle equally good candidates.
+* `POST /api/runs/{uid}/terminal/focus` performs the raise and `/api/runs/active`
+  reports `focus_supported`.
 
 ## v0.10.53
 

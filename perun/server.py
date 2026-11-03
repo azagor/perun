@@ -154,6 +154,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db.init_db()
     config.ensure_dirs()
     _control_project()
+    # Repair installs from older builds that re-registered the hidden control
+    # path as a second, visible project. One sweep per server start is enough;
+    # control.ensure() also runs on each health poll and must stay cheap.
+    try:
+        project = registry.get_project_by_path(str(config.REPO_ROOT))
+        if project:
+            discovery.hide_control_duplicates(project)
+    except Exception:  # pragma: no cover - repair is best effort
+        logger.debug("control-duplicate sweep failed", exc_info=True)
     # Seed the default global guidance file once on startup.
     orchestrator._seed_default_instructions()
     # Runs are durable: a prompt admitted to an OpenCode session keeps running
@@ -1054,18 +1063,36 @@ def _cmd_quote(value: str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
+_TITLE_UNSAFE = set('&|<>^"')
+
+
+def _window_title(label: str) -> str:
+    """A single-line, shell-neutral label for the terminal-window title."""
+    text = " ".join(str(label or "").split())
+    text = "".join(ch for ch in text if ch not in _TITLE_UNSAFE)
+    return text[:60]
+
+
 def _terminal_command(*, shell_cls: str, cwd: str, prompt: str = "", model: str = "",
                       agent: str = "", session: str = "", run_uid: str = "",
-                      tui: bool = False) -> str:
+                      tui: bool = False, title: str = "") -> str:
     """Build the terminal command line, quoting every value for *shell_cls*.
 
     Values never reach the shell unquoted (PowerShell single quotes, POSIX
     single quotes, ``cmd`` double quotes), so a prompt is passed as data — not
     parsed as PowerShell/``cmd`` code — whichever terminal is configured.
+
+    ``title`` writes a ``Perun: <project>`` window title at launch. It is only a
+    hint for the dashboard's Focus button (OpenCode may replace it with the
+    session title), and it is sanitized by the caller.
     """
     if shell_cls in ("powershell", "pwsh"):
         q = _ps_quote
         head = f"$env:PERUN_RUN_UID={q(run_uid)}; " if run_uid else ""
+        if title:
+            # The title is a Focus hint, never a launch dependency.
+            head = (f"try {{ $Host.UI.RawUI.WindowTitle={q('Perun: ' + title)} }}"
+                    " catch {}; " + head)
         cmd = f"{head}Set-Location -LiteralPath {q(cwd)}; opencode"
         if tui:
             if prompt:
@@ -1086,6 +1113,12 @@ def _terminal_command(*, shell_cls: str, cwd: str, prompt: str = "", model: str 
     if shell_cls in ("cmd", "wt"):
         q = _cmd_quote
         head = f'set "PERUN_RUN_UID={run_uid}" && ' if run_uid else ""
+        # Both cmd and the `wt ... cmd /k` tab run this through cmd, so the
+        # builtin names the console/tab without depending on wt's --title
+        # (older Windows Terminal builds do not have it). The caller sanitizes
+        # the value because it is not quoted.
+        if title:
+            head = f"title Perun: {title} && " + head
         cmd = f"{head}cd /d {q(cwd)} && opencode"
         if tui:
             if prompt:
@@ -1134,10 +1167,9 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """
     project_ref = str(payload.get("project") or "").strip()
     cwd = str(payload.get("cwd") or "").strip()
-    if project_ref and not cwd:
-        project = registry.get_project(project_ref)
-        if project:
-            cwd = project["path"]
+    project = registry.get_project(project_ref) if project_ref else None
+    if project and not cwd:
+        cwd = project["path"]
 
     action = str(payload.get("action") or "session").strip().lower()
     if action not in ("session", "auth-login"):
@@ -1170,6 +1202,12 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # so a configured full path (e.g. C:\...\wt.exe) still matches cmd/pwsh/wt.
     exe = os.path.basename(argv[0]).lower().replace(".exe", "")
     shell_cls = os.path.basename(shell.lower().replace(".exe", "")) or exe
+    # A window title is a hint for the Focus button, not a correctness
+    # requirement: OpenCode may replace it with the session title.
+    title_text = str((project or {}).get("slug") or (project or {}).get("name") or "")
+    if not title_text and cwd:
+        title_text = Path(cwd).name
+    title_label = _window_title(title_text)
     # cmd.exe cannot carry a newline in its command line; flatten them.
     if shell_cls in ("cmd", "wt"):
         prompt = " ".join(prompt.splitlines())
@@ -1188,7 +1226,7 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     else:
         cmd_text = _terminal_command(
             shell_cls=shell_cls, cwd=cwd, prompt=prompt, model=model, agent=agent,
-            session=session, run_uid=run_uid, tui=tui)
+            session=session, run_uid=run_uid, tui=tui, title=title_label)
 
     use_cmdline = False
     # Windows Terminal needs the starting directory; then it should run the
@@ -1201,6 +1239,10 @@ def api_run_in_terminal(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 wt_argv[d_idx + 1] = cwd
             except (ValueError, IndexError):
                 wt_argv.extend(["-d", cwd])
+        # Name the tab so the Focus button can pick the right window when
+        # several Windows Terminal windows are open. The title is applied by
+        # the `cmd /k` command inside the tab (not `wt --title`), so older
+        # Windows Terminal builds keep working.
         # Keep the tab open after opencode exits so the user can see results.
         # Build the trailing "cmd /k <text>" as raw text, never through
         # list2cmdline(... + cmd_text): cmd.exe does not understand C-runtime
@@ -1315,6 +1357,16 @@ def api_mcp_probe(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @app.get("/api/projects")
 def api_list_projects(include_hidden: bool = False) -> dict[str, Any]:
+    """List projects. Hidden ones only for a configured operator.
+
+    ``include_hidden`` is what the dashboard sends so the owner can manage the
+    control plane. It is a listing convenience, not a privilege switch: a
+    brand-new install (no owner name, no paired chat) must not list the hidden
+    control project, because anyone who can reach the local dashboard would
+    then see the Perun project on a fresh machine.
+    """
+    if include_hidden and not SETTINGS.owner_configured():
+        include_hidden = False
     return {"ok": True, "projects": registry.list_projects(include_hidden=include_hidden)}
 
 
@@ -2319,8 +2371,11 @@ def api_active_runs() -> dict[str, Any]:
     # A standalone (TUI) run survives a restart, so it must not make the CLI
     # refuse one: ``blocking`` is what the restart guard reads.
     blocking = sum(1 for r in runs if not r.get("standalone"))
+    from . import terminal_focus
+
     return _ok(runs=runs, live=ORCH.active(), projects=slugs,
-               count=len(runs), blocking=blocking)
+               count=len(runs), blocking=blocking,
+               focus_supported=terminal_focus.supported())
 
 
 @app.post("/api/runs")
@@ -2370,6 +2425,23 @@ def api_cancel_run(run_uid: str) -> dict[str, Any]:
     if tracker_killed and not orch_cancelled:
         process_tracker.TRACKER.finalize(run_uid)
     return _ok(cancelled=orch_cancelled or tracker_killed)
+
+
+@app.post("/api/runs/{run_uid}/terminal/focus")
+def api_focus_run_terminal(run_uid: str) -> dict[str, Any]:
+    """Raise the terminal window that hosts this TUI run.
+
+    Non-destructive, but attribution-gated: the pid comes from the tracker's
+    marker-verified resolution (the same rule Stop uses), so a recycled pid can
+    never point the operator at an unrelated program. Expected failures
+    (headless run, closed terminal, unsupported platform) return
+    ``{"focused": False, "reason": ...}`` for the dashboard to toast.
+    """
+    from . import terminal_focus
+
+    if not registry.get_run(run_uid):
+        raise HTTPException(status_code=404, detail="no such run")
+    return _ok(**terminal_focus.focus_run_terminal(run_uid))
 
 
 # --------------------------------------------------------------------------- #

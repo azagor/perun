@@ -315,6 +315,21 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
     return d
 
 
+def list_project_paths(*, include_hidden: bool = True) -> list[dict[str, Any]]:
+    """Every registered project's identity and path, without the counts.
+
+    Integrity checks that run on startup (e.g. discovery's control-duplicate
+    sweep) only need these columns; :func:`list_projects` also computes session/
+    memory/chunk counts, which is too expensive for a hot path.
+    """
+    sql = "SELECT id, slug, name, path, hidden FROM projects"
+    if not include_hidden:
+        sql += " WHERE hidden=0"
+    sql += " ORDER BY id"
+    with db.db() as conn:
+        return [dict(r) for r in db.rows(conn, sql)]
+
+
 def list_projects(*, include_hidden: bool = False) -> list[dict[str, Any]]:
     with db.db() as conn:
         if include_hidden:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from perun import discovery, registry
@@ -154,3 +155,82 @@ def test_register_preserves_configured_description_when_manifest_omits_it(workdi
     proj2, created2 = discovery.register(discovery.detect(p))
     assert created2 is False
     assert proj2["description"] == "User supplied description"
+
+
+def test_discovery_does_not_duplicate_a_hidden_project(workdir):
+    """A hidden row is still registered.
+
+    The path lookup used to be built from the *visible* list only, so the
+    hidden control project looked new. Re-registering it either aborted the
+    scan with a duplicate-path error or, when the resolved spelling differed,
+    created a **visible duplicate** of the control project.
+    """
+    import os
+
+    hidden_dir = _mk(workdir / "hidden-control", "opencode.json")
+    visible_dir = _mk(workdir / "visible", "opencode.json")
+    # A visible project makes the path lookup non-empty, which is what exposed
+    # the bug: the hidden row was then missing from it.
+    registry.add_project("Visible", str(visible_dir), kind="opencode")
+    hidden = registry.add_project("HiddenControl", str(hidden_dir), kind="opencode")
+    registry.update_project(hidden["slug"], hidden=1)
+
+    discovery.discover_and_sync([str(workdir)], max_depth=1)
+
+    def same_path(value):
+        return os.path.normcase(os.path.realpath(os.path.abspath(value)))
+
+    target = same_path(str(hidden_dir))
+    matched = [p for p in registry.list_projects(include_hidden=True)
+               if same_path(p["path"]) == target]
+    assert len(matched) == 1, matched
+    assert matched[0]["hidden"] is True
+    # The control project must never reappear as a visible project.
+    assert "hidden-control" not in {p["slug"] for p in registry.list_projects()}
+    assert "visible" in {p["slug"] for p in registry.list_projects()}
+
+
+def test_a_visible_control_duplicate_is_hidden_on_startup(monkeypatch):
+    """Installs that already carry the old visible duplicate are repaired."""
+    from perun import config
+
+    updated = []
+    duplicate = os.path.join(str(config.REPO_ROOT), ".")
+    monkeypatch.setattr(discovery.registry, "list_project_paths",
+                        lambda **kw: [
+                            {"slug": "perun", "path": str(config.REPO_ROOT),
+                             "hidden": True},
+                            {"slug": "perun-dup", "path": duplicate,
+                             "hidden": False},
+                        ])
+    monkeypatch.setattr(discovery.registry, "update_project",
+                        lambda slug, **kw: updated.append((slug, kw)))
+
+    discovery.hide_control_duplicates(
+        {"slug": "perun", "path": str(config.REPO_ROOT)})
+
+    assert updated == [("perun-dup", {"hidden": 1})]
+
+
+def test_discovery_leaves_the_control_project_alone(control_repo):
+    """The control project is curated by register_self(), not by a directory scan.
+
+    Scanning its path must not rename it (directory name vs "Perun") or create
+    a second row.
+    """
+    from perun import control
+
+    control.ensure()
+    before = registry.get_project_by_path(str(control_repo))
+    assert before["name"] == "Perun" and before["hidden"] is True
+
+    discovery.discover_and_sync([str(control_repo.parent)], max_depth=1)
+
+    after = registry.get_project_by_path(str(control_repo))
+    assert after["slug"] == before["slug"]
+    assert after["name"] == "Perun"
+    assert after["hidden"] is True
+    target = os.path.normcase(os.path.realpath(str(control_repo)))
+    matches = [p for p in registry.list_projects(include_hidden=True)
+               if os.path.normcase(os.path.realpath(p["path"])) == target]
+    assert len(matches) == 1, matches

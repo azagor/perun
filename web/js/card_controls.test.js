@@ -47,3 +47,30 @@ test('standalone is truthy as a number or a boolean', () => {
         assert.equal(controls.runControlSpec(run).title, 'Cancel this run');
     }
 });
+
+test('a headless run offers no Focus button', () => {
+    assert.equal(controls.focusControlSpec(headless), null);
+});
+
+test('a TUI run without a pid offers no Focus button', () => {
+    assert.equal(controls.focusControlSpec({ run_uid: 'x', standalone: 1 }), null);
+});
+
+test('a TUI run with a pid offers Focus', () => {
+    const spec = controls.focusControlSpec({ run_uid: 'def456', standalone: 1, pid: 4242 });
+    assert.equal(spec.kind, 'focus');
+    assert.equal(spec.attr, 'data-focus');
+    assert.equal(spec.uid, 'def456');
+    assert.match(spec.title, /terminal/i);
+});
+
+test('Focus is hidden where the platform cannot raise a window', () => {
+    const run = { run_uid: 'def456', standalone: 1, pid: 4242 };
+    assert.equal(controls.focusControlSpec(run, { focusSupported: false }), null);
+    assert.ok(controls.focusControlSpec(run, { focusSupported: true }));
+});
+
+test('standalone truthiness matches the Stop rule for Focus', () => {
+    assert.ok(controls.focusControlSpec({ run_uid: 'x', standalone: true, pid: 1 }));
+    assert.equal(controls.focusControlSpec({ run_uid: 'x', standalone: false, pid: 1 }), null);
+});

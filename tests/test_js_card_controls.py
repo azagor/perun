@@ -42,3 +42,12 @@ def test_perun_js_renders_the_run_control_from_the_module():
     assert "CardControls.runControlSpec(" in src
     # The bug: a hardcoded Run button next to an always-rendered run action.
     assert "data-tui title=\"Run OpenCode" not in src
+
+
+def test_perun_js_offers_the_focus_control_from_the_module():
+    """The Focus button is gated in card_controls.js (standalone + pid)."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "CardControls.focusControlSpec(" in src
+    assert "data-focus" in src
+    # A stale cached module must not crash the card renderer.
+    assert "focusControlSpec: () => null" in src

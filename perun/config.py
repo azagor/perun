@@ -452,6 +452,24 @@ class Settings:
                 return {"source": "os", "path": path}
         return {"source": "os", "path": os.environ.get("SHELL", shutil.which("bash") or shutil.which("sh") or "")}
 
+    def owner_configured(self) -> bool:
+        """Whether this installation has a named or paired human operator.
+
+        Perun has no login, so "the owner" is the person the installation was
+        set up for: an operator who named themselves (``perun_owner_name``) or
+        paired a Telegram chat (the static allow-list, persisted by ``/pair``,
+        or a ``TELEGRAM_CHAT_ID`` override). A brand-new install has none of
+        these, so its hidden control project must stay out of project lists -
+        a reachable local dashboard is not evidence of ownership.
+        """
+        if any(str(chat).strip() for chat in self.telegram_allowed_chats):
+            return True
+        if (self.perun_owner_name or "").strip():
+            return True
+        env_chats = (os.environ.get("TELEGRAM_CHAT_ID")
+                     or os.environ.get("TG_CHAT_ID") or "")
+        return bool(env_chats.strip())
+
     def telegram_sources(self) -> dict[str, str]:
         """Where the *effective* token/chats come from: ``settings`` | ``settings-encrypted`` | ``env`` | ``""``.
 

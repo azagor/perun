@@ -1912,7 +1912,10 @@ def test_run_in_terminal_wt_keeps_raw_quotes(client, tmp_path, monkeypatch):
     assert popen_args[0].startswith("wt.exe -d ")
     assert '\\"' not in popen_args[0]
     wt_dir = str(tmp_path / "wt")
-    assert popen_args[0].endswith(f' cmd /k cd /d "{wt_dir}" && opencode')
+    # The tab is named by the cmd builtin inside the tab (not `wt --title`),
+    # so older Windows Terminal builds keep working.
+    assert popen_args[0].endswith(
+        f' cmd /k title Perun: {slug} && cd /d "{wt_dir}" && opencode')
 
 
 def test_run_in_terminal_full_path_terminal_is_recognized(client, tmp_path, monkeypatch):

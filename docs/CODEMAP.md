@@ -57,6 +57,9 @@ Filesystem layout + persisted settings.
     `TELEGRAM_CHAT_ID` / `TG_CHAT_ID` chat fallback), `Settings.telegram_sources()`
     (which source is in force: `orchestrator` | `settings` | `settings-encrypted` |
     `env` | `""`, surfaced by the dashboard).
+  * `Settings.owner_configured()` reports whether this installation has a
+    known owner (a `perun_owner_name` or a paired Telegram chat) - the gate for
+    listing hidden projects such as the control plane.
   * `Settings.terminal_cmd(shell_hint=…)` returns the argv to launch the
     configured/default terminal emulator (on POSIX it prefers a real emulator and
     returns an argv ending in the shell).
@@ -490,7 +493,11 @@ Find & register OpenCode projects under roots.
   `register()` (merges any `perun.md` manifest plus the JSON-formatted fallback,
   parses dependency files into memory facts, and records local project refs),
   `_record_dependencies()`, `_record_local_references()`,
-  `discover_and_sync()`, `register_self()`. Registration also calls
+  `discover_and_sync()`, `register_self()`, `hide_control_duplicates()` (startup
+  repair for installs that re-registered the control path as a visible row).
+  Scans skip the control project's path - `register_self()` curates it - and the
+  path lookup includes hidden rows so a hidden project is never re-registered as
+  a visible duplicate. Registration also calls
   `project_roots.auto_register()` so newly discovered projects outside the
   known roots become addressable for cross-project path resolution.
 
@@ -717,8 +724,24 @@ Lifecycle tracking for externally-launched TUI/terminal sessions.
   processes. The frontend injects a `PERUN_RUN_UID` environment marker into the
   shell command so the tracker can find the TUI process even when the launcher has
   already exited.
-* `TRACKER` — module-level singleton used by `/api/run-in-terminal`,
-  `/api/runs/{uid}/cancel`, and `/api/runs/{uid}/kill`.
+* `TRACKER` - module-level singleton used by `/api/run-in-terminal`,
+  `/api/runs/{uid}/cancel`, `/api/runs/{uid}/terminal/focus`, and
+  `/api/runs/{uid}/kill`.
+
+### `perun/terminal_focus.py`
+Raise the terminal window that hosts a run's TUI session (the card's Focus button).
+* `supported()` (Windows with `psutil`) and `focus_run_terminal(run_uid)` ->
+  `{focused, pid, hwnd, method, reason}`; expected misses return a reason.
+* The pid comes from `ProcessTracker.run_terminal_pid()` (marker-verified, the
+  same attribution Stop uses). Window enumeration then matches the shell itself,
+  an ancestor (Windows Terminal) or a descendant (conhost/OpenConsole); a title
+  hint (`Perun: <slug>` or the run/session title - a bare project name is not
+  enough for a title-only match) breaks ties within a tier. Equally good
+  candidates cycle on repeated clicks, because several Windows Terminal windows
+  share one process.
+* Activation restores the window, calls the user32 foreground API, retries via
+  a thread-input attach, then falls back to SwitchToThisWindow; when Windows
+  still refuses, the taskbar button is flashed (reported as `method: "flash"`).
 
 ### `perun/session_runner.py`
 Durable run execution: the prompt is admitted to an OpenCode session and observed
@@ -1227,7 +1250,8 @@ FastAPI app + SSE + static dashboard.
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
   snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
   unified), projects
-  (`/api/projects…` incl. the creation wizard, `/api/projects/{slug}/instructions`
+  (`/api/projects…` — hidden rows (the control plane) only when
+  `Settings.owner_configured()`; incl. the creation wizard, `/api/projects/{slug}/instructions`
   (legacy inline or project-local Markdown file), `/api/projects/{slug}/instruction-files`
   (multi-file project-local instructions with CRUD + toggle), `/api/projects/{slug}/manifest…`,
   `/api/projects/{slug}/git…`,
@@ -1244,7 +1268,8 @@ FastAPI app + SSE + static dashboard.
   the control project),
   filesystem (`/api/fs/list`, `/api/fs/mkdir`), discovery (`/api/discover…`), runs
   (`/api/runs…`, `/api/runs/active`, `/api/runs/tui`, `/api/runs/{uid}/finish`,
-  `/api/runs/{uid}/kill`,
+  `/api/runs/{uid}/kill`, `/api/runs/{uid}/terminal/focus` (raise the tracked
+  TUI window; marker-verified),
   `/api/runs/{uid}/stream` (404 for an unknown run), `/api/stream`; `POST /api/runs`
   defaults to the orchestrator; `/api/runs/active` is declared **before**
   `/api/runs/{run_uid}`), run-in-terminal (`/api/run-in-terminal` — command

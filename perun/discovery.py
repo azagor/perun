@@ -334,17 +334,26 @@ def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]
     created, updated = [], []
     # Build a path lookup once so registration is O(1) per candidate.
     # Keys use realpath so a path reached through a symlink maps onto the
-    # project stored under its resolved location.
+    # project stored under its resolved location. Hidden rows are included:
+    # they are still registered projects, and skipping them made the control
+    # project look "new", which aborted the scan with a duplicate-path error.
     existing_by_path: dict[str, dict[str, Any]] = {}
-    for p in registry.list_projects():
+    for p in registry.list_projects(include_hidden=True):
         try:
             key = os.path.normcase(os.path.realpath(os.path.abspath(p["path"])))
         except (OSError, ValueError):
             key = os.path.normcase(os.path.abspath(p["path"]))
         existing_by_path[key] = p
+    from . import config as _config
+
     for info in found:
         if info["kind"] == "dir":
             # Do not auto-register anonymous plain directories.
+            continue
+        if _config.is_control_path(info["path"]):
+            # The control project is curated by ``register_self()``. A directory
+            # scan must never rename it (directory name vs "Perun") or turn it
+            # into a second row.
             continue
         proj, is_new = register(info, existing_by_path=existing_by_path)
         (created if is_new else updated).append(proj["slug"])
@@ -403,8 +412,39 @@ def register_self() -> tuple[dict[str, Any], bool]:
         "path": str(repo),
         "root": str(repo.parent),
         "kind": "opencode",
-        "description": "Perun — overseer and orchestrator for all OpenCode projects.",
+        "description": "Perun - overseer and orchestrator for all OpenCode projects.",
         "capabilities": capabilities(repo),
     })
     registry.update_project(project["slug"], hidden=1)
     return registry.get_project(project["slug"]) or project, created
+
+
+def hide_control_duplicates(control_project: dict[str, Any]) -> None:
+    """Hide visible rows that resolve to the control project's directory.
+
+    Older builds could re-register the control path as a second, **visible**
+    row: discovery's path lookup ignored hidden projects, and when the resolved
+    spelling differed (8.3 names, junctions) the duplicate was created instead
+    of updating the hidden row. Hiding it removes the card without deleting the
+    operator's runs/memory.
+
+    Called once per server start (not from every ``control.ensure()``, which
+    also runs on each health poll).
+    """
+    path = str(control_project.get("path") or "").strip()
+    if not path:
+        return
+    try:
+        wanted = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    except (OSError, ValueError):
+        return
+    for other in registry.list_project_paths(include_hidden=True):
+        if other.get("slug") == control_project.get("slug") or other.get("hidden"):
+            continue
+        try:
+            candidate = os.path.normcase(os.path.realpath(
+                os.path.abspath(str(other.get("path") or ""))))
+        except (OSError, ValueError):
+            continue
+        if candidate == wanted:
+            registry.update_project(other["slug"], hidden=1)

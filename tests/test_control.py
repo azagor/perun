@@ -109,12 +109,12 @@ def test_health_exposes_control_slug(control_repo):  # noqa: ARG001
         assert "control" in body and body["control"]
 
 
-def test_control_project_is_hidden_from_project_list(control_repo):  # noqa: ARG001
-    """The default API list hides the Perun source-code project.
+def test_control_project_is_hidden_from_project_list(control_repo, monkeypatch):  # noqa: ARG001
+    """The API hides the Perun project unless this install has an operator.
 
-    The local dashboard is owner-only and explicitly requests
-    ``?include_hidden=true`` so the owner can still manage the Perun project
-    from the UI; external/shared installs do not see it by default.
+    The dashboard asks for hidden projects so the owner can manage the control
+    plane, but a fresh install has no owner (no name, no paired chat) and must
+    not see it merely because the dashboard is reachable over loopback.
     """
     from fastapi.testclient import TestClient
 
@@ -122,12 +122,52 @@ def test_control_project_is_hidden_from_project_list(control_repo):  # noqa: ARG
 
     control.ensure()
     server.SETTINGS.auto_discover_on_start = False
-    with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
-        default = client.get("/api/projects").json()
-        assert "perun" not in {p["slug"] for p in default["projects"]}
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TG_CHAT_ID", raising=False)
+    saved = (list(server.SETTINGS.telegram_allowed_chats),
+             server.SETTINGS.perun_owner_name)
+    try:
+        server.SETTINGS.telegram_allowed_chats = []
+        server.SETTINGS.perun_owner_name = ""
+        with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+            default = client.get("/api/projects").json()
+            assert "perun" not in {p["slug"] for p in default["projects"]}
 
-        included = client.get("/api/projects?include_hidden=true").json()
-        assert "perun" in {p["slug"] for p in included["projects"]}
+            # A brand-new install cannot ask its way into the hidden project.
+            asked = client.get("/api/projects?include_hidden=true").json()
+            assert "perun" not in {p["slug"] for p in asked["projects"]}
+
+        # Once an operator is configured, the owner's dashboard sees it again.
+        server.SETTINGS.telegram_allowed_chats = ["4242"]
+        with TestClient(server.app, base_url="http://127.0.0.1:8760") as client:
+            included = client.get("/api/projects?include_hidden=true").json()
+            assert "perun" in {p["slug"] for p in included["projects"]}
+    finally:
+        (server.SETTINGS.telegram_allowed_chats,
+         server.SETTINGS.perun_owner_name) = saved
+
+
+def test_owner_configured_needs_a_name_or_a_paired_chat(monkeypatch):
+    """A fresh install is nobody's yet; naming/pairing makes it the owner's."""
+    from perun import config
+
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TG_CHAT_ID", raising=False)
+    settings = config.Settings()
+    settings.telegram_allowed_chats = []
+    settings.perun_owner_name = ""
+    assert settings.owner_configured() is False
+
+    settings.perun_owner_name = "Lukasz"
+    assert settings.owner_configured() is True
+
+    settings.perun_owner_name = ""
+    settings.telegram_allowed_chats = ["4242"]
+    assert settings.owner_configured() is True
+
+    settings.telegram_allowed_chats = []
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "4242")
+    assert settings.owner_configured() is True
 
 
 def test_models_endpoint_is_structured(control_repo):  # noqa: ARG001

@@ -55,5 +55,28 @@
         return runControlSpec(run).attr;
     }
 
-    return { runControlSpec, runControlAttr };
+    /**
+     * Describe the optional Focus control for a card's active run.
+     *
+     * Only a tracked TUI run has a window to raise: a headless run has none, and
+     * a TUI run whose launch never produced a pid has nothing to attribute. The
+     * server also reports whether window activation is supported at all (it is
+     * Windows-only today), so other platforms never show a dead button.
+     *
+     * @param {object|null|undefined} run the project's active run
+     * @param {{focusSupported?: boolean}} [opts]
+     * @returns {null|{kind: string, uid: string, cls: string, attr: string,
+     *                label: string, title: string}}
+     */
+    function focusControlSpec(run, opts) {
+        const supported = !opts || opts.focusSupported !== false;
+        if (!run || !run.standalone || !run.pid || !supported) return null;
+        return {
+            kind: 'focus', uid: run.run_uid || '', cls: 'btn sm ghost', attr: 'data-focus',
+            label: '\u2922 Focus',
+            title: 'Bring this TUI terminal to the front',
+        };
+    }
+
+    return { runControlSpec, runControlAttr, focusControlSpec };
 });
