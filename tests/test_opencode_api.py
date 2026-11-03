@@ -259,3 +259,38 @@ def test_event_hub_dispatches_by_session_and_isolates_a_failing_subscriber():
     hub.stop()
 
     assert seen == [1]
+
+
+def test_ready_reports_whether_discovery_resolved_the_endpoint():
+    api = opencode_api.OpenCodeAPI(base_url="http://127.0.0.1:9", password="x",
+                                   discovery=lambda: "")
+    try:
+        assert api.ready is True
+    finally:
+        api.close()
+
+    unresolved = opencode_api.OpenCodeAPI(discovery=lambda: "")
+    try:
+        assert unresolved.ready is False
+    finally:
+        unresolved.close()
+
+
+def test_session_forwards_a_per_call_timeout():
+    class Client:
+        def __init__(self):
+            self.kwargs = None
+
+        def request(self, method, url, json=None, headers=None, **kwargs):  # noqa: A002
+            self.kwargs = kwargs
+            return StubResponse(200, {"data": {"title": "T"}})
+
+    api = opencode_api.OpenCodeAPI(base_url="http://127.0.0.1:9", password="x")
+    client = Client()
+    api._client.close()
+    api._client = client
+    try:
+        assert api.session("ses_x", timeout=0.5)["title"] == "T"
+        assert client.kwargs == {"timeout": 0.5}
+    finally:
+        api.close()

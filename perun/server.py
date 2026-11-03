@@ -161,10 +161,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         project = registry.get_project_by_path(str(config.REPO_ROOT))
         if project:
             discovery.hide_control_duplicates(project)
+    except Exception:  # pragma: no cover - repair is best effort
+        logger.debug("control-duplicate sweep failed", exc_info=True)
+    try:
         # The private companion repo is owner-only content, not a user project.
         discovery.hide_internal_companion()
     except Exception:  # pragma: no cover - repair is best effort
-        logger.debug("owner-only project sweep failed", exc_info=True)
+        logger.debug("internal-companion sweep failed", exc_info=True)
     # Seed the default global guidance file once on startup.
     orchestrator._seed_default_instructions()
     # Runs are durable: a prompt admitted to an OpenCode session keeps running

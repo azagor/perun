@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Focus lookup hardening
+
+* The session-title lookup is capped at 1 s per call and cached for 30 s, so a
+  Focus click stays responsive even when the OpenCode service is slow; a failing
+  lookup simply falls back to the project-name hint.
+* `config.is_internal_path()` compares real paths, so a symlinked companion repo
+  is still recognised; the two startup sweeps are isolated, so one failing cannot
+  skip the other; and the terminal-title fallback ignores hints shorter than
+  three characters (a project named "ai" cannot select an "ai-playground"
+  terminal).
 
 ## v0.10.57
 

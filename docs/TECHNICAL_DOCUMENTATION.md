@@ -747,7 +747,9 @@ a **pseudoconsole**, so the terminal window is in neither the shell's ancestors
 nor its descendants: the run's OpenCode **session title** (which is what the
 Windows Terminal tab shows) is matched as a strong hint, and a terminal-class
 window may fall back to the project name - a browser window with the same words
-never qualifies. Launches also write a `Perun: <slug>` window/tab title as a
+never qualifies, and hints shorter than three characters are ignored. The
+session-title lookup is capped at 1 s and cached for 30 s. Launches also write a
+`Perun: <slug>` window/tab title as a
 matching hint (the `cmd` builtin inside the tab, so old Windows Terminal builds
 work too), and repeated clicks cycle equally good candidates because several
 Windows Terminal windows share one process. The session-title lookup only uses

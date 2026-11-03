@@ -183,12 +183,17 @@ class OpenCodeAPI:
         body: Any = None,
         location: str = "",
         allow_404: bool = False,
+        timeout: float | None = None,
     ) -> Any:
         self._ensure_ready()
         headers = {"Authorization": _auth_header(self._password)}
+        # A per-call cap lets a hot path (e.g. the dashboard's Focus button)
+        # avoid the client's normal timeout; ``None`` keeps the client default.
+        call: Dict[str, Any] = {} if timeout is None else {"timeout": timeout}
         try:
             response = self._client.request(
-                method, self._url(path, location), json=body, headers=headers
+                method, self._url(path, location), json=body, headers=headers,
+                **call,
             )
         except Exception as exc:
             # The service may have restarted on a new port: rediscover once.
@@ -196,7 +201,8 @@ class OpenCodeAPI:
             try:
                 self._ensure_ready()
                 response = self._client.request(
-                    method, self._url(path, location), json=body, headers=headers
+                    method, self._url(path, location), json=body, headers=headers,
+                    **call,
                 )
             except Exception:
                 raise OpenCodeUnavailable(f"opencode service unreachable: {exc}") from exc
@@ -206,7 +212,8 @@ class OpenCodeAPI:
             if self._password:
                 headers = {"Authorization": _auth_header(self._password)}
                 response = self._client.request(
-                    method, self._url(path, location), json=body, headers=headers
+                    method, self._url(path, location), json=body, headers=headers,
+                    **call,
                 )
         if response.status_code == 404 and allow_404:
             return None
@@ -411,9 +418,10 @@ class OpenCodeAPI:
     def session_active(self, session_id: str) -> bool:
         return str(session_id) in self.active_sessions()
 
-    def session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def session(self, session_id: str, *, timeout: float | None = None
+                ) -> Optional[Dict[str, Any]]:
         payload = self._request(
-            "GET", f"/api/session/{session_id}", allow_404=True
+            "GET", f"/api/session/{session_id}", allow_404=True, timeout=timeout
         )
         return (payload or {}).get("data") if isinstance(payload, dict) else None
 

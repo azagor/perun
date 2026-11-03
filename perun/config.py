@@ -160,8 +160,9 @@ def is_internal_path(path: "str | Path | None") -> bool:
     if not path:
         return False
     try:
-        return (os.path.normcase(os.path.abspath(str(path)))
-                == os.path.normcase(os.path.abspath(str(internal_root()))))
+        return (os.path.normcase(os.path.realpath(os.path.abspath(str(path))))
+                == os.path.normcase(os.path.realpath(
+                    os.path.abspath(str(internal_root())))))
     except Exception:  # pragma: no cover - defensive
         return False
 

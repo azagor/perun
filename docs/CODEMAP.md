@@ -744,9 +744,10 @@ Raise the terminal window that hosts a run's TUI session (the card's Focus butto
   same attribution Stop uses). Window enumeration then matches the shell itself,
   an ancestor (Windows Terminal) or a descending conhost/OpenConsole; when the
   terminal hosts a pseudoconsole (Windows 11 default), the run's **session
-  title** (`OpenCodeAPI.session()`, only when the service is already discovered)
-  is a strong title hint, and a terminal-class window may fall back to the
-  project name (a browser window with the same words never qualifies). Equally
+  title** (`OpenCodeAPI.session()`, only when the service is already discovered;
+  capped at 1 s and cached for 30 s) is a strong title hint, and a terminal-class
+  window may fall back to the project name (hints shorter than three characters
+  are ignored, and a browser window with the same words never qualifies). Equally
   good candidates cycle on repeated clicks, because several Windows Terminal
   windows share one process.
 * Activation restores the window, calls the user32 foreground API, retries via
@@ -816,7 +817,8 @@ Perun answer a permission prompt, fill a form, or deliver a message into a
 **running TUI session** — the parts of a session a child `opencode run` process
 cannot reach.
 * `OpenCodeAPI` - `info()`, `active_sessions()` (global), `locations()`
-  (`/api/debug/location`), `session()`, `ready` (discovery already resolved; no
+  (`/api/debug/location`), `session()` (optional per-call `timeout`), `ready`
+  (discovery already resolved; no
   network call, so hot paths can skip a slow lookup), `pending_permissions(location)`,
   `pending_forms(location)`, `reply_permission()`, `reply_form()`, `prompt()`
   (`delivery` `queue`/`steer`, `id` for idempotent admission), `set_inbox_delivery()`,

@@ -279,7 +279,7 @@ class _FakeSessionAPI:
     def __init__(self, title):
         self.title = title
 
-    def session(self, sid):
+    def session(self, sid, *, timeout=None):
         assert sid == "ses_x"
         return {"title": self.title}
 
@@ -290,6 +290,7 @@ def test_title_hints_include_the_opencode_session_title(monkeypatch):
                         lambda: _FakeSessionAPI("Perun path spaces and psutil"))
     monkeypatch.setattr(terminal_focus.registry, "get_project",
                         lambda ref: {"slug": "perun", "name": "Perun"})
+    terminal_focus._session_titles.clear()
 
     hints, strong = terminal_focus._title_hints({
         "project_id": 1, "opencode_session_id": "ses_x", "prompt": "",
@@ -304,13 +305,14 @@ def test_title_hints_skip_an_unready_service(monkeypatch):
     class _Unready:
         ready = False
 
-        def session(self, sid):  # pragma: no cover - must not be called
+        def session(self, sid, *, timeout=None):  # pragma: no cover - must not be called
             raise AssertionError("discovery would block the click")
 
     monkeypatch.setattr(terminal_focus.opencode_api, "default_api",
                         lambda: _Unready())
     monkeypatch.setattr(terminal_focus.registry, "get_project",
                         lambda ref: {"slug": "perun", "name": "Perun"})
+    terminal_focus._session_titles.clear()
 
     hints, _strong = terminal_focus._title_hints({"project_id": 1,
                                                  "opencode_session_id": "ses_x"})
@@ -328,3 +330,86 @@ def test_a_terminal_class_title_match_is_the_last_resort():
         hints=["perun"], strong_hints=[])
 
     assert [w["hwnd"] for _, w in ranked] == [1]
+
+def test_a_failing_session_lookup_does_not_break_the_hints(monkeypatch):
+    class _Broken:
+        ready = True
+
+        def session(self, sid, *, timeout=None):
+            raise RuntimeError("service exploded")
+
+    monkeypatch.setattr(terminal_focus.opencode_api, "default_api",
+                        lambda: _Broken())
+    monkeypatch.setattr(terminal_focus.registry, "get_project",
+                        lambda ref: {"slug": "perun", "name": "Perun"})
+    terminal_focus._session_titles.clear()
+
+    hints, strong = terminal_focus._title_hints({"project_id": 1,
+                                                 "opencode_session_id": "ses_broken"})
+
+    assert "perun: perun" in strong
+    assert "perun" in hints
+
+
+def test_the_session_title_is_cached_between_clicks(monkeypatch):
+    calls = []
+
+    class _Counting:
+        ready = True
+
+        def session(self, sid, *, timeout=None):
+            calls.append(sid)
+            return {"title": "Cached title"}
+
+    monkeypatch.setattr(terminal_focus.opencode_api, "default_api",
+                        lambda: _Counting())
+    monkeypatch.setattr(terminal_focus.registry, "get_project",
+                        lambda ref: {"slug": "perun", "name": "Perun"})
+    terminal_focus._session_titles.clear()
+    run = {"project_id": 1, "opencode_session_id": "ses_cached"}
+
+    first = terminal_focus._title_hints(run)
+    second = terminal_focus._title_hints(run)
+
+    assert "Cached title" in first[1]
+    assert "Cached title" in second[1]
+    assert calls == ["ses_cached"]
+
+
+def test_short_weak_hints_do_not_pick_a_terminal():
+    """A 2-letter project name is too ambiguous for the title fallback."""
+    windows = [_win(1, 900, "ai-playground - Windows Terminal",
+                    cls="CASCADIA_HOSTING_WINDOW_CLASS")]
+    ranked = terminal_focus._rank_candidates(
+        windows, shell_pid=100, ancestors=set(), descendants=set(),
+        hints=["ai"], strong_hints=[])
+
+    assert ranked == []
+
+def test_a_failed_session_lookup_is_not_cached(monkeypatch):
+    """A miss must not stick for the TTL: the service can come up before the next click."""
+    calls = []
+
+    class _Flaky:
+        ready = True
+        fail = True
+
+        def session(self, sid, *, timeout=None):
+            calls.append(sid)
+            if self.fail:
+                raise RuntimeError("service warming up")
+            return {"title": "Back online"}
+
+    api = _Flaky()
+    monkeypatch.setattr(terminal_focus.opencode_api, "default_api", lambda: api)
+    monkeypatch.setattr(terminal_focus.registry, "get_project",
+                        lambda ref: {"slug": "perun", "name": "Perun"})
+    terminal_focus._session_titles.clear()
+    run = {"project_id": 1, "opencode_session_id": "ses_flaky"}
+
+    assert terminal_focus._title_hints(run)[1] == ["perun: perun"]
+    api.fail = False
+    hints, strong = terminal_focus._title_hints(run)
+
+    assert "Back online" in strong
+    assert calls == ["ses_flaky", "ses_flaky"]
