@@ -355,6 +355,10 @@ def discover_and_sync(roots: list[str], *, max_depth: int = 1) -> dict[str, Any]
             # scan must never rename it (directory name vs "Perun") or turn it
             # into a second row.
             continue
+        if _config.is_internal_path(info["path"]):
+            # The private companion repo holds this project's owner-only
+            # content; it is not a separate user project.
+            continue
         proj, is_new = register(info, existing_by_path=existing_by_path)
         (created if is_new else updated).append(proj["slug"])
     # Registered projects under the scanned roots whose directory vanished —
@@ -440,6 +444,35 @@ def hide_control_duplicates(control_project: dict[str, Any]) -> None:
         return
     for other in registry.list_project_paths(include_hidden=True):
         if other.get("slug") == control_project.get("slug") or other.get("hidden"):
+            continue
+        try:
+            candidate = os.path.normcase(os.path.realpath(
+                os.path.abspath(str(other.get("path") or ""))))
+        except (OSError, ValueError):
+            continue
+        if candidate == wanted:
+            registry.update_project(other["slug"], hidden=1)
+
+
+def hide_internal_companion() -> None:
+    """Hide a visible row for the private ``perun_internal`` companion repo.
+
+    Once the control path stopped aborting directory scans, discovery could
+    register the owner-only companion repo as a normal project - a second
+    "Perun" card. It is this project's content, not a user project: hide it
+    rather than delete it, so its sessions/memory stay.
+    """
+    from . import config
+
+    root = config.internal_root()
+    if not root.is_dir():
+        return
+    try:
+        wanted = os.path.normcase(os.path.realpath(os.path.abspath(str(root))))
+    except (OSError, ValueError):
+        return
+    for other in registry.list_project_paths(include_hidden=True):
+        if other.get("hidden"):
             continue
         try:
             candidate = os.path.normcase(os.path.realpath(

@@ -234,3 +234,76 @@ def test_discovery_leaves_the_control_project_alone(control_repo):
     matches = [p for p in registry.list_projects(include_hidden=True)
                if os.path.normcase(os.path.realpath(p["path"])) == target]
     assert len(matches) == 1, matches
+
+
+def test_the_private_companion_repo_is_not_a_user_project(tmp_path, monkeypatch):
+    from perun import config
+
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path / "perun")
+    (tmp_path / "perun").mkdir()
+    internal = tmp_path / "perun_internal"
+    internal.mkdir()
+    monkeypatch.delenv("PERUN_INTERNAL_ROOT", raising=False)
+
+    assert config.internal_root() == internal
+    assert config.is_internal_path(str(internal)) is True
+    assert config.is_internal_path(str(tmp_path / "perun")) is False
+
+    monkeypatch.setenv("PERUN_INTERNAL_ROOT", str(tmp_path / "other"))
+    assert config.is_internal_path(str(tmp_path / "other")) is True
+
+
+def test_discovery_skips_the_internal_companion(control_repo, monkeypatch):
+    """The owner-only companion repo must never be registered as a project."""
+    internal = control_repo.parent / "perun_internal"
+    _mk(internal, "opencode.json")
+    monkeypatch.delenv("PERUN_INTERNAL_ROOT", raising=False)
+
+    discovery.discover_and_sync([str(control_repo.parent)], max_depth=1)
+
+    paths = {p["path"] for p in registry.list_projects(include_hidden=True)}
+    assert str(internal) not in paths
+
+
+def test_a_visible_internal_companion_is_hidden(monkeypatch, tmp_path):
+    """Existing installs that registered it get a second Perun card removed."""
+    from perun import config
+
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path / "perun")
+    (tmp_path / "perun").mkdir()
+    internal = tmp_path / "perun_internal"
+    internal.mkdir()
+    monkeypatch.delenv("PERUN_INTERNAL_ROOT", raising=False)
+
+    updated = []
+    monkeypatch.setattr(discovery.registry, "list_project_paths",
+                        lambda **kw: [{"slug": "perun-2",
+                                       "path": os.path.join(str(internal), "."),
+                                       "hidden": 0}])
+    monkeypatch.setattr(discovery.registry, "update_project",
+                        lambda slug, **kw: updated.append((slug, kw)))
+
+    discovery.hide_internal_companion()
+
+    assert updated == [("perun-2", {"hidden": 1})]
+
+
+def test_the_internal_companion_is_never_listed(tmp_path, monkeypatch):
+    """Hidden is not enough: the owner workspace lists hidden projects too."""
+    from perun import config
+
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path / "perun")
+    (tmp_path / "perun").mkdir()
+    internal = tmp_path / "perun_internal"
+    internal.mkdir()
+    monkeypatch.delenv("PERUN_INTERNAL_ROOT", raising=False)
+
+    project = registry.add_project("Companion", str(internal), kind="opencode")
+    listed = {p["slug"] for p in registry.list_projects(include_hidden=True)}
+    assert project["slug"] not in listed
+
+    registry.update_project(project["slug"], hidden=1)
+    listed = {p["slug"] for p in registry.list_projects(include_hidden=True)}
+    assert project["slug"] not in listed
+    # Still addressable by slug; only the listing is suppressed.
+    assert registry.get_project(project["slug"]) is not None

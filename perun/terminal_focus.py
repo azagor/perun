@@ -32,7 +32,7 @@ import threading
 from ctypes import wintypes
 from typing import Any, Iterable, Sequence
 
-from . import process_tracker, registry
+from . import opencode_api, process_tracker, registry
 
 try:  # optional: the tracker degrades without psutil, so must focusing
     import psutil  # type: ignore
@@ -46,6 +46,18 @@ GW_OWNER = 4
 FLASHW_ALL = 0x00000003
 FLASHW_TIMERNOFG = 0x0000000C
 MIN_WINDOW_PIXELS = 40
+
+#: Window classes that host a terminal. A title-only match is allowed for these
+#: with a *weak* hint (the project name), because Windows Terminal hosts the
+#: console in a pseudoconsole: the shell is not its child and the window is not
+#: in the shell's process tree, so the title is the only signal.
+_TERMINAL_WINDOW_CLASSES = {
+    "cascadia_hosting_window_class",
+    "consolewindowclass",
+    "virtualconsoleclass",
+    "mintty",
+    "conemu",
+}
 
 _user32: Any = None
 _kernel32: Any = None
@@ -219,10 +231,13 @@ def _rank_candidates(windows: Iterable[dict[str, Any]], *,
 
     Tier 0 is the shell itself, 1 an ancestor (Windows Terminal or an IDE that
     owns the terminal), 2 a descendant (conhost/OpenConsole). A title-only match
-    is tier 3 and only used when the process tree cannot answer, so it requires
-    a *strong* hint (the launch marker or the run's session title) - a bare
-    project name could just as easily be a browser tab. Lower tiers always win;
-    within a tier the title hint decides, then z-order.
+    is tier 3 when a *strong* hint matches (the launch marker or the run's
+    session title). Tier 4 is the last resort: a **terminal-class** window whose
+    title carries even a weak hint (the project name) - Windows Terminal hosts a
+    pseudoconsole, so its window is in neither the shell's ancestors nor its
+    descendants, and the tab title is all we get. A browser window with the same
+    words never qualifies. Lower tiers always win; within a tier the title hint
+    decides, then z-order.
     """
     excluded = {int(h) for h in exclude}
     strong = tuple(strong_hints or ())
@@ -236,6 +251,7 @@ def _rank_candidates(windows: Iterable[dict[str, Any]], *,
         if not title:
             continue
         pid = int(window.get("pid") or 0)
+        window_class = str(window.get("class") or "").lower()
         title_match = _matches_title(title, hints)
         if pid == shell_pid:
             tier = 0
@@ -245,6 +261,8 @@ def _rank_candidates(windows: Iterable[dict[str, Any]], *,
             tier = 2
         elif _matches_title(title, strong):
             tier = 3
+        elif window_class in _TERMINAL_WINDOW_CLASSES and title_match:
+            tier = 4
         else:
             continue
         score = (tier, 0 if title_match else 1, int(window.get("order", 0)))
@@ -307,7 +325,8 @@ def _title_hints(run: dict[str, Any]) -> tuple[list[str], list[str]]:
 
     A bare project name is too weak to pick a window on its own (a browser tab
     can contain it). The launcher's ``Perun: <slug>`` marker and the run's
-    prompt/session title are strong enough for a title-only match.
+    **OpenCode session title** are strong: Windows Terminal's tab title shows
+    the session title, and it replaces the marker once the session starts.
     """
     hints: list[str] = []
     strong: list[str] = []
@@ -319,6 +338,18 @@ def _title_hints(run: dict[str, Any]) -> tuple[list[str], list[str]]:
             hints.extend([marker, text])
             strong.append(marker)
             break
+    session_id = str(run.get("opencode_session_id") or "").strip()
+    if session_id:
+        try:
+            api = opencode_api.default_api()
+            if api.ready:  # never trigger CLI discovery from a Focus click
+                info = api.session(session_id) or {}
+                title = " ".join(str(info.get("title") or "").split())
+                if len(title) >= 4:
+                    hints.append(title)
+                    strong.append(title[:60])
+        except Exception:  # pragma: no cover - service unavailable
+            LOG.debug("could not read the session title", exc_info=True)
     prompt = " ".join(str(run.get("prompt") or "").split())
     if len(prompt) >= 8:
         snippet = prompt[:40]

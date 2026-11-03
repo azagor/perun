@@ -59,8 +59,10 @@ def test_rank_uses_a_title_hint_only_without_a_process_relation():
 
 
 def test_a_bare_project_name_is_not_enough_for_a_title_only_match():
-    """A browser tab can mention the project; only strong hints pick a window."""
-    browser = [_win(1, 900, "Perun - Overseer - Google Chrome")]
+    """A browser tab can mention the project; only strong hints or a terminal
+    window may be picked."""
+    browser = [_win(1, 900, "Perun - Overseer - Google Chrome",
+                    cls="Chrome_WidgetWin_1")]
     ranked = terminal_focus._rank_candidates(
         browser, shell_pid=100, ancestors=set(), descendants=set(),
         hints=["perun", "perun: perun"], strong_hints=["perun: perun"])
@@ -270,3 +272,59 @@ def test_repeated_focus_cycles_between_equally_good_windows(monkeypatch):
 
     assert first["ambiguous"] is True and second["ambiguous"] is True
     assert {first["hwnd"], second["hwnd"]} == {1, 2}
+
+class _FakeSessionAPI:
+    ready = True
+
+    def __init__(self, title):
+        self.title = title
+
+    def session(self, sid):
+        assert sid == "ses_x"
+        return {"title": self.title}
+
+
+def test_title_hints_include_the_opencode_session_title(monkeypatch):
+    """Windows Terminal shows the session title, not our launch marker."""
+    monkeypatch.setattr(terminal_focus.opencode_api, "default_api",
+                        lambda: _FakeSessionAPI("Perun path spaces and psutil"))
+    monkeypatch.setattr(terminal_focus.registry, "get_project",
+                        lambda ref: {"slug": "perun", "name": "Perun"})
+
+    hints, strong = terminal_focus._title_hints({
+        "project_id": 1, "opencode_session_id": "ses_x", "prompt": "",
+    })
+
+    assert "Perun path spaces and psutil" in strong
+    assert "Perun path spaces and psutil" in hints
+
+
+def test_title_hints_skip_an_unready_service(monkeypatch):
+    """A Focus click must never trigger CLI-based service discovery."""
+    class _Unready:
+        ready = False
+
+        def session(self, sid):  # pragma: no cover - must not be called
+            raise AssertionError("discovery would block the click")
+
+    monkeypatch.setattr(terminal_focus.opencode_api, "default_api",
+                        lambda: _Unready())
+    monkeypatch.setattr(terminal_focus.registry, "get_project",
+                        lambda ref: {"slug": "perun", "name": "Perun"})
+
+    hints, _strong = terminal_focus._title_hints({"project_id": 1,
+                                                 "opencode_session_id": "ses_x"})
+    assert "perun" in hints
+
+
+def test_a_terminal_class_title_match_is_the_last_resort():
+    """Windows Terminal hosts a pseudoconsole: the title is all we get."""
+    windows = [
+        _win(1, 900, "OC | Perun path spaces", cls="CASCADIA_HOSTING_WINDOW_CLASS"),
+        _win(2, 901, "Perun - Overseer", cls="Chrome_WidgetWin_1"),
+    ]
+    ranked = terminal_focus._rank_candidates(
+        windows, shell_pid=100, ancestors=set(), descendants=set(),
+        hints=["perun"], strong_hints=[])
+
+    assert [w["hwnd"] for _, w in ranked] == [1]

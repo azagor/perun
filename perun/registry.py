@@ -374,6 +374,10 @@ def list_projects(*, include_hidden: bool = False) -> list[dict[str, Any]]:
                 last_activity=last_activities.get(r["id"]),
             )
             for r in rows
+            # The private companion repo is owner-only content, not a project:
+            # never list it, not even with ``include_hidden=true`` (which the
+            # owner's workspace uses). It stays addressable by slug.
+            if not config.is_internal_path(r["path"])
         ]
 
 

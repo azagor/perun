@@ -142,6 +142,30 @@ def is_owner_workspace() -> bool:
         return False
 
 
+def internal_root() -> Path:
+    """The private ``perun_internal`` companion repo (owner-only content).
+
+    A sibling of the public checkout by default; ``PERUN_INTERNAL_ROOT``
+    overrides it. On an installed copy the sibling does not exist, so nothing is
+    discovered there.
+    """
+    env = (os.environ.get("PERUN_INTERNAL_ROOT") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    return REPO_ROOT.parent / "perun_internal"
+
+
+def is_internal_path(path: "str | Path | None") -> bool:
+    """True when *path* is the private companion repo, not a user project."""
+    if not path:
+        return False
+    try:
+        return (os.path.normcase(os.path.abspath(str(path)))
+                == os.path.normcase(os.path.abspath(str(internal_root()))))
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def _default_roots() -> list[str]:
     env = os.environ.get("PERUN_ROOTS")
     if env and env.strip():

@@ -70,6 +70,10 @@ map, the memory, the orchestration, and a remote control.
         TELEGRAM ── the same control room, from your phone
 ```
 
+A working card also offers **Focus**, which raises the TUI terminal Perun
+launched for that run (Windows; a taskbar flash when the OS refuses the
+foreground switch), so several open terminals never become a guessing game.
+
 Three nouns carry the whole product: **Project**, **Run**, **Memory**. Every
 screen maps to one of them.
 
@@ -210,9 +214,13 @@ a context key (`memory:`) or a secret (`kind: secret`), and
 
 ### Talk to the orchestrator
 `#/orchestrator` (or Telegram `/orchestrator`) chats with the control-plane agent
-— the one whose job is *managing projects*. It works on a machine with **zero**
+- the one whose job is *managing projects*. It works on a machine with **zero**
 projects registered, and its model, agent, and custom instructions live in
-Settings (they belong to the singleton, not to any user project).
+Settings (they belong to the singleton, not to any user project). The control
+project is registered hidden and listed only in the owner's private workspace
+(the `.perun/owner-workspace` marker from the internal overlay;
+`PERUN_SHOW_HIDDEN_PROJECTS` overrides). An installed copy lists only the user's
+projects, and this page still works with none of them.
 
 ### Start Perun (one click)
 On Windows, double-clicking **`Perun.cmd`** brings the whole thing up: it finds

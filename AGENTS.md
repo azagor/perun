@@ -270,7 +270,10 @@ line in `docs/TECHNICAL_DOCUMENTATION.md`.
 The release pipeline is `tools/release.py`. It bumps `perun/__init__.py`,
 updates the changelog/technical docs, syncs internal project content to
 `../perun_internal` via `tools/sync-internal.py --reverse --force`, commits both
-repos, tags the public repo, and pushes `master` + the tag. Read that script
+repos, tags the public repo, and pushes `master` + the tag. It also refuses to
+run without the private `.perun/owner-workspace` marker and re-verifies it after
+the sync: that marker keeps the control project listed on the owner's dashboard,
+and the reverse sync would otherwise delete it. Read that script
 before a release and prefer it over hand-crafted git commands. Run
 `python -m perun docs audit --all` to check CODEMAP traceability before
 tagging.

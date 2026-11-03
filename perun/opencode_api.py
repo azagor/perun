@@ -221,6 +221,15 @@ class OpenCodeAPI:
             return None
 
     # ---- read --------------------------------------------------------- #
+    @property
+    def ready(self) -> bool:
+        """Whether discovery already resolved the service endpoint.
+
+        No network call: callers on a hot path (a click) use this to avoid
+        triggering CLI-based discovery, which has its own longer timeout.
+        """
+        return bool(self._base)
+
     def info(self) -> Dict[str, Any]:
         return self._request("GET", "/api/info") or {}
 

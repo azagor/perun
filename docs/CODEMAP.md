@@ -61,6 +61,9 @@ Filesystem layout + persisted settings.
     copy is the owner's private workspace - the `.perun/owner-workspace` marker
     from the internal overlay; `PERUN_SHOW_HIDDEN_PROJECTS` overrides. It gates
     listing hidden projects such as the control plane.
+  * `internal_root()` / `is_internal_path()` identify the private
+    `perun_internal` companion repo (`PERUN_INTERNAL_ROOT` overrides), which is
+    owner-only content and never a user project.
   * `Settings.terminal_cmd(shell_hint=…)` returns the argv to launch the
     configured/default terminal emulator (on POSIX it prefers a real emulator and
     returns an argv ending in the shell).
@@ -171,7 +174,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   registration path — CLI `perun add`, wizard — gets manifest data, not just
   discovery; stores `agent_models` as a JSON map), `update_project()`
   (accepts `agent_models`), `touch_project()`,
-  `get_project()`, `get_project_by_path()`, `list_projects()`, `delete_project()`,
+  `get_project()`, `get_project_by_path()`, `list_projects()` (never includes the
+  private companion repo, even with `include_hidden=true`; it is owner-only
+  content, not a project), `delete_project()`,
   `set_project_manifest()`, `get_project_manifest()`,
   `load_manifest_from_disk()` (refresh snapshot + apply declared fields + sync
   `dependencies:` edges).
@@ -494,9 +499,11 @@ Find & register OpenCode projects under roots.
   `register()` (merges any `perun.md` manifest plus the JSON-formatted fallback,
   parses dependency files into memory facts, and records local project refs),
   `_record_dependencies()`, `_record_local_references()`,
-  `discover_and_sync()`, `register_self()`, `hide_control_duplicates()` (startup
-  repair for installs that re-registered the control path as a visible row).
-  Scans skip the control project's path - `register_self()` curates it - and the
+  `discover_and_sync()`, `register_self()`, `hide_control_duplicates()`,
+  `hide_internal_companion()` (startup repair for installs that re-registered the
+  control path or the owner-only companion repo as a visible row).
+  Scans skip the control project's path and `perun_internal` - `register_self()`
+  curates the former and the latter is owner-only content - and the
   path lookup includes hidden rows so a hidden project is never re-registered as
   a visible duplicate. Registration also calls
   `project_roots.auto_register()` so newly discovered projects outside the
@@ -735,11 +742,13 @@ Raise the terminal window that hosts a run's TUI session (the card's Focus butto
   `{focused, pid, hwnd, method, reason}`; expected misses return a reason.
 * The pid comes from `ProcessTracker.run_terminal_pid()` (marker-verified, the
   same attribution Stop uses). Window enumeration then matches the shell itself,
-  an ancestor (Windows Terminal) or a descendant (conhost/OpenConsole); a title
-  hint (`Perun: <slug>` or the run/session title - a bare project name is not
-  enough for a title-only match) breaks ties within a tier. Equally good
-  candidates cycle on repeated clicks, because several Windows Terminal windows
-  share one process.
+  an ancestor (Windows Terminal) or a descending conhost/OpenConsole; when the
+  terminal hosts a pseudoconsole (Windows 11 default), the run's **session
+  title** (`OpenCodeAPI.session()`, only when the service is already discovered)
+  is a strong title hint, and a terminal-class window may fall back to the
+  project name (a browser window with the same words never qualifies). Equally
+  good candidates cycle on repeated clicks, because several Windows Terminal
+  windows share one process.
 * Activation restores the window, calls the user32 foreground API, retries via
   a thread-input attach, then falls back to SwitchToThisWindow; when Windows
   still refuses, the taskbar button is flashed (reported as `method: "flash"`).
@@ -806,8 +815,9 @@ Thin client for the local OpenCode HTTP API (v2). This is the channel that lets
 Perun answer a permission prompt, fill a form, or deliver a message into a
 **running TUI session** — the parts of a session a child `opencode run` process
 cannot reach.
-* `OpenCodeAPI` — `info()`, `active_sessions()` (global), `locations()`
-  (`/api/debug/location`), `session()`, `pending_permissions(location)`,
+* `OpenCodeAPI` - `info()`, `active_sessions()` (global), `locations()`
+  (`/api/debug/location`), `session()`, `ready` (discovery already resolved; no
+  network call, so hot paths can skip a slow lookup), `pending_permissions(location)`,
   `pending_forms(location)`, `reply_permission()`, `reply_form()`, `prompt()`
   (`delivery` `queue`/`steer`, `id` for idempotent admission), `set_inbox_delivery()`,
   `cancel_inbox()`, `interrupt()`, `commands(directory)` (`GET /api/command`) and

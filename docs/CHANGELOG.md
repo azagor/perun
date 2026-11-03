@@ -4,7 +4,28 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The private companion repo is not a project
+
+* Discovery could register `perun_internal` — the owner-only companion repo, a
+  sibling of the public checkout — as a normal project once the control path
+  stopped aborting the scan, producing a second "Perun" card. The registry never
+  lists it now, not even with `include_hidden=true` (which the owner's workspace
+  uses), directory scans skip it (`config.is_internal_path()`,
+  `PERUN_INTERNAL_ROOT` overrides), and a startup sweep marks any row an earlier
+  scan created as hidden — never deleted, so its sessions and memory stay. It is
+  still addressable by slug.
+
+### Focus finds Windows Terminal sessions again
+
+* On Windows 11 the default terminal hosts a console in a pseudoconsole: the
+  terminal window is neither an ancestor nor a descendant of the shell, so the
+  project card's Focus button reported "no terminal window found". The run's
+  OpenCode **session title** — the text the Windows Terminal tab already shows —
+  is now a strong matching hint, and a terminal-class window may fall back to the
+  project name (a browser window with the same words never qualifies).
+* The session-title lookup uses the service only when discovery has already
+  resolved it (`OpenCodeAPI.ready`), so a Focus click never blocks on CLI
+  discovery.
 
 ## v0.10.56
 

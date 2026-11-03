@@ -34,6 +34,10 @@ them all — no matter which folder you happened to open.
 
 * **One place to see everything.** A dashboard of every project, its agents,
   its sessions, its memory, and a live activity feed.
+* **Find the right terminal.** While a TUI run is active, the project card's
+  **Focus** button raises the exact terminal window Perun launched - even with
+  several terminals open. On Windows it restores a minimised window and falls
+  back to flashing the taskbar button when the OS refuses the foreground switch.
 * **Cross-project memory.** Facts you store and docs Perun indexes are
   searchable from any project — "which project handled the OAuth callback?".
 * **Start any agent from anywhere.** Kick off a task in `project-a` while
@@ -56,8 +60,11 @@ them all — no matter which folder you happened to open.
   short-lived single-use WebSocket tickets instead of putting the API key in a
   URL, and agents can rotate their own keys without operator distribution.
 * **An always-available orchestrator.** Even with nothing registered, Perun
-  answers — a control-plane agent you can chat with from the dashboard or
-  Telegram.
+  answers - a control-plane agent you can chat with from the dashboard or
+  Telegram. Its project is registered hidden and listed only in the owner's
+  private workspace (the `.perun/owner-workspace` marker from the internal
+  overlay), so an installed copy lists just your projects while the Orchestrator
+  page keeps working.
 * **Provider management from the dashboard.** Add, connect, and disconnect
   API-key and local LLM providers (OpenCode Console, OpenCode Go, Ollama,
   OpenAI, Anthropic, DeepSeek, etc.) directly from the UI. Credentials are
