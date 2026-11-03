@@ -414,6 +414,11 @@ Unified facts + document vector store + search.
   CODEMAP files are split at `###` modules into `<H2> › <H3>` chunks capped at
   `CODEMAP_TARGET_CHUNK`; CHANGELOG files are reduced to a release index when
   oversized.
+* Ranking: cosine + keyword bonus + a small freshness tie-breaker. The 0.15
+  cutoff applies only to a row with a comparable vector; an unembedded row
+  (Ollama was down when it was stored/indexed) uses a 0.02 lexical cutoff, so a
+  genuine multi-word match survives an outage while a single incidental `LIKE`
+  hit stays filtered.
 * Unified / maintenance: `unified_search()`, `stats()`, `usage_stats()`,
   `reembed_missing()` (re-embeds facts/doc chunks whose vectors are missing or
   stale).

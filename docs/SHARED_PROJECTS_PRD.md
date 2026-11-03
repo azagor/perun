@@ -221,6 +221,28 @@ external) are readable/writable.
 - **NFR-4 Auditability:** every ACL change, room lifecycle event, action proposal,
   and path-guard denial is logged with actor, timestamp, and result.
 
+### 3.10 Bounded Verification (v0.10.59)
+
+A chat persona has no shell, but a shared project still needs a way to answer
+"did the delivered change pass?". Two paths exist, both operator-gated:
+
+- **Declared checks.** The operator names a command in Perun's own store
+  (`perun checks add <project> <name> "<command>"`, optional `--pin` on the
+  script's sha256). The declaration never lives in the project tree, so no room
+  message, MCP tool or approved proposal can add one. `guard_run_check` takes a
+  **name**, never a command; `perun_run_check` does the same for local agents.
+- **Proposal verification.** `perun_verify_proposal` accepts only an `executed`
+  proposal and derives the command from an approved `.py`/`.ps1`/`.sh`/`.bat`/
+  `.cmd` target. The operator sees the exact command, target and sha256 in an
+  attention card and must choose **Run it**; the file is re-hashed after the
+  answer and the run refuses on drift. The confirmation is durable and one-shot.
+
+Every run is single-flight per project (plus a machine-wide cap), uses a
+scrubbed environment, caps timeout/output, strips terminal control bytes, keeps
+`check_runs` history (200/project), and logs to the activity feed. The sandboxed
+`perun-shared` executor is explicitly denied the check tools: checks are
+operator configuration, not an approved target.
+
 ---
 
 ## 4. Agile User Stories & Acceptance Criteria
@@ -445,6 +467,7 @@ so I can re-verify or remove them.
 | Perun registry/DB | `project_chats` table: `(project_slug, room_id, managed_by, state, manifest_rev, last_sync_at)`; `participant_status` view joining trust list. |
 | PerunChat `rooms`/`room_members` | `managed_by` column on rooms; endpoint guard: member mutations allowed only to `managed_by` key (or owner). |
 | Bridge | `Action Envelope` + `State Digest` schemas; digest quota; `manifest_rev` in prompt assembly; lifecycle notices for started/rejected/failed/completed proposals. |
+| Perun registry/DB (v0.10.59) | `project_checks` (operator-declared name → command, cwd, timeout, optional pin), `check_runs` (one row per run, `running` is the cross-process lease, capped output), `check_confirmations` (durable, one-shot operator answer bound to proposal + target + sha256). |
 
 ### 5.3 Sync flows
 

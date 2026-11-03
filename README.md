@@ -291,7 +291,8 @@ for details.
 | **REST API** | `/api/*` | JSON; see `docs/TECHNICAL_DOCUMENTATION.md` |
 | **Live streams** | `/api/runs/{run_uid}/stream`, `/api/stream` | Server-Sent Events |
 | **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
-| **MCP server** | stdio, tool namespace `perun` | 34 tools, installed globally |
+| **MCP server** | stdio, tool namespace `perun` | 37 tools, installed globally |
+| **Checks** | `perun checks …`, project page → Checks | Operator-declared verification commands; a room agent runs one by name, or verifies an executed proposal only after a hash-pinned operator confirmation |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL or autonomous peer review for actions |
 | **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, `perun-guard` MCP + post-run audit, external ZIP handoff, configurable approver/HITL secret |

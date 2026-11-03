@@ -45,6 +45,12 @@ map, the memory, the orchestration, and a remote control.
    output; expose a live activity feed. The overseer must itself be watchable.
 7. **Clarity over cleverness.** The UI shows plain labels, real statuses, and
    one obvious action per card. No hidden state.
+8. **Execution is declared, never improvised.** A chat persona has no shell.
+   The only command it may run is a **check the operator declared** (by name,
+   never by command text) or an **executed proposal's approved script**, after
+   the operator sees the exact command and its sha256 and confirms. Declarations
+   live in Perun's own store, not in the project, so a room message or an
+   approved proposal can never widen what runs.
 
 ## 3. Mental model (what the user sees)
 
@@ -145,6 +151,16 @@ cancellation, history and restart recovery behave exactly like every other run.
 Two entry points, one store. From a project: Memory tab → *Add fact* (global or
 this project). From anywhere: the topbar search, or the Memory view with an
 "all projects" toggle. The CLI and MCP expose the same operations.
+
+### Verify a change (bounded execution)
+The room agent has no shell, so "did the delivered script pass?" needs a
+declared path. The operator declares a check once (`perun checks add <project>
+<name> "<command>"`, optionally `--pin`ned to the script's sha256); from then on
+the room can run it **by name** and report the exit code and output. For an
+ad-hoc delivered script, `perun_verify_proposal` derives the command from an
+approved target, shows the operator the exact command and sha256, and runs only
+after they confirm. A check that is already running, a changed pinned file, or
+a changed confirmed file is refused rather than guessed at.
 
 ### Global install
 Settings → *Install globally* explains the exact command; the CLI does the merge
