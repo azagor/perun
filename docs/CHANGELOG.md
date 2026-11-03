@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.67
+
+*Released 2026-11-03.*
+
 ### Manage a proposal from the chat peek, and keep the focus
 
 * The peek card now offers the state-appropriate actions directly: **Approve &

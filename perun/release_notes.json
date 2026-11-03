@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T20:57:00+00:00",
+  "generated": "2026-11-03T21:11:40+00:00",
   "releases": [
+    {
+      "version": "0.10.67",
+      "date": "2026-11-03",
+      "body": "### Manage a proposal from the chat peek, and keep the focus\n\n* The peek card now offers the state-appropriate actions directly: **Approve &\n  run / Approve only / Reject / Delete** (pending), **Run now / Withdraw /\n  Delete** (approved), **Revoke claim** (claimed), **Cancel** (executing), and\n  **Retry / Delete** (completed). Each action re-fetches the proposal, recolours\n  the chat chip and updates the card; Retry opens the new proposal.\n* The focus is encoded in the URL (`#/project/<slug>/shared/<prop_…>`) and\n  re-applied on every render, poll and reload, so the row is not lost when the\n  view refreshes. The Shared tab now waits for **both** cards (settings and\n  proposals) before scrolling — the settings card loading above the list used to\n  move the row off-screen. The gold highlight persists while the id is in the\n  URL and clears when another tab is opened."
+    },
     {
       "version": "0.10.66",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.58",
       "date": "2026-11-03",
       "body": "### Focus lookup hardening\n\n* The session-title lookup is capped at 1 s per call and cached for 30 s, so a\n  Focus click stays responsive even when the OpenCode service is slow; a failing\n  lookup simply falls back to the project-name hint.\n* `config.is_internal_path()` compares real paths, so a symlinked companion repo\n  is still recognised; the two startup sweeps are isolated, so one failing cannot\n  skip the other; and the terminal-title fallback ignores hints shorter than\n  three characters (a project named \"ai\" cannot select an \"ai-playground\"\n  terminal)."
-    },
-    {
-      "version": "0.10.57",
-      "date": "2026-11-03",
-      "body": "### The private companion repo is not a project\n\n* Discovery could register `perun_internal` — the owner-only companion repo, a\n  sibling of the public checkout — as a normal project once the control path\n  stopped aborting the scan, producing a second \"Perun\" card. The registry never\n  lists it now, not even with `include_hidden=true` (which the owner's workspace\n  uses), directory scans skip it (`config.is_internal_path()`,\n  `PERUN_INTERNAL_ROOT` overrides), and a startup sweep marks any row an earlier\n  scan created as hidden — never deleted, so its sessions and memory stay. It is\n  still addressable by slug.\n\n### Focus finds Windows Terminal sessions again\n\n* On Windows 11 the default terminal hosts a console in a pseudoconsole: the\n  terminal window is neither an ancestor nor a descendant of the shell, so the\n  project card's Focus button reported \"no terminal window found\". The run's\n  OpenCode **session title** — the text the Windows Terminal tab already shows —\n  is now a strong matching hint, and a terminal-class window may fall back to the\n  project name (a browser window with the same words never qualifies).\n* The session-title lookup uses the service only when discovery has already\n  resolved it (`OpenCodeAPI.ready`), so a Focus click never blocks on CLI\n  discovery."
     }
   ]
 }
