@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.55 (see §15). The control project is listed only in the owner's workspace, and a project card can raise its TUI terminal.
+**Latest release:** v0.10.56 (see §15). The release pipeline verifies the owner-workspace marker, and dashboard presence filtering is unit-tested.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2450,6 +2450,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.56: The release pipeline verifies the owner-workspace marker, and dashboard presence filtering is unit-tested.
+
 ### 2026-11-03 — v0.10.55: The control project is listed only in the owner's workspace, and a project card can raise its TUI terminal.
 
 ### 2026-11-03 — v0.10.54: Fresh installs no longer show the Perun control project, and a project card can raise its TUI terminal.

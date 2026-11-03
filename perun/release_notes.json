@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T14:20:13+00:00",
+  "generated": "2026-11-03T14:33:22+00:00",
   "releases": [
+    {
+      "version": "0.10.56",
+      "date": "2026-11-03",
+      "body": "### Release-pipeline and dashboard hardening\n\n* `tools/release.py` re-verifies the private owner-workspace marker after the\n  reverse sync (`verify_internal_marker()`), so a release cannot half-apply\n  version/docs changes and then discover it lost the marker; both checks are\n  unit-tested.\n* The dashboard's run filter is a pure `visibleRuns(runs, projects)` helper in\n  `card_controls.js` (unit-tested), and presence falls back safely when an old\n  cached module lacks it. A checkout with only `.git` (a plain public clone) is\n  explicitly tested as **not** an owner workspace.\n* Docs: the raw-API and Telegram visibility rules for the control project are\n  stated explicitly, and the marker file notes that copying it makes another\n  checkout an owner workspace."
+    },
     {
       "version": "0.10.55",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.47",
       "date": "2026-11-01",
       "body": "### A working project card shows Stop again\n\n* The card rendered **▶ Run** unconditionally and only *added* a Stop button for\n  runs that were not standalone. Every TUI session opened from the dashboard is\n  `standalone=1` for its whole life, so Stop was never rendered for it (since\n  v0.10.3, when the restart-marker fix suppressed it) — an active card showed\n  \"working\" plus a Run button that would have started a second session.\n* `web/js/card_controls.js` (`runControlSpec`, unit-tested with `node --test`) now\n  decides the first card action: **Run** when the project is idle, **Stop** for\n  any active run. Stop calls `POST /api/runs/{uid}/cancel`, which is already the\n  intended path — cancel a headless run, or close the terminal Perun opened for a\n  TUI run (it only kills a pid carrying that run's `PERUN_RUN_UID` marker, and it\n  still works after a restart from the persisted `runs.pid`).\n* `applyCardStates()` re-syncs that control on every 4 s presence poll, so a card\n  that lights up, is stopped or is swept swaps its button in place, and\n  `openProjectTui()` swaps it immediately for the run it just started. The button\n  is rebuilt only when its kind or run id actually changed.\n* The card's `Run` tooltip and doc text now match what it does (OpenCode launched\n  in the project directory, not the Agent Console)."
-    },
-    {
-      "version": "0.10.46",
-      "date": "2026-11-01",
-      "body": "### A working project card offers its run's control, never Run\n\n* After a browser refresh, a card whose project had an active session showed a\n  \"working\" pip and banner but still rendered **▶ Run**. A standalone TUI run had\n  its Stop button suppressed (\"Perun cannot stop it\") while Run was hardcoded, so\n  the card invited a second session next to the working one. The first card\n  action now comes from `web/js/card_controls.js` (`runControlSpec`, unit-tested\n  with `node --test`): **Run** when idle, **Stop** for a headless run Perun owns,\n  **Finish** for a standalone TUI run — which calls\n  `POST /api/runs/{uid}/finish`, marks it done and captures usage, and never kills\n  the terminal.\n* `applyCardStates()` re-syncs that control on every 4 s presence poll (so a card\n  that lights up, finishes or is swept changes its action in place), and\n  `openProjectTui()` swaps it immediately for the run it just started. The button\n  is only rebuilt when its kind or run id actually changed.\n* The card's `Run` no longer goes through the Agent Console: its tooltip and doc\n  text now match what it does (OpenCode launched in the project directory).\n\n### Usage cards refresh on their own\n\n* The dashboard's **Usage · captured in the last 24h** card and the project\n  page's usage line now re-fetch every 60 seconds while their view is open,\n  instead of only on first render (a browser reload or a tab switch was the only\n  way to see a run's new numbers). The timer stops itself when the view changes,\n  is replaced on re-render, and never overlaps a request. 60 s matches the data:\n  open TUI runs are captured every 5 minutes, headless runs at finalize."
     }
   ]
 }

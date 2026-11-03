@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.56
+
+*Released 2026-11-03.*
+
 ### Release-pipeline and dashboard hardening
 
 * `tools/release.py` re-verifies the private owner-workspace marker after the
