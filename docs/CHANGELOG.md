@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.65
+
+*Released 2026-11-03.*
+
 ### Chat fallback and chip font
 
 * When `chat_core.js` is missing (a stale cache or a truncated deploy), the

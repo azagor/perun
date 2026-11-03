@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.64 (see §15). The exact proposal is visible and reachable: the Shared row shows its id, and Open in project scrolls to and flashes it.
+**Latest release:** v0.10.65 (see §15). The chat fallback survives a missing chat_core.js, and proposal chips use the real monospace stack.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2557,6 +2557,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-03 — v0.10.65: The chat fallback survives a missing chat_core.js, and proposal chips use the real monospace stack.
+
 ### 2026-11-03 — v0.10.64: The exact proposal is visible and reachable: the Shared row shows its id, and Open in project scrolls to and flashes it.
 
 ### 2026-11-03 — v0.10.63: Proposal ids in the chat are now status-coloured chips with a peek card and a direct jump to the exact Shared-tab row.
