@@ -1,10 +1,15 @@
 {
-  "generated": "2026-11-04T11:07:30+00:00",
+  "generated": "2026-11-04T11:28:07+00:00",
   "releases": [
+    {
+      "version": "0.10.78",
+      "date": "2026-11-04",
+      "body": ""
+    },
     {
       "version": "0.10.77",
       "date": "2026-11-04",
-      "body": "### Pause autonomous work in a shared project\n\n* The Shared tab has **Pause work** / **Resume work** (durable\n  `projects.work_paused`, with the actor and timestamp); the project card is\n  badged `paused`. While paused the bridge posts no room replies, does not feed\n  the room's messages to coroutine triggers, skips the autonomous proposal\n  review, and policy auto-approve leaves new proposals pending. In-flight runs\n  finish; human chat and explicit approvals remain available.\n* Members can keep chatting: paused messages stay in room history for the agent\n  to catch up after a resume. The bridge posts one notice per pause period so the\n  room knows why the agent is silent."
+      "body": "### Pause autonomous work in a shared project\n\n* The Shared tab has **Pause work** / **Resume work** (durable\n  `projects.work_paused`, with the actor and timestamp); the project card is\n  badged `paused`. While paused the bridge posts no room replies, does not feed\n  the room's messages to coroutine triggers, skips the autonomous proposal\n  review, and policy auto-approve leaves new proposals pending. In-flight runs\n  finish; human chat and explicit approvals remain available.\n* Members can keep chatting: paused messages stay in room history for the agent\n  to catch up after a resume. The bridge posts one notice per pause period so the\n  room knows why the agent is silent; operator-directed mentions are still\n  raised (a notification, not agent work)."
     },
     {
       "version": "0.10.76",
@@ -45,11 +50,6 @@
       "version": "0.10.69",
       "date": "2026-11-04",
       "body": "### Proposal cards leave the inbox when the proposal is decided\n\n* `attention.reconcile_proposals()` — run by the watcher — closes an approval\n  card once its proposal is `approved`/`claimed`/`executing`/`executed`,\n  `rejected`, or no longer exists. The inbox and the proposal board can no longer\n  disagree about what is still waiting, which was the root of the “nothing\n  pending” reply while eleven approved proposals sat unexecuted."
-    },
-    {
-      "version": "0.10.68",
-      "date": "2026-11-04",
-      "body": "### Operator asks are durable, structured messages are readable, proposals show expiry\n\n* A room message that names the operator now creates a `room` attention item\n  **even when Perun also answers**. The PerunChat page shows an “N operator asks\n  for you” strip, and a new **Needs you** page (and nav entry) lists room\n  mentions alongside permissions, forms, proposals and handoffs; replying there\n  posts back to the exact room.\n* Structured (object) room payloads render as an expandable JSON preview with a\n  type/status summary and a proposal chip, instead of `[object Object]`. Object\n  dedupe uses a real payload key, not `String(payload)`.\n* Active proposals show their expiry in the peek, the Shared row and the chip\n  tooltip. The proposal MCP tools now return `expires_at`, and the room persona\n  treats `approved` (awaiting claim or execution) as pending — never “nothing\n  pending” while an approved proposal has no executor."
     }
   ]
 }
