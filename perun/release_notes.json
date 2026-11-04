@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T08:55:37+00:00",
+  "generated": "2026-11-04T09:03:40+00:00",
   "releases": [
+    {
+      "version": "0.10.71",
+      "date": "2026-11-04",
+      "body": "### Operator ask dedupe and inbox batching\n\n* A mention is deduplicated by a fingerprint of room + sender + timestamp + text,\n  so a replay under a fresh frame id cannot create a second inbox item. The\n  operator's own handle is skipped, and settings/operator names are cached for\n  30 s per message burst.\n* `attention.reconcile_proposals()` now resolves proposal statuses in one query\n  and closes cards in one transaction (`action_proposals.statuses`,\n  `registry.close_attention_many`) instead of two connections per open card.\n* Payload identities above 200 KB collapse to a short `len:<n>:<hash>` key, and\n  the chat “operator asks” strip orders by the message timestamp rather than the\n  inbox row id."
+    },
     {
       "version": "0.10.70",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.62",
       "date": "2026-11-03",
       "body": "### Updates refresh the global install\n\n* `perun update apply` on a git checkout now re-runs the additive global install\n  (`perun install --no-index`) after the pull, so the managed `AGENTS.md` kernel,\n  the slash commands and the MCP entry match the release that was just installed.\n  Previously only fresh installs and installer upgrades refreshed them, leaving\n  git users on old always-on rules. The step backs up before writing and is\n  best-effort: a locked or read-only config logs a warning and never fails a\n  successful update."
-    },
-    {
-      "version": "0.10.61",
-      "date": "2026-11-03",
-      "body": "### Global kernel: search with a tool, not a shell pipeline\n\n* The managed global `AGENTS.md` block now tells every project to search with the\n  `grep` / `perun_grep` tool and never with a `Select-String` / `findstr` /\n  shell-`grep` pipeline. On Windows the console rendering collapses match lines\n  into columns of `1`s or ANSI noise, so a search can look empty when it matched\n  and a misread costs a whole retry. The template change is applied by\n  `perun install` (the global block is refreshed without touching user content)."
     }
   ]
 }
