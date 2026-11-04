@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T06:41:50+00:00",
+  "generated": "2026-11-04T08:55:37+00:00",
   "releases": [
+    {
+      "version": "0.10.70",
+      "date": "2026-11-04",
+      "body": ""
+    },
     {
       "version": "0.10.69",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.61",
       "date": "2026-11-03",
       "body": "### Global kernel: search with a tool, not a shell pipeline\n\n* The managed global `AGENTS.md` block now tells every project to search with the\n  `grep` / `perun_grep` tool and never with a `Select-String` / `findstr` /\n  shell-`grep` pipeline. On Windows the console rendering collapses match lines\n  into columns of `1`s or ANSI noise, so a search can look empty when it matched\n  and a misread costs a whole retry. The template change is applied by\n  `perun install` (the global block is refreshed without touching user content)."
-    },
-    {
-      "version": "0.10.60",
-      "date": "2026-11-03",
-      "body": "### Checks hardening (audit follow-up)\n\n* Proposal verification respects the hidden-project rule: a proposal id is no\n  longer a side door around `_visible()`, so a session outside a hidden project\n  cannot verify its script.\n* Check output is treated as untrusted terminal data: OSC/CSI sequences and C0\n  control bytes are stripped, and output is decoded as UTF-8 with a console\n  codepage fallback (UTF-16 BOM included) instead of a wall of replacement\n  characters.\n* `project_checks.env` lets the operator add toolchain paths (`JAVA_HOME`,\n  `GOROOT`, `NODE_PATH`, …) per check, from the CLI (`--env KEY=VALUE`), the API\n  and the dashboard. The runner still starts from a scrubbed base; the common\n  toolchain roots are now inherited too.\n* `check_runs` keeps the newest 200 finished runs per project; a machine-wide\n  cap of 4 concurrent checks prevents several projects from starting heavy\n  checks at once. The HTTP run path is capped at 120 s (MCP 300 s, CLI 600 s),\n  and a locked/busy check store degrades to a clear \"busy\" message.\n* The dashboard disables Run while a check is running, the confirmation TTL now\n  matches the attention card (4 h), and `perun checks add --help` documents\n  `--env` and the `--` escape for a command starting with `-`.\n* `memory.search_facts()`, `search_room_facts()` and `search_docs()` no longer\n  drop a genuine multi-word lexical match when no embedding is available\n  (Ollama down, or a row stored/indexed while it was down). The 0.15 semantic\n  cutoff now applies only when the row has a comparable vector; unembedded rows\n  use a 0.02 lexical cutoff, which admits a genuine two-word match but still\n  filters a single incidental word (the `LIKE` pre-filter can admit one). This\n  was the long-standing intermittent `test_memory` failure (a two-word hit\n  scored 0.03 against a 0.15 threshold)."
     }
   ]
 }
