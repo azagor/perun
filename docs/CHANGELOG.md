@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.74
+
+*Released 2026-11-04.*
+
 ### Hardening for TUI session resume
 
 * The card **Run** button disables while it looks up the newest session, so a

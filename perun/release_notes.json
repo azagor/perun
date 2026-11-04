@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T09:19:26+00:00",
+  "generated": "2026-11-04T09:47:23+00:00",
   "releases": [
+    {
+      "version": "0.10.74",
+      "date": "2026-11-04",
+      "body": "### Hardening for TUI session resume\n\n* The card **Run** button disables while it looks up the newest session, so a\n  double click cannot launch two terminals.\n* `POST /api/runs/tui` rejects a `session_pk` that belongs to another project\n  (400), so a crafted request cannot attach another project's usage.\n* The Agent Console session picker skips sessions with no `opencode_session_id`,\n  because such a session cannot be passed to `opencode --session`.\n\n### Focus finds the terminal through its console again\n\n* On Windows 11 the shell has no live process-tree link to Windows Terminal (the\n  ConPTY host exits) and the tab title belongs to OpenCode, so Focus could report\n  \"no terminal window found\" while the terminal was open — especially once the\n  window showed another active tab or its title changed.\n* Focus now asks the console itself: a short-lived detached helper attaches to the\n  run's console and reads the console window, whose **owner** is the exact Windows\n  Terminal window (a classic console owns its window directly). This is\n  deterministic and needs no title, project name, or OpenCode service call; the\n  existing window/title search remains the fallback.\n* `ProcessTracker.run_terminal_pid()` falls back to the run row's persisted pid\n  when the in-memory launcher handle has died (e.g. `wt.exe`) instead of reporting\n  a live terminal as unattributable. Marker verification is unchanged."
+    },
     {
       "version": "0.10.73",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.65",
       "date": "2026-11-03",
       "body": "### Chat fallback and chip font\n\n* When `chat_core.js` is missing (a stale cache or a truncated deploy), the\n  permissive shim now includes `proposalIds: () => []`. Without it\n  `renderMessage` threw on exactly the degraded path the fallback exists to keep\n  alive.\n* The proposal chip uses the real monospace stack; `var(--mono)` was undefined,\n  so the declaration was invalid."
-    },
-    {
-      "version": "0.10.64",
-      "date": "2026-11-03",
-      "body": "### The exact proposal is visible and reachable\n\n* The Shared tab now shows each proposal's `prop_…` id as a copy chip, so a chat\n  reference can be matched to the exact row (and copied back into the room).\n* **Open in project** now really lands on that row: the focus ran before the card\n  was inserted into the DOM, so the lookup found nothing and the pending id was\n  consumed. It focuses after insertion, re-renders when the Shared tab is already\n  open and the card is still loading, expands the completed section, and scrolls\n  and flashes the row. Chip status lookups are cached for the chat re-renders."
     }
   ]
 }
