@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T23:50:28+00:00",
+  "generated": "2026-11-04T23:51:33+00:00",
   "releases": [
+    {
+      "version": "0.11.3",
+      "date": "2026-11-05",
+      "body": "### PerunChat prompt parity\n\n* The `perunchat_chat.md` tool list now names `perun-proposals_approve_package`\n  and `perun-proposals_reject_package`, matching the installed agent prompt and\n  the external-handoff paragraph."
+    },
     {
       "version": "0.11.2",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.10.82",
       "date": "2026-11-04",
       "body": "### Project grid shares a partial last row\n\n* The Projects grid now uses flex-wrap with growable cards, so a partly filled\n  last row (for example PerunChat alone at two columns) fills the width instead\n  of squeezing the last card into one grid column. Long names and descriptions\n  wrap instead of forcing a wider track.\n\n### Documentation refresh\n\n* README, DESIGN, and the retrievable context docs now describe TUI session\n  resume/selection, the console-handle Focus path, the shared-project **Pause\n  work** control, coroutine task composition, and the release-notes/changelog\n  placement rule."
-    },
-    {
-      "version": "0.10.81",
-      "date": "2026-11-04",
-      "body": "### Release-notes bundle correction\n\n* Regenerate the bundled release notes so the v0.10.80 update card has content;\n  the v0.10.80 section was empty when that package was built."
     }
   ]
 }
