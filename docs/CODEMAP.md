@@ -193,7 +193,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `analyze_impact()` (transitive affected-project list ordered by depth),
   `get_deploy_plan()` (ordered deploy checklist with auto-deploy filtering).
 * Sessions: `create_session()`, `get_session()`, `find_session_by_opencode()`,
-  `update_session()`, `list_sessions()`, `delete_session()`.
+  `update_session()`, `list_sessions()`, `session_origins()` (session id -> whether
+  its first linked run was a TUI/standalone run; absent means no run evidence),
+  `delete_session()`.
 * Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`,
   `list_active_runs()` (queued/running runs joined with their project — the data
   behind the dashboard storm layer).
@@ -1569,6 +1571,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   composition, unit-testable) and `buildCoroutinePrompt()` (the same idea for a
   headless coroutine: the extra prompt first, then structured `[Task: …]` blocks;
   skill tasks are not emitted as TUI slash commands).
+* `web/js/session_pick.js` — pure session-choice rules, loaded before
+  `perun.js`: `isResumeCandidate(session)` (`tui !== false`; unknown/legacy is
+  resumable), `latestResumeCandidate(sessions)` (the newest chat), and
+  `originLabel(session)` (`TUI chat` / `headless run` / empty). Keeps the card's
+  fast Run off machine-created sessions; the caret picker still offers them.
 * `web/js/chat_core.js` — pure dashboard-chat decisions, moved out of
   `perun.js` so `node --test` can cover them: `shouldRender(existing, msg,
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames),
@@ -1589,8 +1596,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   **Run** for no run and **Stop** for any active run (a headless cancel, or closing
   the TUI terminal Perun opened via `/api/runs/{uid}/cancel`), plus
   `runControlAttr(run)`. `runMenuSpec(run)` is the idle card's caret: the main
-  Run resumes the latest project session, while the caret starts a new session or
-  opens the existing-session picker. `focusControlSpec(run)` gates the Focus
+  Run resumes the latest **TUI chat** (`session_pick.js` skips a session whose
+  first run was headless), while the caret starts a new session or
+  opens the existing-session picker (which labels headless runs). `focusControlSpec(run)` gates the Focus
   button to a tracked TUI run, and `visibleRuns(runs, projects)` drops runs whose
   project the dashboard may not list (the hidden control plane on an installed
   copy).
@@ -1905,6 +1913,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   no hardcoded Run button, and that it uses the module's Focus and
   `visibleRuns` gates (with safe fallbacks for a stale cached module); skips
   when `node` is unavailable.
+* `test_js_session_pick.py` - runs `node web/js/session_pick.test.js` and asserts
+  `session_pick.js` loads before `perun.js`; skips when `node` is unavailable.
+* `web/js/session_pick.test.js` - the node suite for `session_pick.js`: unknown
+  and TUI sessions are resumable, a headless-only session is not, the newest
+  candidate wins, and origin labels are stable.
 * `web/js/card_controls.test.js` - the `node --test` suite for
   `card_controls.js`: a working card never yields the Run control, a headless run
   is stoppable, a standalone TUI run is stoppable too (Stop closes its terminal),

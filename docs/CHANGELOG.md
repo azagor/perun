@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Resume skips machine-created sessions
+
+* `GET /api/projects/{slug}/sessions` now reports `tui` per session: `true` when
+  the session's **first** linked run was a TUI launch, `false` when it was a
+  headless job, and `null` when there is no run evidence (manual/legacy). A later
+  resume never flips a headless session into a chat.
+* The card's main **Run** resumes the newest TUI/unknown session and starts a
+  fresh one when only headless sessions exist. The caret picker and the Agent
+  Console list every session with a `TUI chat` / `headless run` label, and the
+  console default skips headless sessions.
+* This keeps a machine session (including one created by an old run with a
+  malformed instruction prompt) from being reopened as if it were the
+  operator's chat.
 
 ## v0.10.75
 

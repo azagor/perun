@@ -785,7 +785,7 @@ const CardControls = window.CardControls || {
         ? { kind: 'stop', uid: run.run_uid || '', cls: 'btn sm danger', attr: 'data-stop',
             label: '\u25a0 Stop', title: 'Cancel this run' }
         : { kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
-            label: '\u25b6 Run', title: "Resume the latest session (use the caret for a new or other session)" }),
+            label: '\u25b6 Run', title: "Resume the latest TUI chat (use the caret for a new or other session)" }),
     runMenuSpec: (run) => (run ? null : {
         kind: 'run-menu', uid: '', cls: 'btn sm ghost', attr: 'data-tui-menu',
         label: '\u25be', title: 'Start a new session or choose an existing one',
@@ -801,6 +801,20 @@ const CardControls = window.CardControls || {
 };
 if (!window.CardControls) {
     console.error('perun: card_controls.js did not load; card actions are degraded');
+}
+
+/* Session-choice rules come from js/session_pick.js (loaded just before this
+   file). If it is missing, keep the safe rule: unknown/legacy sessions are
+   resumable, a headless-only session is not auto-resumed. */
+const SessionPick = window.SessionPick || {
+    isResumeCandidate: (s) => !!s && s.tui !== false,
+    latestResumeCandidate: (sessions) => (sessions || [])
+        .find((s) => !!s && s.tui !== false) || null,
+    originLabel: (s) => (s && s.tui === false ? 'headless run'
+        : (s && s.tui === true ? 'TUI chat' : '')),
+};
+if (!window.SessionPick) {
+    console.error('perun: session_pick.js did not load; session labels are degraded');
 }
 
 function runControlButton(spec) {
@@ -1450,11 +1464,13 @@ function openResumedSession(p, session) {
 }
 
 async function resumeLatestProjectTui(p) {
-    // The fast path: the newest session for this project, or a fresh one when
-    // the project has none yet.
+    // The fast path: the newest **TUI chat**, or a fresh session when the only
+    // sessions were created by headless jobs. A machine session stays available
+    // through the caret's explicit picker.
     if (!p || tuiLaunchInFlight.has(p.slug)) return;
     const sessions = await fetchProjectSessions(p);
-    if (sessions.length) return openResumedSession(p, sessions[0]);
+    const latest = SessionPick.latestResumeCandidate(sessions);
+    if (latest) return openResumedSession(p, latest);
     return openProjectTui(p, {});
 }
 
@@ -1462,9 +1478,10 @@ function chooseProjectSession(p, sessions) {
     const body = el('div');
     const list = el('div', { class: 'list' });
     for (const session of sessions) {
+        const origin = SessionPick.originLabel(session);
         const row = el('div', { class: 'list-row' },
             `<span class="grow"><div class="msg truncate">${esc(session.title || '(untitled)')}</div>
-             <div class="meta">${esc(timeAgo(session.updated_at))} · ${esc(session.status || '')} · ${esc(session.opencode_session_id || '')}</div></span>`);
+             <div class="meta">${esc(timeAgo(session.updated_at))} · ${esc(session.status || '')}${origin ? ' · ' + esc(origin) : ''} · ${esc(session.opencode_session_id || '')}</div></span>`);
         const resume = el('button', { class: 'btn sm primary' }, 'Resume');
         resume.addEventListener('click', () => {
             closeModal();
@@ -1482,7 +1499,7 @@ function chooseProjectSession(p, sessions) {
 
 async function openTuiMenu(p) {
     const sessions = await fetchProjectSessions(p);
-    const latest = sessions[0];
+    const latest = SessionPick.latestResumeCandidate(sessions);
     const body = el('div');
     const add = (label, desc, cls, onClick) => {
         const row = el('button', {
@@ -4017,14 +4034,19 @@ function mountConsole(host, initial) {
                 // A session without an OpenCode id cannot be resumed: there is
                 // nothing to pass to `opencode --session`.
                 if (!String(s.opencode_session_id || '').trim()) continue;
-                const o = el('option', { value: s.id }, esc(`${(s.title || '(untitled)').slice(0, 40)} · ${timeAgo(s.updated_at)}`));
+                const origin = SessionPick.originLabel(s);
+                const label = `${(s.title || '(untitled)').slice(0, 40)} · ${timeAgo(s.updated_at)}`
+                    + (origin ? ` · ${origin}` : '');
+                const o = el('option', { value: s.id }, esc(label));
                 o.dataset.oc = s.opencode_session_id || '';
+                o.dataset.tui = s.tui === false ? 'false' : (s.tui === true ? 'true' : '');
                 sel.appendChild(o);
             }
-            // Default to resuming the latest real session; "New session" stays
-            // the first, explicit choice.
+            // Default to the latest resumable session (a headless-only one is
+            // listed but never preselected); "New session" stays the first,
+            // explicit choice.
             const latest = [...sel.options].find(
-                (o) => o.dataset && o.dataset.oc);
+                (o) => o.dataset && o.dataset.oc && o.dataset.tui !== 'false');
             if (latest) sel.value = latest.value;
         } catch (_) { /* ignore */ }
         await loadProjectTasks();

@@ -1155,6 +1155,30 @@ def list_sessions(project_id: int, limit: int = 100) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def session_origins(project_id: int) -> dict[int, bool]:
+    """Map session id -> whether its **first** run was a TUI (standalone).
+
+    A resume run is standalone too, but it can never be the first run that used
+    an existing session, so a session created by a headless job stays headless.
+    Sessions with no linked run are absent from the map (unknown origin); the
+    dashboard treats those as safe to resume.
+    """
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT r.session_pk AS pk, r.standalone AS standalone
+               FROM runs r
+               JOIN (SELECT session_pk, MIN(id) AS first_id
+                     FROM runs
+                     WHERE project_id=? AND session_pk IS NOT NULL
+                     GROUP BY session_pk) f
+                 ON r.id = f.first_id""",
+            (project_id,),
+        )
+    return {int(r["pk"]): bool(r["standalone"])
+            for r in rows if r["pk"] is not None}
+
+
 def delete_session(pk: int) -> None:
     with db.db() as conn:
         conn.execute("DELETE FROM sessions WHERE id=?", (pk,))

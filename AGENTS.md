@@ -219,14 +219,16 @@ with `python -m perun project-roots --add <name> <path>`.
   closing it by hand), including a nested `opencode serve` shared with other
   sessions. Telegram's `/stop` and `/cancel` take the same path (bridge →
   `ORCH.cancel` + `ProcessTracker.terminate`). Sweep the run when the pid is gone
-  (age window only as a fallback). **Run resumes the latest session by default**
+  (age window only as a fallback). **Run resumes the latest TUI chat by default**
   (`opencode --session <id>`); the card's caret starts a new session or picks
-  another, and the Agent Console picker defaults to the latest. A repeated Run
-  must not silently create a new session. **Focus resolves the window through the
-  run's console handle** (a detached `AttachConsole` helper; the pseudoconsole's
-  owner is the exact Windows Terminal window), never by title alone. `AttachConsole`
-  is process-wide: it must never run inside the server, and the cached window is
-  keyed by `(pid, run_uid)`.
+  another, and the Agent Console picker defaults to the latest chat. **A session
+  whose first run was headless (a coroutine, a one-off job) is never
+  auto-resumed**; it stays explicitly selectable and is labeled `headless run`.
+  A repeated Run must not silently create a new session. **Focus resolves the
+  window through the run's console handle** (a detached `AttachConsole` helper;
+  the pseudoconsole's owner is the exact Windows Terminal window), never by title
+  alone. `AttachConsole` is process-wide: it must never run inside the server,
+  and the cached window is keyed by `(pid, run_uid)`.
 * **A working card never offers Run.** The first card action comes from
   `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for *any*
   active run (headless cancel, or closing the TUI terminal Perun opened). A

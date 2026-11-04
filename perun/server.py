@@ -1993,7 +1993,14 @@ def api_index_project(slug: str) -> dict[str, Any]:
 @app.get("/api/projects/{slug}/sessions")
 def api_project_sessions(slug: str) -> dict[str, Any]:
     project = _project_or_404(slug)
-    return _ok(sessions=registry.list_sessions(project["id"]))
+    sessions = registry.list_sessions(project["id"])
+    # ``tui`` is True when the session's first run was a TUI launch, False when
+    # it was a headless job, and None when there is no run evidence (manual
+    # sessions / older data). The dashboard never auto-resumes False.
+    origins = registry.session_origins(project["id"])
+    for session in sessions:
+        session["tui"] = origins.get(int(session["id"]))
+    return _ok(sessions=sessions)
 
 
 @app.post("/api/projects/{slug}/session")
@@ -2976,6 +2983,9 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 status_code=400,
                 detail="session_pk does not belong to this project",
             )
+        # Touch the session so a resumed chat becomes the newest for the next
+        # Run (and the picker), not whichever machine run happened to finish last.
+        _registry.update_session(session_pk, status="active")
     _registry.create_run(
         run_uid, project["id"], prompt,
         model=model, model_explicit=bool(model),

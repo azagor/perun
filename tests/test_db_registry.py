@@ -239,6 +239,27 @@ def test_session_lifecycle():
     assert registry.get_session(s["id"]) is None
 
 
+def test_session_origins_follow_the_first_run():
+    """A later resume must not turn a headless-created session into a TUI chat."""
+    p = registry.add_project("Origins", r"C:\origins")
+    tui = registry.create_session(p["id"], "oc-tui")
+    head = registry.create_session(p["id"], "oc-head")
+    manual = registry.create_session(p["id"], "oc-manual")
+    registry.create_run("origin-tui", p["id"], "chat",
+                        standalone=True, session_pk=tui["id"])
+    registry.create_run("origin-head", p["id"], "job",
+                        standalone=False, session_pk=head["id"])
+    # The resume run is standalone, but it is not the first run using head.
+    registry.create_run("origin-resume", p["id"], "Resumed: job",
+                        standalone=True, session_pk=head["id"])
+
+    origins = registry.session_origins(p["id"])
+
+    assert origins[tui["id"]] is True
+    assert origins[head["id"]] is False
+    assert manual["id"] not in origins
+
+
 def test_run_lifecycle():
     p = registry.add_project("P", r"C:\p")
     run = registry.create_run("abc123", p["id"], "do a thing",

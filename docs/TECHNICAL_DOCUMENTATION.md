@@ -732,14 +732,18 @@ OpenCode's own project defaults (including the values mirrored into
 `opencode.json` by `sync_opencode_config()`) — the TUI cannot be told
 `--model`/`--agent` directly.
 
-**Session choice.** The project card's main **Run** resumes the latest OpenCode
-session for that project (`opencode --session <id>`) — the fast path; the caret
+**Session choice.** The project card's main **Run** resumes the latest **TUI
+chat** for that project (`opencode --session <id>`) - the fast path; the caret
 next to it starts a **new** session or opens a picker of the project's existing
-sessions. A project with no sessions starts fresh. The Agent Console's session
-picker defaults to the latest session and keeps **New session** as the first,
-explicit choice; the TUI run record carries `opencode_session_id` and
-`session_pk` so Finish captures the session's usage. **Stop is unchanged**: it
-closes the terminal Perun opened, which ends every session in that terminal.
+sessions. A session whose **first run was headless** (a coroutine, a one-off job)
+is never auto-resumed: it stays explicitly selectable and is labeled
+"headless run", because resuming it would drop the operator into a machine
+prompt. Sessions with no run evidence (manual or older data) are treated as
+chats. A project with no resumable session starts fresh. The Agent Console's
+session picker defaults to the latest resumable session and keeps **New session**
+as the first, explicit choice; the TUI run record carries `opencode_session_id`
+and `session_pk` so Finish captures the session's usage. **Stop is unchanged**:
+it closes the terminal Perun opened, which ends every session in that terminal.
 
 `--model` is passed whenever a non-empty model was resolved (so `model_explicit`
 is `1`); `--agent` is passed only when an agent value is set. With `cwd` set to the
@@ -1030,7 +1034,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | PATCH | `/api/projects/{slug}` | update fields; when `model`/`agent`/`agent_models` change, also mirrors them into the project's `opencode.json[c]` and returns the result in `opencode_config` |
 | DELETE | `/api/projects/{slug}` | unregister (refuses the control project) |
 | POST | `/api/projects/{slug}/index` | sync manifest, then index docs |
-| GET | `/api/projects/{slug}/sessions` | sessions |
+| GET | `/api/projects/{slug}/sessions` | sessions, each with `tui` (`true` = the first run was a TUI launch, `false` = headless-only, `null` = no run evidence/manual); the dashboard never auto-resumes `false` |
 | POST | `/api/projects/{slug}/session` | start an OpenCode session for this project; `prompt` is optional |
 | DELETE | `/api/sessions/{pk}` | delete a session |
 | GET | `/api/projects/{slug}/activity` | project activity |

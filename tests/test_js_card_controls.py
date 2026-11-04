@@ -102,3 +102,13 @@ def test_terminal_launches_are_single_flight_and_finalized_on_failure():
     assert "tuiLaunchInFlight.delete(p.slug);" in src
     assert "if (!opened)" in src
     assert "await api(`/api/runs/${runUid}/finish`" in src
+
+
+def test_the_resume_path_skips_headless_sessions():
+    """A machine-created session must not be auto-resumed as a chat."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "SessionPick.latestResumeCandidate" in src
+    assert "SessionPick.originLabel" in src
+    assert "o.dataset.tui !== 'false'" in src
+    # A stale cached session_pick.js must not crash the resume path.
+    assert "latestResumeCandidate: (sessions) =>" in src

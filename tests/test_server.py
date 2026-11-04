@@ -2911,6 +2911,7 @@ def test_a_tui_run_can_resume_an_existing_session(client, tmp_path):
     project = _check_project(tmp_path, "tui-resume")
     session = registry.create_session(
         project["id"], "ses_resume", title="Earlier chat")
+    registry.update_session(session["id"], status="error")
 
     r = client.post("/api/runs/tui", json={
         "project": project["slug"],
@@ -2923,6 +2924,8 @@ def test_a_tui_run_can_resume_an_existing_session(client, tmp_path):
     run = r.json()["run"]
     assert run["opencode_session_id"] == "ses_resume"
     assert run["session_pk"] == session["id"]
+    # Resuming touches the session (it is the newest chat for the next Run).
+    assert registry.get_session(session["id"])["status"] == "active"
 
 
 def test_a_tui_run_cannot_resume_another_projects_session(client, tmp_path):
@@ -2942,6 +2945,26 @@ def test_a_tui_run_cannot_resume_another_projects_session(client, tmp_path):
 
     assert r.status_code == 400, r.text
     assert "does not belong to this project" in r.json()["detail"]
+
+
+def test_the_sessions_endpoint_marks_headless_only_sessions(client, tmp_path):
+    from perun import registry
+
+    project = _check_project(tmp_path, "session-origins")
+    tui = registry.create_session(project["id"], "ses_tui", title="chat")
+    head = registry.create_session(project["id"], "ses_head", title="job")
+    manual = registry.create_session(project["id"], "ses_manual", title="manual")
+    registry.create_run("sess-tui-run", project["id"], "chat",
+                        standalone=True, session_pk=tui["id"])
+    registry.create_run("sess-head-run", project["id"], "job",
+                        standalone=False, session_pk=head["id"])
+
+    body = client.get(f"/api/projects/{project['slug']}/sessions").json()
+    by_id = {s["id"]: s for s in body["sessions"]}
+
+    assert by_id[tui["id"]]["tui"] is True
+    assert by_id[head["id"]]["tui"] is False
+    assert by_id[manual["id"]]["tui"] is None
 
 
 def test_a_headless_run_cannot_claim_another_projects_session(client, tmp_path):

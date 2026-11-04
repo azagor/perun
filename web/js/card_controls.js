@@ -35,7 +35,7 @@
             return {
                 kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
                 label: '\u25b6 Run',
-                title: "Resume the latest session (use the caret for a new or other session)",
+                title: "Resume the latest TUI chat (use the caret for a new or other session)",
             };
         }
         return {
