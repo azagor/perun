@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Equal-height project cards
+
+* Every project card now receives the tallest card's height as well as one
+  computed width, so a card on a shorter row (PerunChat alone) is the same size
+  as the first-row cards. Actions are pinned to the card bottom; the height is
+  recomputed on render, resize and presence updates.
 
 ## v0.10.85
 

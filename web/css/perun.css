@@ -135,6 +135,7 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
     flex: 0 1 var(--proj-card-w, 310px);
     min-width: 0;
     max-width: var(--proj-card-w, 310px);
+    min-height: var(--proj-card-h, 0);
 }
 .grid.two-col { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 
@@ -163,7 +164,7 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 .num.warn, .warn { color: var(--amber); }
 
 /* ---------- project card ---------- */
-.proj-card { position: relative; }
+.proj-card { position: relative; display: flex; flex-direction: column; }
 .proj-card .pc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .proj-card .pc-top > div:first-child { min-width: 0; }
 .proj-card .pc-flags { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
@@ -171,7 +172,7 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 .proj-card .pc-path { font-size: .74rem; color: var(--text-muted); word-break: break-all; margin-top: 2px; }
 .proj-card .pc-desc { color: var(--text-secondary); font-size: .85rem; margin-top: 10px; min-height: 2.4em; overflow-wrap: anywhere; }
 .proj-card .pc-meta { display: flex; gap: 14px; margin-top: 12px; font-size: .78rem; color: var(--text-secondary); flex-wrap: wrap; }
-.proj-card .pc-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.proj-card .pc-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 14px; flex-wrap: wrap; }
 
 /* ---------- badges ---------- */
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: .68rem; letter-spacing: .6px; text-transform: uppercase; border: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap; }

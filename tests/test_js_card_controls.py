@@ -141,6 +141,10 @@ def test_the_project_grid_shares_a_partial_last_row():
     # The maximum column count keeps the previous first-row card size.
     assert "const columns = Math.min(maxCols, count)" in js
     assert "maxCard = 520" in js
+    # Every card is the same height, with actions pinned to the bottom.
+    assert "--proj-card-h" in css and "--proj-card-h" in js
+    assert "margin-top: auto" in css
+    assert "getBoundingClientRect().height" in js
 
 
 def test_an_uncertain_terminal_launch_is_not_finalized():

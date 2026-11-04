@@ -860,6 +860,8 @@ function applyCardStates() {
         }
         syncRunControl(card, run);
     });
+    // A banner or a new run control changes the natural height; equalize again.
+    document.querySelectorAll('.proj-grid').forEach(layoutProjectGrid);
 }
 
 /* Keep a card's run control in step with *run* (null = idle) without recreating
@@ -1377,6 +1379,14 @@ function layoutProjectGrid(grid) {
     const available = width - (columns - 1) * gap;
     const card = Math.min(width, maxCard, Math.floor(available / columns));
     grid.style.setProperty('--proj-card-w', `${card}px`);
+    // Flex lines size independently; give every card the tallest card's height
+    // so a short row (PerunChat alone) matches the first row.
+    grid.style.removeProperty('--proj-card-h');
+    let tallest = 0;
+    grid.querySelectorAll(':scope > .proj-card').forEach((node) => {
+        tallest = Math.max(tallest, node.getBoundingClientRect().height);
+    });
+    if (tallest) grid.style.setProperty('--proj-card-h', `${Math.ceil(tallest)}px`);
 }
 
 function projectGrid(projects) {
