@@ -827,6 +827,11 @@ def upload_external_package(
     if (int(proposal.get("claim_expires_at") or 0)
             and int(proposal["claim_expires_at"]) < int(time.time())):
         raise ValueError("the claim has expired; claim the proposal again")
+    if proposal.get("package_state") == "pending":
+        return {
+            "ok": False,
+            "reason": "a package is already awaiting approval; reject it before uploading another",
+        }
 
     project = registry.get_project(proposal["project_id"])
     if not project:

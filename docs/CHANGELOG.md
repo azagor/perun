@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Package replacement guard
+
+* A staged package awaiting approval can no longer be silently replaced by a
+  second upload. `upload_external_package()` refuses while
+  `package_state='pending'`; the claimant must `reject_package` first (or let the
+  24 h window expire). This closes a TOCTOU gap where an executor could swap the
+  archive between the operator reviewing it and clicking Approve.
 
 ## v0.11.0
 

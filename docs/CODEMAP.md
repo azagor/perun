@@ -1300,7 +1300,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `project_chats.room_id` when the envelope carries none.
   **Package handoff:** `upload_external_package()` validates and *stages* the
   archive (`package_state='pending'`, digest, manifest, preview, 24 h window),
-  returning `package_pending` instead of writing. `approve_external_package()`
+  returning `package_pending` instead of writing; a second upload is refused
+  while a package is pending (reject or let it expire first). `approve_external_package()`
   enforces the second-approval rules (operator, rw trusted peer/owner, or
   `policy_auto_approve`; never the requester/executor), CAS-moves
   `claimed → executing` with both expiry windows, and calls

@@ -1927,3 +1927,26 @@ def test_local_delete_postcondition_is_enforced(tmp_path):
     assert result["status"] == "failed"
     assert "POSTCONDITION FAILED" in result["result"]
     assert (project["path"] / "gone.py").exists()
+
+
+def test_pending_package_cannot_be_replaced_silently(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal, staged = _stage(project, action="edit", target=target,
+                              entries={"api.py": b"first"})
+    digest = staged["digest"]
+
+    second = action_proposals.upload_external_package(
+        proposal["id"], "frambo", _zip_bytes({"api.py": b"second"}), owner="owner")
+
+    assert second["ok"] is False
+    assert "reject it before uploading" in second["reason"]
+    current = action_proposals.get(proposal["id"])
+    assert current["package_state"] == "pending"
+    assert current["package_digest"] == digest
+    # The approved artifact is still the first archive, not the silent second.
+    result = action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+    assert result["status"] == "executed"
+    assert (project["path"] / "api.py").read_text() == "first"
