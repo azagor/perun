@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T06:38:41+00:00",
+  "generated": "2026-11-04T06:41:50+00:00",
   "releases": [
+    {
+      "version": "0.10.69",
+      "date": "2026-11-04",
+      "body": "### Proposal cards leave the inbox when the proposal is decided\n\n* `attention.reconcile_proposals()` — run by the watcher — closes an approval\n  card once its proposal is `approved`/`claimed`/`executing`/`executed`,\n  `rejected`, or no longer exists. The inbox and the proposal board can no longer\n  disagree about what is still waiting, which was the root of the “nothing\n  pending” reply while eleven approved proposals sat unexecuted."
+    },
     {
       "version": "0.10.68",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.60",
       "date": "2026-11-03",
       "body": "### Checks hardening (audit follow-up)\n\n* Proposal verification respects the hidden-project rule: a proposal id is no\n  longer a side door around `_visible()`, so a session outside a hidden project\n  cannot verify its script.\n* Check output is treated as untrusted terminal data: OSC/CSI sequences and C0\n  control bytes are stripped, and output is decoded as UTF-8 with a console\n  codepage fallback (UTF-16 BOM included) instead of a wall of replacement\n  characters.\n* `project_checks.env` lets the operator add toolchain paths (`JAVA_HOME`,\n  `GOROOT`, `NODE_PATH`, …) per check, from the CLI (`--env KEY=VALUE`), the API\n  and the dashboard. The runner still starts from a scrubbed base; the common\n  toolchain roots are now inherited too.\n* `check_runs` keeps the newest 200 finished runs per project; a machine-wide\n  cap of 4 concurrent checks prevents several projects from starting heavy\n  checks at once. The HTTP run path is capped at 120 s (MCP 300 s, CLI 600 s),\n  and a locked/busy check store degrades to a clear \"busy\" message.\n* The dashboard disables Run while a check is running, the confirmation TTL now\n  matches the attention card (4 h), and `perun checks add --help` documents\n  `--env` and the `--` escape for a command starting with `-`.\n* `memory.search_facts()`, `search_room_facts()` and `search_docs()` no longer\n  drop a genuine multi-word lexical match when no embedding is available\n  (Ollama down, or a row stored/indexed while it was down). The 0.15 semantic\n  cutoff now applies only when the row has a comparable vector; unembedded rows\n  use a 0.02 lexical cutoff, which admits a genuine two-word match but still\n  filters a single incidental word (the `LIKE` pre-filter can admit one). This\n  was the long-standing intermittent `test_memory` failure (a two-word hit\n  scored 0.03 against a 0.15 threshold)."
-    },
-    {
-      "version": "0.10.59",
-      "date": "2026-11-03",
-      "body": "### Checks: a bounded way to run a verification\n\n* Perun can now run a **verification command** instead of answering \"I have no\n  shell access\". Two paths exist, both deliberately narrow:\n  * **Operator-declared checks** live in Perun's own store (`perun checks add\n    <project> <name> \"<command>\"`), never in the project tree, so no room\n    message, agent tool or approved proposal can add one. `perun checks list /\n    run / remove / history` manage them; the guard MCP server exposes\n    `guard_list_checks` and `guard_run_check` (a name, never a command), and the\n    Perun MCP server exposes `perun_list_checks` and `perun_run_check`. A check\n    may pin a script's sha256 (`--pin tests/check_manifest.py`): the run is\n    refused when the reviewed file changed.\n  * **Proposal verification** (`perun_verify_proposal`) runs an *executed*\n    proposal's approved script (`.py`, `.ps1`, `.sh`, `.bat`, `.cmd`). The\n    command is derived from the target, never taken from proposal text; the\n    operator sees the exact command and sha256 in the attention card and must\n    confirm; the run is refused if the file changes after they answer.\n* The operator's confirmation is durable: `check_confirmations` remembers the\n  card, so an answer that lands after the room's short wait window is reused by\n  the next call instead of asking a second time. A confirmation is one-shot and\n  bound to the sha256 the operator saw.\n* Every run is cross-process single-flight per project, records its exit code,\n  duration and capped output in `check_runs`, logs a `check_ok` / `check_failed`\n  / `check_timeout` activity row, runs with the project root as cwd, and gets a\n  scrubbed environment (no Perun or provider credentials).\n* New HTTP endpoints (`GET/POST /api/projects/{slug}/checks`, `DELETE .../{name}`,\n  `POST .../{name}/run`, `GET .../{name}/history`) expose the same store to the\n  dashboard."
     }
   ]
 }
