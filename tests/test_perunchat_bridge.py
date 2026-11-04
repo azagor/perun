@@ -3862,3 +3862,81 @@ def test_operator_echoes_do_not_create_mention_items(settings, tmp_path, monkeyp
     bridge._raise_operator_mention(echo_frame, room)
 
     assert registry.open_attention() == []
+
+
+def test_a_replayed_operator_mention_under_a_new_id_is_one_item(
+        settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(
+            attention_enabled=True, attention_operator_names=["piotr"],
+        )),
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(bridge, "_project_binding", lambda rid: (project, {}))
+
+    base = {"room_id": room, "timestamp": 1793000000, "payload":
+            "Piotr, can you register the checks?", "sender": {"agent_id": "frambo"}}
+    bridge._raise_operator_mention({**base, "id": "msg_1"}, room)
+    bridge._raise_operator_mention({**base, "id": "msg_2"}, room)
+
+    items = registry.open_attention()
+    assert len(items) == 1
+    assert items[0]["ref"]["message_ts"] == 1793000000
+
+
+def test_the_operator_posting_under_their_own_handle_is_not_an_ask(
+        settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(
+            attention_enabled=True, attention_operator_names=["piotr"],
+        )),
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(bridge, "_project_binding", lambda rid: (project, {}))
+
+    frame = {"id": "msg_self", "room_id": room, "timestamp": 1,
+             "payload": "Piotr, can you check this?",
+             "sender": {"agent_id": "piotr"}}
+    bridge._raise_operator_mention(frame, room)
+
+    assert registry.open_attention() == []
+
+
+def test_operator_context_is_cached_between_frames(settings, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import config
+
+    project, room = _make_shared_project(tmp_path)
+    calls = {"n": 0}
+
+    def load():
+        calls["n"] += 1
+        return SimpleNamespace(attention_enabled=True,
+                               attention_operator_names=["piotr"])
+
+    monkeypatch.setattr(config.Settings, "load", staticmethod(load))
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    monkeypatch.setattr(bridge, "_project_binding", lambda rid: (project, {}))
+    calls["n"] = 0
+
+    bridge._raise_operator_mention(
+        {"id": "c1", "room_id": room, "timestamp": 1,
+         "payload": "Piotr, one", "sender": {"agent_id": "frambo"}}, room)
+    bridge._raise_operator_mention(
+        {"id": "c2", "room_id": room, "timestamp": 2,
+         "payload": "Piotr, two", "sender": {"agent_id": "frambo"}}, room)
+
+    assert calls["n"] == 1

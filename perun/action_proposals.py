@@ -322,6 +322,30 @@ def get(proposal_id: str) -> dict[str, Any] | None:
         return _row_to_dict(row) if row else None
 
 
+def statuses(proposal_ids: list[str]) -> dict[str, str]:
+    """Return ``{proposal_id: status}`` for a batch, in one connection.
+
+    The inbox reconciliation used to call :func:`get` per open card, which opens
+    a connection (and runs the expiry sweep) for each. Chunked to stay below the
+    SQLite variable limit.
+    """
+    ids = [str(p).strip() for p in proposal_ids if str(p or "").strip()]
+    out: dict[str, str] = {}
+    if not ids:
+        return out
+    with db.db() as conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            for row in db.rows(
+                conn,
+                f"SELECT id, status FROM action_proposals WHERE id IN ({placeholders})",
+                tuple(chunk),
+            ):
+                out[str(row["id"])] = str(row["status"])
+    return out
+
+
 def list_by_project(project_id: int, status: str | None = None) -> list[dict[str, Any]]:
     expire_stale()
     with db.db() as conn:

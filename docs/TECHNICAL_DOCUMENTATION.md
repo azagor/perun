@@ -1622,7 +1622,9 @@ five-minute `/api/debug/location` sweep, and creates one item per request id.
 `_reconcile()` closes an item whose request vanished (answered in the TUI);
 `attention.reconcile_proposals()` closes a proposal card once the proposal is
 approved, claimed, executing, executed, rejected or gone, so the inbox cannot
-keep asking for a decision that was already made.
+keep asking for a decision that was already made. It resolves every target in
+one query and closes the batch in one transaction, so the sweep stays cheap even
+with many cards.
 Detection is **event-driven by default** (`attention_ingest_events`): the watcher
 subscribes to the shared `EventHub` as a global subscriber — a permission can
 arrive for a session nobody admitted yet — and a `permission.asked` /
@@ -1739,8 +1741,10 @@ their Telegram, and the reply is posted back into the room. The same derivation
 drives `_raise_operator_mention`, so there is no per-project configuration. A
 mention creates a durable `room` item **even when Perun also answers** — an ask
 like “register these two checks” is a human task, not a conversational reply that
-may scroll away. The operator's own messages, Perun's echo and object payloads
-are ignored. The notice names *this project's* operator and says that an agent
+may scroll away. The item is keyed by a fingerprint of room + sender + timestamp
++ text, so a replay under a fresh frame id does not duplicate it; the operator's
+own handle, Perun's echo and object payloads are ignored. Settings and operator
+names are cached for 30 s so a busy room does not reload the config per frame. The notice names *this project's* operator and says that an agent
 answering to a different human reaches that person through its own system.
 Perun's own room agent can also call `perun_ask_operator` (allowed in the
 `perunchat` agent) and answer with the operator's reply.
@@ -1959,7 +1963,9 @@ everything, so a stale cache never blanks the log.
 
 **Structured payloads.** `payloadKey()` (in `chat_core.js`) gives an object
 payload a real identity, so two different objects are not collapsed as
-`[object Object]` and a replay is still deduped. `chatPayloadView()` renders a
+`[object Object]` and a replay is still deduped. A key above 200 KB collapses to
+`len:<n>:<fnv1a hash>` so a huge frame does not keep a megabyte-long identity
+alive in the log. `chatPayloadView()` renders a
 summary (content type or `type`/`kind`, proposal id, status, action) and a
 collapsible pretty-printed JSON block; if the object names a `prop_…`, a proposal
 chip is added so the operator can open or manage it. Reply previews use the same

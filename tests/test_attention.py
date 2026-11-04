@@ -914,3 +914,35 @@ def test_poll_once_reconciles_proposal_cards_when_delivery_is_disabled(
     attention_watcher.poll_once(api=SimpleNamespace())
 
     assert registry.get_attention(item["id"])["state"] == "approved"
+
+
+def test_reconcile_closes_several_proposal_cards_in_one_pass(tmp_path):
+    from perun import db, registry
+
+    project = registry.add_project("att-batch", str(tmp_path / "att-batch"))
+    ids = ["prop_aaa111bbb222", "prop_ccc333ddd444", "prop_eee555fff666"]
+    with db.db() as conn:
+        for proposal_id in ids:
+            conn.execute(
+                "INSERT INTO action_proposals (id, project_id, requester, action_type, "
+                "intent, targets, details, status, expires_at, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (proposal_id, project["id"], "frambo", "edit", "do work", "[]",
+                 "{}", "pending", 9_999_999_999,
+                 registry.now_iso(), registry.now_iso()),
+            )
+    items = [
+        attention.request(project, "proposal", proposal_id, "proposal",
+                          f"approve {proposal_id}?")
+        for proposal_id in ids
+    ]
+    with db.db() as conn:
+        conn.execute("UPDATE action_proposals SET status='approved' WHERE id=?",
+                     (ids[0],))
+        conn.execute("UPDATE action_proposals SET status='rejected' WHERE id=?",
+                     (ids[1],))
+
+    assert attention.reconcile_proposals() == 2
+    assert registry.get_attention(items[0]["id"])["state"] == "approved"
+    assert registry.get_attention(items[1]["id"])["state"] == "rejected"
+    assert registry.get_attention(items[2]["id"])["state"] == "open"

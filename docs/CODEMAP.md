@@ -238,7 +238,9 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   replyable": a digest list), `attention_delivered_message()` (the
   message id that last carried an item to a chat), `open_attention_of_kind()` (unbounded-by-page reconcile), `record_attention_delivery()`,
   `attention_deliveries()`, `undelivered_attention(within_minutes=…)`,
-  `close_attention()` (conditional on `state='open'`), `update_attention_ref()`
+  `close_attention()` (conditional on `state='open'`), `close_attention_many()`
+  (the same CAS for a batch in one transaction, used by proposal
+  reconciliation), `update_attention_ref()`
   (one atomic `json_set`, so a toggle and a delivery cannot clobber each other),
   `set_attention_delivery()`, `touch_attention_waiter()` /
   `clear_attention_waiter()` (the timeout path drops its heartbeat before
@@ -1215,7 +1217,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   and non-blocking `start_execution`, `claim_execution`/`revoke_execution_claim`
   for the external rw handoff, startup `reconcile_interrupted`, post-run audit
   enforcement, State Digests for the project chat, and activity logging
-  (`proposal_created`/`approved`/`rejected`/`cancelled`/`executed`). `cancel()`
+  (`proposal_created`/`approved`/`rejected`/`cancelled`/`executed`). `statuses()`
+  resolves a batch of ids to statuses for the inbox sweep without a connection
+  per proposal. `cancel()`
   withdraws an approved-but-unclaimed proposal (`approved → cancelled`, reason in
   `result`) and is restricted to the requester or the project owner,
   because `reject()` only accepts `pending`. `approve()` stores

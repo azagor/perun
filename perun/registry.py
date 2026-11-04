@@ -1800,6 +1800,32 @@ def close_attention(attention_id: int, state: str, *, answer: str = "",
         return bool(cur.rowcount)
 
 
+def close_attention_many(items: list[tuple[int, str, str]]) -> int:
+    """Close several open items in one transaction; returns rows actually closed.
+
+    Used by the proposal-card reconciliation. An item already answered elsewhere
+    is skipped by the ``state='open'`` predicate, exactly like
+    :func:`close_attention`.
+    """
+    if not items:
+        return 0
+    for _attention_id, state, _answer in items:
+        if state not in ATTENTION_CLOSED:
+            raise ValueError(f"unknown attention state: {state}")
+    ts = now_iso()
+    closed = 0
+    with db.db() as conn:
+        for attention_id, state, answer in items:
+            cur = conn.execute(
+                """UPDATE attention_requests
+                   SET state=?, answer=?, answered_by=?, updated_at=?, closed_at=?
+                   WHERE id=? AND state='open'""",
+                (state, answer or None, "system", ts, ts, int(attention_id)),
+            )
+            closed += cur.rowcount
+    return closed
+
+
 def update_attention_ref(attention_id: int, **fields: Any) -> dict[str, Any] | None:
     """Merge *fields* into the item's ``ref`` JSON and return the fresh row.
 

@@ -15,12 +15,30 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
+    //: Keys above this are reduced to `len:<n>:<hash>` so a huge frame does not
+    //: keep a megabyte-long identity string alive in the chat log.
+    const MAX_PAYLOAD_KEY = 200_000;
+
+    function _fnv1a(text) {
+        let hash = 0x811c9dc5;
+        for (let i = 0; i < text.length; i += 1) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193);
+        }
+        return (hash >>> 0).toString(16);
+    }
+
     /** A stable identity for a string or an object payload. */
     function payloadKey(payload) {
         if (payload == null) return '';
-        if (typeof payload === 'string') return payload;
+        if (typeof payload === 'string') {
+            if (payload.length <= MAX_PAYLOAD_KEY) return payload;
+            return `len:${payload.length}:${_fnv1a(payload)}`;
+        }
         try {
-            return JSON.stringify(payload);
+            const text = JSON.stringify(payload);
+            if (text.length <= MAX_PAYLOAD_KEY) return text;
+            return `len:${text.length}:${_fnv1a(text)}`;
         } catch (_) {
             return String(payload);
         }

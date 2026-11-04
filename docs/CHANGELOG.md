@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Operator ask dedupe and inbox batching
+
+* A mention is deduplicated by a fingerprint of room + sender + timestamp + text,
+  so a replay under a fresh frame id cannot create a second inbox item. The
+  operator's own handle is skipped, and settings/operator names are cached for
+  30 s per message burst.
+* `attention.reconcile_proposals()` now resolves proposal statuses in one query
+  and closes cards in one transaction (`action_proposals.statuses`,
+  `registry.close_attention_many`) instead of two connections per open card.
+* Payload identities above 200 KB collapse to a short `len:<n>:<hash>` key, and
+  the chat “operator asks” strip orders by the message timestamp rather than the
+  inbox row id.
 
 ## v0.10.70
 

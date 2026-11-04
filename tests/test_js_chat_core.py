@@ -83,3 +83,9 @@ def test_the_operator_inbox_is_a_page_and_surfaced_in_the_chat():
     assert "pc-needs-you" in src
     assert "loadChatNeedsYou" in src
     assert 'data-route="#/attention"' in page
+
+def test_the_chat_banner_orders_room_asks_by_message_time():
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "message_ts" in src
+    start = src.index("const items = (res.items || []).filter")
+    assert "message_ts" in src[start:start + 700]

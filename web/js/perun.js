@@ -4975,6 +4975,15 @@ async function viewPerunChat() {
             return;
         }
         const items = (res.items || []).filter((it) => it.target_kind === 'room');
+        // Message time, not row-insertion order: backfilled items are written
+        // later than the message they quote.
+        items.sort((a, b) => {
+            const at = Number((a.ref || {}).message_ts || 0)
+                || Date.parse(a.created_at || '') || 0;
+            const bt = Number((b.ref || {}).message_ts || 0)
+                || Date.parse(b.created_at || '') || 0;
+            return bt - at;
+        });
         if (!items.length) {
             host.style.display = 'none';
             host.innerHTML = '';

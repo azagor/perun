@@ -135,3 +135,14 @@ test('payloadKey is stable for strings, objects and null', () => {
     assert.equal(core.payloadKey({ a: 1 }), '{"a":1}');
     assert.equal(core.payloadKey(null), '');
 });
+
+test('a huge payload key is reduced to a short stable hash', () => {
+    const a = 'x'.repeat(200001) + 'a';
+    const b = 'x'.repeat(200001) + 'b';
+    const ka = core.payloadKey(a);
+    const kb = core.payloadKey(b);
+
+    assert.match(ka, /^len:200002:[0-9a-f]+$/);
+    assert.equal(core.payloadKey(a), ka);
+    assert.notEqual(ka, kb);
+});

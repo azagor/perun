@@ -19,6 +19,7 @@ Human operators remain in control:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -2589,6 +2590,36 @@ class PerunChatBridge:
                 names = [owner]
         return names
 
+    _MENTION_CONTEXT_TTL = 30.0
+
+    def _mention_context(self) -> tuple[bool, List[str]]:
+        """``(attention_enabled, lowercased operator names)`` for a message burst.
+
+        Every room frame asks whether it is an operator mention; loading the
+        settings file and re-deriving the names per frame is needless work in a
+        busy room. The cache is short so a settings change still lands quickly.
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_mention_context_cache", None)
+        if cached and now < cached[0]:
+            return cached[1], cached[2]
+        try:
+            settings = config.Settings.load()
+        except Exception:  # pragma: no cover - defensive
+            settings = self.settings
+        enabled = bool(getattr(settings, "attention_enabled", False))
+        names = [
+            str(n).strip().lower()
+            for n in (getattr(settings, "attention_operator_names", None) or [])
+            if str(n).strip()
+        ]
+        if not names:
+            owner = str(getattr(settings, "perun_owner_name", "") or "").strip()
+            if owner:
+                names = [owner.lower()]
+        self._mention_context_cache = (now + self._MENTION_CONTEXT_TTL, enabled, names)
+        return enabled, names
+
     def _operator_notice_text(self) -> str:
         names = self._operator_names()
         if names:
@@ -2659,14 +2690,18 @@ class PerunChatBridge:
             return
         if self._agent_id and sender.lower() == str(self._agent_id).lower():
             return
-        try:
-            settings = config.Settings.load()
-        except Exception:  # pragma: no cover - defensive
+        enabled, names = self._mention_context()
+        if not enabled or not names:
             return
-        if not getattr(settings, "attention_enabled", False):
-            return
-        names = [n.lower() for n in self._operator_names()]
-        if not names:
+        # A human client may post under their own handle (e.g. "szczepan"); that
+        # is not a new ask for the operator.
+        sender_lower = sender.lower()
+        if any(
+            sender_lower == name
+            or sender_lower.startswith(name + "-")
+            or sender_lower.startswith(name + "_")
+            for name in names
+        ):
             return
         text = frame.get("payload")
         if not isinstance(text, str) or not text.strip():
@@ -2681,14 +2716,24 @@ class PerunChatBridge:
         if not binding:
             return
         project, _cfg = binding
+        # A replay can arrive under a fresh frame id; identify the *message*
+        # (room + sender + timestamp + text), not the delivery attempt.
+        stamp = str(frame.get("timestamp") or "")
+        fingerprint = hashlib.sha1(
+            f"{room_id}|{sender_lower}|{stamp}|{text}".encode("utf-8")
+        ).hexdigest()
         try:
             from . import attention
 
             attention.request(
                 project, "room", room_id, "mention",
                 f"{sender or 'someone'}: {text[:500]}",
-                ref={"frame_id": str(frame.get("id") or ""), "room_id": room_id},
-                dedupe_key=f"room|{room_id}|{frame.get('id') or ''}",
+                ref={
+                    "frame_id": str(frame.get("id") or ""),
+                    "room_id": room_id,
+                    "message_ts": frame.get("timestamp") or "",
+                },
+                dedupe_key=f"room|{room_id}|mention|{fingerprint}",
             )
         except Exception:  # pragma: no cover - telemetry must never break the room
             logger.debug("could not raise an operator mention for %s", room_id,

@@ -1092,27 +1092,29 @@ def reconcile_proposals() -> int:
     """
     from . import action_proposals
 
-    closed = 0
-    for item in registry.open_attention_of_kind("proposal"):
-        proposal = action_proposals.get(str(item.get("target_id") or ""))
-        if not proposal:
+    items = registry.open_attention_of_kind("proposal")
+    if not items:
+        return 0
+    # Expire once, then resolve every target in one query; the old per-item
+    # ``get()`` opened two connections for every open card.
+    action_proposals.expire_stale()
+    statuses = action_proposals.statuses(
+        [str(item.get("target_id") or "") for item in items])
+    to_close: list[tuple[int, str, str]] = []
+    for item in items:
+        status = statuses.get(str(item.get("target_id") or ""))
+        if not status:
             state, reason = "cancelled", "proposal no longer exists"
+        elif status == "pending":
+            continue
+        elif status in ("approved", "claimed", "executing", "executed"):
+            state, reason = "approved", f"proposal is {status}"
+        elif status == "rejected":
+            state, reason = "rejected", f"proposal is {status}"
         else:
-            status = str(proposal.get("status") or "")
-            if status == "pending":
-                continue
-            if status in ("approved", "claimed", "executing", "executed"):
-                state = "approved"
-            elif status == "rejected":
-                state = "rejected"
-            else:
-                state = "cancelled"
-            reason = f"proposal is {status}"
-        if registry.close_attention(
-            item["id"], state, answer=reason, answered_by="system",
-        ):
-            closed += 1
-    return closed
+            state, reason = "cancelled", f"proposal is {status}"
+        to_close.append((item["id"], state, reason))
+    return registry.close_attention_many(to_close)
 
 
 def drain_outbox(limit: int = 20) -> int:
