@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.68
+
+*Released 2026-11-04.*
+
 ### Operator asks are durable, structured messages are readable, proposals show expiry
 
 * A room message that names the operator now creates a `room` attention item

@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-03T21:11:40+00:00",
+  "generated": "2026-11-04T06:38:41+00:00",
   "releases": [
+    {
+      "version": "0.10.68",
+      "date": "2026-11-04",
+      "body": "### Operator asks are durable, structured messages are readable, proposals show expiry\n\n* A room message that names the operator now creates a `room` attention item\n  **even when Perun also answers**. The PerunChat page shows an “N operator asks\n  for you” strip, and a new **Needs you** page (and nav entry) lists room\n  mentions alongside permissions, forms, proposals and handoffs; replying there\n  posts back to the exact room.\n* Structured (object) room payloads render as an expandable JSON preview with a\n  type/status summary and a proposal chip, instead of `[object Object]`. Object\n  dedupe uses a real payload key, not `String(payload)`.\n* Active proposals show their expiry in the peek, the Shared row and the chip\n  tooltip. The proposal MCP tools now return `expires_at`, and the room persona\n  treats `approved` (awaiting claim or execution) as pending — never “nothing\n  pending” while an approved proposal has no executor."
+    },
     {
       "version": "0.10.67",
       "date": "2026-11-03",
@@ -45,11 +50,6 @@
       "version": "0.10.59",
       "date": "2026-11-03",
       "body": "### Checks: a bounded way to run a verification\n\n* Perun can now run a **verification command** instead of answering \"I have no\n  shell access\". Two paths exist, both deliberately narrow:\n  * **Operator-declared checks** live in Perun's own store (`perun checks add\n    <project> <name> \"<command>\"`), never in the project tree, so no room\n    message, agent tool or approved proposal can add one. `perun checks list /\n    run / remove / history` manage them; the guard MCP server exposes\n    `guard_list_checks` and `guard_run_check` (a name, never a command), and the\n    Perun MCP server exposes `perun_list_checks` and `perun_run_check`. A check\n    may pin a script's sha256 (`--pin tests/check_manifest.py`): the run is\n    refused when the reviewed file changed.\n  * **Proposal verification** (`perun_verify_proposal`) runs an *executed*\n    proposal's approved script (`.py`, `.ps1`, `.sh`, `.bat`, `.cmd`). The\n    command is derived from the target, never taken from proposal text; the\n    operator sees the exact command and sha256 in the attention card and must\n    confirm; the run is refused if the file changes after they answer.\n* The operator's confirmation is durable: `check_confirmations` remembers the\n  card, so an answer that lands after the room's short wait window is reused by\n  the next call instead of asking a second time. A confirmation is one-shot and\n  bound to the sha256 the operator saw.\n* Every run is cross-process single-flight per project, records its exit code,\n  duration and capped output in `check_runs`, logs a `check_ok` / `check_failed`\n  / `check_timeout` activity row, runs with the project root as cwd, and gets a\n  scrubbed environment (no Perun or provider credentials).\n* New HTTP endpoints (`GET/POST /api/projects/{slug}/checks`, `DELETE .../{name}`,\n  `POST .../{name}/run`, `GET .../{name}/history`) expose the same store to the\n  dashboard."
-    },
-    {
-      "version": "0.10.58",
-      "date": "2026-11-03",
-      "body": "### Focus lookup hardening\n\n* The session-title lookup is capped at 1 s per call and cached for 30 s, so a\n  Focus click stays responsive even when the OpenCode service is slow; a failing\n  lookup simply falls back to the project-name hint.\n* `config.is_internal_path()` compares real paths, so a symlinked companion repo\n  is still recognised; the two startup sweeps are isolated, so one failing cannot\n  skip the other; and the terminal-title fallback ignores hints shorter than\n  three characters (a project named \"ai\" cannot select an \"ai-playground\"\n  terminal)."
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.67 (see §15). Manage proposals directly in the chat peek, and keep the exact row focused across polls and reloads.
+**Latest release:** v0.10.68 (see §15). Operator asks are durable inbox items, structured room payloads are previewable, and proposals show their expiry.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2580,6 +2580,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.68: Operator asks are durable inbox items, structured room payloads are previewable, and proposals show their expiry.
+
 ### 2026-11-03 — v0.10.67: Manage proposals directly in the chat peek, and keep the exact row focused across polls and reloads.
 
 ### 2026-11-03 — v0.10.66: The global proposal lookup respects hidden projects, the chat cache is bounded, and the focus regression is locked by tests.
