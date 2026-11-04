@@ -217,6 +217,13 @@ shows the project, status, intent and targets, and **Open in project** takes the
 operator straight to that row in the Shared tab. The operator never has to hunt
 for which project a chat mention belongs to.
 
+The operator can **pause and resume the project's autonomous work** from the
+Shared tab. The durable flag stops room replies, room-event coroutine triggers,
+the autonomous reviewer and policy auto-approve; in-flight runs finish, chat
+history is retained, operator-directed mentions stay durable, and explicit human
+approvals remain available. Scheduled/time-based coroutines keep their own Pause
+control, so the project flag scopes autonomy to the room.
+
 ### Context and secrets
 An agent that needs reference material calls `perun_context("<task>")` instead
 of carrying it inline; orchestrated runs get the relevant docs pre-fetched.

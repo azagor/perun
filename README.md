@@ -34,10 +34,14 @@ them all — no matter which folder you happened to open.
 
 * **One place to see everything.** A dashboard of every project, its agents,
   its sessions, its memory, and a live activity feed.
-* **Find the right terminal.** While a TUI run is active, the project card's
-  **Focus** button raises the exact terminal window Perun launched - even with
-  several terminals open. On Windows it restores a minimised window and falls
-  back to flashing the taskbar button when the OS refuses the foreground switch.
+* **Resume the right chat, and find its terminal.** The project card's **Run**
+  resumes the latest TUI chat (`opencode --session`); the caret starts a new
+  session or picks another. A session whose first run was a headless job is
+  labeled **headless run** and is never auto-resumed, so Run cannot drop you into
+  a machine prompt. While a TUI run is active, the card's **Focus** button raises
+  the exact terminal window Perun launched - even with several terminals open.
+  On Windows it restores a minimised window and falls back to flashing the
+  taskbar button when the OS refuses the foreground switch.
 * **Cross-project memory.** Facts you store and docs Perun indexes are
   searchable from any project — "which project handled the OAuth callback?".
 * **Start any agent from anywhere.** Kick off a task in `project-a` while
@@ -102,7 +106,11 @@ them all — no matter which folder you happened to open.
   Lifecycle notices (started, completed, failed, withdrawn) are posted back to the
   project chat, and completed proposals move to a collapsed-by-default list in the
   dashboard. Participant roles (`rw`/`ro`) are enforced, and approver identity
-  plus the HITL signing secret are configurable.
+  plus the HITL signing secret are configurable. The Shared tab's **Pause work**
+  control is durable: while paused the bridge posts no room replies, does not
+  feed the room to coroutine triggers, skips the autonomous review and leaves
+  policy auto-approve pending; in-flight runs finish, paused messages stay in
+  history, and operator mentions remain durable.
 * **Coroutines: scheduled and event-triggered agent jobs.** A new dashboard tab
   creates durable jobs that run an agent on an interval, a calendar/cron
   schedule, once, on demand, or when an event arrives (webhook, finished run,
@@ -117,8 +125,10 @@ them all — no matter which folder you happened to open.
   and a timeout watchdog. Pause lets the active run finish; Stop cancels it.
   A room job can post its result back into the room through a durable, redacted
   outbox and suppress the bridge's conversational reply, so the room gets one
-  answer. Every fire is a normal Perun run, so streaming, cancellation and
-  restart recovery are the same as everywhere else.
+  answer. A project job can compose one or more of the project's saved tasks into
+  its prompt (a skill task becomes a structured instruction for the headless run,
+  not a TUI slash command). Every fire is a normal Perun run, so streaming,
+  cancellation and restart recovery are the same as everywhere else.
 * **Robust provider and MCP discovery.** Perun merges providers and MCP servers
   from every known OpenCode config directory (including `%APPDATA%`/`%LOCALAPPDATA%`
   on Windows) and tolerates wrapped `opencode auth list` output, so providers
@@ -295,7 +305,7 @@ for details.
 | **Checks** | `perun checks …`, project page → Checks | Operator-declared verification commands; a room agent runs one by name, or verifies an executed proposal only after a hash-pinned operator confirmation |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL or autonomous peer review for actions |
-| **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, `perun-guard` MCP + post-run audit, external ZIP handoff, configurable approver/HITL secret |
+| **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, durable **Pause work** (replies, room events, review, auto-approve), `perun-guard` MCP + post-run audit, external ZIP handoff, configurable approver/HITL secret |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
 | **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard), `installer/macos/Output/PerunSetup.pkg` (macOS), or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + optional `PerunBridge` task |
@@ -370,6 +380,7 @@ perun/                     the Python package
   cron.py                  five-field cron helpers for coroutine schedules
   domain_events.py         durable domain-event inbox for coroutine triggers
   process_tracker.py       live process/session accounting for runs and TUI launches
+  terminal_focus.py        raise the terminal window hosting a TUI run (console-handle first)
   attention.py             operator inbox: typed targets, cards, reply adapters
   attention_watcher.py     OpenCode permission/form detection (event stream + poll)
   telegram.py              shared bridge with per-project routing

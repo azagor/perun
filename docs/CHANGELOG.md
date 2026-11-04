@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation refresh
+
+* README, DESIGN, and the retrievable context docs now describe TUI session
+  resume/selection, the console-handle Focus path, the shared-project **Pause
+  work** control, coroutine task composition, and the release-notes/changelog
+  placement rule.
 
 ## v0.10.81
 
