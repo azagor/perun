@@ -881,3 +881,36 @@ def test_a_proposal_card_closes_when_the_proposal_leaves_pending(tmp_path):
     closed = registry.get_attention(item["id"])
     assert closed["state"] == "approved"
     assert "approved" in (closed.get("answer") or "")
+
+
+def test_poll_once_reconciles_proposal_cards_when_delivery_is_disabled(
+        tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perun import attention_watcher, config, db, registry
+
+    project = registry.add_project("att-disabled", str(tmp_path / "att-disabled"))
+    proposal_id = "prop_disabled1234"
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO action_proposals (id, project_id, requester, action_type, "
+            "intent, targets, details, status, expires_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (proposal_id, project["id"], "frambo", "edit", "do work", "[]", "{}",
+             "pending", 9_999_999_999, registry.now_iso(), registry.now_iso()),
+        )
+    item = attention.request(
+        project, "proposal", proposal_id, "proposal", "approve?",
+        options=[{"id": "approve", "label": "Approve"}],
+    )
+    with db.db() as conn:
+        conn.execute("UPDATE action_proposals SET status='approved' WHERE id=?",
+                     (proposal_id,))
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(attention_enabled=False)),
+    )
+
+    attention_watcher.poll_once(api=SimpleNamespace())
+
+    assert registry.get_attention(item["id"])["state"] == "approved"

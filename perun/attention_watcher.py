@@ -311,6 +311,17 @@ def _poll_once_locked(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[
     global _last_sweep
 
     settings = config.Settings.load()
+    # Inbox hygiene runs even when delivery is disabled: proposal cards are
+    # written regardless of the switch, so decided ones must still expire and
+    # leave the inbox instead of piling up until it is turned back on.
+    try:
+        registry.expire_attention()
+    except Exception:  # pragma: no cover - expiry is best effort
+        LOG.debug("attention watcher: expire failed", exc_info=True)
+    try:
+        attention.reconcile_proposals()
+    except Exception:  # pragma: no cover - inbox hygiene is best effort
+        LOG.debug("attention watcher: proposal reconcile failed", exc_info=True)
     if not getattr(settings, "attention_enabled", False):
         return {"created": 0, "locations": 0, "closed": 0}
 
@@ -348,17 +359,6 @@ def _poll_once_locked(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[
     created = 0
     live_permissions: Set[str] = set()
     live_forms: Set[str] = set()
-
-    # Cheap indexed UPDATE: without it a bridge that stays up for weeks never
-    # expires anything (``expire_stale`` used to run only at startup).
-    try:
-        registry.expire_attention()
-    except Exception:  # pragma: no cover - expiry is best effort
-        LOG.debug("attention watcher: expire failed", exc_info=True)
-    try:
-        attention.reconcile_proposals()
-    except Exception:  # pragma: no cover - inbox hygiene is best effort
-        LOG.debug("attention watcher: proposal reconcile failed", exc_info=True)
 
     for directory in sorted({loc for loc in {str(l) for l in locations} if loc}):
         project = attention.project_for_location(directory)

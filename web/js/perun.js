@@ -4960,7 +4960,8 @@ async function viewPerunChat() {
 
     // Operator asks are durable inbox items now; surface the count in the chat
     // itself so an "add these checks" request cannot scroll away unnoticed.
-    let chatNeedsTimer = null;
+    // `chatNeedsTimer` is module-level (next to attentionTimer) so a re-render
+    // cannot leave the previous interval polling forever.
     const loadChatNeedsYou = async () => {
         const host = $('#pc-needs-you');
         if (!host) {
@@ -4990,6 +4991,7 @@ async function viewPerunChat() {
         const open = host.querySelector('#pc-needs-open');
         if (open) open.addEventListener('click', () => goto('#/attention'));
     };
+    if (chatNeedsTimer) { clearInterval(chatNeedsTimer); chatNeedsTimer = null; }
     loadChatNeedsYou();
     chatNeedsTimer = setInterval(loadChatNeedsYou, 30000);
 
@@ -5294,7 +5296,10 @@ async function viewPerunChat() {
         }
         let pretty = '';
         try {
-            pretty = JSON.stringify(payload, null, 2);
+            const serialized = JSON.stringify(payload, null, 2);
+            // JSON.stringify(undefined) returns undefined, not a string; a
+            // malformed frame with no payload must not throw in .length below.
+            pretty = serialized === undefined ? String(payload) : serialized;
         } catch (_) {
             pretty = String(payload);
         }
@@ -6116,6 +6121,7 @@ async function loadRoutingPanel() {
 }
 
 let attentionTimer = null;
+let chatNeedsTimer = null;
 
 async function viewAttention() {
     $('#topbar-title').textContent = 'Needs you';
