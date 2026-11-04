@@ -27,6 +27,22 @@ const buildPromptChain = (taskQueue, prompt) => {
     return parts.join('\n\n---\n\n');
 };
 
+/* Coroutine variant: the job runs through `opencode run`, not the TUI, so a
+   skill task is emitted as a structured instruction instead of a slash command
+   the headless agent could not interpret. */
+const buildCoroutinePrompt = (taskQueue, prompt) => {
+    const parts = [];
+    const text = String(prompt || '').trim();
+    if (text) parts.push(text);
+    for (const t of taskQueue || []) {
+        let p = `[Task: ${t.name}]\n${t.prompt || ''}`.trim();
+        if (t.tools && t.tools.length) p += `\n\nAllowed tools: ${t.tools.join(', ')}`;
+        if (t.skills && t.skills.length) p += `\n\nSkills to use: ${t.skills.join(', ')}`;
+        parts.push(p);
+    }
+    return parts.join('\n\n---\n\n');
+};
+
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { buildPromptChain };
+    module.exports = { buildPromptChain, buildCoroutinePrompt };
 }

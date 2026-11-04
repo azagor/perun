@@ -45,3 +45,21 @@ assert.strictEqual(
 );
 
 console.log('prompt_chain tests passed');
+
+const { buildCoroutinePrompt } = require('../web/js/prompt_chain.js');
+
+// A coroutine prompt puts the extra instructions first, then the task blocks.
+assert.strictEqual(
+    buildCoroutinePrompt([], 'Hello'),
+    'Hello'
+);
+assert.strictEqual(
+    buildCoroutinePrompt([skillTask], ''),
+    '[Task: Audit]\ncheck security\n\nSkills to use: code-audit'
+);
+assert.strictEqual(
+    buildCoroutinePrompt([toolTask], 'user input'),
+    'user input\n\n---\n\n[Task: Fix]\nfix the bug\n\nAllowed tools: edit\n\nSkills to use: find-skills'
+);
+// A headless job never receives a TUI slash command.
+assert.ok(!buildCoroutinePrompt([skillTask], '').includes('/code-audit'));

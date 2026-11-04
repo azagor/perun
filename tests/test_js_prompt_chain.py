@@ -24,3 +24,11 @@ def test_prompt_chain_js():
         check=False,
     )
     assert res.returncode == 0, res.stdout + res.stderr
+
+def test_the_coroutine_wizard_composes_selected_project_tasks():
+    src = (REPO_ROOT / "web" / "js" / "perun.js").read_text(encoding="utf-8")
+    assert "openCoroutineTaskPicker" in src
+    assert "coroutineTaskBox" in src
+    assert "buildCoroutinePrompt" in src
+    assert "prompt: coroutinePrompt(w)" in src
+    assert "Project tasks" in src

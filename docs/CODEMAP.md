@@ -1555,7 +1555,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   the storm/FX styles (sigil eyes, storm meter, `.is-awake` / `.is-working`,
   `.card-pip`, `.perun-flash`), with a `prefers-reduced-motion` guard.
 * `web/js/prompt_chain.js` — `buildPromptChain()` (Agent Console prompt/task
-  composition, unit-testable).
+  composition, unit-testable) and `buildCoroutinePrompt()` (the same idea for a
+  headless coroutine: the extra prompt first, then structured `[Task: …]` blocks;
+  skill tasks are not emitted as TUI slash commands).
 * `web/js/chat_core.js` — pure dashboard-chat decisions, moved out of
   `perun.js` so `node --test` can cover them: `shouldRender(existing, msg,
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames),

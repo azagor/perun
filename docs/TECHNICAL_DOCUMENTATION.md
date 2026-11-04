@@ -922,6 +922,14 @@ agent is never overwritten). Legacy global event rows
 and control-plane event rows are paused at startup with a migration note, and
 resuming a global event job is rejected.
 
+**Project tasks as the work.** For a project job, the wizard's Work step can
+compose one or more of the execution project's enabled tasks into the job prompt
+(`buildCoroutinePrompt`, in `web/js/prompt_chain.js`); the extra prompt is
+optional. The composed prompt is saved once, so editing a project task later does
+not rewrite an existing coroutine. A skill task becomes a structured `[Task: …]`
+instruction for the headless run, not a TUI `/skill` slash command. Global jobs
+have no task list.
+
 Webhook ingress lives at `/hooks/coroutines/{uid}`, outside the `/api/` token
 middleware (external providers cannot send the local token). It is authenticated
 by the per-job secret in `X-Perun-Webhook-Secret` and applies the same Host /
@@ -1049,7 +1057,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | POST | `/api/fs/mkdir` | create a directory |
 | POST | `/api/run-in-terminal` | open the configured terminal/shell with a **server-built** command. Body is structured — `{cwd | project, prompt?, model?, agent?, session?, run_uid?, tui?, shell?}` or `{action:"auth-login", provider}`; a free-text `command` is no longer accepted, and every interpolated value is quoted for the target shell (PowerShell single quotes, POSIX single quotes, `cmd` double quotes). `run_uid` links the terminal to a TUI run record for lifecycle tracking. Newlines/NUL in `cwd`/`model`/`agent`/`session`/`run_uid` are rejected (400), as is an unknown `action` or an invalid `provider` id |
 | GET | `/api/projects/{slug}/tasks` | list reusable project tasks |
-| POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}`. `kind` is one of `prompt`, `skill`, `tool`, `combo`. Skill tasks are emitted as `/<skillname>` slash commands by `web/js/prompt_chain.js` |
+| POST | `/api/projects/{slug}/tasks` | create a task `{name,kind,prompt,tools[],skills[],enabled}`. `kind` is one of `prompt`, `skill`, `tool`, `combo`. In the Agent Console, skill tasks are emitted as `/<skillname>` slash commands by `buildPromptChain`; a coroutine uses `buildCoroutinePrompt` (structured instructions) |
 | PATCH | `/api/projects/{slug}/tasks/{task_id}` | update a task |
 | DELETE | `/api/projects/{slug}/tasks/{task_id}` | delete a task |
 | POST | `/api/discover` | scan roots & register |

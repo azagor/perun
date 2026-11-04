@@ -7742,6 +7742,7 @@ function corWizardDefaults(existing) {
             event_sender_allow: Array.isArray(existing.event_sender_allow) ? existing.event_sender_allow : [],
             event_filter: existing.event_filter || {},
             options: existing.options || {},
+            tasks: [],
             _activate: existing.status === 'active',
             _step: 0,
         };
@@ -7760,8 +7761,72 @@ function corWizardDefaults(existing) {
         event_mention_only: 0, event_sender_allow: [], event_min_interval_seconds: 5,
         event_filter: {}, post_result_to_room: 0, suppress_auto_reply: 1,
         post_on_failure: 0, options: {}, status: 'paused',
+        tasks: [],
         _activate: false, _step: 0,
     };
+}
+
+function coroutineTaskBox(w, redraw) {
+    const wrap = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
+    const chips = el('div', { class: 'row wrap', style: 'gap:6px' });
+    const selected = w.tasks || [];
+    if (!selected.length) {
+        chips.appendChild(el('span', { class: 'muted' }, 'No project tasks selected.'));
+    }
+    selected.forEach((task, index) => {
+        chips.appendChild(el('span', { class: 'chip', style: 'background:var(--bg-card)' },
+            `${esc(task.name)} <b data-crm="${index}" style="cursor:pointer">×</b>`));
+    });
+    chips.addEventListener('click', (e) => {
+        const remove = e.target.closest('[data-crm]');
+        if (!remove) return;
+        w.tasks.splice(Number(remove.dataset.crm), 1);
+        redraw();
+    });
+    const add = el('button', { class: 'btn sm ghost', type: 'button' }, '＋ Add project tasks');
+    add.addEventListener('click', () => openCoroutineTaskPicker(w, redraw));
+    wrap.appendChild(chips);
+    wrap.appendChild(add);
+    return wrap;
+}
+
+function openCoroutineTaskPicker(w, redraw) {
+    const project = (state.projects || []).find(
+        (p) => Number(p.id) === Number(w.execution_project_id));
+    if (!project) { toast('Choose an execution project first', 'err'); return; }
+    api(`/api/projects/${encodeURIComponent(project.slug)}/tasks`).then((res) => {
+        const selected = new Set((w.tasks || []).map((t) => Number(t.id)));
+        const tasks = (res.tasks || []).filter(
+            (t) => t.enabled && !selected.has(Number(t.id)));
+        if (!tasks.length) {
+            toast('No enabled project tasks left to add', 'ok');
+            return;
+        }
+        const body = el('div');
+        for (const task of tasks) {
+            body.appendChild(el('label', {
+                class: 'opt',
+                style: 'display:flex;gap:8px;align-items:flex-start;margin:6px 0',
+            }, `<input type="checkbox" data-task="${esc(String(task.id))}">
+                <span><b>${esc(task.name)}</b><span class="muted"> · ${esc(task.kind || 'prompt')}</span>
+                <div class="meta">${esc(String(task.prompt || '').slice(0, 160))}</div></span>`));
+        }
+        const addSelected = () => {
+            const chosen = [];
+            body.querySelectorAll('input[data-task]:checked').forEach((cb) => {
+                const task = tasks.find((t) => String(t.id) === cb.dataset.task);
+                if (task) chosen.push(task);
+            });
+            if (!chosen.length) { toast('Select at least one task', 'err'); return; }
+            w.tasks = [...(w.tasks || []), ...chosen];
+            closeModal();
+            redraw();
+        };
+        modal('Add project tasks', body, [
+            { label: 'Add selected', class: 'primary', onClick: addSelected },
+            { label: 'Cancel', class: 'ghost', onClick: closeModal },
+        ]);
+    }).catch((e) => toast(e.message, 'err'));
 }
 
 function openCoroutineWizard(existing, opts = {}) {
@@ -7844,6 +7909,7 @@ function openCoroutineWizard(existing, opts = {}) {
                     w.event_source = '';
                     w.event_room_id = '';
                 }
+                if (w.scope === 'global') w.tasks = [];
                 render();
             });
             pane.appendChild(field('Scope', scope,
@@ -7858,6 +7924,7 @@ function openCoroutineWizard(existing, opts = {}) {
                 const exec = select('execution_project_id', projectOptions(), (value) => {
                     w.execution_project_id = Number(value);
                     if (w.scope === 'project') w.project_id = w.execution_project_id;
+                    w.tasks = [];
                 });
                 pane.appendChild(field('Execution project', exec,
                     'The agent runs in this directory. Global jobs do not use a project; they run as the orchestrator.'));
@@ -7896,10 +7963,17 @@ function openCoroutineWizard(existing, opts = {}) {
             pane.appendChild(el('div', { class: 'mselect-label', style: 'margin-top:14px' }, 'Start from a template'));
             pane.appendChild(templates);
         } else if (w._step === 1) {
+            if (w.scope === 'project') {
+                pane.appendChild(field('Project tasks', coroutineTaskBox(w, render),
+                    'Optional. Selected tasks are composed with the prompt. A skill task becomes a structured instruction for the headless run, not a TUI slash command.'));
+            }
             const ta = el('textarea', { rows: '7', placeholder: 'What should the agent do on each run?' });
             ta.value = w.prompt || '';
             ta.addEventListener('input', () => { w.prompt = ta.value; });
-            pane.appendChild(field('Prompt', ta));
+            pane.appendChild(field(w.scope === 'project' ? 'Additional prompt' : 'Prompt', ta,
+                w.scope === 'project'
+                    ? 'Optional when project tasks are selected. It is placed before the task blocks.'
+                    : ''));
             const modelHost = el('div', { class: 'select-host' });
             const ms = modelSelect({ value: w.model || '', placeholder: w.scope === 'global' ? 'orchestrator default model' : 'project default model', onSelect: (id) => { w.model = id; } });
             modelHost.appendChild(ms);
@@ -8181,6 +8255,10 @@ function openCoroutineWizard(existing, opts = {}) {
                 ['Mode', CS.modeHuman(w)],
                 ['Model', w.model || 'project default'],
                 ['Agent', w.agent || 'project default'],
+                ...(w.scope === 'project' ? [[
+                    'Project tasks',
+                    (w.tasks || []).map((t) => t.name).join(', ') || 'none',
+                ]] : []),
                 ['Daily cap', Number(w.max_runs_per_day) ? `${w.max_runs_per_day} runs` : 'unlimited'],
                 ['Failure policy', `${w.failure_policy} after ${w.failure_threshold}`],
             ];
@@ -8215,7 +8293,7 @@ function openCoroutineWizard(existing, opts = {}) {
                 onclick: () => {
                     if (w._modelNode) w.model = w._modelNode.getValue();
                     if (w._agentNode) w.agent = w._agentNode.getValue();
-                    const problem = CS.validateStep(w._step, w);
+                    const problem = CS.validateStep(w._step, coroutineValidationState(w));
                     if (problem) { showError(problem); return; }
                     if (w._step === 2 && w._preview && w._preview.valid === false) {
                         showError(w._preview.error || 'The trigger is not valid.'); return;
@@ -8231,7 +8309,8 @@ function openCoroutineWizard(existing, opts = {}) {
                     if (saveBusy) return;
                     if (w._modelNode) w.model = w._modelNode.getValue();
                     if (w._agentNode) w.agent = w._agentNode.getValue();
-                    const problem = CS.validateStep(3, w) || CS.validateStep(2, w) || CS.validateStep(1, w) || CS.validateStep(0, w);
+                    const validation = coroutineValidationState(w);
+                    const problem = CS.validateStep(3, validation) || CS.validateStep(2, validation) || CS.validateStep(1, validation) || CS.validateStep(0, validation);
                     if (problem) { showError(problem); return; }
                     saveBusy = true;
                     try {
@@ -8292,6 +8371,19 @@ function coroutinePreview(w, host) {
     }, 250);
 }
 
+function coroutinePrompt(w) {
+    // A project task list is composed into the job's prompt once, at save time.
+    // Task edits later do not rewrite an existing coroutine.
+    if (w.scope !== 'project') return String(w.prompt || '').trim();
+    return buildCoroutinePrompt(w.tasks || [], w.prompt);
+}
+
+function coroutineValidationState(w) {
+    // The step validator only sees ``prompt``; give it the composed text so a
+    // job with tasks and no extra prompt is valid.
+    return { ...w, prompt: coroutinePrompt(w) };
+}
+
 function corWizardPayload(w) {
     return {
         name: String(w.name || '').trim(),
@@ -8305,7 +8397,7 @@ function corWizardPayload(w) {
         trigger_expr: String(w.trigger_expr || ''),
         timezone: String(w.timezone || ''),
         run_at_epoch: Number(w.run_at_epoch || 0),
-        prompt: String(w.prompt || '').trim(),
+        prompt: coroutinePrompt(w),
         model: String(w.model || '').trim(),
         agent: String(w.agent || '').trim(),
         session_mode: w.session_mode,

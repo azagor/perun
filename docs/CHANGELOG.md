@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Project coroutines can include project tasks
+
+* The coroutine wizard's **Work** step now lists the execution project's enabled
+  tasks. Several can be selected at once, shown as removable chips, and composed
+  with the optional extra prompt by `buildCoroutinePrompt`. A skill task becomes
+  a structured instruction for the headless run, not a TUI slash command.
+* The composed prompt is saved once; editing the project's tasks later does not
+  rewrite an existing coroutine. A job with tasks and no extra prompt is valid.
+* Quick create keeps its single-prompt shortcut; use **New coroutine** for task
+  selection.
 
 ## v0.10.72
 
