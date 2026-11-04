@@ -128,7 +128,10 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 /* ---------- cards / grid ---------- */
 .grid { display: grid; gap: 16px; }
 .stats-grid { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); }
-.proj-grid { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); }
+/* Project cards share the row instead of leaving an empty grid cell when the
+   last row is only partly filled (a lone card used to look squeezed). */
+.proj-grid { display: flex; flex-wrap: wrap; }
+.proj-grid > .proj-card { flex: 1 1 310px; min-width: min(100%, 310px); }
 .grid.two-col { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 
 .card {
@@ -160,9 +163,9 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 .proj-card .pc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .proj-card .pc-top > div:first-child { min-width: 0; }
 .proj-card .pc-flags { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
-.proj-card .pc-name { font-family: 'Cinzel', serif; font-size: 1.08rem; }
+.proj-card .pc-name { font-family: 'Cinzel', serif; font-size: 1.08rem; overflow-wrap: anywhere; }
 .proj-card .pc-path { font-size: .74rem; color: var(--text-muted); word-break: break-all; margin-top: 2px; }
-.proj-card .pc-desc { color: var(--text-secondary); font-size: .85rem; margin-top: 10px; min-height: 2.4em; }
+.proj-card .pc-desc { color: var(--text-secondary); font-size: .85rem; margin-top: 10px; min-height: 2.4em; overflow-wrap: anywhere; }
 .proj-card .pc-meta { display: flex; gap: 14px; margin-top: 12px; font-size: .78rem; color: var(--text-secondary); flex-wrap: wrap; }
 .proj-card .pc-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 

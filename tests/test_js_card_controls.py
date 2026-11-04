@@ -128,6 +128,15 @@ def test_shared_projects_expose_a_work_pause_control():
     assert "Work running" in src
 
 
+def test_the_project_grid_shares_a_partial_last_row():
+    """A lone last-row card must grow, not sit squeezed in one grid column."""
+    css = (REPO_ROOT / "web" / "css" / "perun.css").read_text(encoding="utf-8")
+    assert ".proj-grid { display: flex; flex-wrap: wrap; }" in css
+    assert ".proj-grid > .proj-card" in css
+    assert "flex: 1 1 310px" in css
+    assert "overflow-wrap: anywhere" in css
+
+
 def test_an_uncertain_terminal_launch_is_not_finalized():
     """Only a definitive server failure may finish/untrack the run."""
     src = (JS_DIR / "perun.js").read_text(encoding="utf-8")

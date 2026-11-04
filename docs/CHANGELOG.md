@@ -4,6 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Project grid shares a partial last row
+
+* The Projects grid now uses flex-wrap with growable cards, so a partly filled
+  last row (for example PerunChat alone at two columns) fills the width instead
+  of squeezing the last card into one grid column. Long names and descriptions
+  wrap instead of forcing a wider track.
+
 ### Documentation refresh
 
 * README, DESIGN, and the retrievable context docs now describe TUI session
