@@ -4,11 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Release-notes bundle correction
+
+* Regenerate the bundled release notes so the v0.10.80 update card has content;
+  the v0.10.80 section was empty when that package was built.
 
 ## v0.10.80
 
 *Released 2026-11-04.*
+
+### Shared header separates chat and work state
+
+* The Shared tab header now labels the room binding separately (**Chat active**
+  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work
+  running** badge, so a paused project no longer looks active.
 
 ## v0.10.79
 
@@ -16,9 +25,6 @@ _No unreleased changes yet._
 
 ### Hardening for the work pause and TUI launch
 
-* The Shared tab header now labels the room binding separately (**Chat active**
-  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work
-  running** badge, so a paused project no longer looks active.
 * A TUI launch only finishes/untracks its run on a **definitive** server error;
   a network-uncertain failure leaves the run stopable because the terminal may
   have opened.

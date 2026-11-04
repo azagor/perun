@@ -1,15 +1,15 @@
 {
-  "generated": "2026-11-04T12:12:11+00:00",
+  "generated": "2026-11-04T12:12:53+00:00",
   "releases": [
     {
       "version": "0.10.80",
       "date": "2026-11-04",
-      "body": ""
+      "body": "### Shared header separates chat and work state\n\n* The Shared tab header now labels the room binding separately (**Chat active**\n  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work\n  running** badge, so a paused project no longer looks active."
     },
     {
       "version": "0.10.79",
       "date": "2026-11-04",
-      "body": "### Hardening for the work pause and TUI launch\n\n* The Shared tab header now labels the room binding separately (**Chat active**\n  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work\n  running** badge, so a paused project no longer looks active.\n* A TUI launch only finishes/untracks its run on a **definitive** server error;\n  a network-uncertain failure leaves the run stopable because the terminal may\n  have opened.\n* Paused projects annotate peer-review requests for pending proposals so peers\n  hold the review; activity logging is best effort and the project-card `paused`\n  badge refreshes immediately after a toggle. A transient binding-read failure\n  keeps a recently paused room paused for a grace period instead of silently\n  resuming autonomy.\n* Scheduled/time-based coroutines keep their own Pause control; the project flag\n  suppresses room-driven autonomy only (replies, room events, review, policy\n  auto-approve)."
+      "body": "### Hardening for the work pause and TUI launch\n\n* A TUI launch only finishes/untracks its run on a **definitive** server error;\n  a network-uncertain failure leaves the run stopable because the terminal may\n  have opened.\n* Paused projects annotate peer-review requests for pending proposals so peers\n  hold the review; activity logging is best effort and the project-card `paused`\n  badge refreshes immediately after a toggle. A transient binding-read failure\n  keeps a recently paused room paused for a grace period instead of silently\n  resuming autonomy.\n* Scheduled/time-based coroutines keep their own Pause control; the project flag\n  suppresses room-driven autonomy only (replies, room events, review, policy\n  auto-approve)."
     },
     {
       "version": "0.10.78",
