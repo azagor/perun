@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Pause autonomous work in a shared project
+
+* The Shared tab has **Pause work** / **Resume work** (durable
+  `projects.work_paused`, with the actor and timestamp); the project card is
+  badged `paused`. While paused the bridge posts no room replies, does not feed
+  the room's messages to coroutine triggers, skips the autonomous proposal
+  review, and policy auto-approve leaves new proposals pending. In-flight runs
+  finish; human chat and explicit approvals remain available.
+* Members can keep chatting: paused messages stay in room history for the agent
+  to catch up after a resume. The bridge posts one notice per pause period so the
+  room knows why the agent is silent.
 
 ## v0.10.76
 

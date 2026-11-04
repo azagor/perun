@@ -1535,6 +1535,29 @@ def api_update_project(slug: str, payload: dict[str, Any] = Body(...)) -> dict[s
     return _ok(**result)
 
 
+@app.post("/api/projects/{slug}/work")
+def api_set_project_work(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Pause or resume autonomous work for a project.
+
+    Durable in the registry: the PerunChat bridge reads it per room message and
+    stops auto-replies, room-event ingestion, autonomous reviews and policy
+    auto-approval while it is set. In-flight runs finish; human chat and explicit
+    approvals are unaffected.
+    """
+    project = _project_or_404(slug)
+    paused = payload.get("paused")
+    if not isinstance(paused, bool):
+        raise HTTPException(status_code=400, detail="paused must be true or false")
+    actor = _approver_identity()
+    updated = registry.set_work_paused(project["id"], paused, actor=actor)
+    registry.log_activity(
+        project["id"], "work",
+        f"Autonomous work {'paused' if paused else 'resumed'} by {actor}",
+        {"paused": paused},
+    )
+    return _ok(project=updated)
+
+
 @app.get("/api/projects/{slug}/shared")
 def api_get_shared_project(slug: str) -> dict[str, Any]:
     """Return the shared-project configuration, binding and live chat state."""

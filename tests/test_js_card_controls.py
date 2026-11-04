@@ -112,3 +112,13 @@ def test_the_resume_path_skips_headless_sessions():
     assert "o.dataset.tui !== 'false'" in src
     # A stale cached session_pick.js must not crash the resume path.
     assert "latestResumeCandidate: (sessions) =>" in src
+
+
+def test_shared_projects_expose_a_work_pause_control():
+    """The operator can stop autonomous room work; the card shows the state."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "api/projects/${p.slug}/work" in src
+    assert 'id="sp-work-toggle"' in src
+    assert "sp-paused-note" in src
+    assert "work_paused" in src
+    assert 'badge amber">paused' in src

@@ -171,6 +171,25 @@ def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
         return project_dict(conn, row) if row else None
 
 
+def set_work_paused(project_id: int, paused: bool, actor: str = "") -> dict[str, Any] | None:
+    """Pause/resume autonomous work for a project (durable across restarts).
+
+    The bridge reads ``work_paused`` per room message, so a toggle takes effect
+    immediately: no auto-reply, no room-event ingestion, no autonomous review or
+    policy auto-approve. In-flight runs finish; human chat is unaffected.
+    """
+    now = now_iso()
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE projects SET work_paused=?, work_paused_at=?, "
+            "work_paused_by=?, updated_at=? WHERE id=?",
+            (1 if paused else 0, now if paused else "",
+             (actor or "").strip() if paused else "", now, project_id),
+        )
+        row = db.one(conn, "SELECT * FROM projects WHERE id=?", (project_id,))
+        return project_dict(conn, row) if row else None
+
+
 def touch_project(project_id: int, seen: bool = False) -> None:
     with db.db() as conn:
         if seen:
@@ -268,6 +287,7 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
     d["favorite"] = bool(d.get("favorite"))
     d["enabled"] = bool(d.get("enabled"))
     d["hidden"] = bool(d.get("hidden"))
+    d["work_paused"] = bool(d.get("work_paused"))
     # Decode the per-agent model map; a bad/missing value degrades to {}.
     raw_agent_models = d.pop("agent_models", "{}")
     if isinstance(raw_agent_models, str):

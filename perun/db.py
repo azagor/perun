@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS projects (
     git_remote    TEXT DEFAULT '',
     git_branch    TEXT DEFAULT '',
     git_provider  TEXT DEFAULT '',
+    work_paused   INTEGER DEFAULT 0,
+    work_paused_at TEXT DEFAULT '',
+    work_paused_by TEXT DEFAULT '',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     last_seen_at  TEXT
@@ -703,6 +706,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("hidden", "INTEGER DEFAULT 0"),
         # Per-agent default models (v0.8.32).
         ("agent_models", "TEXT DEFAULT '{}'"),
+        # Autonomous work pause for shared-project rooms (v0.10.77).
+        ("work_paused", "INTEGER DEFAULT 0"),
+        ("work_paused_at", "TEXT DEFAULT ''"),
+        ("work_paused_by", "TEXT DEFAULT ''"),
     ],
     "runs": [
         ("model_explicit", "INTEGER DEFAULT 0"),

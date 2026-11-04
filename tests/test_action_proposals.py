@@ -1637,3 +1637,21 @@ def test_execution_triggers_the_docs_step(tmp_path, monkeypatch):
     action_proposals.execute(proposal["id"], orchestrator_instance=orch)
 
     assert calls == [(project["slug"], "executed")]
+
+
+def test_policy_auto_approve_is_held_while_work_is_paused(tmp_path, monkeypatch):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    data = manifest.from_project(project)
+    data["policy_auto_approve"] = True
+    manifest.save(project["path"], data, body="# paused")
+    project["work_paused"] = True
+
+    monkeypatch.setattr(action_proposals, "approve",
+                        lambda *a, **k: pytest.fail("approved a paused project"))
+    monkeypatch.setattr(action_proposals, "start_execution",
+                        lambda *a, **k: pytest.fail("started a paused project"))
+
+    assert action_proposals.auto_approve_and_execute(
+        project, {"id": "prop_paused", "status": "pending",
+                  "requester": "frambo"}) is None

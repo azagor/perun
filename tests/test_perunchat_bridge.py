@@ -3940,3 +3940,97 @@ def test_operator_context_is_cached_between_frames(settings, tmp_path, monkeypat
          "payload": "Piotr, two", "sender": {"agent_id": "frambo"}}, room)
 
     assert calls["n"] == 1
+
+
+def _paused_project():
+    return {
+        "id": 1, "slug": "paused", "path": r"C:\paused",
+        "work_paused": True,
+        "work_paused_at": "2026-11-04T10:00:00+00:00",
+        "work_paused_by": "owner",
+    }
+
+
+def test_a_paused_shared_project_suppresses_autonomous_work(settings, monkeypatch):
+    from perun import coroutines
+
+    settings.perunchat_ingest_events = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    project = _paused_project()
+    monkeypatch.setattr(bridge, "_project_binding",
+                        lambda room: (project, {"shared": True}))
+    monkeypatch.setattr(bridge, "_store_transcript_fact", lambda frame: None)
+    notices = []
+    monkeypatch.setattr(bridge, "_post_execution_notice",
+                        lambda room, text: notices.append((room, text)) or True)
+    ingest = MagicMock()
+    monkeypatch.setattr(coroutines, "ingest_room_message", ingest)
+    frame = {
+        "type": "CHAT", "id": "msg_paused_1", "room_id": "grp:t:p",
+        "sender": {"agent_id": "frambo"}, "payload": "please do the work",
+    }
+
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
+        assert not mock_reply.called
+    ingest.assert_not_called()
+    assert len(notices) == 1 and "paused" in notices[0][1].lower()
+    # The message is kept for context after a resume.
+    assert "msg_paused_1" in [f.get("id") for f in bridge._room_history["grp:t:p"]]
+
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame({**frame, "id": "msg_paused_2"}, None)
+        bridge._drain_room_queues()
+        assert not mock_reply.called
+    assert len(notices) == 1  # one notice per pause period
+
+
+def test_resumed_work_lets_the_room_agent_act_again(settings, monkeypatch):
+    from perun import coroutines
+    from perun.perunchat_bridge import _ReplyDecision
+
+    settings.perunchat_ingest_events = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    project = {**_paused_project(), "work_paused": False,
+               "work_paused_at": "", "work_paused_by": ""}
+    monkeypatch.setattr(bridge, "_project_binding",
+                        lambda room: (project, {"shared": True}))
+    monkeypatch.setattr(bridge, "_store_transcript_fact", lambda frame: None)
+    monkeypatch.setattr(bridge, "_post_execution_notice", lambda room, text: True)
+    monkeypatch.setattr(bridge, "_should_reply_to",
+                        lambda frame: _ReplyDecision(True, "test", is_direct=True))
+    monkeypatch.setattr(bridge, "_raise_operator_mention", lambda frame, room: None)
+    ingest = MagicMock()
+    monkeypatch.setattr(coroutines, "ingest_room_message", ingest)
+    frame = {
+        "type": "CHAT", "id": "msg_resumed_1", "room_id": "grp:t:p",
+        "sender": {"agent_id": "frambo"}, "payload": "please do the work",
+    }
+
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame(frame, None)
+        bridge._drain_room_queues()
+        mock_reply.assert_called_once()
+    ingest.assert_called_once()
+
+
+def test_a_paused_project_skips_the_autonomous_review(settings, monkeypatch):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    project = _paused_project()
+    monkeypatch.setattr("perun.registry.get_project", lambda ref: project)
+    monkeypatch.setattr("perun.shared_projects.load",
+                        lambda path: {"auto_approve": True})
+    called = []
+    monkeypatch.setattr(bridge, "_agent_review_worker",
+                        lambda *args, **kwargs: called.append(args))
+
+    bridge._maybe_schedule_agent_review(
+        {"id": "prop_1", "status": "pending", "requester": "frambo",
+         "project_id": 1},
+        "grp:t:p",
+    )
+
+    assert called == []

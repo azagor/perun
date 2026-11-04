@@ -1395,6 +1395,7 @@ function projectCard(p) {
          ${running}
          <div class="pc-meta">
             <span class="badge ${badge}">${esc(badgeText)}</span>
+             ${p.work_paused ? '<span class="badge amber">paused</span>' : ''}
             <span>◧ ${p.session_count || 0} sessions</span>
             <span>◉ ${p.memory_count || 0} facts</span>
             <span>▤ ${p.chunk_count || 0} chunks</span>
@@ -2555,11 +2556,15 @@ async function sharedProjectCard(detail) {
         return { cls: '', text: 'Disabled' };
     };
     const enabled = !!cfg.shared;
+    const paused = !!p.work_paused;
     const initialStatus = statusOf(projectChat);
 
     card.innerHTML = `
         <div class="card-head"><h4>Shared project</h4>
-            <span class="shared-status ${initialStatus.cls}" id="sp-status">${esc(initialStatus.text)}</span></div>
+            <span class="shared-status ${initialStatus.cls}" id="sp-status">${esc(initialStatus.text)}</span>
+            ${enabled ? `<button class="btn sm ${paused ? 'primary' : 'ghost'}" id="sp-work-toggle" type="button">${paused ? '▶ Resume work' : '❚❚ Pause work'}</button>` : ''}
+        </div>
+        ${enabled && paused ? `<div class="cor-warn" id="sp-paused-note">Autonomous work is paused${p.work_paused_by ? ` by ${esc(p.work_paused_by)}` : ''}. New chat messages are kept, but no agent will act until you resume. In-flight work finishes.</div>` : ''}
         <label class="opt"><input type="checkbox" id="sp-enabled" ${enabled ? 'checked' : ''}> <b>Enable shared project (PerunChat)</b></label>
         <p class="muted" style="font-size:.72rem;margin-top:4px">Hiding a project only removes it from lists; it does not disable sharing. Turn this off to tear the room down.</p>
         <div id="sp-config"></div>
@@ -2710,6 +2715,24 @@ async function sharedProjectCard(detail) {
     enabledCb.addEventListener('change', () => {
         card.querySelector('#sp-form').classList.toggle('hidden', !enabledCb.checked);
     });
+    const workToggle = card.querySelector('#sp-work-toggle');
+    if (workToggle) {
+        workToggle.addEventListener('click', async () => {
+            workToggle.disabled = true;
+            try {
+                const res = await api(`/api/projects/${p.slug}/work`, {
+                    method: 'POST',
+                    body: { paused: !p.work_paused },
+                });
+                toast(res.project && res.project.work_paused
+                    ? 'Autonomous work paused' : 'Autonomous work resumed', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) {
+                toast(e.message, 'err');
+                workToggle.disabled = false;
+            }
+        });
+    }
     const autoApproveCb = card.querySelector('#sp-auto-approve');
     const policyAutoApproveCb = card.querySelector('#sp-policy-auto-approve');
     card.querySelector('#sp-save').addEventListener('click', async () => {

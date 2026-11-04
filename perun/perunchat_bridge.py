@@ -574,6 +574,9 @@ class PerunChatBridge:
         self._rate_limit_lock = threading.Lock()
         # Room -> wall-clock of the last [Routing] notice (anti-burst).
         self._last_routing_notice: Dict[str, float] = {}
+        # Room -> pause stamp already announced. One notice per pause period;
+        # the next message after a resume clears the entry.
+        self._paused_notice: Dict[str, str] = {}
         # Consecutive-reply budget per room: two autonomous agents whose replies
         # end in "?" otherwise answer each other forever (~3 model runs/min each).
         self._room_burst: Dict[str, Tuple[int, float]] = {}
@@ -946,6 +949,32 @@ class PerunChatBridge:
         except Exception:
             return ""
         return str(chat.get("managed_by") or "").strip()
+
+    def _notice_paused(self, project: Dict[str, Any], room_id: str) -> None:
+        """Announce a paused project once per pause period (best effort).
+
+        The room keeps accepting messages; this tells participants why the
+        agent is silent, without replying to each one. A resume clears the
+        marker (see ``_on_frame``), so the next pause is announced again.
+        """
+        if not room_id:
+            return
+        stamp = str(project.get("work_paused_at") or "paused")
+        key = str(room_id)
+        if self._paused_notice.get(key) == stamp:
+            return
+        actor = str(project.get("work_paused_by") or "").strip()
+        who = f" by {actor}" if actor else ""
+        text = (
+            f"Work on this project is paused{who}. New messages are kept, but no "
+            "agent will act on them until the operator resumes work from the "
+            "Shared tab in Perun. In-flight work finishes."
+        )
+        # Mark before posting: the gateway echoes our own frame back through the
+        # reader thread, and that echo must not post a second notice.
+        self._paused_notice[key] = stamp
+        if not self._post_execution_notice(key, text):
+            self._paused_notice.pop(key, None)
 
     def _refresh_discovered_rooms(self) -> None:
         """Cache the private rooms Perun is a member of on the gateway.
@@ -1705,10 +1734,25 @@ class PerunChatBridge:
         if not is_chat:
             logger.info("PerunChat ignoring frame from %s: not a chat message", sender)
             return
+        # A paused shared project is a hard stop for autonomous work: no room
+        # event (so no coroutine fire), no conversational reply, no autonomous
+        # review or policy auto-approve. In-flight runs finish; human chat and
+        # explicit approvals remain available. Read per frame so the dashboard
+        # toggle takes effect without a bridge restart.
+        binding = self._project_binding(room) if room else None
+        paused = bool(binding and (binding[0] or {}).get("work_paused"))
+        if paused:
+            early_text = frame.get("payload")
+            is_typing_frame = content_type == "application/perun-typing"
+            if (not is_typing_frame and isinstance(early_text, str)
+                    and early_text.strip()):
+                self._notice_paused(binding[0], room)
+        else:
+            self._paused_notice.pop(str(room), None)
         # Coroutine event triggers consume room messages even when Perun is not
         # answering conversationally. This must run before the auto-reply gate;
         # the durable inbox dedupes gateway replays by message id.
-        if getattr(self.settings, "perunchat_ingest_events", True):
+        if not paused and getattr(self.settings, "perunchat_ingest_events", True):
             try:
                 from . import coroutines as _coroutines
 
@@ -1779,6 +1823,12 @@ class PerunChatBridge:
                 self._own_message_ids.add(msg_id)
                 if len(self._own_message_ids) > _MAX_RECENT_REPLIED:
                     self._own_message_ids = set(list(self._own_message_ids)[-_REPLIED_TRIM_TO:])
+            return
+
+        if paused:
+            # History above is kept so the agent can catch up after a resume,
+            # but no work is scheduled and no coroutine saw this frame.
+            logger.info("PerunChat work paused for %s; message kept, no reply", room_id)
             return
 
         # A coroutine that owns this message suppresses the bridge's own reply.
@@ -1969,11 +2019,11 @@ class PerunChatBridge:
             recipient_id=sender_id,
         )
 
-    def _post_execution_notice(self, room_id: str, text: str) -> None:
+    def _post_execution_notice(self, room_id: str, text: str) -> bool:
         redact = getattr(self, "_redact_internal_info", None)
         if callable(redact):
             text = redact(text, room_id)
-        self.post_to_room(room_id, text)
+        return self.post_to_room(room_id, text)
 
     def _start_download_transfer(
         self,
@@ -2938,6 +2988,11 @@ class PerunChatBridge:
         # this, the local room owner posting from the dashboard got a generic
         # reply with no project context at all.
         binding = self._project_binding(room_id) if room_id else None
+        if binding and (binding[0] or {}).get("work_paused"):
+            logger.info(
+                "PerunChat reply suppressed: project %s is paused",
+                (binding[0] or {}).get("slug"))
+            return
         is_project_member = self._is_project_member(room_id, sender, binding=binding)
         if is_project_member and not is_trusted:
             logger.info(
@@ -3589,6 +3644,11 @@ class PerunChatBridge:
             logger.exception("Could not resolve project for proposal review")
             return
         if not cfg.get("auto_approve"):
+            return
+        if project and project.get("work_paused"):
+            logger.info(
+                "Project %s is paused; skipping autonomous review of %s",
+                project.get("slug"), proposal.get("id"))
             return
         proposal_id = str(proposal["id"])
         with self._lock:

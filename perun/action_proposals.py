@@ -102,6 +102,11 @@ def auto_approve_and_execute(
         return None
     if not shared_projects.is_policy_auto_approve(project["path"]):
         return None
+    if project.get("work_paused"):
+        logger.info(
+            "Project %s is paused; leaving proposal %s pending",
+            project.get("slug", project["id"]), proposal["id"])
+        return None
     cfg = shared_projects.load(project["path"])
     approver = _pick_auto_approver(cfg, proposal.get("requester", ""))
     logger.info(

@@ -248,6 +248,21 @@ scrubbed environment, caps timeout/output, strips terminal control bytes, keeps
 `perun-shared` executor is explicitly denied the check tools: checks are
 operator configuration, not an approved target.
 
+### 3.11 Autonomous Work Pause (v0.10.77)
+
+- **FR-32** The Shared tab exposes **Pause work** / **Resume work** for a
+  project. The state is durable (`projects.work_paused`, `work_paused_at`,
+  `work_paused_by`) and survives a Perun or bridge restart; the project card is
+  badged `paused`. Only the local operator's dashboard/API can toggle it.
+- **FR-33** While paused, the bridge must not auto-reply to room messages, must
+  not ingest them for project-room coroutine triggers, must not start the
+  autonomous proposal review, and policy auto-approve must leave new proposals
+  `pending`. In-flight runs finish. A room message can never clear the flag.
+- **FR-34** Members keep their chat: paused messages are retained in room
+  history so the agent can catch up after a resume. The bridge posts one notice
+  per pause period explaining why the agent is silent; explicit human
+  approvals/executions remain available.
+
 ---
 
 ## 4. Agile User Stories & Acceptance Criteria

@@ -107,6 +107,12 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
+* **Pausing project work stops autonomy, not people.** `projects.work_paused` is
+  durable; while set, the bridge must not auto-reply in the project room, must
+  not ingest its messages for coroutine triggers, must not start the autonomous
+  proposal review, and policy auto-approve must leave new proposals pending.
+  In-flight runs finish; human chat, explicit approvals and the dashboard remain.
+  A room message can never clear the flag.
 * **Execution is declared, never improvised.** The only command Perun runs on
   its own is a check the operator declared (`project_checks`, written by
   `perun checks add` / the dashboard, never by an MCP tool and never from the

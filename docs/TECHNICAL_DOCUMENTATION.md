@@ -1146,6 +1146,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/projects/{slug}/shared` | Shared-project config, local chat binding, and a live `project_chat` description (room id, state, `managed_by`, manifest rev, expected vs. live members — gateway errors are reported in `project_chat.error`, never as a 5xx) |
 | PUT | `/api/projects/{slug}/shared` | Replace `shared`/`participants`/`external_deps`; validates against the trust list, bumps `manifest_rev`, mirrors `opencode.json`, and re-syncs the chat (a failed sync is returned in `chat_sync`, the manifest save still succeeds) |
 | POST | `/api/projects/{slug}/shared/sync` | Force-reconcile the project chat with the manifest participant list: create the managed room if missing, add declared participants, remove everyone else. Idempotent |
+| POST | `/api/projects/{slug}/work` | pause/resume autonomous work `{paused: true/false}`; durable in `projects.work_paused`. While paused the bridge stops auto-replies, room-event ingestion, autonomous review and policy auto-approve; in-flight runs finish |
 
 **Autonomous proposal execution (v0.8.0+)**
 
@@ -1982,6 +1983,18 @@ the same proposals MCP tool. Policy auto-approve executes proposals immediately
 by the system, recording the `auto` policy identity. When both flags are enabled,
 policy auto-approve takes precedence. Humans always retain the ability to
 approve, execute, retry, or delete proposals manually.
+
+**Pausing autonomous work.** The Shared tab's **Pause work** control
+(`POST /api/projects/{slug}/work`) sets a durable `projects.work_paused` flag
+(with `work_paused_at` / `work_paused_by`). While it is set, the bridge answers
+no room messages, drops room-event ingestion for that room (so room coroutines
+do not fire), skips the autonomous proposal review, and policy auto-approve
+leaves new proposals pending; in-flight runs finish. Members can keep chatting:
+their messages are retained in the room history so the agent can catch up after
+a resume. The bridge posts one notice per pause period (the `work_paused_at`
+stamp) explaining why the agent is silent, and the project card is badged
+`paused`. Resume clears the flag and the actor; explicit human approvals and
+executions remain available - the pause stops autonomy, not the operator.
 
 **Dashboard chat log decisions.** The dashboard log used to duplicate a message
 or show a frame from another room because the filtering, the dedupe and the

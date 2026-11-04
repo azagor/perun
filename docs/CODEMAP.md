@@ -180,7 +180,8 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
 * Projects: `add_project()` (loads `perun.md` after insert so **every**
   registration path — CLI `perun add`, wizard — gets manifest data, not just
   discovery; stores `agent_models` as a JSON map), `update_project()`
-  (accepts `agent_models`), `touch_project()`,
+  (accepts `agent_models`), `set_work_paused()` (durable autonomous-work pause:
+  `work_paused`, `work_paused_at`, `work_paused_by`), `touch_project()`,
   `get_project()`, `get_project_by_path()`, `list_projects()` (never includes the
   private companion repo, even with `include_hidden=true`; it is owner-only
   content, not a project), `delete_project()`,
@@ -1024,6 +1025,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `perun-guard`/`perun-proposals` servers; `_record_room_actor()` persists the
   per-message requester and the bot's own agent id under PERUN_HOME so the
   statically-configured proposals server can authorize `approve`/`reject`.
+  **Work pause:** when the bound project's durable `work_paused` flag is set,
+  `_on_frame()` posts one notice per pause period (`_notice_paused`) and returns
+  before event ingestion or the reply queue, so room coroutines do not fire and
+  the agent stays silent; `_reply()` re-checks the flag as a second guard.
+  `_maybe_schedule_agent_review()` also skips a paused project.
   Unbound/public rooms use the control
   plane. State-changing requests are sent through the `propose` tool, not
   executed directly. A background activity-table poller posts review requests
@@ -1267,9 +1273,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is
-  always the ``auto`` autonomous policy identity. Accepts ``on_started`` and
-  ``on_complete`` callbacks so callers can post lifecycle notices to the bound
-  project chat.
+  always the ``auto`` autonomous policy identity. A paused project
+  (`projects.work_paused`) leaves the proposal pending instead. Accepts
+  ``on_started`` and ``on_complete`` callbacks so callers can post lifecycle
+  notices to the bound project chat.
 * `_pick_auto_approver()` — returns the ``auto`` policy identity; policy
   auto-approval is a system decision, not a peer review.
 * `_humanize_result()` — shortens run-result JSON errors for chat State Digests
@@ -1576,6 +1583,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   resumable), `latestResumeCandidate(sessions)` (the newest chat), and
   `originLabel(session)` (`TUI chat` / `headless run` / empty). Keeps the card's
   fast Run off machine-created sessions; the caret picker still offers them.
+* The Shared tab (`sharedProjectCard` in `perun.js`) exposes a **Pause work**
+  control (`POST /api/projects/{slug}/work`) and a `paused` badge on the project
+  card; the state is the durable `projects.work_paused` flag.
 * `web/js/chat_core.js` — pure dashboard-chat decisions, moved out of
   `perun.js` so `node --test` can cover them: `shouldRender(existing, msg,
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames),

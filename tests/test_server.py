@@ -2988,3 +2988,25 @@ def test_a_headless_run_cannot_claim_another_projects_session(client, tmp_path):
 
     assert r.status_code == 400, r.text
     assert "does not belong to this project" in r.json()["detail"]
+
+
+def test_work_pause_endpoint_is_durable_and_validates_input(client, tmp_path):
+    project = _check_project(tmp_path, "work-pause")
+
+    paused = client.post(f"/api/projects/{project['slug']}/work",
+                         json={"paused": True})
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["project"]["work_paused"] is True
+    assert paused.json()["project"]["work_paused_by"]
+
+    detail = client.get(f"/api/projects/{project['slug']}").json()["project"]
+    assert detail["work_paused"] is True
+
+    resumed = client.post(f"/api/projects/{project['slug']}/work",
+                          json={"paused": False})
+    assert resumed.json()["project"]["work_paused"] is False
+    assert resumed.json()["project"]["work_paused_at"] == ""
+
+    bad = client.post(f"/api/projects/{project['slug']}/work",
+                      json={"paused": "yes"})
+    assert bad.status_code == 400

@@ -260,6 +260,22 @@ def test_session_origins_follow_the_first_run():
     assert manual["id"] not in origins
 
 
+def test_work_pause_is_durable_and_cleared_on_resume():
+    p = registry.add_project("Paused", r"C:\paused")
+    assert p["work_paused"] is False
+
+    paused = registry.set_work_paused(p["id"], True, actor="owner")
+    assert paused["work_paused"] is True
+    assert paused["work_paused_by"] == "owner"
+    assert paused["work_paused_at"]
+    assert registry.get_project("paused")["work_paused"] is True
+
+    resumed = registry.set_work_paused(p["id"], False)
+    assert resumed["work_paused"] is False
+    assert resumed["work_paused_by"] == ""
+    assert resumed["work_paused_at"] == ""
+
+
 def test_run_lifecycle():
     p = registry.add_project("P", r"C:\p")
     run = registry.create_run("abc123", p["id"], "do a thing",
