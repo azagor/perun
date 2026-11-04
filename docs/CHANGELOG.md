@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.87
+
+*Released 2026-11-04.*
+
 ### Project grid layout hardening
 
 * The width/column math is a pure, node-tested `CardControls.gridPlan()`:

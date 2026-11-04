@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.86 (see §15). Project cards share one width and height; a card on a short row matches the first row.
+**Latest release:** v0.10.87 (see §15). Project grid layout hardening: a pure tested planner, font re-measure, equal card heights, and graceful stale-module fallback.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2655,6 +2655,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.87: Project grid layout hardening: a pure tested planner, font re-measure, equal card heights, and graceful stale-module fallback.
+
 ### 2026-11-04 — v0.10.86: Project cards share one width and height; a card on a short row matches the first row.
 
 ### 2026-11-04 — v0.10.85: Restore the previous project-card size; every card keeps one consistent width and a partial row starts at the first column.
