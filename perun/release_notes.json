@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T22:46:35+00:00",
+  "generated": "2026-11-04T22:58:07+00:00",
   "releases": [
+    {
+      "version": "0.11.1",
+      "date": "2026-11-04",
+      "body": "### Package replacement guard\n\n* A staged package awaiting approval can no longer be silently replaced by a\n  second upload. `upload_external_package()` refuses while\n  `package_state='pending'`; the claimant must `reject_package` first (or let the\n  24 h window expire). This closes a TOCTOU gap where an executor could swap the\n  archive between the operator reviewing it and clicking Approve."
+    },
     {
       "version": "0.11.0",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.80",
       "date": "2026-11-04",
       "body": "### Shared header separates chat and work state\n\n* The Shared tab header now labels the room binding separately (**Chat active**\n  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work\n  running** badge, so a paused project no longer looks active."
-    },
-    {
-      "version": "0.10.79",
-      "date": "2026-11-04",
-      "body": "### Hardening for the work pause and TUI launch\n\n* A TUI launch only finishes/untracks its run on a **definitive** server error;\n  a network-uncertain failure leaves the run stopable because the terminal may\n  have opened.\n* Paused projects annotate peer-review requests for pending proposals so peers\n  hold the review; activity logging is best effort and the project-card `paused`\n  badge refreshes immediately after a toggle. A transient binding-read failure\n  keeps a recently paused room paused for a grace period instead of silently\n  resuming autonomy.\n* Scheduled/time-based coroutines keep their own Pause control; the project flag\n  suppresses room-driven autonomy only (replies, room events, review, policy\n  auto-approve)."
     }
   ]
 }

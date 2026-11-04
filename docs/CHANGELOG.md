@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.1
+
+*Released 2026-11-04.*
+
 ### Package replacement guard
 
 * A staged package awaiting approval can no longer be silently replaced by a
