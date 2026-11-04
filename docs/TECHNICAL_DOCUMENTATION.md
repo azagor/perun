@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.83 (see §15). Project cards keep one width; a short last row is centered instead of stretched.
+**Latest release:** v0.10.84 (see §15). Project grid rows are balanced (4+2 instead of 5+1) with one card width.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2647,6 +2647,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.84: Project grid rows are balanced (4+2 instead of 5+1) with one card width.
+
 ### 2026-11-04 — v0.10.83: Project cards keep one width; a short last row is centered instead of stretched.
 
 ### 2026-11-04 — v0.10.82: The project grid shares a partly filled last row so the final card is no longer squeezed.

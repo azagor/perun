@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.84
+
+*Released 2026-11-04.*
+
 ### Project grid row balancing
 
 * The grid now chooses a column count that avoids a single card alone on the
