@@ -260,7 +260,8 @@ operator configuration, not an approved target.
   `pending`. In-flight runs finish. A room message can never clear the flag.
 - **FR-34** Members keep their chat: paused messages are retained in room
   history so the agent can catch up after a resume. The bridge posts one notice
-  per pause period explaining why the agent is silent; explicit human
+  per pause period explaining why the agent is silent; operator-directed
+  mentions are still raised (a notification, not agent work); explicit human
   approvals/executions remain available.
 
 ---

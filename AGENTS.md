@@ -112,7 +112,8 @@ with `python -m perun project-roots --add <name> <path>`.
   not ingest its messages for coroutine triggers, must not start the autonomous
   proposal review, and policy auto-approve must leave new proposals pending.
   In-flight runs finish; human chat, explicit approvals and the dashboard remain.
-  A room message can never clear the flag.
+  Operator-directed mentions stay durable while paused (a notification, not
+  agent work). A room message can never clear the flag.
 * **Execution is declared, never improvised.** The only command Perun runs on
   its own is a check the operator declared (`project_checks`, written by
   `perun checks add` / the dashboard, never by an MCP tool and never from the

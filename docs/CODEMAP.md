@@ -1029,7 +1029,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `_on_frame()` posts one notice per pause period (`_notice_paused`) and returns
   before event ingestion or the reply queue, so room coroutines do not fire and
   the agent stays silent; `_reply()` re-checks the flag as a second guard.
-  `_maybe_schedule_agent_review()` also skips a paused project.
+  `_maybe_schedule_agent_review()` also skips a paused project. Operator-directed
+  mentions are still raised before the paused return (notification, not work).
   Unbound/public rooms use the control
   plane. State-changing requests are sent through the `propose` tool, not
   executed directly. A background activity-table poller posts review requests

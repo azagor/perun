@@ -1993,8 +1993,10 @@ leaves new proposals pending; in-flight runs finish. Members can keep chatting:
 their messages are retained in the room history so the agent can catch up after
 a resume. The bridge posts one notice per pause period (the `work_paused_at`
 stamp) explaining why the agent is silent, and the project card is badged
-`paused`. Resume clears the flag and the actor; explicit human approvals and
-executions remain available - the pause stops autonomy, not the operator.
+`paused`. Operator-directed mentions are still raised while paused (a
+notification, not agent work). Resume clears the flag and the actor; explicit
+human approvals and executions remain available - the pause stops autonomy, not
+the operator.
 
 **Dashboard chat log decisions.** The dashboard log used to duplicate a message
 or show a frame from another room because the filtering, the dedupe and the

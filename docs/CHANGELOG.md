@@ -20,7 +20,8 @@ _No unreleased changes yet._
   finish; human chat and explicit approvals remain available.
 * Members can keep chatting: paused messages stay in room history for the agent
   to catch up after a resume. The bridge posts one notice per pause period so the
-  room knows why the agent is silent.
+  room knows why the agent is silent; operator-directed mentions are still
+  raised (a notification, not agent work).
 
 ## v0.10.76
 

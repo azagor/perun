@@ -3966,6 +3966,8 @@ def test_a_paused_shared_project_suppresses_autonomous_work(settings, monkeypatc
                         lambda room, text: notices.append((room, text)) or True)
     ingest = MagicMock()
     monkeypatch.setattr(coroutines, "ingest_room_message", ingest)
+    mention = MagicMock()
+    monkeypatch.setattr(bridge, "_raise_operator_mention", mention)
     frame = {
         "type": "CHAT", "id": "msg_paused_1", "room_id": "grp:t:p",
         "sender": {"agent_id": "frambo"}, "payload": "please do the work",
@@ -3976,6 +3978,7 @@ def test_a_paused_shared_project_suppresses_autonomous_work(settings, monkeypatc
         bridge._drain_room_queues()
         assert not mock_reply.called
     ingest.assert_not_called()
+    mention.assert_called_once()
     assert len(notices) == 1 and "paused" in notices[0][1].lower()
     # The message is kept for context after a resume.
     assert "msg_paused_1" in [f.get("id") for f in bridge._room_history["grp:t:p"]]
@@ -3985,6 +3988,11 @@ def test_a_paused_shared_project_suppresses_autonomous_work(settings, monkeypatc
         bridge._drain_room_queues()
         assert not mock_reply.called
     assert len(notices) == 1  # one notice per pause period
+
+    # A typing indicator is not a message: it must not announce the pause.
+    bridge._on_frame({**frame, "id": "msg_paused_typing", "payload": "",
+                      "content_type": "application/perun-typing"}, None)
+    assert len(notices) == 1
 
 
 def test_resumed_work_lets_the_room_agent_act_again(settings, monkeypatch):

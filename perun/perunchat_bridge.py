@@ -1827,7 +1827,14 @@ class PerunChatBridge:
 
         if paused:
             # History above is kept so the agent can catch up after a resume,
-            # but no work is scheduled and no coroutine saw this frame.
+            # but no agent work is scheduled and no coroutine saw this frame.
+            # A room ask that names the operator is a notification, not agent
+            # work: keep it durable even while the project is paused.
+            try:
+                self._raise_operator_mention(frame, room_id)
+            except Exception:  # pragma: no cover - telemetry must never break the room
+                logger.debug("could not raise an operator mention in a paused room",
+                             exc_info=True)
             logger.info("PerunChat work paused for %s; message kept, no reply", room_id)
             return
 
