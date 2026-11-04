@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Project card size restored
+
+* The grid uses the maximum column count again (restoring the previous
+  first-row card size), keeps one computed width for every card, and a partly
+  filled last row starts at the first column instead of being rebalanced or
+  centered.
 
 ## v0.10.84
 

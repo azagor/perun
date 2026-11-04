@@ -1360,9 +1360,9 @@ function sectionTitle(text, extra) {
 }
 
 function layoutProjectGrid(grid) {
-    // Size every card to one width and choose a column count that avoids a
-    // single card stranded on the last row (6 cards at a wide width become
-    // 4+2, not 5+1). A partial last row is centered.
+    // Size every card to one width, using the maximum column count that fits
+    // (the previous first-row size). A partly filled last row starts at the
+    // first column; no rebalancing.
     if (!grid || !grid.isConnected) return;
     const width = grid.clientWidth;
     if (!width) return;
@@ -1373,10 +1373,7 @@ function layoutProjectGrid(grid) {
     const count = grid.querySelectorAll(':scope > .proj-card').length;
     if (!count) return;
     const maxCols = Math.max(1, Math.floor((width + gap) / (min + gap)));
-    let columns = Math.min(maxCols, count);
-    for (let c = columns; c >= 2; c--) {
-        if (count % c !== 1) { columns = c; break; }
-    }
+    const columns = Math.min(maxCols, count);
     const available = width - (columns - 1) * gap;
     const card = Math.min(width, maxCard, Math.floor(available / columns));
     grid.style.setProperty('--proj-card-w', `${card}px`);

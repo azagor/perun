@@ -128,9 +128,9 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 /* ---------- cards / grid ---------- */
 .grid { display: grid; gap: 16px; }
 .stats-grid { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); }
-/* Project cards share the row; a partly filled last row is centered and every
-   card keeps the same width (set as --proj-card-w by layoutProjectGrid). */
-.proj-grid { display: flex; flex-wrap: wrap; justify-content: center; }
+/* Project cards share one computed width; a partly filled last row starts at
+   the first column (the previous row size is preserved). */
+.proj-grid { display: flex; flex-wrap: wrap; }
 .proj-grid > .proj-card {
     flex: 0 1 var(--proj-card-w, 310px);
     min-width: 0;
