@@ -1359,12 +1359,33 @@ function sectionTitle(text, extra) {
     return s;
 }
 
+function layoutProjectGrid(grid) {
+    // Give every card the same width for the current column count, so a partly
+    // filled last row is centered instead of stretched. The CSS fallback is
+    // 310px when JS has not measured the grid yet.
+    if (!grid || !grid.isConnected) return;
+    const width = grid.clientWidth;
+    if (!width) return;
+    const styles = getComputedStyle(grid);
+    const gap = parseFloat(styles.columnGap || styles.gap) || 16;
+    const min = 310;
+    const columns = Math.max(1, Math.floor((width + gap) / (min + gap)));
+    const available = width - (columns - 1) * gap;
+    const card = Math.min(width, Math.floor(available / columns));
+    grid.style.setProperty('--proj-card-w', `${card}px`);
+}
+
 function projectGrid(projects) {
     if (!projects.length) return el('div', { class: 'empty' }, 'No projects yet — run discovery to register your projects.');
     const grid = el('div', { class: 'grid proj-grid' });
     for (const p of projects) grid.appendChild(projectCard(p));
+    requestAnimationFrame(() => layoutProjectGrid(grid));
     return grid;
 }
+
+window.addEventListener('resize', () => {
+    document.querySelectorAll('.proj-grid').forEach(layoutProjectGrid);
+});
 
 function projectCard(p) {
     const isControl = !!p.is_control;

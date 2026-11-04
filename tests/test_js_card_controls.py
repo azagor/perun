@@ -129,12 +129,15 @@ def test_shared_projects_expose_a_work_pause_control():
 
 
 def test_the_project_grid_shares_a_partial_last_row():
-    """A lone last-row card must grow, not sit squeezed in one grid column."""
+    """Every card keeps the same width; the short last row is centered."""
     css = (REPO_ROOT / "web" / "css" / "perun.css").read_text(encoding="utf-8")
-    assert ".proj-grid { display: flex; flex-wrap: wrap; }" in css
-    assert ".proj-grid > .proj-card" in css
-    assert "flex: 1 1 310px" in css
+    js = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert ".proj-grid { display: flex; flex-wrap: wrap; justify-content: center; }" in css
+    assert "flex: 0 1 var(--proj-card-w, 310px)" in css
     assert "overflow-wrap: anywhere" in css
+    assert "layoutProjectGrid" in js
+    assert "--proj-card-w" in js
+    assert "requestAnimationFrame(() => layoutProjectGrid(grid))" in js
 
 
 def test_an_uncertain_terminal_launch_is_not_finalized():

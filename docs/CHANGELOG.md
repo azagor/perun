@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Project grid balance
+
+* Every project card now uses the same computed width for the current column
+  count; a partly filled last row is centered instead of stretching the final
+  card across the row (PerunChat alone no longer becomes full-width).
 
 ## v0.10.82
 

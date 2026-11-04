@@ -128,10 +128,14 @@ h1, h2, h3, h4 { font-family: 'Cinzel', Georgia, serif; font-weight: 600; letter
 /* ---------- cards / grid ---------- */
 .grid { display: grid; gap: 16px; }
 .stats-grid { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); }
-/* Project cards share the row instead of leaving an empty grid cell when the
-   last row is only partly filled (a lone card used to look squeezed). */
-.proj-grid { display: flex; flex-wrap: wrap; }
-.proj-grid > .proj-card { flex: 1 1 310px; min-width: min(100%, 310px); }
+/* Project cards share the row; a partly filled last row is centered and every
+   card keeps the same width (set as --proj-card-w by layoutProjectGrid). */
+.proj-grid { display: flex; flex-wrap: wrap; justify-content: center; }
+.proj-grid > .proj-card {
+    flex: 0 1 var(--proj-card-w, 310px);
+    min-width: 0;
+    max-width: var(--proj-card-w, 310px);
+}
 .grid.two-col { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 
 .card {
