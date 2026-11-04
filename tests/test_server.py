@@ -2923,3 +2923,22 @@ def test_a_tui_run_can_resume_an_existing_session(client, tmp_path):
     run = r.json()["run"]
     assert run["opencode_session_id"] == "ses_resume"
     assert run["session_pk"] == session["id"]
+
+
+def test_a_tui_run_cannot_resume_another_projects_session(client, tmp_path):
+    from perun import registry
+
+    owner = _check_project(tmp_path, "tui-owner")
+    other = _check_project(tmp_path, "tui-other")
+    foreign = registry.create_session(
+        other["id"], "ses_foreign", title="Another project's chat")
+
+    r = client.post("/api/runs/tui", json={
+        "project": owner["slug"],
+        "opencode_session_id": "ses_foreign",
+        "session_pk": foreign["id"],
+        "prompt": "Resumed: Another project's chat",
+    })
+
+    assert r.status_code == 400, r.text
+    assert "does not belong to this project" in r.json()["detail"]

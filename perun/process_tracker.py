@@ -111,6 +111,21 @@ class ProcessTracker:
         except Exception:  # pragma: no cover - tracking is best effort
             pass
 
+    def _persisted_terminal_pid(self, run_uid: str) -> int | None:
+        """The run row's pid, resolved like the post-restart path.
+
+        Read-only: used when the in-memory Popen handle has died (``wt.exe``
+        exits immediately) and the marker scan could not identify the new shell
+        yet. The same marker verification applies, so a recycled pid is refused.
+        """
+        run = registry.get_run(run_uid) or {}
+        pid = int(run.get("pid") or 0)
+        if not pid or not registry.pid_alive(pid):
+            return None
+        if not self._belongs_to_run(pid, run_uid):
+            return None
+        return self._terminal_owner(pid, run_uid) or pid
+
     def run_terminal_pid(self, run_uid: str) -> int | None:
         """The shell pid whose window hosts this run's terminal, or ``None``.
 
@@ -123,16 +138,14 @@ class ProcessTracker:
         if not entry:
             # After a restart the in-memory entry is gone; the persisted pid is
             # usable only while it still carries this run's marker.
-            run = registry.get_run(run_uid) or {}
-            pid = int(run.get("pid") or 0)
-            if not pid or not registry.pid_alive(pid):
-                return None
-            if not self._belongs_to_run(pid, run_uid):
-                return None
-            return self._terminal_owner(pid, run_uid) or pid
+            return self._persisted_terminal_pid(run_uid)
         pid = self._kill_pid(entry)
         if not pid:
-            return None
+            # The launcher can exit before the shell it spawned (``wt.exe``),
+            # and the marker scan can miss a console that is still starting. The
+            # persisted pid is the same evidence Stop uses after a restart, so
+            # Focus must not report a live terminal as unattributable.
+            return self._persisted_terminal_pid(run_uid)
         proc = entry.get("proc")
         try:
             if proc is not None and getattr(proc, "pid", None) == pid and proc.poll() is None:

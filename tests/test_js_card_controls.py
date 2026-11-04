@@ -78,3 +78,16 @@ def test_the_console_defaults_its_session_picker_to_the_latest():
     src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
     assert "const latest = [...sel.options].find" in src
     assert "if (latest) sel.value = latest.value;" in src
+
+
+def test_the_card_run_button_is_disabled_while_the_session_lookup_runs():
+    """A double click must not launch two terminals."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "if (btn.disabled) return;" in src
+    assert "if (btn.isConnected) btn.disabled = false;" in src
+
+
+def test_the_console_skips_sessions_without_an_opencode_id():
+    """A session with no OpenCode id cannot be resumed."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "if (!String(s.opencode_session_id || '').trim()) continue;" in src

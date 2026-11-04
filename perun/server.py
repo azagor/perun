@@ -2967,6 +2967,15 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         session_pk = int(session_pk) if session_pk else None
     except (TypeError, ValueError):
         session_pk = None
+    if session_pk is not None:
+        # A run may only claim a session that belongs to its own project, so a
+        # crafted request cannot attach usage from another project's chat.
+        session = _registry.get_session(session_pk)
+        if not session or int(session.get("project_id") or 0) != int(project["id"]):
+            raise HTTPException(
+                status_code=400,
+                detail="session_pk does not belong to this project",
+            )
     _registry.create_run(
         run_uid, project["id"], prompt,
         model=model, model_explicit=bool(model),

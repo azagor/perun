@@ -23,6 +23,29 @@ class _Kernel:
         return 0
 
 
+class _User32:
+    def __init__(self, owner=0, valid=True, visible=True):
+        self.owner = owner
+        self.valid = valid
+        self.visible = visible
+
+    def GetWindow(self, hwnd, index):
+        return self.owner
+
+    def IsWindow(self, hwnd):
+        return self.valid
+
+    def IsWindowVisible(self, hwnd):
+        return self.visible
+
+
+@pytest.fixture(autouse=True)
+def _no_console_subprocess(monkeypatch):
+    """Never spawn the console probe for a fake pid; tests opt in explicitly."""
+    monkeypatch.setattr(terminal_focus, "_read_console_hwnd", lambda pid: 0)
+    terminal_focus._console_hwnd.clear()
+
+
 # --------------------------------------------------------------------------- #
 # Candidate ranking (pure)
 # --------------------------------------------------------------------------- #
@@ -413,3 +436,90 @@ def test_a_failed_session_lookup_is_not_cached(monkeypatch):
 
     assert "Back online" in strong
     assert calls == ["ses_flaky", "ses_flaky"]
+
+
+# --------------------------------------------------------------------------- #
+# Deterministic console-window resolution (the pseudoconsole link)
+# --------------------------------------------------------------------------- #
+def test_the_console_handle_names_the_terminal_window(monkeypatch):
+    """A classic console owns its own window; no title search is needed."""
+    monkeypatch.setattr(terminal_focus, "_read_console_hwnd", lambda pid: 777)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (_User32(owner=0), _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_class",
+                        lambda hwnd: "ConsoleWindowClass")
+    terminal_focus._console_hwnd.clear()
+
+    assert terminal_focus.console_host_window(4242) == 777
+
+
+def test_a_pseudoconsole_owner_is_the_windows_terminal_window(monkeypatch):
+    """Windows 11 returns a hidden ConPTY window; its owner is the real window."""
+    monkeypatch.setattr(terminal_focus, "_read_console_hwnd", lambda pid: 777)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (_User32(owner=900), _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_class",
+                        lambda hwnd: "CASCADIA_HOSTING_WINDOW_CLASS")
+    terminal_focus._console_hwnd.clear()
+
+    assert terminal_focus.console_host_window(4242) == 900
+
+
+def test_a_non_terminal_or_hidden_window_is_never_raised(monkeypatch):
+    monkeypatch.setattr(terminal_focus, "_read_console_hwnd", lambda pid: 777)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (_User32(owner=0), _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_class",
+                        lambda hwnd: "Chrome_WidgetWin_1")
+    terminal_focus._console_hwnd.clear()
+    assert terminal_focus.console_host_window(4242) == 0
+
+    monkeypatch.setattr(terminal_focus, "_api",
+                        lambda: (_User32(owner=900, visible=False), _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_class",
+                        lambda hwnd: "CASCADIA_HOSTING_WINDOW_CLASS")
+    terminal_focus._console_hwnd.clear()
+    assert terminal_focus.console_host_window(4242) == 0
+
+
+def test_focus_uses_the_console_window_before_title_matching(monkeypatch):
+    monkeypatch.setattr(
+        terminal_focus.registry, "get_run",
+        lambda uid: {"run_uid": uid, "standalone": 1, "pid": 100,
+                     "project_id": 0, "prompt": ""})
+    monkeypatch.setattr(terminal_focus, "supported", lambda: True)
+    monkeypatch.setattr(terminal_focus.process_tracker.TRACKER,
+                        "run_terminal_pid", lambda uid: 100)
+    monkeypatch.setattr(terminal_focus, "console_host_window", lambda pid: 900)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (None, _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_title", lambda hwnd: "OC | title")
+    monkeypatch.setattr(terminal_focus, "_activate",
+                        lambda hwnd: ("setforegroundwindow", True))
+    searched = []
+    monkeypatch.setattr(terminal_focus, "_list_windows",
+                        lambda: searched.append(True) or [])
+
+    out = terminal_focus.focus_run_terminal("console-first")
+
+    assert out["focused"] is True
+    assert out["hwnd"] == 900
+    assert out["ambiguous"] is False
+    assert searched == []  # the title search was not needed
+
+
+def test_a_blocked_console_window_reports_the_flash(monkeypatch):
+    monkeypatch.setattr(
+        terminal_focus.registry, "get_run",
+        lambda uid: {"run_uid": uid, "standalone": 1, "pid": 100,
+                     "project_id": 0, "prompt": ""})
+    monkeypatch.setattr(terminal_focus, "supported", lambda: True)
+    monkeypatch.setattr(terminal_focus.process_tracker.TRACKER,
+                        "run_terminal_pid", lambda uid: 100)
+    monkeypatch.setattr(terminal_focus, "console_host_window", lambda pid: 900)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (None, _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_title", lambda hwnd: "OC | title")
+    monkeypatch.setattr(terminal_focus, "_activate", lambda hwnd: ("flash", False))
+    monkeypatch.setattr(terminal_focus, "_list_windows", lambda: [])
+
+    out = terminal_focus.focus_run_terminal("console-flash")
+
+    assert out["focused"] is False
+    assert "flashed" in out["reason"]
+    assert out["hwnd"] == 900

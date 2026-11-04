@@ -4,7 +4,29 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Hardening for TUI session resume
+
+* The card **Run** button disables while it looks up the newest session, so a
+  double click cannot launch two terminals.
+* `POST /api/runs/tui` rejects a `session_pk` that belongs to another project
+  (400), so a crafted request cannot attach another project's usage.
+* The Agent Console session picker skips sessions with no `opencode_session_id`,
+  because such a session cannot be passed to `opencode --session`.
+
+### Focus finds the terminal through its console again
+
+* On Windows 11 the shell has no live process-tree link to Windows Terminal (the
+  ConPTY host exits) and the tab title belongs to OpenCode, so Focus could report
+  "no terminal window found" while the terminal was open — especially once the
+  window showed another active tab or its title changed.
+* Focus now asks the console itself: a short-lived detached helper attaches to the
+  run's console and reads the console window, whose **owner** is the exact Windows
+  Terminal window (a classic console owns its window directly). This is
+  deterministic and needs no title, project name, or OpenCode service call; the
+  existing window/title search remains the fallback.
+* `ProcessTracker.run_terminal_pid()` falls back to the run row's persisted pid
+  when the in-memory launcher handle has died (e.g. `wt.exe`) instead of reporting
+  a live terminal as unattributable. Marker verification is unchanged.
 
 ## v0.10.73
 

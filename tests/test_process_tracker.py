@@ -343,6 +343,25 @@ def test_run_terminal_pid_refuses_an_unmarked_pid(fresh_tracker, monkeypatch):
     assert fresh_tracker.run_terminal_pid("focus-bad") is None
 
 
+def test_run_terminal_pid_falls_back_to_the_persisted_pid(fresh_tracker, project, monkeypatch):
+    """A dead launcher must not hide a live terminal: the row's pid is the net."""
+    proc = _sleep_proc()
+    try:
+        run = registry.create_run("focus-fallback", project["id"], "TUI",
+                                  standalone=True)
+        registry.update_run(run["run_uid"], status="running", pid=proc.pid)
+        fresh_tracker._entries["focus-fallback"] = {
+            "run_uid": "focus-fallback", "proc": None, "pid": 111,
+        }
+        monkeypatch.setattr(fresh_tracker, "_kill_pid", lambda entry: None)
+        monkeypatch.setattr(fresh_tracker, "_belongs_to_run", lambda pid, uid: True)
+        monkeypatch.setattr(fresh_tracker, "_terminal_owner", lambda pid, uid: 555)
+
+        assert fresh_tracker.run_terminal_pid(run["run_uid"]) == 555
+    finally:
+        proc.kill()
+
+
 def test_run_terminal_pid_after_a_restart_requires_the_marker(project, monkeypatch):
     proc = _sleeper()
     try:

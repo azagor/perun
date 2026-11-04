@@ -749,25 +749,35 @@ positional directory argument. stdout is streamed line-by-line to
 **Focusing a TUI terminal.** While a TUI run is active the project card also
 offers **Focus** (`POST /api/runs/{uid}/terminal/focus`). The pid comes from
 `ProcessTracker.run_terminal_pid()` - the same `PERUN_RUN_UID`-verified
-resolution Stop uses, so a recycled pid's window is never raised. On Windows
-with `psutil` available, `perun/terminal_focus.py` enumerates top-level windows,
+resolution Stop uses, so a recycled pid's window is never raised; when the
+in-memory launcher handle has died (e.g. `wt.exe`) it falls back to the run
+row's persisted pid under the same marker check. On Windows with `psutil`
+available, `perun/terminal_focus.py` resolves the window **through the console
+itself** first: a short-lived detached helper attaches to the run's console and
+returns its window, whose **owner** is the exact Windows Terminal window hosting
+the tab (a classic console owns its window directly). AttachConsole is
+process-wide, so it must never run inside the server; the helper keeps the
+server's own console intact. This is deterministic and needs no title, project
+name, or OpenCode call.
+
+When the console link is unavailable, Focus enumerates top-level windows,
 matches the shell, an ancestor (Windows Terminal) or a descendant
 (conhost/OpenConsole), and activates it (`ShowWindow`/`SetForegroundWindow`, an
 `AttachThreadInput` retry, then `SwitchToThisWindow`); if Windows still refuses,
 the taskbar button is flashed and the UI says so. Windows 11 hosts a console in
 a **pseudoconsole**, so the terminal window is in neither the shell's ancestors
-nor its descendants: the run's OpenCode **session title** (which is what the
-Windows Terminal tab shows) is matched as a strong hint, and a terminal-class
-window may fall back to the project name - a browser window with the same words
-never qualifies, and hints shorter than three characters are ignored. The
-session-title lookup is capped at 1 s and cached for 30 s. Launches also write a
-`Perun: <slug>` window/tab title as a
-matching hint (the `cmd` builtin inside the tab, so old Windows Terminal builds
-work too), and repeated clicks cycle equally good candidates because several
-Windows Terminal windows share one process. The session-title lookup only uses
-an already-discovered service (`OpenCodeAPI.ready`), so a Focus click never
-blocks on CLI discovery. `/api/runs/active` carries `focus_supported` so other
-platforms never render a dead button.
+nor its descendants: as a fallback, the run's OpenCode **session title** (which
+is what the Windows Terminal tab shows) is matched as a strong hint, and a
+terminal-class window may fall back to the project name - a browser window with
+the same words never qualifies, and hints shorter than three characters are
+ignored. The session-title lookup is capped at 1 s and cached for 30 s. Launches
+also write a `Perun: <slug>` window/tab title as a matching hint (the `cmd`
+builtin inside the tab, so old Windows Terminal builds work too), and repeated
+clicks cycle equally good candidates because several Windows Terminal windows
+share one process. The session-title lookup only uses an already-discovered
+service (`OpenCodeAPI.ready`), so a Focus click never blocks on CLI discovery.
+`/api/runs/active` carries `focus_supported` so other platforms never render a
+dead button.
 
 | event | meaning |
 |---|---|
@@ -1065,10 +1075,10 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/runs` | recent runs (`?project=`) |
 | GET | `/api/runs/active` | queued/running runs joined with their project (the live storm layer) |
 | POST | `/api/runs` | start a headless run `{project,prompt?,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator; an omitted `prompt` uses a default starter prompt |
-| POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?,model?,agent?}` |
+| POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?,model?,agent?,opencode_session_id?,session_pk?}`; a `session_pk` from another project is refused with 400 |
 | GET | `/api/runs/{run_uid}` | run status/output |
 | POST | `/api/runs/{run_uid}/cancel` | cancel a headless run **and** terminate a tracked TUI/terminal session; the run is always offered to the tracker, so a restarted server still closes the terminal from `runs.pid` + its `PERUN_RUN_UID` marker |
-| POST | `/api/runs/{run_uid}/terminal/focus` | raise/restore the terminal window hosting a tracked TUI run (marker-verified pid, Windows + `psutil`); expected misses return `{focused:false, reason}` and a refused foreground switch flashes the taskbar button |
+| POST | `/api/runs/{run_uid}/terminal/focus` | raise/restore the terminal window hosting a tracked TUI run (marker-verified pid, Windows + `psutil`); the console handle names the window first (pseudoconsole owner = the Windows Terminal window), with the window/title search as fallback; expected misses return `{focused:false, reason}` and a refused foreground switch flashes the taskbar button |
 | POST | `/api/runs/{run_uid}/finish` | finalize a TUI run record (e.g. user closed the window manually) |
 | POST | `/api/runs/{run_uid}/kill` | terminate the tracked terminal/TUI process for a run and finalize it |
 | GET | `/api/runs/{run_uid}/stream` | **SSE** run events |

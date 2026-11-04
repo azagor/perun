@@ -741,7 +741,9 @@ Lifecycle tracking for externally-launched TUI/terminal sessions.
   `_resolve_child_pid()`
   (descendant-first marker scan with full-system fallback; its `heuristic=False`
   mode skips the launch-time Windows Terminal guess, which is liveness-only),
-  `_kill_tree()`, `_watch_loop()`.
+  `_persisted_terminal_pid()` (the restart/focus fallback: the run row's `pid`,
+  marker-verified), `run_terminal_pid()` (read-only, never kills), `_kill_tree()`,
+  `_watch_loop()`.
 * Uses `psutil` to walk process trees and resolve Windows Terminal child
   processes. The frontend injects a `PERUN_RUN_UID` environment marker into the
   shell command so the tracker can find the TUI process even when the launcher has
@@ -755,15 +757,20 @@ Raise the terminal window that hosts a run's TUI session (the card's Focus butto
 * `supported()` (Windows with `psutil`) and `focus_run_terminal(run_uid)` ->
   `{focused, pid, hwnd, method, reason}`; expected misses return a reason.
 * The pid comes from `ProcessTracker.run_terminal_pid()` (marker-verified, the
-  same attribution Stop uses). Window enumeration then matches the shell itself,
-  an ancestor (Windows Terminal) or a descending conhost/OpenConsole; when the
-  terminal hosts a pseudoconsole (Windows 11 default), the run's **session
-  title** (`OpenCodeAPI.session()`, only when the service is already discovered;
-  capped at 1 s and cached for 30 s) is a strong title hint, and a terminal-class
-  window may fall back to the project name (hints shorter than three characters
-  are ignored, and a browser window with the same words never qualifies). Equally
-  good candidates cycle on repeated clicks, because several Windows Terminal
-  windows share one process.
+  same attribution Stop uses). `console_host_window(pid)` is the **primary**
+  path: a short-lived detached helper (`_read_console_hwnd`) attaches to the
+  run's console, and `_terminal_hwnd` accepts the console window itself (classic
+  console) or its **owner** (the Windows Terminal window hosting a pseudoconsole
+  tab). It is deterministic: no title, project name or OpenCode call is involved,
+  and AttachConsole never runs inside the server (it is process-wide).
+* When the console link is unavailable, window enumeration matches the shell
+  itself, an ancestor (Windows Terminal) or a descending conhost/OpenConsole;
+  the run's **session title** (`OpenCodeAPI.session()`, only when the service is
+  already discovered; capped at 1 s and cached for 30 s) is a strong title hint,
+  and a terminal-class window may fall back to the project name (hints shorter
+  than three characters are ignored, and a browser window with the same words
+  never qualifies). Equally good candidates cycle on repeated clicks, because
+  several Windows Terminal windows share one process.
 * Activation restores the window, calls the user32 foreground API, retries via
   a thread-input attach, then falls back to SwitchToThisWindow; when Windows
   still refuses, the taskbar button is flashed (reported as `method: "flash"`).

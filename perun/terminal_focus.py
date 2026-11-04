@@ -28,6 +28,8 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 from ctypes import wintypes
@@ -69,6 +71,33 @@ MIN_WEAK_HINT = 3
 SESSION_TITLE_TTL = 30.0
 _session_titles: dict[str, tuple[float, str]] = {}
 _session_titles_lock = threading.Lock()
+
+#: ``AttachConsole`` is process-wide, so the server must never call it (that
+#: would detach its own console). A throwaway detached process asks the shell
+#: for its console window and reports the owner instead.
+CONSOLE_QUERY_TIMEOUT = 2.5
+CONSOLE_HWND_TTL = 30.0
+_console_hwnd: dict[int, tuple[float, int]] = {}
+_console_hwnd_lock = threading.Lock()
+
+_CONSOLE_HWND_SCRIPT = r"""
+import ctypes, sys
+from ctypes import wintypes
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32.FreeConsole()
+kernel32.AttachConsole.argtypes = [wintypes.DWORD]
+kernel32.AttachConsole.restype = wintypes.BOOL
+kernel32.GetConsoleWindow.restype = wintypes.HWND
+user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+user32.GetWindow.restype = wintypes.HWND
+if not kernel32.AttachConsole(int(sys.argv[1])):
+    sys.exit(3)
+hwnd = int(kernel32.GetConsoleWindow() or 0)
+if not hwnd:
+    sys.exit(4)
+print(int(user32.GetWindow(hwnd, 4) or 0) or hwnd)
+"""
 
 _user32: Any = None
 _kernel32: Any = None
@@ -124,6 +153,8 @@ def _api() -> tuple[Any, Any]:
     user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     user32.GetForegroundWindow.argtypes = []
     user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
     user32.ShowWindow.restype = wintypes.BOOL
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
@@ -163,6 +194,92 @@ def _window_class(hwnd: int) -> str:
     buffer = ctypes.create_unicode_buffer(256)
     user32.GetClassNameW(hwnd, buffer, 256)
     return buffer.value
+
+
+def _read_console_hwnd(pid: int) -> int:
+    """Ask a detached helper for *pid*'s console window handle (0 if none).
+
+    ``AttachConsole`` is process-wide: attaching inside the server would drop
+    its own console, so the query runs in a throwaway process. It is a local,
+    read-only call; the pid is passed as an integer argument, never through a
+    shell.
+    """
+    exe = sys.executable or ""
+    if not exe or os.name != "nt" or getattr(sys, "frozen", False):
+        return 0
+    try:
+        proc = subprocess.run(
+            [exe, "-c", _CONSOLE_HWND_SCRIPT, str(int(pid))],
+            capture_output=True, text=True, timeout=CONSOLE_QUERY_TIMEOUT,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+        )
+    except Exception:  # pragma: no cover - depends on the host
+        LOG.debug("console window probe failed for pid %s", pid, exc_info=True)
+        return 0
+    if proc.returncode != 0:
+        return 0
+    lines = (proc.stdout or "").strip().splitlines()
+    try:
+        return int(lines[-1]) if lines else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _terminal_hwnd(hwnd: int) -> int:
+    """The visible terminal window for a console handle, or 0.
+
+    A classic console owns its window directly; a pseudoconsole (Windows 11
+    default terminal) returns a hidden ConPTY window whose **owner** is the
+    Windows Terminal window hosting the tab. Only a real terminal-class window
+    is accepted, so a stale handle can never raise an unrelated program.
+    """
+    if not hwnd:
+        return 0
+    user32, _ = _api()
+    try:
+        owner = int(user32.GetWindow(hwnd, GW_OWNER) or 0)
+        target = owner or int(hwnd)
+        if not target or not user32.IsWindow(target):
+            return 0
+        if not user32.IsWindowVisible(target):
+            return 0
+    except Exception:  # pragma: no cover - defensive
+        return 0
+    if _window_class(target).lower() not in _TERMINAL_WINDOW_CLASSES:
+        return 0
+    return target
+
+
+def console_host_window(pid: int) -> int:
+    """The window hosting *pid*'s console, resolved through the console itself.
+
+    This is the deterministic link the process tree cannot give on Windows 11:
+    the shell's parent is a ConPTY host that exits, so the terminal window is
+    neither an ancestor nor a descendant. The console handle is stable for the
+    life of the tab, and its owner is the exact Windows Terminal window - no
+    title, project name or OpenCode service call needed.
+
+    Cached briefly because repeated Focus clicks are common and the window does
+    not move between them.
+    """
+    pid = int(pid or 0)
+    if pid <= 0:
+        return 0
+    now = time.monotonic()
+    with _console_hwnd_lock:
+        cached = _console_hwnd.get(pid)
+    if cached and now - cached[0] < CONSOLE_HWND_TTL:
+        if _terminal_hwnd(cached[1]):
+            return cached[1]
+        # The window closed (or its handle was recycled): ask again.
+        with _console_hwnd_lock:
+            _console_hwnd.pop(pid, None)
+    hwnd = _terminal_hwnd(_read_console_hwnd(pid))
+    # Cache a hit only: a miss may be transient (the tab is still starting).
+    if hwnd:
+        with _console_hwnd_lock:
+            _console_hwnd[pid] = (now, hwnd)
+    return hwnd
 
 
 def _list_windows() -> list[dict[str, Any]]:
@@ -438,14 +555,35 @@ def focus_run_terminal(run_uid: str) -> dict[str, Any]:
         return {"focused": False,
                 "reason": "no attributable terminal for this run"}
 
-    hints, strong_hints = _title_hints(run)
-    ancestors, descendants = _relation_sets(pid)
-    windows = _list_windows()
+    # The server's own console must never be raised for a run: `GetConsoleWindow`
+    # is the window this process is attached to.
     _, kernel32 = _api()
     try:
         own_console = int(kernel32.GetConsoleWindow() or 0)
     except Exception:  # pragma: no cover - defensive
         own_console = 0
+
+    # Deterministic path first: the console itself names the hosting window. On
+    # Windows 11 the shell has no live process-tree link to Windows Terminal (the
+    # ConPTY host exits), and the tab title belongs to OpenCode, so title
+    # matching is only a fallback.
+    direct = console_host_window(pid)
+    if direct and direct != own_console:
+        title = _window_title(direct)
+        method, focused = _activate(direct)
+        if focused:
+            return {"focused": True, "pid": pid, "hwnd": direct,
+                    "method": method, "title": title, "ambiguous": False}
+        if method == "flash":
+            return {"focused": False, "pid": pid, "hwnd": direct,
+                    "method": method, "title": title, "ambiguous": False,
+                    "reason": "Windows blocked the foreground switch; "
+                              "the terminal button was flashed"}
+        # An unexpected activation failure: fall through to the ranked search.
+
+    hints, strong_hints = _title_hints(run)
+    ancestors, descendants = _relation_sets(pid)
+    windows = _list_windows()
     ranked = _rank_candidates(
         windows, shell_pid=pid, ancestors=ancestors, descendants=descendants,
         hints=hints, strong_hints=strong_hints, exclude=(own_console,))

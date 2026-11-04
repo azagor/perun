@@ -1407,7 +1407,16 @@ function projectCard(p) {
         }
         if (e.target.closest('[data-tui]')) {
             e.stopPropagation();
-            resumeLatestProjectTui(p);
+            const btn = e.target.closest('[data-tui]');
+            // The session lookup is a network round-trip; a second click would
+            // launch a second terminal. Disable the button until it settles.
+            if (btn.disabled) return;
+            btn.disabled = true;
+            Promise.resolve(resumeLatestProjectTui(p)).finally(() => {
+                // A successful launch re-renders the card; only re-enable if
+                // this element is still on the page.
+                if (btn.isConnected) btn.disabled = false;
+            });
             return;
         }
         goto('#/project/' + p.slug);
@@ -3986,6 +3995,9 @@ function mountConsole(host, initial) {
         try {
             const detail = await api(`/api/projects/${slug}/sessions`);
             for (const s of detail.sessions || []) {
+                // A session without an OpenCode id cannot be resumed: there is
+                // nothing to pass to `opencode --session`.
+                if (!String(s.opencode_session_id || '').trim()) continue;
                 const o = el('option', { value: s.id }, esc(`${(s.title || '(untitled)').slice(0, 40)} · ${timeAgo(s.updated_at)}`));
                 o.dataset.oc = s.opencode_session_id || '';
                 sel.appendChild(o);
