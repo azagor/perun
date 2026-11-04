@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### PerunChat prompt parity
+
+* The `perunchat_chat.md` tool list now names `perun-proposals_approve_package`
+  and `perun-proposals_reject_package`, matching the installed agent prompt and
+  the external-handoff paragraph.
 
 ## v0.11.2
 
