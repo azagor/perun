@@ -1,10 +1,15 @@
 {
-  "generated": "2026-11-04T11:42:22+00:00",
+  "generated": "2026-11-04T12:12:11+00:00",
   "releases": [
+    {
+      "version": "0.10.80",
+      "date": "2026-11-04",
+      "body": ""
+    },
     {
       "version": "0.10.79",
       "date": "2026-11-04",
-      "body": "### Hardening for the work pause and TUI launch\n\n* A TUI launch only finishes/untracks its run on a **definitive** server error;\n  a network-uncertain failure leaves the run stopable because the terminal may\n  have opened.\n* Paused projects annotate peer-review requests for pending proposals so peers\n  hold the review; activity logging is best effort and the project-card `paused`\n  badge refreshes immediately after a toggle. A transient binding-read failure\n  keeps a recently paused room paused for a grace period instead of silently\n  resuming autonomy.\n* Scheduled/time-based coroutines keep their own Pause control; the project flag\n  suppresses room-driven autonomy only (replies, room events, review, policy\n  auto-approve)."
+      "body": "### Hardening for the work pause and TUI launch\n\n* The Shared tab header now labels the room binding separately (**Chat active**\n  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work\n  running** badge, so a paused project no longer looks active.\n* A TUI launch only finishes/untracks its run on a **definitive** server error;\n  a network-uncertain failure leaves the run stopable because the terminal may\n  have opened.\n* Paused projects annotate peer-review requests for pending proposals so peers\n  hold the review; activity logging is best effort and the project-card `paused`\n  badge refreshes immediately after a toggle. A transient binding-read failure\n  keeps a recently paused room paused for a grace period instead of silently\n  resuming autonomy.\n* Scheduled/time-based coroutines keep their own Pause control; the project flag\n  suppresses room-driven autonomy only (replies, room events, review, policy\n  auto-approve)."
     },
     {
       "version": "0.10.78",
@@ -45,11 +50,6 @@
       "version": "0.10.71",
       "date": "2026-11-04",
       "body": "### Operator ask dedupe and inbox batching\n\n* A mention is deduplicated by a fingerprint of room + sender + timestamp + text,\n  so a replay under a fresh frame id cannot create a second inbox item. The\n  operator's own handle is skipped, and settings/operator names are cached for\n  30 s per message burst.\n* `attention.reconcile_proposals()` now resolves proposal statuses in one query\n  and closes cards in one transaction (`action_proposals.statuses`,\n  `registry.close_attention_many`) instead of two connections per open card.\n* Payload identities above 200 KB collapse to a short `len:<n>:<hash>` key, and\n  the chat “operator asks” strip orders by the message timestamp rather than the\n  inbox row id."
-    },
-    {
-      "version": "0.10.70",
-      "date": "2026-11-04",
-      "body": ""
     }
   ]
 }

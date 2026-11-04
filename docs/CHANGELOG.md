@@ -6,6 +6,10 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.10.80
+
+*Released 2026-11-04.*
+
 ## v0.10.79
 
 *Released 2026-11-04.*

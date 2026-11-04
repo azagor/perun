@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.79 (see §15). Definitive launch-failure handling, paused-review annotation, fail-closed pause cache, and regenerated release notes.
+**Latest release:** v0.10.80 (see §15). The Shared header separates the chat binding from the project work state (Chat active + Work paused/running).
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2647,6 +2647,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.80: The Shared header separates the chat binding from the project work state (Chat active + Work paused/running).
+
 ### 2026-11-04 — v0.10.79: Definitive launch-failure handling, paused-review annotation, fail-closed pause cache, and regenerated release notes.
 
 ### 2026-11-04 — v0.10.78: Operator-directed room mentions stay durable while a project's autonomous work is paused.
