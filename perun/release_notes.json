@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T22:58:07+00:00",
+  "generated": "2026-11-04T23:50:28+00:00",
   "releases": [
+    {
+      "version": "0.11.2",
+      "date": "2026-11-05",
+      "body": "### Production-readiness audit fixes\n\n* **External apply audit baseline.** The policy audit now takes a fresh\n  target-scoped snapshot immediately before `apply_operations()` instead of\n  using the claim-time snapshot. A package that waits up to 24 h for its second\n  approval can no longer be marked `failed` because an unrelated file changed\n  while the operator was reviewing it.\n* **Delete postcondition.** Local execution requires a `delete` target to be\n  gone (`exists()`), not merely not-a-regular-file; a directory target is now\n  reported as a postcondition failure instead of a successful delete.\n* **Package replacement and expiry races.** Uploads for one proposal are\n  serialized per proposal and the CAS excludes a pending package. Reject and\n  both expiry sweeps update the row first and discard the archive only if they\n  won the CAS, so an approve that moved the proposal to `executing` keeps its\n  artifact. `reconcile_interrupted()` also discards a dead archive.\n* **Retry with a stale pre-image.** `retry()` refuses to copy an `edit`/`delete`\n  proposal whose target no longer exists (or a `create` whose target now\n  exists) with a clear `cannot retry: …` error instead of creating a proposal\n  guaranteed to fail at approval.\n* **Preview memory bound.** `build_preview()` stats a target before reading it\n  and never loads a file above the 200 KB diff budget just to discard it.\n* **MCP schema bootstrap.** The proposals MCP server runs `db.init_db()` at\n  startup so `approve_package`/`reject_package` work even when an MCP client is\n  the first process after an upgrade.\n* **Room prompt hardening.** The PerunChat agent and instruction files now state\n  that the guard/proposals servers are loaded in a bound project room, tell the\n  model to retry the exact prefixed tool name, and forbid claiming the tools are\n  unavailable without a failed tool result. Verified directly:\n  `opencode run --agent perunchat` in `ai-playground` returns the tree through\n  `perun-guard_guard_list_directory`."
+    },
     {
       "version": "0.11.1",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.81",
       "date": "2026-11-04",
       "body": "### Release-notes bundle correction\n\n* Regenerate the bundled release notes so the v0.10.80 update card has content;\n  the v0.10.80 section was empty when that package was built."
-    },
-    {
-      "version": "0.10.80",
-      "date": "2026-11-04",
-      "body": "### Shared header separates chat and work state\n\n* The Shared tab header now labels the room binding separately (**Chat active**\n  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work\n  running** badge, so a paused project no longer looks active."
     }
   ]
 }

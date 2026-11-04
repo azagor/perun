@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.2
+
+*Released 2026-11-05.*
+
 ### Production-readiness audit fixes
 
 * **External apply audit baseline.** The policy audit now takes a fresh

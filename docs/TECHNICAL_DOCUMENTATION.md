@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.11.1 (see §15). External handoff v2 + pending-package replacement guard
+**Latest release:** v0.11.2 (see §15). Production-readiness audit fixes and PerunChat guard-tool prompt hardening
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2700,6 +2700,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-05 — v0.11.2: Production-readiness audit fixes and PerunChat guard-tool prompt hardening
+
 ### 2026-11-04 — v0.11.1: External handoff v2 + pending-package replacement guard
 
 ### 2026-11-04 — v0.11.0: External handoff v2: typed operations and package approval
