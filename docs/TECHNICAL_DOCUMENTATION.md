@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.76 (see §15). Run resumes only TUI chats; headless-only sessions start a fresh chat and stay explicitly selectable.
+**Latest release:** v0.10.77 (see §15). Pause/resume autonomous work in shared projects; the room agent, coroutines, review and policy auto-approve respect it.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2640,6 +2640,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.77: Pause/resume autonomous work in shared projects; the room agent, coroutines, review and policy auto-approve respect it.
+
 ### 2026-11-04 — v0.10.76: Run resumes only TUI chats; headless-only sessions start a fresh chat and stay explicitly selectable.
 
 ### 2026-11-04 — v0.10.75: Failed TUI launches are finalized, launches are single-flight, and session ownership is enforced on every run path.

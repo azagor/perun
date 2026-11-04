@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.77
+
+*Released 2026-11-04.*
+
 ### Pause autonomous work in a shared project
 
 * The Shared tab has **Pause work** / **Resume work** (durable
