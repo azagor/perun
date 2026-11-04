@@ -294,6 +294,20 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     claim_expires_at INTEGER DEFAULT 0,
     claim_snapshot  TEXT DEFAULT '',
     executed_by     TEXT DEFAULT '',
+    -- Package-level approval for external handoff. The proposal approval pins
+    -- the intent and pre-image; the uploaded package is a separate artifact
+    -- that must be approved by its digest before it is applied.
+    package_state        TEXT DEFAULT '',
+    package_digest       TEXT DEFAULT '',
+    package_manifest     TEXT DEFAULT '',
+    package_preview      TEXT DEFAULT '',
+    package_uploaded_at  TEXT DEFAULT '',
+    package_expires_at   INTEGER DEFAULT 0,
+    package_approved_by  TEXT DEFAULT '',
+    package_approved_at  TEXT DEFAULT '',
+    package_applied_at   TEXT DEFAULT '',
+    package_error        TEXT DEFAULT '',
+    claim_hashes         TEXT DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -780,6 +794,20 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # Target digests captured at approval (v0.8.55): claim refuses a target
         # that changed between approval and external execution.
         ("approval_snapshot", "TEXT DEFAULT ''"),
+        # Package-level external handoff approval (v0.11). The uploaded package
+        # is staged, reviewed by digest, then applied; pre/post hashes live in
+        # package_manifest and the archive digest binds the exact bytes.
+        ("package_state", "TEXT DEFAULT ''"),
+        ("package_digest", "TEXT DEFAULT ''"),
+        ("package_manifest", "TEXT DEFAULT ''"),
+        ("package_preview", "TEXT DEFAULT ''"),
+        ("package_uploaded_at", "TEXT DEFAULT ''"),
+        ("package_expires_at", "INTEGER DEFAULT 0"),
+        ("package_approved_by", "TEXT DEFAULT ''"),
+        ("package_approved_at", "TEXT DEFAULT ''"),
+        ("package_applied_at", "TEXT DEFAULT ''"),
+        ("package_error", "TEXT DEFAULT ''"),
+        ("claim_hashes", "TEXT DEFAULT ''"),
     ],
     # The room binding was not persisted before v0.8.40, so a transfer
     # restored after a restart could not be continued (it looked like it

@@ -1838,6 +1838,54 @@ def api_claim_proposal(slug: str, proposal_id: str) -> dict[str, Any]:
     return _ok(proposal=result)
 
 
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/package/approve")
+def api_approve_package(slug: str, proposal_id: str) -> dict[str, Any]:
+    """Approve the uploaded external package and apply it atomically.
+
+    The proposal intent was approved earlier; this is the second checkpoint for
+    the exact package digest and its server-derived manifest. The dashboard is
+    the local operator, so it may approve even though it is not a chat agent.
+    """
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    chat = registry.get_project_chat(project["id"]) or {}
+    try:
+        result = action_proposals.approve_external_package(
+            proposal_id,
+            _approver_identity(),
+            owner=chat.get("managed_by") or "",
+            operator=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
+
+
+@app.post("/api/projects/{slug}/proposals/{proposal_id}/package/reject")
+def api_reject_package(
+    slug: str, proposal_id: str, payload: dict[str, Any] = Body(default={})
+) -> dict[str, Any]:
+    """Reject the uploaded package; the claimant can upload a new one."""
+    project = _project_or_404(slug)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal or proposal["project_id"] != project["id"]:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    chat = registry.get_project_chat(project["id"]) or {}
+    try:
+        result = action_proposals.reject_external_package(
+            proposal_id,
+            _approver_identity(),
+            reason=str(payload.get("reason") or ""),
+            owner=chat.get("managed_by") or "",
+            operator=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _ok(proposal=result)
+
+
 @app.post("/api/projects/{slug}/proposals/{proposal_id}/revoke-claim")
 def api_revoke_proposal_claim(slug: str, proposal_id: str) -> dict[str, Any]:
     """Return a claimed proposal to approved so it can run locally or be re-claimed."""

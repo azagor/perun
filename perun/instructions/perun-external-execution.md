@@ -8,7 +8,8 @@ enabled: true
 
 This document is reference data for **remote** rw participant agents that want
 to execute an approved shared-project proposal using their own model and
-tokens. Perun validates and applies the resulting ZIP package locally; Perun
+tokens. Perun validates and stages the resulting ZIP package locally for a
+second approval, then applies it; Perun
 does not run an LLM for this path, so it does not burn its own tokens.
 
 ## Who should NOT use this
@@ -66,7 +67,7 @@ true/false, ...}`.
 | `claim_execution` | `{"proposal_id": "prop_..."}` | Reserve the proposal. Status becomes `claimed`. |
 | `request_download_package` | `{"proposal_id": "prop_...", "paths": ["api.py"]}` (paths optional) | Ask Perun to publish the current target snapshot as a download. `paths` must stay under the proposal's approved targets. |
 | `package_begin` | `{"proposal_id": "prop_...", "transfer_id": "trf_...", "sha256": "...", "total_size": N, "total_chunks": K}` | Announce an upload. `sha256` is required; per-chunk and cumulative bytes are capped against `total_size`. A `transfer_id` already in flight is rejected; at most 8 uploads may be open. |
-| `package_end` | `{"transfer_id": "trf_..."}` | Last chunk sent; ask Perun to verify and apply. |
+| `package_end` | `{"transfer_id": "trf_..."}` | Last chunk sent; ask Perun to verify and stage the package for approval. |
 | `revoke_execution_claim` | `{"proposal_id": "prop_..."}` | Return a `claimed` proposal to `approved`. |
 | `execution_status` | `{"proposal_id": "prop_..."}` | Query proposal status. |
 | `transfer_status` | `{"transfer_id": "trf_..."}` | Query which chunks Perun has already received for an upload. |
@@ -107,15 +108,34 @@ true/false, ...}`.
    rejects.
 2. Agent posts package frames (`seq` 0..N-1).
 3. Agent sends `package_end`.
-4. Perun verifies completeness and `sha256`, validates the ZIP (entry caps,
-   traversal, sensitive paths, proposal targets, allowlist), applies the
-   changes, runs a filesystem audit, and finalizes the proposal.
-5. Perun posts `package_accepted` or `package_rejected {reason}`.
+4. Perun verifies completeness and `sha256`, unpack the ZIP, and **derives the
+   operation manifest itself** (no agent-authored manifest is trusted): exactly
+   one operation per approved target, with `pre_sha256` and `post_sha256`
+   computed by Perun. Typed preconditions are enforced: an `edit`/`delete`
+   target must already exist, a `create` target must be absent, and no target
+   may have changed since approval or claim. Files outside the approved targets
+   are rejected. **Nothing is written at this stage.**
+5. Perun stages the archive and replies `package_pending {digest, operations,
+   expires_at}`. A second, separate approval of the exact archive digest and
+   its derived manifest is now required. The claimant **cannot** approve its
+   own package. Another `rw` trusted participant, the room owner, the local
+   operator (dashboard), or the project auto-approve policy may approve. An
+   approval tool call that is not from one of these identities is refused.
+6. On approval, Perun re-verifies every pre-image and applies the operations
+   atomically, checking every postcondition (a failure rolls the whole package
+   back), runs the filesystem audit, and finalizes the proposal. Perun posts
+   `package_accepted` (or `package_rejected {reason}`). A rejected package can
+   be replaced by uploading a new archive while the claim is still live.
 
 ## Package contents
 
 - A ZIP archive with POSIX-style relative entry names from the project root.
-- Only files under the approved proposal targets may be written.
+- Only the approved proposal targets may appear; every target gets exactly one
+  derived operation. Extra entries are rejected.
+- `create`: include the complete new file. The target must not exist yet.
+- `edit`: include the complete new file content. The target must exist.
+- `delete`: no entry is required; Perun unlinks the target and ignores any
+  uploaded bytes for it.
 - Never include: `..`, absolute paths, drive letters, symlinks, encrypted
   entries, or entries outside the approved targets.
 - Sensitive paths (`.env`, `.git`, `.perun`, `.ssh`, `.aws`, `.gnupg`, keys,
@@ -148,17 +168,26 @@ true/false, ...}`.
 
 ## Failure semantics
 
-- Upload verification/validation failure (bad sha, bad ZIP, path violation):
-  the proposal **stays `claimed`** — retry with a new transfer.
-- Filesystem-audit violation at completion: proposal → `failed`.
-- Claim TTL expiry (default 60 min): proposal → `approved`.
-- Revocation by claim holder or owner: `claimed` → `approved`.
+- Upload verification/validation failure (bad sha, bad ZIP, extra path, typed
+  precondition violation): the proposal **stays `claimed`** — retry with a new
+  transfer.
+- A staged package awaiting approval lapses after the package TTL (default 24
+  hours) or can be rejected: the archive is discarded, the proposal stays
+  `claimed`, and the claimant may upload a new package.
+- Apply failure (a pre-image changed, a write failed, a postcondition mismatch):
+  the package is rolled back and the proposal → `failed`.
+- Filesystem-audit violation after apply: proposal → `failed`.
+- Claim TTL expiry (default 60 min): any staged package is discarded and the
+  proposal → `approved`.
+- Revocation by claim holder or owner: `claimed` → `approved`; the staged
+  package is discarded.
 
 ## Limits
 
 | Item | Default |
 |---|---|
 | Claim TTL | 60 minutes |
+| Package approval TTL | 24 hours |
 | Transfer reassembly TTL | 30 minutes |
 | Package frame payload cap | 512 KiB (gateway-enforced) |
 | Raw chunk size | 360 KiB |

@@ -2895,6 +2895,8 @@ async function proposalsCard(detail) {
               }).join('')
             : '<span class="muted">(no targets)</span>';
         const actions = [];
+        const packageState = String(prop.package_state || '');
+        const packagePending = prop.status === 'claimed' && packageState === 'pending';
         if (prop.status === 'pending') {
             actions.push(`<button class="btn sm primary" data-approve-run="${esc(prop.id)}">Approve &amp; run</button>`);
             actions.push(`<button class="btn sm ghost" data-approve="${esc(prop.id)}">Approve only</button>`);
@@ -2905,6 +2907,10 @@ async function proposalsCard(detail) {
             actions.push(`<button class="btn sm ghost" data-withdraw="${esc(prop.id)}" title="Withdraw this approval; the record stays in the audit trail">Withdraw</button>`);
             actions.push(`<button class="btn sm ghost danger" data-delete="${esc(prop.id)}">Delete</button>`);
         } else if (prop.status === 'claimed') {
+            if (packagePending) {
+                actions.push(`<button class="btn sm primary" data-package-approve="${esc(prop.id)}">Approve package</button>`);
+                actions.push(`<button class="btn sm ghost" data-package-reject="${esc(prop.id)}">Reject package</button>`);
+            }
             actions.push(`<button class="btn sm ghost" data-revoke-claim="${esc(prop.id)}">Revoke claim</button>`);
         } else if (prop.status === 'executing') {
             actions.push(`<button class="btn sm ghost" data-cancel="${esc(prop.id)}">Cancel</button>`);
@@ -2915,7 +2921,8 @@ async function proposalsCard(detail) {
         // Show the id in the row: a chat reference can be matched to it, and the
         // operator can copy it back to the room.
         const idChip = `<button class="chip chip-link proposal-id" data-copy="${esc(prop.id)}" type="button" title="Copy this proposal id">${esc(prop.id)}</button>`;
-        let meta = `${idChip} · ${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
+        const actionType = String(prop.action_type || 'unknown');
+        let meta = `${idChip} · <span class="chip">${esc(actionType)}</span> · ${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
         if (['pending', 'approved', 'claimed', 'executing'].includes(prop.status)
             && prop.expires_at) {
             meta += ` · expires ${timeLeft(prop.expires_at)}`;
@@ -2927,6 +2934,12 @@ async function proposalsCard(detail) {
             const executor = prop.executor_id || 'unknown';
             const expires = prop.claim_expires_at ? new Date(prop.claim_expires_at * 1000).toLocaleString() : '';
             meta += ` · claimed by ${esc(executor)}${expires ? ' · expires ' + esc(expires) : ''}`;
+            if (packageState) {
+                meta += ` · package ${esc(packageState)}`;
+                if (prop.package_expires_at) {
+                    meta += ` · review by ${esc(new Date(prop.package_expires_at * 1000).toLocaleString())}`;
+                }
+            }
         }
         if (prop.status === 'approved' || prop.status === 'rejected' || prop.status === 'cancelled') {
             const who = prop.approved_by || 'owner';
@@ -2954,10 +2967,43 @@ async function proposalsCard(detail) {
         const outcomeHtml = outcome
             ? `<div class="meta truncate" title="${esc(outcome)}">result: ${esc(outcome)}</div>`
             : '';
+        // Package review: the second gate of an external handoff. The operator
+        // approves the exact archive digest and its server-derived operations,
+        // never an agent-authored manifest.
+        let packageHtml = '';
+        if (packageState) {
+            const operations = (prop.package_manifest && prop.package_manifest.operations) || [];
+            const preview = Array.isArray(prop.package_preview) ? prop.package_preview : [];
+            const digest = String(prop.package_digest || '');
+            const digestShort = digest ? digest.slice(0, 16) + '…' : '';
+            const opLines = operations.map((op) => {
+                const pre = op.pre_sha256 ? String(op.pre_sha256).slice(0, 8) + '…' : '(absent)';
+                const post = op.post_sha256 ? String(op.post_sha256).slice(0, 8) + '…' : '(deleted)';
+                return `<li><span class="chip">${esc(op.op)}</span> ${esc(op.path)} <span class="muted">${esc(pre)} → ${esc(post)}</span></li>`;
+            }).join('');
+            const diffs = preview.map((entry) => {
+                const summary = entry.summary || entry.op || '';
+                const diff = entry.diff || '';
+                const body = diff
+                    ? `<pre class="pkg-diff">${esc(diff)}${entry.truncated ? '\n… (truncated)' : ''}</pre>`
+                    : `<div class="meta">${esc(summary)}</div>`;
+                return `<details class="pkg-file"><summary>${esc(entry.path || '')} · ${esc(summary)}</summary>${body}</details>`;
+            }).join('');
+            const err = prop.package_error
+                ? `<div class="meta" style="color:var(--red)">${esc(prop.package_error)}</div>`
+                : '';
+            packageHtml = `<details class="pkg-review" ${packagePending ? 'open' : ''}>
+                <summary>Uploaded package · ${esc(packageState)}${digestShort ? ' · ' + esc(digestShort) : ''}</summary>
+                <div class="meta">sha256 ${esc(digest || '(unknown)')}</div>
+                ${err}
+                ${opLines ? `<ul class="pkg-ops">${opLines}</ul>` : ''}
+                ${diffs}
+            </details>`;
+        }
         const row = el('div', { class: 'list-row' },
             `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' || prop.status === 'executing' ? 'blue' : prop.status === 'rejected' || prop.status === 'cancelled' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
              <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
-             <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}</span>
+             <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}${packageHtml}</span>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
         row.dataset.proposal = prop.id;
         row.querySelectorAll('.proposal-target').forEach((btn) => {
@@ -3000,6 +3046,27 @@ async function proposalsCard(detail) {
             try {
                 await api(`/api/projects/${p.slug}/proposals/${prop.id}/execute`, { method: 'POST' });
                 toast('Headless run started', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-package-approve]')?.addEventListener('click', async () => {
+            const ops = (prop.package_manifest && prop.package_manifest.operations) || [];
+            const detail = ops.map((op) => `  ${op.op} ${op.path}`).join('\n');
+            if (!confirm(`Apply this external package?\n\n${prop.intent}\n\nPackage sha256: ${prop.package_digest || '(unknown)'}\n\n${detail || '(no operations)'}\n\nThe archive is applied atomically; a failed precondition rolls everything back.`)) return;
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}/package/approve`, { method: 'POST' });
+                toast('Package approved and applied', 'ok');
+                viewProject(p.slug, 'shared');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        row.querySelector('[data-package-reject]')?.addEventListener('click', async () => {
+            const reason = prompt('Reject this package? Optional reason (the executor will see it):', '');
+            if (reason === null) return;
+            try {
+                await api(`/api/projects/${p.slug}/proposals/${prop.id}/package/reject`, {
+                    method: 'POST', body: JSON.stringify({ reason }),
+                });
+                toast('Package rejected', 'ok');
                 viewProject(p.slug, 'shared');
             } catch (e) { toast(e.message, 'err'); }
         });

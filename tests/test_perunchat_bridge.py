@@ -817,6 +817,10 @@ def _make_shared_project(
 
     path = tmp_path / slug
     path.mkdir(parents=True)
+    # A realistic project has files; ``edit`` proposals require an existing
+    # target under the typed preconditions.
+    (path / "api.py").write_text("old", encoding="utf-8")
+    (path / "other.py").write_text("old", encoding="utf-8")
     project = registry.add_project(slug, str(path), description=description)
     data = manifest.from_project(project)
     data["shared"] = True
@@ -2285,6 +2289,12 @@ def test_package_begin_does_not_steal_another_claim_transfer(settings, tmp_path)
             "payload": {"op": "package_end", "transfer_id": "trf_shared"},
         }, None)
 
+    # The upload is staged; the second approval applies it.
+    assert action_proposals.get(proposal_a["id"])["status"] == "claimed"
+    assert action_proposals.get(proposal_a["id"])["package_state"] == "pending"
+    assert (root / "api.py").read_text(encoding="utf-8") == "old"
+    action_proposals.approve_external_package(
+        proposal_a["id"], "owner", operator=True)
     assert action_proposals.get(proposal_a["id"])["status"] == "executed"
     assert (root / "api.py").read_text(encoding="utf-8") == "new"
     assert action_proposals.get(proposal_b["id"])["status"] == "claimed"
@@ -2628,6 +2638,7 @@ def test_download_names_declared_targets_that_do_not_exist(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     root = Path(project["path"])
     (root / "api.py").write_text("old")
+    (root / "MANIFEST.sha256").write_text("pinned")
     proposal = action_proposals.create(
         project,
         "frambo",
@@ -2640,6 +2651,8 @@ def test_download_names_declared_targets_that_do_not_exist(settings, tmp_path):
     )
     proposal = action_proposals.approve(proposal["id"], "owner")
     proposal = action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+    # The file can still disappear after the claim (a human or another process).
+    (root / "MANIFEST.sha256").unlink()
 
     bridge = PerunChatBridge(MagicMock(settings=settings))
     bridge._agent_id = "perun-local"
@@ -3043,11 +3056,18 @@ def test_external_package_upload_end_to_end(settings, tmp_path):
         }, None)
 
     proposal = action_proposals.get(proposal["id"])
-    assert proposal["status"] == "executed"
-    assert (root / "api.py").read_text(encoding="utf-8") == "new"
-    assert sent[-1]["payload"]["op"] == "package_accepted"
+    # package_end now stages; nothing is written until the second approval.
+    assert proposal["status"] == "claimed"
+    assert proposal["package_state"] == "pending"
+    assert (root / "api.py").read_text(encoding="utf-8") == "old"
+    assert sent[-1]["payload"]["op"] == "package_pending"
     assert sent[-1]["payload"]["ok"] is True
     assert sent[-1]["recipient_id"] == "frambo"
+
+    result = action_proposals.approve_external_package(
+        proposal["id"], "owner", operator=True)
+    assert result["status"] == "executed"
+    assert (root / "api.py").read_text(encoding="utf-8") == "new"
 
 
 def test_persisted_transfer_ttl_drops_stale_slots_on_load(settings, tmp_path):
@@ -3313,7 +3333,7 @@ def test_transient_finalize_failure_keeps_the_upload(settings, tmp_path):
             patch.object(bridge, "_project_binding", return_value=(project, {})), \
             patch.object(
                 action_proposals,
-                "complete_external_execution",
+                "upload_external_package",
                 side_effect=ValueError("claim has expired; claim again"),
             ):
         bridge._handle_execution_frame({

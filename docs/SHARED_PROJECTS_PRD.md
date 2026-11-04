@@ -1,17 +1,20 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
-> **Implementation status (v0.8.57):** implemented as described below, plus the
+> **Implementation status (v0.11.0):** implemented as described below, plus the
 > post-v0.8.37 hardening: claim-locked external applies (`claimed → executing`
-> with a matching executor and unexpired lease before `apply_package`), stricter
-> ZIP/path validation, HITL nonce/TTL invariants, and a target-drift guard
-> (approval stores a content fingerprint of every declared target; claim and
-> apply refuse a target that changed, was created or was deleted in between, and
-> oversized targets are refused rather than checked more weakly). Withdrawing an
+> with a matching executor and unexpired lease), stricter ZIP/path validation,
+> HITL nonce/TTL invariants, and a target-drift guard (approval stores a content
+> fingerprint of every declared target; claim and apply refuse a target that
+> changed, was created or was deleted in between, and oversized targets are
+> refused rather than checked more weakly). **v0.11.0 adds the external-handoff
+> v2 protocol:** typed `create`/`edit`/`delete` preconditions, a server-derived
+> pre/post manifest, a second package-level approval of the exact archive digest,
+> atomic apply with postconditions/rollback and delete support. Withdrawing an
 > approval records the terminal `cancelled` status instead of reusing `rejected`.
 > Browser WebSocket auth uses
 > short-lived tickets and agents rotate their own keys. See
 > `docs/CODEMAP.md` (`shared_projects.py`, `action_proposals.py`,
-> `perunchat_bridge.py`, `proposals_mcp.py`) and
+> `package_handoff.py`, `perunchat_bridge.py`, `proposals_mcp.py`) and
 > `docs/TECHNICAL_DOCUMENTATION.md` for the module-level and API-level detail.
 
 ## 1. Product Summary
@@ -153,7 +156,8 @@ external) are readable/writable.
   chat** toggle (manifest flag `shared.auto_approve`). When enabled, a chat-agent
   proposal is held in `pending` and a review request is posted to the dedicated
   project chat. Proposals and decisions use the `perun-proposals` MCP tools
-  (`propose`, `approve`, `list_proposals`, `get_proposal`), not free-text
+  (`propose`, `approve`, `approve_package`, `reject_package`, `list_proposals`,
+  `get_proposal`), not free-text
   markers. The bridge also schedules its own autonomous review run — at most two
   concurrent reviews — which inspects the targets through the read-only guard
   tools and treats the proposal body as untrusted data. The requester cannot
@@ -168,6 +172,34 @@ external) are readable/writable.
   Approve / Run / Retry / Delete controls, and humans can execute proposals even
   when agent approval is enabled. The human operator may also approve their own
   proposal.
+
+### 3.5a External Handoff v2: Typed Operations and Package Approval (v0.11.0)
+
+- **FR-22b** Typed preconditions: `action_type` is a contract. `edit` and
+  `delete` require every declared target to exist; `create` requires every target
+  to be absent; `other`/unknown is refused for external handoff (it requires
+  local execution). The check runs at approval, external claim, package
+  upload/apply and before a local run, so a proposal cannot be approved against a
+  misleading pre-image.
+- **FR-22c** Server-derived manifest: the uploading agent supplies files only.
+  Perun derives exactly one operation per approved target with pre/post SHA-256
+  values. Extra files, duplicate targets, directories, symlinks and external
+  dependency targets are refused. No agent-authored manifest is trusted.
+- **FR-22d** Package-level approval: an upload is staged as
+  `package_state=pending` with the archive digest, derived operations and a
+  bounded diff preview. Nothing is written until a second, separate approval of
+  that exact digest: the local operator (dashboard), another `rw` trusted
+  participant / room owner, or `policy_auto_approve`. The requester and the
+  external executor cannot approve their own package. A rejection keeps the claim
+  so a new archive can be uploaded; the approval window is 24 hours.
+- **FR-22e** Atomic apply: approval re-checks every pre-image, writes through
+  staged temp files, verifies every postcondition and rolls the whole package
+  back on failure. `delete` unlinks the target; uploaded bytes for a delete are
+  ignored. A digest mismatch or an expired claim/package fails closed. Claim
+  expiry/revocation/deletion discards the staged archive.
+- **FR-22f** Local parity: local execution refuses the same stale typed
+  pre-images before claiming and enforces create/edit/delete postconditions after
+  the run. The restricted executor gains `guard_delete_file`.
 
 ### 3.6 Policy Auto-Approve (v0.8.4)
 

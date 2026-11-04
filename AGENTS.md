@@ -107,6 +107,19 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
+* **`action_type` is a typed contract.** `edit`/`delete` targets must exist and
+  `create` targets must be absent at approval, claim, upload/apply and local run;
+  `other`/unknown is refused for external handoff. Do not grandfather an
+  edit-on-missing proposal: re-propose it as `create` (or create the file, then
+  re-approve an edit against the new content).
+* **External packages are staged, then approved as a whole.** An upload is never
+  applied directly. Perun derives the typed manifest and pre/post hashes itself
+  (never trust an agent-authored manifest), stores the archive digest, and waits
+  for a second approval by the operator, another rw trusted peer/owner, or
+  `policy_auto_approve`. The requester and executor cannot approve their own
+  package. `reject_external_package()` keeps the claim so a new archive can be
+  uploaded. Apply is atomic, re-checks every pre/postcondition, rolls back on
+  failure, and discards the archive on apply/reject/expiry/revoke/delete.
 * **Pausing project work stops autonomy, not people.** `projects.work_paused` is
   durable; while set, the bridge must not auto-reply in the project room, must
   not ingest its messages for coroutine triggers, must not start the autonomous

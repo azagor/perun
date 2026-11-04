@@ -328,6 +328,84 @@ def get_proposal(proposal_id: str) -> dict[str, Any]:
         "expires_at": proposal.get("expires_at", 0),
         "result": proposal.get("result", ""),
         "details": proposal.get("details", {}),
+        "package_state": proposal.get("package_state", ""),
+        "package_digest": proposal.get("package_digest", ""),
+        "package_manifest": proposal.get("package_manifest", {}),
+        "package_preview": proposal.get("package_preview", []),
+        "package_error": proposal.get("package_error", ""),
+        "package_approved_by": proposal.get("package_approved_by", ""),
+    }
+
+
+@mcp.tool()
+def approve_package(proposal_id: str) -> dict[str, Any]:
+    """Approve the exact uploaded package (the second external-handoff gate).
+
+    The proposal intent was approved earlier. This tool approves the package
+    manifest/digest uploaded by the claiming executor and applies it. The
+    requester and the executor cannot approve their own package; another rw
+    trusted participant or the room owner can. The local operator can approve
+    from the dashboard.
+    """
+    project_path = _project_path()
+    project = _find_project(project_path)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["project_id"] != project["id"]:
+        raise ValueError("proposal does not belong to this project")
+    chat = registry.get_project_chat(int(project["id"])) or {}
+    room_id = (str(proposal.get("room_id") or "") or _room_id()
+               or str(chat.get("room_id") or ""))
+    approver = _approver(room_id)
+    cfg = shared_projects.load(project["path"])
+    _, error = _validate_participant(approver, project, cfg)
+    if error:
+        raise ValueError(error)
+    result = action_proposals.approve_external_package(
+        proposal_id, approver,
+        owner=_room_owner(project),
+        trusted=list(getattr(_settings(), "perunchat_trusted", []) or []),
+    )
+    fresh = action_proposals.get(proposal_id) or {}
+    return {
+        "proposal_id": proposal_id,
+        "status": fresh.get("status"),
+        "package_state": fresh.get("package_state"),
+        "package_digest": fresh.get("package_digest"),
+        "package_approved_by": fresh.get("package_approved_by"),
+        "result": fresh.get("result", ""),
+    }
+
+
+@mcp.tool()
+def reject_package(proposal_id: str, reason: str = "") -> dict[str, Any]:
+    """Reject an uploaded package; the claimant may upload another one."""
+    project_path = _project_path()
+    project = _find_project(project_path)
+    proposal = action_proposals.get(proposal_id)
+    if not proposal:
+        raise ValueError("proposal not found")
+    if proposal["project_id"] != project["id"]:
+        raise ValueError("proposal does not belong to this project")
+    chat = registry.get_project_chat(int(project["id"])) or {}
+    room_id = (str(proposal.get("room_id") or "") or _room_id()
+               or str(chat.get("room_id") or ""))
+    approver = _approver(room_id)
+    cfg = shared_projects.load(project["path"])
+    _, error = _validate_participant(approver, project, cfg)
+    if error:
+        raise ValueError(error)
+    fresh = action_proposals.reject_external_package(
+        proposal_id, approver, reason=reason,
+        owner=_room_owner(project),
+        trusted=list(getattr(_settings(), "perunchat_trusted", []) or []),
+    )
+    return {
+        "proposal_id": proposal_id,
+        "status": fresh.get("status"),
+        "package_state": fresh.get("package_state"),
+        "package_error": fresh.get("package_error", ""),
     }
 
 

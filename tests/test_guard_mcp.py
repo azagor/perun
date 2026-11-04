@@ -66,7 +66,7 @@ def test_guard_scopes_writes_to_executing_proposal_targets(tmp_path, monkeypatch
     manifest.save(str(project_path), data, body="# p")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "x", "targets": ["allowed.txt"], "action_type": "edit"},
+        {"intent": "x", "targets": ["allowed.txt"], "action_type": "create"},
     )
     action_proposals.approve(proposal["id"], "reviewer")
     action_proposals._set_status(proposal["id"], "executing")

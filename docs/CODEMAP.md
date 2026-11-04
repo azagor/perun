@@ -8,7 +8,7 @@ the file and the key identifiers you'll jump to.
 ## Package `perun/`
 
 ### `perun/__init__.py`
-Package docstring + `__version__` (`"0.10.87"`).
+Package docstring + `__version__` (`"0.11.0"`).
 
 ### `perun/secrets.py`
 Optional password-based encryption for sensitive config values.
@@ -32,7 +32,8 @@ home for credentials that used to live in `AGENTS.md`.
 
 ### `perun/config.py`
 Filesystem layout + persisted settings.
-* Constants: `PACKAGE_DIR`, `REPO_ROOT`, `HOME`, `DB_PATH`, `CONFIG_PATH`,
+* Constants: `PACKAGE_DIR`, `PACKAGES_DIR` (staged external-handoff archives),
+  `REPO_ROOT`, `HOME`, `DB_PATH`, `CONFIG_PATH`,
   `API_TOKEN_PATH` (`<PERUN_HOME>/api-token`), `LOGS_DIR`, `RUNS_DIR`, `WEB_DIR`,
   `MCP_SERVER`, `TEMPLATES_DIR`, `OPENCODE_CONFIG_DIR` (honours
   `XDG_CONFIG_HOME`), `INSTRUCTIONS_DIR` (global instruction Markdown),
@@ -658,7 +659,8 @@ Start / stream / cancel headless `opencode run`.
 ### `perun/package_handoff.py`
 Safe ZIP work-package handling for the external execution handoff. Perun never
 runs an LLM on this path; the remote rw participant generates the package with
-its own model/tokens and Perun validates/applies it locally.
+its own model/tokens, and Perun derives, stages and (after a second approval)
+applies it locally.
 * `pack()` — build a ZIP from a list of target paths relative to the project root;
   skips sensitive files/directories (`.env`, `.git`, `.perun`, keys, OpenCode
   config, …) even when a requested directory contains them, and enforces the
@@ -667,12 +669,23 @@ its own model/tokens and Perun validates/applies it locally.
   caps (uncompressed total 50 MB, 500 entries, 10 MB/entry) and anti-abuse rules;
   directory entries are skipped. Entry names are case-insensitively de-duplicated
   and reject shell-expansion characters (`$`, `%`, `~`) or backslashes.
-* `validate_package()` — reject traversal (`..`), absolute paths, drive letters,
-  symlinks, encrypted entries, duplicate entry names, sensitive paths, and
-  entries outside the approved proposal targets.
-* `apply_package()` — stage the validated entries, back up existing targets, and
-  apply with a `mkstemp` temp + `os.replace`; a mid-apply failure restores the
-  backups, so a package is not left half-applied.
+* `store_archive()` / `load_archive()` / `discard_archive()` — the uploaded
+  archive lives under `PERUN_HOME/packages/<proposal>.zip`; the sha256 of these
+  exact bytes is the approved artifact.
+* `derive_package()` — the authoritative typed manifest. One operation per
+  approved target (`create`/`edit`/`delete`) with server-computed
+  `pre_sha256`/`post_sha256`; refuses extra files, duplicate targets, unknown
+  actions, directories, symlinks, sensitive paths and external-dependency
+  targets. `create` requires an absent target, `edit`/`delete` require an existing
+  one, and a claim hash mismatch is refused.
+* `build_preview()` — a bounded unified diff / binary summary per operation for
+  the approval UI, capped in bytes and lines.
+* `apply_operations()` — re-checks every pre-image immediately before writing,
+  stages through `mkstemp` temp files, verifies every postcondition
+  (create/edit must be a regular file, delete must be gone), and restores all
+  backups on any failure; `delete` ignores uploaded bytes.
+* `validate_package()` / `apply_package()` — the earlier path-level validator and
+  byte-oriented apply retained for direct/legacy callers.
 * The external download path is restricted to the proposal's approved targets;
   a claimant cannot request arbitrary project paths. External-dependency
   targets are rejected for external handoff (they require local execution).
@@ -718,7 +731,8 @@ entry); probing never happens automatically.
   surface in `parse_errors`.
 * `find(name, scope=…, projects=…, project=…)` — resolve one server by name.
 * `probe(name, …)` — spawn a local server (or call a remote URL) and perform the
-  MCP `initialize` + `tools/list` handshake, returning status, `tools`, latency,
+  MCP handshake (`server/discover` + `tools/list` on modern `mcp` 2.x, with a
+  legacy `initialize` fallback), returning status, `tools`, latency,
   and any stderr tail. The command always comes from disk, never the request.
   Concurrency is gated (a saturated gate returns `busy` instead of pinning a
   worker thread) and the timeout is clamped to `MAX_PROBE_TIMEOUT`.
@@ -1179,10 +1193,13 @@ Autonomous PerunChat chat participant for the Orchestrator.
   directories, and falls back to pass-through when unset. When the per-run env
   is absent (`standalone=False`), `_active_targets()` derives the target scope
   from the project's `executing` proposal; multiple concurrent executions fail
-  closed. It also exposes `guard_list_checks` / `guard_run_check`: the room
+  closed. `guard_delete_file` deletes a file inside the approved target scope,
+  using the same path checks as the write tools. It also exposes
+  `guard_list_checks` / `guard_run_check`: the room
   persona's only execution path, restricted to names the operator declared.
 * `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
-  Exposes `propose`, `approve`, `list_proposals` and `get_proposal`; uses
+  Exposes `propose`, `approve`, `approve_package`, `reject_package`,
+  `list_proposals` and `get_proposal`; uses
   `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` (requester) /
   `PERUN_CHAT_AGENT` (the bot's own approval identity) / `PERUN_ROOM_ID` from
   the chat run environment to validate rw/trust/owner rules server-side. When
@@ -1196,7 +1213,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   to “no filter” because models sometimes serialize an omitted optional as the
   literal string `"null"`. `approve()` defaults to `execute=false`, leaving a
   proposal `approved` for external claim/manual execution; `execute=true` starts
-  the local headless run.
+  the local headless run. `approve_package()`/`reject_package()` are the second
+  external-handoff gate: they act on the staged archive digest/manifest, cannot
+  be called by the requester or executor, and `get_proposal()` exposes
+  `package_state`, `package_digest`, `package_manifest` and `package_preview`.
 * `perun/fs_audit.py` — post-run filesystem audit: snapshots allowlisted paths
   (optionally target-scoped) before a shared-project run, diffs them after, and
   logs allowlist violations, target-scope violations, and created/modified/
@@ -1247,34 +1267,49 @@ Autonomous PerunChat chat participant for the Orchestrator.
   withdraws an approved-but-unclaimed proposal (`approved → cancelled`, reason in
   `result`) and is restricted to the requester or the project owner,
   because `reject()` only accepts `pending`. `approve()` stores
-  `approval_snapshot` (per-target digests from `fs_audit.target_digests()`);
-  `claim_execution()` and `complete_external_execution()` refuse a target that
-  changed in between. `_same_actor()` enforces
+  `approval_snapshot` (per-target digests from `fs_audit.target_digests()`) and
+  enforces the typed pre-image: `edit`/`delete` targets exist, `create` targets
+  are absent (`_assert_action_targets()`; `other`/unknown is refused for external
+  handoff). `claim_execution()`, `upload_external_package()` and
+  `approve_external_package()` refuse a target that changed in between.
+  `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
   `approve()`/`reject()`; the human dashboard routes and
   `auto_approve_and_execute()` pass `allow_self=True`. Approved runs use the
   restricted `perun-shared` agent and a target-scoped guard allowlist; the
   proposal id is also the headless run id. `expire_stale()` expires pending
-  proposals after 24 h and approved proposals after 7 days. `_prepare_execution()`
+  proposals after 24 h, approved proposals after 7 days, an unapproved staged
+  package after 24 h, and fails an abandoned `executing` row after 12 h; claim
+  expiry also discards the staged archive and clears the package columns.
+  `_prepare_execution()`
   fails early with “guard MCP not registered” when the project config lacks
-  `perun-guard`, probes the guard server for `guard_write_file`, and runs use the
+  `perun-guard`, probes the guard server for `guard_write_file`, re-checks the
+  typed pre-image and approval drift, and runs use the
   running OpenCode service (`standalone=False`) so the project's MCP servers are
   loaded. `_build_execution_prompt()` names the
-  prefixed `perun-guard_guard_*` tools and instructs the model not to use the
-  `skill` tool or to give up after an “Unable to load skill …” error.
+  prefixed `perun-guard_guard_*` tools (including `guard_delete_file`) and
+  instructs the model not to use the `skill` tool or to give up after an
+  “Unable to load skill …” error.
   External execution claims are room/sender-bound and target-scoped, and expire
   after one hour by default (`external_execution_claim_ttl`, clamped to
   `[1 s, APPROVED_TTL_SECONDS]`); `claimed` proposals are returned
   to `approved` by revoke or by the expiration sweep. `executed_by` records the
-  actor that attempted/applied the change (`perun` for local runs, the claimant
-  for external handoffs), is cleared on revoke/expiry, and must be read with
-  `status`; `create()` binds dashboard/API proposals to the project's
-  `project_chats.room_id` when the envelope carries none. External applies
-  atomically move `claimed → executing` (matching executor and unexpired lease)
-  before `apply_package`; an expired or lost claim is rejected without writing.
-  `expire_stale()` also fails an abandoned `executing` row after 12 h. Targets
-  are de-duplicated and must be strings; a `create` proposal must touch every
-  approved target before it can be reported `executed`.
+  actor that attempted/applied the change (`perun` for local runs, the package
+  approver for external handoffs), is cleared on revoke/expiry, and must be read
+  with `status`; `create()` binds dashboard/API proposals to the project's
+  `project_chats.room_id` when the envelope carries none.
+  **Package handoff:** `upload_external_package()` validates and *stages* the
+  archive (`package_state='pending'`, digest, manifest, preview, 24 h window),
+  returning `package_pending` instead of writing. `approve_external_package()`
+  enforces the second-approval rules (operator, rw trusted peer/owner, or
+  `policy_auto_approve`; never the requester/executor), CAS-moves
+  `claimed → executing` with both expiry windows, and calls
+  `package_handoff.apply_operations()`. `reject_external_package()` marks the
+  package rejected and keeps the claim. `complete_external_execution()` is now a
+  staging-only alias. `expire_stale()` rejects an unapproved staged package and
+  discards its archive. Targets
+  are de-duplicated and must be strings; the typed postcondition for every
+  target is checked before a run is recorded `executed`.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**
   (`shared.policy_auto_approve`) is enabled, approves a freshly-created pending
   proposal and starts its headless run immediately. The recorded approver is

@@ -6,6 +6,53 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.11.0
+
+*Released 2026-11-04.*
+
+### External handoff v2: typed operations and package-level approval
+
+* **Typed preconditions.** A proposal's `action_type` is now a contract, not a
+  label: `edit` and `delete` targets must exist, `create` targets must be absent,
+  and `other`/unknown is refused for external handoff. The check runs at
+  approval, claim, upload/apply and before a local run, so an approval cannot be
+  created against a misleading pre-image and a later change cannot bypass it.
+  The two in-flight `edit` proposals against missing files (`prop_a704ff6ddda4`,
+  `prop_3645d3495174`) are refused at claim; re-propose them as `create` (or run
+  the prerequisite creators first and re-approve the edits against the new
+  content).
+* **Server-derived manifest.** An external agent uploads files only. Perun
+  derives one typed operation per approved target with `pre_sha256` and
+  `post_sha256`; extra files, duplicate targets, directories and external-dep
+  targets are refused. No agent-authored manifest is trusted.
+* **Package-level approval.** Uploading now *stages* the exact archive digest and
+  derived manifest (`package_pending`). A second, separate approval is required
+  before anything is written: the operator dashboard, another rw trusted
+  participant / room owner, or `policy_auto_approve`. The requester and the
+  executor cannot approve their own package. Rejecting a package keeps the claim
+  so a new archive can be uploaded.
+* **Atomic apply with postconditions and delete.** Apply re-checks every
+  pre-image, writes through staged temp files, verifies every postcondition and
+  rolls the whole package back on any failure. `delete` unlinks the target and
+  ignores uploaded bytes. A digest mismatch, an expired claim/package, or a
+  changed pre-image fails closed.
+* **Expiry and revocation clean up.** Claim expiry discards a staged archive and
+  clears the package fields; the package approval window (24 h) rejects an
+  unapproved package independently while keeping the claim. Revoke and delete
+  discard the archive too.
+* **Local execution gains the same contract.** `_prepare_execution()` refuses a
+  stale typed pre-image before claiming, and the post-run outcome check enforces
+  create/edit/delete postconditions. `guard_delete_file` is now available to the
+  restricted executor and named in the execution prompt.
+* **UI and tools.** The Shared tab renders the package digest, derived
+  operations, per-file diffs and **Approve package**/**Reject package** actions.
+  The MCP surface adds `approve_package`/`reject_package` and exposes package
+  state in `get_proposal`; the dashboard adds
+  `POST …/proposals/{id}/package/approve|reject`.
+* **MCP probe.** `mcp_servers.probe()` now performs the modern
+  `server/discover` handshake (with the version in `params._meta`) and falls back
+  to the legacy `initialize`, so current `mcp` 2.x releases are probed correctly.
+
 ## v0.10.87
 
 *Released 2026-11-04.*

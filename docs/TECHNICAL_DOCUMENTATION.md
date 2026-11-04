@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.87 (see §15). Project grid layout hardening: a pure tested planner, font re-measure, equal card heights, and graceful stale-module fallback.
+**Latest release:** v0.11.0 — External handoff v2: typed create/edit/delete preconditions, a server-derived pre/post manifest, package-level approval of the exact archive digest, atomic apply with postconditions and rollback, plus the Shared-tab review UI and MCP package tools.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -1262,26 +1262,51 @@ claim refuses it. Before this, a directory was recorded as `{"kind": "dir"}` on 
 sides, so `targets: ["docs"]` could never drift.
 If a target was modified, created or deleted between approval and claim, the
 claim is refused with `target changed since approval: …`; the same check runs
-again in `complete_external_execution()` (reported as `changed during upload`), so
-a package built against older content cannot overwrite newer work. The
-remediation is to `cancel()` the proposal and re-propose it — a fresh approval
-captures the current content. Proposals approved before this column existed have
-an empty snapshot and keep the old behaviour, so an upgrade cannot strand
-in-flight handoffs.
+again when an uploaded package is validated/applied (reported as `changed during
+upload`), so a package built against older content cannot overwrite newer work.
+The remediation is to `cancel()` the proposal and re-propose it — a fresh
+approval captures the current content. Proposals approved before this column
+existed have an empty snapshot and keep the old behaviour, so an upgrade cannot
+strand in-flight handoffs.
+
+**Typed preconditions.** `action_type` is a contract, not a label. `edit` and
+`delete` require every target to exist; `create` requires every target to be
+absent; `other`/unknown is refused for external handoff. `_assert_action_targets()`
+runs at approval, external claim, package upload/apply and local execution, and
+`_normalize_action_type()` maps the small alias set (`modify`/`update` → `edit`,
+`new`/`add` → `create`, `remove`/`rm` → `delete`). An approval therefore cannot be
+created against a misleading pre-image, and a later change cannot bypass the
+check. `approve()` is also strict about drift: it captures the current content
+and refuses a proposal whose target no longer matches its declared kind.
 
 A target above the verification budget (256 MiB per file, 512 MiB in total) is
 recorded as `unverifiable` and an external claim is **refused** rather than
 silently checked more weakly; local runs are unaffected. The budgets sit far above
 the 50 MiB handoff package cap, so an ordinary handoff is always fully hashed.
 
-An external apply first performs an atomic `claimed → executing` transition that
-matches the executor and an unexpired lease, immediately before
-`package_handoff.apply_package`; an expired or lost claim is rejected without
-writing. `expire_stale()` also fails an abandoned `executing` row after 12 hours.
+**Server-derived package and second approval.** The uploaded archive is *staged*,
+never applied on upload. `package_handoff.derive_package()` derives one typed
+operation per approved target with `pre_sha256`/`post_sha256` (create: absent →
+file; edit: file → file; delete: file → absent). Files outside the targets,
+duplicate targets, directories, symlinks and external-dependency targets are
+refused. Perun stores the archive under `PERUN_HOME/packages/<proposal>.zip`, its
+sha256 in `package_digest`, the manifest in `package_manifest`, and a bounded
+diff preview in `package_preview`; the proposal stays `claimed` with
+`package_state='pending'`. A second approval of the exact digest is required:
+the dashboard operator, another rw trusted participant / room owner, or
+`policy_auto_approve`. The requester and the executor cannot approve their own
+package. Rejecting (`package_state='rejected'`) keeps the claim so a new archive
+can be uploaded. The package approval window is 24 hours; claim expiry discards
+the archive and clears the package fields. On approval Perun re-runs the typed
+and drift checks, moves `claimed → executing` with a CAS that also verifies the
+claim and package windows, applies through staged temp files, verifies every
+post-image and rolls the whole package back on any failure. `delete` unlinks the
+target and ignores uploaded bytes; a digest mismatch fails closed.
+`expire_stale()` also fails an abandoned `executing` row after 12 hours.
 ZIP entries are rejected on case-insensitive duplicates, shell-expansion
 characters (`$`, `%`, `~`) or backslashes, and staging uses `mkstemp`. Proposal
-targets are de-duplicated and must be strings; a `create` proposal must touch
-every approved target before it can be recorded `executed`.
+targets are de-duplicated and must be strings; `create`/`edit`/`delete` all
+enforce their postcondition before a run is recorded `executed`.
 
 HITL tokens are HMAC-SHA256 over the proposal id, a canonical JSON action hash,
 expiry and nonce. `validate()` checks the signature before consuming the nonce,
@@ -1291,7 +1316,8 @@ window to exceed the token TTL by at least 5 seconds.
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools
 (`perun-guard_guard_read_file`, `perun-guard_guard_write_file`,
-`perun-guard_guard_edit_file`, `perun-guard_guard_list_directory`,
+`perun-guard_guard_edit_file`, `perun-guard_guard_delete_file`,
+`perun-guard_guard_list_directory`,
 `perun-guard_guard_search_files`), denies every other tool including the
 built-in `skill` loader, and its prompt tells the model to retry the exact
 guard tool if a call accidentally hits `skill` and returns “Unable to load
@@ -1319,9 +1345,9 @@ project's MCP servers are loaded; `_prepare_execution()` also fails early with
 and probes the server for `guard_write_file` before spending a model run.
 External handoff: a remote rw claimant requests a ZIP of the proposal's approved
 targets (arbitrary paths are rejected and sensitive files are excluded), uploads
-chunked replacement files bound to the same room/sender, and Perun unpacks,
-validates against the target/allowlist/sensitive rules, stages and applies the
-files with backup/rollback, and runs the audit. Downloads enforce the configured
+chunked replacement files bound to the same room/sender, and Perun derives the
+typed manifest, stages the archive and waits for the separate package approval
+described above before writing anything. Downloads enforce the configured
 package/entry/entry-count caps. Uploads require a SHA-256, are base64-validated,
 enforce per-chunk/cumulative byte caps, reject a `transfer_id` that is already in
 flight, and cap concurrent uploads at 8. Upload slots expire after the
@@ -1329,11 +1355,12 @@ configured idle TTL (`external_execution_package_ttl`, 30 minutes by default,
 60 s floor — **Settings → Package slot idle TTL (s)**); every accepted chunk
 refreshes the deadline, so a slow but progressing upload is not reclaimed
 mid-transfer. Execution results carry `op`, `ok`, `proposal_id` and
-`transfer_id` so the MCP client can correlate replies. The external apply is
-claim-locked as described above, so an expired or superseded claim cannot still
-write. Downloads name any declared target that does not exist on disk in
-`package_ready.missing_targets` (and in the tool result) instead of shipping a
-silently partial archive.
+`transfer_id` so the MCP client can correlate replies; a staged upload returns
+`package_pending` with the digest. The external apply is claim- and
+package-approval-locked as described above, so an expired or superseded claim
+cannot still write. Downloads name any declared target that does not exist on
+disk in `package_ready.missing_targets` (and in the tool result) instead of
+shipping a silently partial archive.
 Handoff frames are directed with `recipient_id`: results and downloads go to the
 claimant, upload chunks go to the room owner, and the gateway rejects
 unaddressed package chunks or result/`package_ready` frames from non-owners.
@@ -1345,7 +1372,10 @@ flow as `perunchat_claim_execution`,
 `perunchat_request_download_package`, `perunchat_upload_package`,
 `perunchat_write_target_file`, `perunchat_execution_status`,
 `perunchat_transfer_status`, and `perunchat_revoke_execution_claim`, so an MCP-capable agent does not need to
-speak raw WebSocket frames.
+speak raw WebSocket frames. The `perun-proposals` MCP server adds
+`approve_package`/`reject_package` and reports `package_state`, `package_digest`,
+`package_manifest` and `package_preview` from `get_proposal`; the dashboard
+adds `POST /api/projects/{slug}/proposals/{id}/package/approve|reject`.
 
 Project-room authorization requires the participant to be on the local
 PerunChat trust list *and* in the manifest; the room owner (`managed_by`) and

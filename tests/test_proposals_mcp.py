@@ -11,7 +11,9 @@ import pytest
 
 from perun import action_proposals, config, manifest, registry
 from perun import proposals_mcp as proposals_mcp_module
-from perun.proposals_mcp import propose, approve, list_proposals, get_proposal
+from perun.proposals_mcp import (
+    approve, approve_package, get_proposal, list_proposals, propose, reject_package,
+)
 
 
 _TOOL_MAP = {
@@ -19,6 +21,8 @@ _TOOL_MAP = {
     "approve": approve,
     "list_proposals": list_proposals,
     "get_proposal": get_proposal,
+    "approve_package": approve_package,
+    "reject_package": reject_package,
 }
 
 
@@ -434,4 +438,72 @@ def test_proposals_mcp_tool_names_match_permissions():
     import asyncio
 
     tools = asyncio.run(proposals_mcp_module.mcp.list_tools())
-    assert {t.name for t in tools} == {"propose", "approve", "list_proposals", "get_proposal"}
+    assert {t.name for t in tools} == {
+        "propose", "approve", "list_proposals", "get_proposal",
+        "approve_package", "reject_package",
+    }
+
+def _stage_external_package(project, room, sender="frambo"):
+    import io
+    import zipfile
+
+    from perun import package_handoff
+
+    proposal = action_proposals.create(
+        project, sender,
+        {"intent": "add README", "action_type": "create",
+         "targets": ["README.md"], "room_id": room},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], sender, owner="owner")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README.md", "# hi\n")
+    action_proposals.upload_external_package(
+        proposal["id"], sender, buf.getvalue(), owner="owner")
+    return proposal
+
+
+def test_package_tools_are_exposed(tool_runner, tmp_path, _settings):
+    _settings.perunchat_trusted = ["frambo"]
+    project, room = _make_project(tmp_path)
+    proposal = _stage_external_package(project, room)
+
+    fetched = tool_runner(
+        "get_proposal", project, "frambo",
+        {"proposal_id": proposal["id"]})
+    assert fetched["package_state"] == "pending"
+    assert fetched["package_digest"]
+    assert fetched["package_manifest"]["operations"][0]["op"] == "create"
+
+    listed = tool_runner("list_proposals", project, "frambo", {"status": "claimed"})
+    assert any(p["proposal_id"] == proposal["id"] for p in listed)
+
+
+def test_approve_package_applies_the_package(tool_runner, tmp_path, _settings):
+    _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
+    project, room = _make_project(tmp_path)
+    proposal = _stage_external_package(project, room)
+
+    result = tool_runner(
+        "approve_package", project, "peruntheoverseer",
+        {"proposal_id": proposal["id"]})
+
+    assert result["status"] == "executed"
+    assert result["package_state"] == "applied"
+    assert (Path(project["path"]) / "README.md").read_text() == "# hi\n"
+
+
+def test_reject_package_keeps_the_claim_and_records_the_reason(
+        tool_runner, tmp_path, _settings):
+    _settings.perunchat_trusted = ["frambo", "peruntheoverseer"]
+    project, room = _make_project(tmp_path)
+    proposal = _stage_external_package(project, room)
+
+    result = tool_runner(
+        "reject_package", project, "peruntheoverseer",
+        {"proposal_id": proposal["id"], "reason": "not that"})
+
+    assert result["package_state"] == "rejected"
+    assert "not that" in result["package_error"]
+    assert result["status"] == "claimed"

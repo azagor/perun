@@ -316,6 +316,12 @@ select { cursor: pointer; }
     border-radius: var(--radius);
     transition: background .3s ease;
 }
+.pkg-review { margin-top: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 9px; background: var(--bg-inset); }
+.pkg-review > summary { cursor: pointer; color: var(--gold-light); font-size: .78rem; }
+.pkg-review .pkg-ops { margin: 6px 0 0 16px; padding: 0; display: grid; gap: 3px; font-size: .76rem; }
+.pkg-review .pkg-file { margin-top: 6px; font-size: .76rem; }
+.pkg-review .pkg-file > summary { cursor: pointer; color: var(--text-secondary); }
+.pkg-review .pkg-diff { max-height: 240px; overflow: auto; margin: 4px 0 0; padding: 8px; border-radius: var(--radius-sm); background: rgba(0, 0, 0, .25); color: var(--text-secondary); font-size: .72rem; white-space: pre-wrap; }
 .proposal-ref { font-family: 'Cascadia Code', 'Consolas', monospace; }
 .proposal-ref.proposal-pending { border-color: var(--amber); color: var(--amber); }
 .proposal-ref.proposal-approved,

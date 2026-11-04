@@ -38,8 +38,14 @@ from typing import Any
 
 from . import __version__, config
 
-# MCP protocol version we advertise during the handshake. Servers may negotiate
-# anything; we only need a version both sides understand to exchange tool lists.
+# MCP protocol version we advertise during the legacy handshake. Servers may
+# negotiate anything; we only need a version both sides understand to exchange
+# tool lists. Newer MCP releases (2.x) require the "modern" discovery handshake
+# instead, which carries the version in ``params._meta``.
+try:  # mcp >= 2.2 ships the version constants in ``mcp_types``
+    from mcp_types import LATEST_PROTOCOL_VERSION as _MODERN_PROTOCOL_VERSION
+except Exception:  # pragma: no cover - older mcp releases
+    _MODERN_PROTOCOL_VERSION = ""
 MCP_PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_PROBE_TIMEOUT = 20.0
 # Hard ceiling for a single probe, regardless of what the caller asks for.
@@ -574,33 +580,78 @@ def _probe_stdio(entry: dict[str, Any], timeout: float) -> dict[str, Any]:
 
     deadline = started + timeout
     result: dict[str, Any] = {"status": "ok", "ok": True, "tools": [], "error": ""}
+
+    def _client_meta(version: str) -> dict[str, Any]:
+        return {
+            "io.modelcontextprotocol/protocolVersion": version,
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "perun", "version": __version__,
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+
+    def _capture_server_info(payload: dict[str, Any]) -> None:
+        result_body = payload.get("result") or {}
+        info = (
+            result_body.get("_meta", {})
+            .get("io.modelcontextprotocol/serverInfo", {})
+        ) or result_body.get("serverInfo") or {}
+        result["server_info"] = {
+            "name": str(info.get("name") or ""),
+            "version": str(info.get("version") or ""),
+        }
+        result["protocol_version"] = str(
+            result_body.get("protocolVersion") or ""
+        )
+
+    def _capture_tools(payload: dict[str, Any]) -> None:
+        tools = (payload.get("result") or {}).get("tools") or []
+        names = [str(t.get("name")) for t in tools if isinstance(t, dict) and t.get("name")]
+        result["tools"] = names[:MAX_TOOLS]
+        result["tool_count"] = len(names)
+
     try:
+        # Modern handshake (mcp 2.x): server/discover carries the negotiated
+        # version in params._meta. Fall back to the legacy initialize below for
+        # servers/releases that only speak the older protocol.
+        if _MODERN_PROTOCOL_VERSION:
+            _send({
+                "jsonrpc": "2.0", "id": 1, "method": "server/discover",
+                "params": {"_meta": _client_meta(_MODERN_PROTOCOL_VERSION)},
+            })
+            try:
+                discover = _await(1, min(deadline, started + 3.0))
+            except TimeoutError:
+                discover = {}
+            if isinstance(discover, dict) and "result" in discover:
+                _capture_server_info(discover)
+                result["protocol_version"] = result["protocol_version"] or _MODERN_PROTOCOL_VERSION
+                _send({
+                    "jsonrpc": "2.0", "id": 2, "method": "tools/list",
+                    "params": {"_meta": _client_meta(
+                        result["protocol_version"] or _MODERN_PROTOCOL_VERSION)},
+                })
+                _capture_tools(_await(2, deadline))
+                return result
+
         _send({
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "jsonrpc": "2.0", "id": 3, "method": "initialize",
             "params": {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "perun", "version": __version__},
             },
         })
-        init = _await(1, deadline)
+        init = _await(3, deadline)
         if "error" in init:
             raise RuntimeError(f"initialize failed: {init.get('error')}")
-        info = (init.get("result") or {}).get("serverInfo") or {}
-        result["server_info"] = {
-            "name": str(info.get("name") or ""),
-            "version": str(info.get("version") or ""),
-        }
-        result["protocol_version"] = str((init.get("result") or {}).get("protocolVersion") or "")
+        _capture_server_info(init)
         _send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        _send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        listing = _await(2, deadline)
+        _send({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}})
+        listing = _await(4, deadline)
         if "error" in listing:
             raise RuntimeError(f"tools/list failed: {listing.get('error')}")
-        tools = (listing.get("result") or {}).get("tools") or []
-        names = [str(t.get("name")) for t in tools if isinstance(t, dict) and t.get("name")]
-        result["tools"] = names[:MAX_TOOLS]
-        result["tool_count"] = len(names)
+        _capture_tools(listing)
     except (TimeoutError, EOFError, RuntimeError) as exc:
         result.update(status="unreachable" if isinstance(exc, (TimeoutError, EOFError)) else "error",
                       ok=False, error=str(exc))

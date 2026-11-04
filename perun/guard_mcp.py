@@ -219,6 +219,22 @@ def guard_edit_file(path: str, old_string: str, new_string: str) -> str:
 
 
 @mcp.tool()
+def guard_delete_file(path: str) -> str:
+    """Delete *path* (an approved target only).
+
+    Deleting is a declared operation: the path must be inside the approved
+    target list for the executing proposal, never merely inside the project.
+    """
+    target = _check(path, require_write=True)
+    if not target.exists():
+        raise FileNotFoundError(f"not found: {target}")
+    if not target.is_file():
+        raise ValueError(f"not a file: {target}")
+    target.unlink()
+    return f"deleted {target}"
+
+
+@mcp.tool()
 def guard_list_checks() -> list[dict[str, Any]]:
     """List the operator-declared checks for this project.
 

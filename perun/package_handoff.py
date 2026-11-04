@@ -7,10 +7,12 @@ encrypted entries, path-escape, and writes outside the project allowlist.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import io
 import os
 import posixpath
+import re
 import shutil
 import stat
 import tempfile
@@ -18,7 +20,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import config, path_guard, shared_projects
+from . import config, fs_audit, path_guard, shared_projects
 
 
 class PackageError(Exception):
@@ -40,6 +42,59 @@ def _settings() -> config.Settings:
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+_PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _archive_path(proposal_id: str) -> Path:
+    pid = str(proposal_id or "").strip()
+    if not _PACKAGE_ID_RE.match(pid):
+        raise PackageError("invalid proposal id for a package")
+    return config.PACKAGES_DIR / f"{pid}.zip"
+
+
+def store_archive(proposal_id: str, data: bytes) -> Path:
+    """Atomically store a validated package for approval/apply."""
+    path = _archive_path(proposal_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.stem + ".", suffix=".tmp", dir=path.parent
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            Path(tmp_name).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return path
+
+
+def load_archive(proposal_id: str) -> bytes | None:
+    path = _archive_path(proposal_id)
+    try:
+        return path.read_bytes()
+    except (OSError, PackageError):
+        return None
+
+
+def discard_archive(proposal_id: str) -> None:
+    try:
+        _archive_path(proposal_id).unlink(missing_ok=True)
+    except (OSError, PackageError):
+        pass
+
+
+def _target_rel(root: Path, target: str) -> tuple[Path, str]:
+    resolved = path_guard.resolve_target(str(root), target)
+    if not _path_under(resolved, root):
+        raise PackageError(
+            "external dependency targets are not supported in external handoff; "
+            "use local execution")
+    return resolved, resolved.relative_to(root).as_posix()
 
 
 def pack(project: dict[str, Any], paths: list[str] | None = None) -> bytes:
@@ -357,6 +412,329 @@ def apply_package(
                     pass
                 raise
             applied.append(relpath)
+    except Exception:
+        for target, backup in reversed(backups):
+            try:
+                if backup is not None:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return applied
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def derive_package(
+    project: dict[str, Any],
+    proposal: dict[str, Any],
+    files: dict[str, bytes],
+    claim_hashes: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    """Derive the typed operation manifest for an uploaded package.
+
+    The external agent uploads files only; Perun derives every operation and
+    pre/post hash. That makes it impossible for the package to lie about its
+    own path set, operation type or digests.
+
+    Returns ``(manifest, operations, errors)``. At least one error means the
+    package must be rejected without touching the project.
+    """
+    root = Path(project["path"]).resolve()
+    action = str(proposal.get("action_type") or "").strip().lower()
+    targets = [str(t) for t in (proposal.get("targets") or [])]
+    errors: list[str] = []
+    if action not in ("edit", "create", "delete"):
+        return {}, [], [
+            f"external handoff supports edit/create/delete, not {action or 'unknown'}"
+        ]
+    if not targets:
+        return {}, [], ["a proposal must declare at least one target"]
+    if len(set(targets)) != len(targets):
+        return {}, [], ["a proposal target is declared more than once"]
+
+    cfg = shared_projects.load(root)
+    external_deps = cfg.get("external_deps", [])
+    plans: list[tuple[str, str, Path]] = []
+    rels: set[str] = set()
+    for target in targets:
+        try:
+            resolved, rel = _target_rel(root, target)
+        except PackageError as exc:
+            errors.append(str(exc))
+            continue
+        if rel in rels:
+            errors.append(f"duplicate target path: {rel}")
+            continue
+        rels.add(rel)
+        if path_guard.is_sensitive_path(resolved):
+            errors.append(f"{rel} resolves to a protected or sensitive path")
+            continue
+        ok, reason = path_guard.check(root, target, external_deps, require_write=True)
+        if not ok:
+            errors.append(reason)
+            continue
+        if resolved.is_symlink():
+            errors.append(f"{rel} is a symlink; external handoff does not follow links")
+            continue
+        if resolved.exists() and not resolved.is_file():
+            errors.append(
+                f"{rel} is not a regular file; use local execution for directories")
+            continue
+        plans.append((target, rel, resolved))
+    if errors:
+        return {}, [], errors
+
+    try:
+        current = fs_audit.target_digests(project, targets)
+    except Exception as exc:
+        return {}, [], [f"could not fingerprint the targets: {exc}"]
+    claims = claim_hashes if isinstance(claim_hashes, dict) else {}
+    operations: list[dict[str, Any]] = []
+    allowed = {rel for _target, rel, _resolved in plans}
+    extra = sorted(set(files) - allowed)
+    if extra:
+        errors.append(
+            "package contains files outside the approved targets: " + ", ".join(extra[:5])
+        )
+        return {}, [], errors
+
+    for target, rel, _resolved in plans:
+        now = current.get(target)
+        if claims:
+            claimed = claims.get(target, "__missing__")
+            if claimed == "__missing__" or now != claimed:
+                errors.append(
+                    f"{rel} changed since the claim; re-propose or re-claim the proposal")
+                continue
+        if action == "create":
+            if now is not None:
+                errors.append(
+                    f"create target {rel} already exists; re-propose it as an edit")
+                continue
+            if rel not in files:
+                errors.append(f"package is missing the new file {rel}")
+                continue
+            data = files[rel]
+            operations.append({
+                "path": rel, "op": "create", "pre_sha256": None,
+                "post_sha256": sha256_hex(data), "size": len(data),
+            })
+        elif action == "edit":
+            if not isinstance(now, dict) or now.get("kind") != "file":
+                errors.append(
+                    f"edit target {rel} does not exist or is not a regular file; "
+                    "re-propose it as a create")
+                continue
+            if rel not in files:
+                errors.append(f"package is missing the edited file {rel}")
+                continue
+            data = files[rel]
+            operations.append({
+                "path": rel, "op": "edit", "pre_sha256": now.get("sha256"),
+                "post_sha256": sha256_hex(data), "size": len(data),
+            })
+        else:  # delete
+            if not isinstance(now, dict) or now.get("kind") != "file":
+                errors.append(f"delete target {rel} does not exist or is not a regular file")
+                continue
+            operations.append({
+                "path": rel, "op": "delete", "pre_sha256": now.get("sha256"),
+                "post_sha256": None,
+                "size": int(now.get("size") or 0),
+            })
+
+    manifest = {
+        "version": 1,
+        "proposal_id": str(proposal.get("id") or ""),
+        "action_type": action,
+        "operations": operations,
+    }
+    return manifest, operations, errors
+
+
+def build_preview(
+    project: dict[str, Any],
+    operations: list[dict[str, Any]],
+    files: dict[str, bytes],
+    *,
+    max_chars: int = 120_000,
+) -> list[dict[str, Any]]:
+    """A bounded, human-readable diff/summary for package approval."""
+    root = Path(project["path"]).resolve()
+    preview: list[dict[str, Any]] = []
+    used = 0
+    for op in operations:
+        rel = str(op.get("path") or "")
+        kind = str(op.get("op") or "")
+        try:
+            target = path_guard.resolve_target(root, rel)
+        except Exception:
+            continue
+        old = b""
+        new = b""
+        if kind in ("edit", "delete"):
+            try:
+                old = target.read_bytes()
+            except OSError:
+                old = b""
+        if kind in ("edit", "create"):
+            new = files.get(rel, b"")
+        entry: dict[str, Any] = {
+            "path": rel, "op": kind, "size": len(new), "diff": "", "truncated": False,
+        }
+        if len(old) > 200_000 or len(new) > 200_000 or b"\x00" in old or b"\x00" in new:
+            entry["summary"] = (
+                f"{kind} · binary · {len(old)} -> {len(new)} bytes"
+            )
+        else:
+            try:
+                old_text = old.decode("utf-8")
+                new_text = new.decode("utf-8")
+            except UnicodeDecodeError:
+                entry["summary"] = f"{kind} · binary · {len(old)} -> {len(new)} bytes"
+            else:
+                diff_lines = list(difflib.unified_diff(
+                    old_text.splitlines(), new_text.splitlines(),
+                    fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm="",
+                ))
+                adds = sum(1 for line in diff_lines
+                           if line.startswith("+") and not line.startswith("+++"))
+                dels = sum(1 for line in diff_lines
+                           if line.startswith("-") and not line.startswith("---"))
+                entry["summary"] = f"{kind} · +{adds}/-{dels} lines"
+                budget = max(0, max_chars - used)
+                text = "\n".join(diff_lines)
+                if len(text) > min(budget, 20_000) or len(diff_lines) > 400:
+                    text = "\n".join(diff_lines[:400])
+                    if len(text) > min(budget, 20_000):
+                        text = text[:min(budget, 20_000)]
+                    entry["truncated"] = True
+                entry["diff"] = text
+                used += len(text)
+        preview.append(entry)
+        if used >= max_chars:
+            break
+    return preview
+
+
+def apply_operations(
+    project: dict[str, Any],
+    operations: list[dict[str, Any]],
+    files: dict[str, bytes],
+) -> list[str]:
+    """Apply a validated typed manifest atomically with rollback.
+
+    Every operation re-checks its pre-image and post-image here, immediately
+    before writing; a failed postcondition rolls the whole package back.
+    """
+    root = Path(project["path"]).resolve()
+    staging = Path(tempfile.mkdtemp(prefix="perun-apply-"))
+    new_dir = staging / "_new"
+    backup_dir = staging / "_backup"
+    new_dir.mkdir()
+    backup_dir.mkdir()
+    applied: list[str] = []
+    backups: list[tuple[Path, Path | None]] = []
+    try:
+        prepared: list[tuple[dict[str, Any], Path, bytes | None]] = []
+        for op in operations:
+            rel = str(op.get("path") or "")
+            kind = str(op.get("op") or "")
+            if kind not in ("create", "edit", "delete"):
+                raise PackageError(f"unsupported operation {kind!r} for {rel}")
+            target = _target_for_apply(root, rel)
+            if target.is_symlink():
+                raise PackageError(f"{rel} is a symlink; refusing to write")
+            if path_guard.is_sensitive_path(target):
+                raise PackageError(f"{rel} resolves to a protected or sensitive path")
+            exists = target.is_file()
+            if kind == "create":
+                if exists:
+                    raise PackageError(f"create target {rel} already exists")
+                data = files.get(rel)
+                if data is None:
+                    raise PackageError(f"package is missing {rel}")
+                if sha256_hex(data) != str(op.get("post_sha256") or ""):
+                    raise PackageError(f"content hash mismatch for {rel}")
+            elif kind == "edit":
+                if not exists:
+                    raise PackageError(f"edit target {rel} no longer exists")
+                if _file_sha256(target) != str(op.get("pre_sha256") or ""):
+                    raise PackageError(f"{rel} changed before apply")
+                data = files.get(rel)
+                if data is None:
+                    raise PackageError(f"package is missing {rel}")
+                if sha256_hex(data) != str(op.get("post_sha256") or ""):
+                    raise PackageError(f"content hash mismatch for {rel}")
+            else:  # delete
+                if not exists:
+                    raise PackageError(f"delete target {rel} no longer exists")
+                if _file_sha256(target) != str(op.get("pre_sha256") or ""):
+                    raise PackageError(f"{rel} changed before delete")
+                data = None
+            prepared.append((op, target, data))
+
+        for op, target, data in prepared:
+            rel = target.relative_to(root).as_posix()
+            if data is not None:
+                staged = new_dir / rel
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(data)
+            if target.is_file():
+                backup = backup_dir / rel
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, backup)
+                backups.append((target, backup))
+            else:
+                backups.append((target, None))
+
+        for op, target, data in prepared:
+            rel = target.relative_to(root).as_posix()
+            if str(op.get("op")) == "delete":
+                target.unlink()
+                applied.append(rel)
+                continue
+            staged = new_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=target.stem + ".", suffix=".perun-tmp", dir=target.parent
+            )
+            os.close(fd)
+            tmp = Path(tmp_name)
+            try:
+                shutil.copy2(staged, tmp)
+                os.replace(str(tmp), str(target))
+            except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
+            applied.append(rel)
+
+        # Postconditions are part of the transaction: a bad result rolls back.
+        for op, target, _data in prepared:
+            rel = target.relative_to(root).as_posix()
+            kind = str(op.get("op"))
+            if kind == "delete":
+                if target.exists():
+                    raise PackageError(f"delete postcondition failed for {rel}")
+            elif not target.is_file():
+                raise PackageError(f"write postcondition failed for {rel}")
+            elif _file_sha256(target) != str(op.get("post_sha256") or ""):
+                raise PackageError(f"postcondition hash mismatch for {rel}")
     except Exception:
         for target, backup in reversed(backups):
             try:

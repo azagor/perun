@@ -53,6 +53,8 @@ RUNS_DIR: Path = HOME / "runs"
 # Kept out of the project tree on purpose: a config lives in a git repo, and a
 # sibling ``.bak`` would show up as an untracked file that can be committed.
 BACKUPS_DIR: Path = HOME / "backups"
+# Staged external-handoff packages awaiting/serving package-level approval.
+PACKAGES_DIR: Path = HOME / "packages"
 WEB_DIR: Path = REPO_ROOT / "web"
 MCP_SERVER: Path = REPO_ROOT / "mcp" / "perun_mcp.py"
 TEMPLATES_DIR: Path = PACKAGE_DIR / "integrations" / "templates"
@@ -615,7 +617,7 @@ def perunchat_actor_path(room_id: str) -> Path:
 
 def ensure_dirs() -> None:
     for d in (HOME, LOGS_DIR, RUNS_DIR, INSTRUCTIONS_DIR,
-              HOME / "perunchat_actors"):
+              PACKAGES_DIR, HOME / "perunchat_actors"):
         d.mkdir(parents=True, exist_ok=True)
 
 
