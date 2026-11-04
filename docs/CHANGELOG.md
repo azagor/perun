@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.83
+
+*Released 2026-11-04.*
+
 ### Project grid balance
 
 * Every project card now uses the same computed width for the current column

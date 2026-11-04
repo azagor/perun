@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T15:51:09+00:00",
+  "generated": "2026-11-04T15:54:27+00:00",
   "releases": [
+    {
+      "version": "0.10.83",
+      "date": "2026-11-04",
+      "body": "### Project grid balance\n\n* Every project card now uses the same computed width for the current column\n  count; a partly filled last row is centered instead of stretching the final\n  card across the row (PerunChat alone no longer becomes full-width)."
+    },
     {
       "version": "0.10.82",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.74",
       "date": "2026-11-04",
       "body": "### Hardening for TUI session resume\n\n* The card **Run** button disables while it looks up the newest session, so a\n  double click cannot launch two terminals.\n* `POST /api/runs/tui` rejects a `session_pk` that belongs to another project\n  (400), so a crafted request cannot attach another project's usage.\n* The Agent Console session picker skips sessions with no `opencode_session_id`,\n  because such a session cannot be passed to `opencode --session`.\n\n### Focus finds the terminal through its console again\n\n* On Windows 11 the shell has no live process-tree link to Windows Terminal (the\n  ConPTY host exits) and the tab title belongs to OpenCode, so Focus could report\n  \"no terminal window found\" while the terminal was open — especially once the\n  window showed another active tab or its title changed.\n* Focus now asks the console itself: a short-lived detached helper attaches to the\n  run's console and reads the console window, whose **owner** is the exact Windows\n  Terminal window (a classic console owns its window directly). This is\n  deterministic and needs no title, project name, or OpenCode service call; the\n  existing window/title search remains the fallback.\n* `ProcessTracker.run_terminal_pid()` falls back to the run row's persisted pid\n  when the in-memory launcher handle has died (e.g. `wt.exe`) instead of reporting\n  a live terminal as unattributable. Marker verification is unchanged."
-    },
-    {
-      "version": "0.10.73",
-      "date": "2026-11-04",
-      "body": "### Project coroutines can include project tasks\n\n* The coroutine wizard's **Work** step now lists the execution project's enabled\n  tasks. Several can be selected at once, shown as removable chips, and composed\n  with the optional extra prompt by `buildCoroutinePrompt`. A skill task becomes\n  a structured instruction for the headless run, not a TUI slash command.\n* The composed prompt is saved once; editing the project's tasks later does not\n  rewrite an existing coroutine. A job with tasks and no extra prompt is valid.\n* Quick create keeps its single-prompt shortcut; use **New coroutine** for task\n  selection."
     }
   ]
 }
