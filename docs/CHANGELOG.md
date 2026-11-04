@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.81
+
+*Released 2026-11-04.*
+
 ### Release-notes bundle correction
 
 * Regenerate the bundled release notes so the v0.10.80 update card has content;

@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T12:12:53+00:00",
+  "generated": "2026-11-04T12:13:00+00:00",
   "releases": [
+    {
+      "version": "0.10.81",
+      "date": "2026-11-04",
+      "body": "### Release-notes bundle correction\n\n* Regenerate the bundled release notes so the v0.10.80 update card has content;\n  the v0.10.80 section was empty when that package was built."
+    },
     {
       "version": "0.10.80",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.72",
       "date": "2026-11-04",
       "body": "### Run resumes the latest TUI session\n\n* The project card's main **Run** now resumes the latest OpenCode session for\n  that project (`opencode --session <id>`) instead of always starting a new one.\n  The caret next to it starts a **new** session or opens a picker of the\n  project's existing sessions; a project with no sessions starts fresh.\n* The Agent Console's session picker defaults to the latest session and keeps\n  **New session** as the first, explicit choice. The TUI run record carries\n  `opencode_session_id` and `session_pk`, so Finish captures that session's\n  usage.\n* **Stop is unchanged**: it closes the terminal Perun opened, ending every\n  session in that terminal."
-    },
-    {
-      "version": "0.10.71",
-      "date": "2026-11-04",
-      "body": "### Operator ask dedupe and inbox batching\n\n* A mention is deduplicated by a fingerprint of room + sender + timestamp + text,\n  so a replay under a fresh frame id cannot create a second inbox item. The\n  operator's own handle is skipped, and settings/operator names are cached for\n  30 s per message burst.\n* `attention.reconcile_proposals()` now resolves proposal statuses in one query\n  and closes cards in one transaction (`action_proposals.statuses`,\n  `registry.close_attention_many`) instead of two connections per open card.\n* Payload identities above 200 KB collapse to a short `len:<n>:<hash>` key, and\n  the chat “operator asks” strip orders by the message timestamp rather than the\n  inbox row id."
     }
   ]
 }
