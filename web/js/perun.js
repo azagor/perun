@@ -794,6 +794,20 @@ const CardControls = window.CardControls || {
         label: '\u25be', title: 'Start a new session or choose an existing one',
     }),
     focusControlSpec: () => null,
+    // Fallback for a stale cached card_controls.js. The module's gridPlan is
+    // unit-tested; this keeps the grid usable if the script failed to load.
+    gridPlan: (width, gap, count) => {
+        width = Number(width) || 0;
+        const rawGap = Number(gap);
+        gap = Number.isFinite(rawGap) && rawGap >= 0 ? rawGap : 16;
+        count = Number(count) || 0;
+        if (width <= 0 || count <= 0) return { columns: 0, card: 0 };
+        const maxCols = Math.max(1, Math.floor((width + gap) / (310 + gap)));
+        const columns = Math.min(maxCols, count);
+        const card = Math.min(width, 520,
+            Math.floor((width - (columns - 1) * gap) / columns));
+        return { columns, card };
+    },
     visibleRuns: (runs, projects) => {
         const listed = new Set((projects || [])
             .map((p) => p && p.slug)
@@ -1370,15 +1384,15 @@ function layoutProjectGrid(grid) {
     if (!width) return;
     const styles = getComputedStyle(grid);
     const gap = parseFloat(styles.columnGap || styles.gap) || 16;
-    const min = 310;
-    const maxCard = 520;
     const count = grid.querySelectorAll(':scope > .proj-card').length;
     if (!count) return;
-    const maxCols = Math.max(1, Math.floor((width + gap) / (min + gap)));
-    const columns = Math.min(maxCols, count);
-    const available = width - (columns - 1) * gap;
-    const card = Math.min(width, maxCard, Math.floor(available / columns));
-    grid.style.setProperty('--proj-card-w', `${card}px`);
+    // A stale cached card_controls.js may predate gridPlan; keep the grid
+    // usable (one column, capped) rather than throwing.
+    const plan = (typeof CardControls.gridPlan === 'function')
+        ? CardControls.gridPlan(width, gap, count)
+        : { columns: 1, card: Math.min(width, 520) };
+    if (!plan.columns) return;
+    grid.style.setProperty('--proj-card-w', `${plan.card}px`);
     // Flex lines size independently; give every card the tallest card's height
     // so a short row (PerunChat alone) matches the first row.
     grid.style.removeProperty('--proj-card-h');
@@ -1400,6 +1414,13 @@ function projectGrid(projects) {
 window.addEventListener('resize', () => {
     document.querySelectorAll('.proj-grid').forEach(layoutProjectGrid);
 });
+
+// Fonts can change text height after the first layout; re-measure once loaded.
+if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+        document.querySelectorAll('.proj-grid').forEach(layoutProjectGrid);
+    });
+}
 
 function projectCard(p) {
     const isControl = !!p.is_control;

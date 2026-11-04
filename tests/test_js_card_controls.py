@@ -138,9 +138,10 @@ def test_the_project_grid_shares_a_partial_last_row():
     assert "layoutProjectGrid" in js
     assert "--proj-card-w" in js
     assert "requestAnimationFrame(() => layoutProjectGrid(grid))" in js
-    # The maximum column count keeps the previous first-row card size.
-    assert "const columns = Math.min(maxCols, count)" in js
-    assert "maxCard = 520" in js
+    # The pure planner is unit-tested in card_controls.test.js.
+    assert "CardControls.gridPlan(" in js
+    assert "typeof CardControls.gridPlan === 'function'" in js
+    assert "document.fonts.ready" in js
     # Every card is the same height, with actions pinned to the bottom.
     assert "--proj-card-h" in css and "--proj-card-h" in js
     assert "margin-top: auto" in css

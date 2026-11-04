@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Project grid layout hardening
+
+* The width/column math is a pure, node-tested `CardControls.gridPlan()`:
+  zero/hidden grids, one/few cards, the 310 px minimum, the 520 px cap and a bad
+  gap are covered. A stale cached `card_controls.js` degrades to one capped
+  column instead of throwing.
+* The grid re-measures after fonts load and on every presence update; a resize
+  re-runs it. Height-only changes cannot loop the layout.
 
 ## v0.10.86
 

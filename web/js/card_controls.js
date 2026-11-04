@@ -98,6 +98,36 @@
     }
 
     /**
+     * Plan the project grid: one card width and the column count.
+     *
+     * Uses the largest column count that honors the minimum card width, capped
+     * at the number of cards and one card's maximum width. Pure so the edge
+     * cases (zero-width/hidden grid, one card, few cards, the cap) are tested
+     * without a DOM.
+     *
+     * @param {number} width available grid width in px
+     * @param {number} gap flex gap in px
+     * @param {number} count number of project cards
+     * @param {{min?: number, max?: number}} [opts]
+     * @returns {{columns: number, card: number}}
+     */
+    function gridPlan(width, gap, count, opts) {
+        width = Number(width) || 0;
+        const rawGap = Number(gap);
+        gap = Number.isFinite(rawGap) && rawGap >= 0 ? rawGap : 16;
+        count = Number(count) || 0;
+        const options = opts || {};
+        const min = Number(options.min) || 310;
+        const max = Number(options.max) || 520;
+        if (width <= 0 || count <= 0) return { columns: 0, card: 0 };
+        const maxCols = Math.max(1, Math.floor((width + gap) / (min + gap)));
+        const columns = Math.min(maxCols, count);
+        const available = width - (columns - 1) * gap;
+        const card = Math.min(width, max, Math.floor(available / columns));
+        return { columns, card };
+    }
+
+    /**
      * Runs whose project the dashboard may list.
      *
      * Hidden projects (the control plane) are absent from the project list on
@@ -117,5 +147,8 @@
             (r) => r && r.project_slug && listed.has(r.project_slug));
     }
 
-    return { runControlSpec, runControlAttr, runMenuSpec, focusControlSpec, visibleRuns };
+    return {
+        runControlSpec, runControlAttr, runMenuSpec, focusControlSpec,
+        gridPlan, visibleRuns,
+    };
 });

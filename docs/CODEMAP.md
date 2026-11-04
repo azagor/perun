@@ -1616,7 +1616,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   opens the existing-session picker (which labels headless runs). `focusControlSpec(run)` gates the Focus
   button to a tracked TUI run, and `visibleRuns(runs, projects)` drops runs whose
   project the dashboard may not list (the hidden control plane on an installed
-  copy).
+  copy). `gridPlan(width, gap, count)` plans the project grid: the maximum fitting
+  column count and one card width (310 px minimum, 520 px cap, at most one column
+  per card); the pure planner is node-tested for zero/hidden grids, one/few
+  cards, the cap and a bad gap.
   `perun.js` renders/syncs the button from it, so an active
   card can never offer a second launch - the regression when Stop was suppressed
   for standalone runs while Run stayed hardcoded. `perun.js` also serializes

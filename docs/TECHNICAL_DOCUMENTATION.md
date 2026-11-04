@@ -2550,6 +2550,14 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   re-rendered card or the caret cannot open a second terminal while the session
   lookup is in flight; if the terminal launch fails, `openProjectTui()` finishes
   the run row it created instead of leaving a phantom working card.
+  **Project grid layout.** `layoutProjectGrid()` uses
+  `CardControls.gridPlan()` for the maximum fitting column count and one card
+  width (310 px minimum, 520 px cap), then applies the tallest card's height to
+  every card; the action row is pinned to the bottom. A partly filled last row
+  starts at the first column and every card shares the same width and height.
+  It re-runs on render, window resize, presence updates and font load; a
+  hidden/zero-width grid is skipped, and a stale cached `card_controls.js`
+  degrades to one capped column rather than throwing.
 * **Orchestrator chat** targets the control plane; it streams in place and works
   with zero other projects registered. Its Settings card edits the orchestrator's
   **model**, **agent**, and **custom instructions**.

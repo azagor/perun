@@ -105,3 +105,19 @@ test('an active card offers neither Run nor its caret', () => {
     assert.equal(controls.runMenuSpec(headless), null);
     assert.equal(controls.runMenuSpec(tui), null);
 });
+
+test('gridPlan keeps one card width and the maximum columns', () => {
+    assert.deepEqual(controls.gridPlan(0, 16, 6), { columns: 0, card: 0 });
+    assert.deepEqual(controls.gridPlan(NaN, NaN, 0), { columns: 0, card: 0 });
+    assert.deepEqual(controls.gridPlan(1920, 16, 6), { columns: 5, card: 371 });
+    assert.deepEqual(controls.gridPlan(1920, 16, 4), { columns: 4, card: 468 });
+    assert.deepEqual(controls.gridPlan(1180, 16, 6), { columns: 3, card: 382 });
+    assert.deepEqual(controls.gridPlan(700, 16, 3), { columns: 2, card: 342 });
+    assert.deepEqual(controls.gridPlan(300, 16, 1), { columns: 1, card: 300 });
+    // A single/few cards are capped at 520 rather than filling a huge row.
+    assert.deepEqual(controls.gridPlan(1920, 16, 1), { columns: 1, card: 520 });
+    assert.deepEqual(controls.gridPlan(1920, 16, 2), { columns: 2, card: 520 });
+    // A bad or negative gap falls back to the CSS gap.
+    assert.deepEqual(controls.gridPlan(700, 'nope', 3), { columns: 2, card: 342 });
+    assert.deepEqual(controls.gridPlan(700, -5, 3), { columns: 2, card: 342 });
+});
