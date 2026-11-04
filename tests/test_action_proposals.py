@@ -1950,3 +1950,152 @@ def test_pending_package_cannot_be_replaced_silently(tmp_path):
         proposal["id"], "operator", operator=True)
     assert result["status"] == "executed"
     assert (project["path"] / "api.py").read_text() == "first"
+
+
+def test_external_apply_ignores_unrelated_changes_during_review(tmp_path):
+    """A long approval window must not fail a clean package for unrelated work."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    target = _edit_target(project)
+    (root / "unrelated.py").write_text("before", encoding="utf-8")
+    proposal, _ = _stage(project, action="edit", target=target,
+                         entries={"api.py": b"new"})
+
+    # Another agent writes during the 24 h package-review window.
+    (root / "unrelated.py").write_text("changed by someone else", encoding="utf-8")
+
+    result = action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+
+    assert result["status"] == "executed"
+    assert (root / "api.py").read_text() == "new"
+    assert (root / "unrelated.py").read_text() == "changed by someone else"
+
+
+def test_local_delete_postcondition_covers_a_directory_target(tmp_path):
+    """A delete target that is a directory must not be reported as deleted."""
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    (root / "olddir").mkdir()
+    target = str(root / "olddir")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "remove old dir", "targets": [target], "action_type": "delete"},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    orch = type("NoopOrchestrator", (), {})()
+    orch.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
+
+    result = action_proposals.execute(proposal["id"], orchestrator_instance=orch)
+
+    assert result["status"] == "failed"
+    assert "POSTCONDITION FAILED" in result["result"]
+    assert (root / "olddir").is_dir()
+
+
+def test_retry_refuses_a_stale_typed_action(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = str(project["path"] / "later.py")
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+    action_proposals._set_status(proposal["id"], "failed", "provider error")
+
+    with pytest.raises(ValueError, match="cannot retry: edit target does not exist"):
+        action_proposals.retry(proposal["id"], owner="owner", trusted=["frambo"])
+
+
+def test_reconcile_interrupted_discards_a_stale_archive(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+    action_proposals.package_handoff.store_archive(proposal["id"], b"stale")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET status='executing' WHERE id=?",
+            (proposal["id"],),
+        )
+
+    action_proposals.reconcile_interrupted()
+
+    from perun import config
+
+    assert not (config.PACKAGES_DIR / f"{proposal['id']}.zip").exists()
+    assert action_proposals.get(proposal["id"])["status"] == "failed"
+
+
+def test_concurrent_uploads_keep_one_archive(tmp_path):
+    import threading
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal = action_proposals.create(
+        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+
+    barrier = threading.Barrier(2)
+    results: list[tuple[str, dict]] = []
+
+    def upload(content: bytes, label: str):
+        barrier.wait()
+        result = action_proposals.upload_external_package(
+            proposal["id"], "frambo", _zip_bytes({"api.py": content}), owner="owner")
+        results.append((label, result))
+
+    t1 = threading.Thread(target=upload, args=(b"first", "first"))
+    t2 = threading.Thread(target=upload, args=(b"second", "second"))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    winners = [label for label, r in results if r.get("ok")]
+    losers = [label for label, r in results if not r.get("ok")]
+    assert len(winners) == 1 and len(losers) == 1
+    assert "reject it before uploading" in next(
+        r["reason"] for _label, r in results if not r.get("ok"))
+
+    result = action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+    assert result["status"] == "executed"
+    assert (project["path"] / "api.py").read_text() == winners[0]
+
+
+def test_reject_after_apply_is_refused_and_keeps_the_file(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal, _ = _stage(project, action="edit", target=target,
+                         entries={"api.py": b"new"})
+    action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+
+    with pytest.raises(ValueError, match="proposal is executed"):
+        action_proposals.reject_external_package(
+            proposal["id"], "operator", reason="too late", operator=True)
+    assert (project["path"] / "api.py").read_text() == "new"
+
+
+def test_expiry_sweep_does_not_discard_an_archive_owned_by_an_apply(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal, _ = _stage(project, action="edit", target=target,
+                         entries={"api.py": b"new"})
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET status='executing' WHERE id=?",
+            (proposal["id"],),
+        )
+    action_proposals.expire_stale()
+
+    from perun import config
+
+    assert (config.PACKAGES_DIR / f"{proposal['id']}.zip").exists()
+    current = action_proposals.get(proposal["id"])
+    assert current["status"] == "executing"
+    assert current["package_state"] == "pending"

@@ -679,7 +679,8 @@ applies it locally.
   targets. `create` requires an absent target, `edit`/`delete` require an existing
   one, and a claim hash mismatch is refused.
 * `build_preview()` — a bounded unified diff / binary summary per operation for
-  the approval UI, capped in bytes and lines.
+  the approval UI, capped in bytes and lines. It stats an old target before
+  reading it and never loads a file above the 200 KB diff budget.
 * `apply_operations()` — re-checks every pre-image immediately before writing,
   stages through `mkstemp` temp files, verifies every postcondition
   (create/edit must be a regular file, delete must be gone), and restores all
@@ -1016,7 +1017,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `perun/instructions/perunchat_chat.md` persona, which names the prefixed
   guard tools and requires a guard read-back to verify executed proposals).
   The installed `perunchat` agent allows the guard/proposal/memory tools and
-  denies the built-in `skill` loader.
+  denies the built-in `skill` loader. Both the installed agent and the runtime
+  prompt state that the guard/proposals servers are loaded in a bound project
+  room, require retrying the exact prefixed tool name, and forbid claiming they
+  are unavailable without a failed tool result.
 * `PerunChatBridge` — background thread: `status()`, `start()`, `stop()`,
   `restart()`; connects to the gateway via the configured API key,
   auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and
@@ -1280,7 +1284,12 @@ Autonomous PerunChat chat participant for the Orchestrator.
   proposal id is also the headless run id. `expire_stale()` expires pending
   proposals after 24 h, approved proposals after 7 days, an unapproved staged
   package after 24 h, and fails an abandoned `executing` row after 12 h; claim
-  expiry also discards the staged archive and clears the package columns.
+  expiry also discards the staged archive and clears the package columns. Both
+  expiry sweeps update a row first and discard its archive only when their CAS
+  won, so an approve that moved the row to `executing` keeps its artifact.
+  `reconcile_interrupted()` marks a restart-stranded row failed and discards its
+  archive. `retry()` refuses a copied action whose typed pre-image no longer
+  matches, with a `cannot retry: …` error.
   `_prepare_execution()`
   fails early with “guard MCP not registered” when the project config lacks
   `perun-guard`, probes the guard server for `guard_write_file`, re-checks the
@@ -1300,8 +1309,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `project_chats.room_id` when the envelope carries none.
   **Package handoff:** `upload_external_package()` validates and *stages* the
   archive (`package_state='pending'`, digest, manifest, preview, 24 h window),
-  returning `package_pending` instead of writing; a second upload is refused
-  while a package is pending (reject or let it expire first). `approve_external_package()`
+  returning `package_pending` instead of writing; uploads are serialized per
+  proposal and a second upload is refused while a package is pending (reject or
+  let it expire first). `approve_external_package()`
   enforces the second-approval rules (operator, rw trusted peer/owner, or
   `policy_auto_approve`; never the requester/executor), CAS-moves
   `claimed → executing` with both expiry windows, and calls

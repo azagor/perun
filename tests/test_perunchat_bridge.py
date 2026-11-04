@@ -4149,3 +4149,12 @@ def test_a_paused_project_annotates_the_review_request(settings, monkeypatch):
 
     assert posted and "paused" in posted[0].lower()
     assert scheduled == ["grp:t:p"]
+
+
+def test_chat_prompts_do_not_claim_guard_tools_are_unavailable():
+    from perun import perunchat_bridge as pb
+
+    for prompt in (pb._OPENCODE_AGENT_MD, pb._DEFAULT_CHAT_PROMPT):
+        assert "do not conclude the tools are unavailable" in prompt
+        assert "perun-guard_guard_read_file" in prompt
+        assert "perun-guard_guard_list_directory" in prompt

@@ -584,19 +584,27 @@ def build_preview(
             continue
         old = b""
         new = b""
+        old_size = 0
         if kind in ("edit", "delete"):
             try:
-                old = target.read_bytes()
+                old_size = target.stat().st_size
             except OSError:
-                old = b""
+                old_size = 0
+            # Do not load a target larger than the diff budget into memory just
+            # to throw it away; the summary only needs its size.
+            if old_size <= 200_000:
+                try:
+                    old = target.read_bytes()
+                except OSError:
+                    old = b""
         if kind in ("edit", "create"):
             new = files.get(rel, b"")
         entry: dict[str, Any] = {
             "path": rel, "op": kind, "size": len(new), "diff": "", "truncated": False,
         }
-        if len(old) > 200_000 or len(new) > 200_000 or b"\x00" in old or b"\x00" in new:
+        if old_size > 200_000 or len(new) > 200_000 or b"\x00" in old or b"\x00" in new:
             entry["summary"] = (
-                f"{kind} · binary · {len(old)} -> {len(new)} bytes"
+                f"{kind} · binary · {old_size or len(old)} -> {len(new)} bytes"
             )
         else:
             try:

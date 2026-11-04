@@ -4,7 +4,36 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Production-readiness audit fixes
+
+* **External apply audit baseline.** The policy audit now takes a fresh
+  target-scoped snapshot immediately before `apply_operations()` instead of
+  using the claim-time snapshot. A package that waits up to 24 h for its second
+  approval can no longer be marked `failed` because an unrelated file changed
+  while the operator was reviewing it.
+* **Delete postcondition.** Local execution requires a `delete` target to be
+  gone (`exists()`), not merely not-a-regular-file; a directory target is now
+  reported as a postcondition failure instead of a successful delete.
+* **Package replacement and expiry races.** Uploads for one proposal are
+  serialized per proposal and the CAS excludes a pending package. Reject and
+  both expiry sweeps update the row first and discard the archive only if they
+  won the CAS, so an approve that moved the proposal to `executing` keeps its
+  artifact. `reconcile_interrupted()` also discards a dead archive.
+* **Retry with a stale pre-image.** `retry()` refuses to copy an `edit`/`delete`
+  proposal whose target no longer exists (or a `create` whose target now
+  exists) with a clear `cannot retry: …` error instead of creating a proposal
+  guaranteed to fail at approval.
+* **Preview memory bound.** `build_preview()` stats a target before reading it
+  and never loads a file above the 200 KB diff budget just to discard it.
+* **MCP schema bootstrap.** The proposals MCP server runs `db.init_db()` at
+  startup so `approve_package`/`reject_package` work even when an MCP client is
+  the first process after an upgrade.
+* **Room prompt hardening.** The PerunChat agent and instruction files now state
+  that the guard/proposals servers are loaded in a bound project room, tell the
+  model to retry the exact prefixed tool name, and forbid claiming the tools are
+  unavailable without a failed tool result. Verified directly:
+  `opencode run --agent perunchat` in `ai-playground` returns the tree through
+  `perun-guard_guard_list_directory`.
 
 ## v0.11.1
 

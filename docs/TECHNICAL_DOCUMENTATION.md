@@ -1308,6 +1308,21 @@ characters (`$`, `%`, `~`) or backslashes, and staging uses `mkstemp`. Proposal
 targets are de-duplicated and must be strings; `create`/`edit`/`delete` all
 enforce their postcondition before a run is recorded `executed`.
 
+**Audit baseline and package races.** The external apply's policy audit uses a
+fresh target-scoped `fs_audit.snapshot()` taken immediately before
+`apply_operations()`, not the claim-time snapshot: a package may wait 24 h for
+its second approval, and an unrelated edit during that window must not turn a
+clean apply into a `POLICY VIOLATION`. Uploads for one proposal are serialized
+with a per-proposal lock and the staging CAS also excludes
+`package_state='pending'`. Reject and both expiry sweeps update the row first
+and discard the archive only when their CAS won, so an approve that moved the
+row to `executing` keeps its artifact; `reconcile_interrupted()` discards a dead
+archive. `retry()` refuses a copied `edit`/`delete` whose target disappeared (or
+a `create` whose target appeared) with a `cannot retry: …` error, and
+`build_preview()` never loads an old target above the 200 KB diff budget. The
+proposals MCP server runs `db.init_db()` at startup so its package tools work
+even when an MCP client starts before the main service migrates the schema.
+
 HITL tokens are HMAC-SHA256 over the proposal id, a canonical JSON action hash,
 expiry and nonce. `validate()` checks the signature before consuming the nonce,
 rejects malformed token/nonce/expiry types, and `HITLConfig` requires the nonce

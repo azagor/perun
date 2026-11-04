@@ -35,11 +35,17 @@ from fastmcp import FastMCP  # noqa: E402
 from perun import (  # noqa: E402
     action_proposals,
     config,
+    db,
     registry,
     shared_projects,
 )
 
 mcp = FastMCP("PerunProposals")
+
+# An MCP client can launch this server before the Perun service has migrated
+# the schema after an upgrade; make the package columns exist before any tool
+# reads or writes them. init_db() is idempotent (and WAL-safe).
+db.init_db()
 
 
 def _settings() -> Any:

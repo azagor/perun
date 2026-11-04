@@ -766,6 +766,22 @@ def claim_execution(
 
 EXTERNAL_PACKAGE_TTL_SECONDS = 24 * 3600
 
+# Two uploads for the same proposal can otherwise race between the
+# ``package_state`` check and the archive/DB write. The bridge is a singleton,
+# so a process-local per-proposal lock is sufficient; the SQL guard below is
+# defence in depth.
+_PACKAGE_LOCKS: dict[str, threading.Lock] = {}
+_PACKAGE_LOCKS_GUARD = threading.Lock()
+
+
+def _package_lock(proposal_id: str) -> threading.Lock:
+    with _PACKAGE_LOCKS_GUARD:
+        lock = _PACKAGE_LOCKS.get(proposal_id)
+        if lock is None:
+            lock = threading.Lock()
+            _PACKAGE_LOCKS[proposal_id] = lock
+        return lock
+
 
 def _package_approver_allowed(
     project: dict[str, Any],
@@ -805,6 +821,23 @@ def _package_approver_allowed(
 
 
 def upload_external_package(
+    proposal_id: str,
+    executor_id: str,
+    archive_bytes: bytes,
+    *,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    """Stage a validated external package for package-level approval.
+
+    Serialized per proposal so two uploads cannot overwrite the archive while
+    the DB still describes the other one.
+    """
+    with _package_lock(str(proposal_id)):
+        return _upload_external_package_locked(
+            proposal_id, executor_id, archive_bytes, owner=owner)
+
+
+def _upload_external_package_locked(
     proposal_id: str,
     executor_id: str,
     archive_bytes: bytes,
@@ -889,7 +922,8 @@ def upload_external_package(
                    package_approved_by='', package_approved_at='',
                    package_applied_at='', package_error='', updated_at=?
                    WHERE id=? AND status='claimed' AND lower(executor_id)=?
-                     AND (claim_expires_at=0 OR claim_expires_at>?)""",
+                     AND (claim_expires_at=0 OR claim_expires_at>?)
+                     AND (package_state IS NULL OR package_state!='pending')""",
                 (
                     digest, _to_json(manifest), _to_json(preview), _now(), expires,
                     _now(), proposal_id, requester_id, now,
@@ -989,14 +1023,18 @@ def reject_external_package(
         raise ValueError("project not found")
     _package_approver_allowed(
         project, proposal, approver, owner=owner, trusted=trusted, operator=operator)
-    package_handoff.discard_archive(proposal_id)
+    # CAS first, then discard: an approve that won the race owns the archive.
     with db.db() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE action_proposals SET package_state='rejected', "
             "package_error=?, updated_at=? WHERE id=? AND status='claimed' "
             "AND package_state='pending'",
             ((str(reason or "").strip()[:1000]), _now(), proposal_id),
         )
+        rejected = cur.rowcount == 1
+    if not rejected:
+        raise ValueError("package is no longer pending")
+    package_handoff.discard_archive(proposal_id)
     registry.log_activity(
         proposal["project_id"], "proposal_package_rejected",
         f"Package for proposal {proposal_id} rejected by {approver}",
@@ -1007,13 +1045,15 @@ def reject_external_package(
 
 def _reject_package_record(proposal: dict[str, Any], reason: str) -> None:
     """Mark a pending package rejected without changing the claim."""
-    package_handoff.discard_archive(str(proposal.get("id") or ""))
     with db.db() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE action_proposals SET package_state='rejected', package_error=?, "
             "updated_at=? WHERE id=? AND status='claimed' AND package_state='pending'",
             (reason[:1000], _now(), proposal["id"]),
         )
+        rejected = cur.rowcount == 1
+    if rejected:
+        package_handoff.discard_archive(str(proposal.get("id") or ""))
 
 
 def _apply_external_package(
@@ -1074,17 +1114,26 @@ def _apply_external_package(
         raise ValueError("claim or package approval expired before apply")
 
     proposal = get(proposal_id) or proposal
+    # Take the audit baseline immediately before the write, not at claim time:
+    # the package may wait up to 24 h for its second approval, and an unrelated
+    # edit during that window must not be attributed to this package and turn a
+    # clean apply into a policy failure. The typed pre/post checks above already
+    # pin every approved target.
+    try:
+        before_snapshot = fs_audit.snapshot(project, targets=proposal["targets"])
+    except Exception as exc:
+        _fail_package(proposal, f"could not snapshot the targets before apply: {exc}")
+        return {
+            "ok": False,
+            "reason": f"could not snapshot the targets before apply: {exc}",
+            "status": "failed",
+        }
     try:
         package_handoff.apply_operations(project, operations, files)
     except Exception as exc:
         _fail_package(proposal, f"apply failed: {exc}")
         return {"ok": False, "reason": f"apply failed: {exc}", "status": "failed"}
 
-    raw_snapshot = proposal.get("claim_snapshot") or {}
-    before_snapshot = (
-        raw_snapshot if isinstance(raw_snapshot, dict)
-        else _from_json(raw_snapshot, {})
-    )
     audit_result: dict[str, Any] = {}
     status = "executed"
     output = "External execution completed"
@@ -1328,6 +1377,7 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
     # pre-image, never inherit a stale approved artifact.
     reclaimed_ids: list[str] = []
     reclaimed_packages: list[str] = []
+    reclaimed_ok: list[str] = []
     try:
         with db.db() as conn:
             rows = db.rows(
@@ -1341,20 +1391,24 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
                 r["id"] for r in rows if (r["package_state"] or "") in (
                     "pending", "approved", "rejected", "failed")
             ]
-            if reclaimed_ids:
-                placeholders = ",".join("?" * len(reclaimed_ids))
-                conn.execute(
-                    f"UPDATE action_proposals SET status='approved', executor_id='', "
-                    f"executed_by='', execution_mode='perun', claimed_at='', "
-                    f"claim_expires_at=0, claim_snapshot='', claim_hashes='', "
-                    f"package_state='', package_digest='', package_manifest='', "
-                    f"package_preview='', package_uploaded_at='', "
-                    f"package_expires_at=0, package_approved_by='', "
-                    f"package_approved_at='', package_applied_at='', "
-                    f"package_error='', updated_at=? "
-                    f"WHERE id IN ({placeholders}) AND status='claimed'",
-                    (_now(), *reclaimed_ids),
+            # Update one row at a time and discard its archive only when this
+            # sweep actually won the CAS: an approve that moved the row to
+            # ``executing`` between SELECT and UPDATE owns the archive.
+            for proposal_id in reclaimed_ids:
+                cur = conn.execute(
+                    "UPDATE action_proposals SET status='approved', executor_id='', "
+                    "executed_by='', execution_mode='perun', claimed_at='', "
+                    "claim_expires_at=0, claim_snapshot='', claim_hashes='', "
+                    "package_state='', package_digest='', package_manifest='', "
+                    "package_preview='', package_uploaded_at='', "
+                    "package_expires_at=0, package_approved_by='', "
+                    "package_approved_at='', package_applied_at='', "
+                    "package_error='', updated_at=? "
+                    "WHERE id=? AND status='claimed'",
+                    (_now(), proposal_id),
                 )
+                if cur.rowcount == 1:
+                    reclaimed_ok.append(proposal_id)
     except Exception as exc:
         if "no such column" not in str(exc).lower():
             raise
@@ -1363,8 +1417,10 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
             "Restart the Perun service so db.init_db() can migrate the schema."
         )
         return expired_ids
-    for proposal_id in reclaimed_packages:
-        package_handoff.discard_archive(proposal_id)
+    reclaimed_ids = reclaimed_ok
+    for proposal_id in reclaimed_ok:
+        if proposal_id in reclaimed_packages:
+            package_handoff.discard_archive(proposal_id)
     for proposal_id in reclaimed_ids:
         registry.log_activity(
             None,
@@ -1377,6 +1433,7 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
     # lapses the archive is discarded and the row is marked rejected so the
     # claimant can upload a fresh package without waiting for the claim TTL.
     package_expired: list[str] = []
+    package_expired_ok: list[str] = []
     try:
         with db.db() as conn:
             rows = db.rows(
@@ -1387,23 +1444,24 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
                 (now,),
             )
             package_expired = [r["id"] for r in rows]
-            if package_expired:
-                placeholders = ",".join("?" * len(package_expired))
-                conn.execute(
-                    f"UPDATE action_proposals SET package_state='rejected', "
-                    f"package_error=?, updated_at=? WHERE id IN ({placeholders}) "
-                    f"AND status='claimed' AND package_state='pending'",
+            for proposal_id in package_expired:
+                cur = conn.execute(
+                    "UPDATE action_proposals SET package_state='rejected', "
+                    "package_error=?, updated_at=? WHERE id=? "
+                    "AND status='claimed' AND package_state='pending'",
                     (
                         "package approval window expired; upload it again",
                         _now(),
-                        *package_expired,
+                        proposal_id,
                     ),
                 )
+                if cur.rowcount == 1:
+                    package_expired_ok.append(proposal_id)
     except Exception as exc:  # pragma: no cover - schema drift
         if "no such column" not in str(exc).lower():
             raise
         package_expired = []
-    for proposal_id in package_expired:
+    for proposal_id in package_expired_ok:
         package_handoff.discard_archive(proposal_id)
         registry.log_activity(
             None,
@@ -1411,6 +1469,7 @@ def expire_stale(max_age_seconds: int = DEFAULT_PENDING_TTL_SECONDS) -> list[str
             f"Package for proposal {proposal_id} expired before approval",
             {"proposal_id": proposal_id},
         )
+    package_expired = package_expired_ok
 
     # Recover rows stuck in ``executing`` (a crashed local run or a process that
     # died between the claim lock and completion). ``updated_at`` is ISO here.
@@ -1719,11 +1778,10 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
         if action in ("create", "edit", "delete"):
             failed: list[str] = []
             for target in target_paths:
-                present = target.is_file()
                 if action == "delete":
-                    if present:
+                    if target.exists():
                         failed.append(f"{target} still exists")
-                elif not present:
+                elif not target.is_file():
                     failed.append(f"{target} was not written as a regular file")
             if failed:
                 status = "failed"
@@ -1854,6 +1912,10 @@ def reconcile_interrupted() -> list[dict[str, Any]]:
                     proposal_id,
                 ),
             )
+    for proposal_id in ids:
+        # An external apply interrupted mid-flight may have left its staged
+        # archive behind; the row is terminal, so the artifact is dead weight.
+        package_handoff.discard_archive(proposal_id)
     recovered: list[dict[str, Any]] = []
     for proposal_id in ids:
         proposal = get(proposal_id)
@@ -2031,6 +2093,14 @@ def retry(
     project = registry.get_project(original["project_id"])
     if not project:
         raise ValueError("project not found")
+
+    # A retry copies the original action_type, but the pre-image may have
+    # changed since. Refuse with a clear reason instead of creating a proposal
+    # that is guaranteed to fail at approval.
+    try:
+        _assert_action_targets(project, original, stage="retry")
+    except ValueError as exc:
+        raise ValueError(f"cannot retry: {exc}") from exc
 
     owner_id = str(owner or "").strip() or original.get("approved_by") or "owner"
     details = dict(original.get("details") or {})
