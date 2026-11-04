@@ -12,6 +12,9 @@ _No unreleased changes yet._
 
 ### Hardening for the work pause and TUI launch
 
+* The Shared tab header now labels the room binding separately (**Chat active**
+  / **Chat pending sync**) and shows a dedicated **Work paused** / **Work
+  running** badge, so a paused project no longer looks active.
 * A TUI launch only finishes/untracks its run on a **definitive** server error;
   a network-uncertain failure leaves the run stopable because the terminal may
   have opened.

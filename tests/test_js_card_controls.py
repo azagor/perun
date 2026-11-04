@@ -122,6 +122,10 @@ def test_shared_projects_expose_a_work_pause_control():
     assert "sp-paused-note" in src
     assert "work_paused" in src
     assert 'badge amber">paused' in src
+    # The header separates the room binding from the work state.
+    assert "Chat active" in src
+    assert "Work paused" in src
+    assert "Work running" in src
 
 
 def test_an_uncertain_terminal_launch_is_not_finalized():

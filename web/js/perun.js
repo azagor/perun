@@ -2557,10 +2557,10 @@ async function sharedProjectCard(detail) {
     }
     const statusOf = (info) => {
         const state = (info && info.state) || 'disabled';
-        if (state === 'active') return { cls: 'on', text: 'Active' };
-        if (state === 'pending') return { cls: 'pending', text: 'Pending sync' };
-        if (state === 'unbound') return { cls: 'pending', text: 'Not created yet' };
-        return { cls: '', text: 'Disabled' };
+        if (state === 'active') return { cls: 'on', text: 'Chat active' };
+        if (state === 'pending') return { cls: 'pending', text: 'Chat pending sync' };
+        if (state === 'unbound') return { cls: 'pending', text: 'Chat not created' };
+        return { cls: '', text: 'Chat disabled' };
     };
     const enabled = !!cfg.shared;
     const paused = !!p.work_paused;
@@ -2569,6 +2569,9 @@ async function sharedProjectCard(detail) {
     card.innerHTML = `
         <div class="card-head"><h4>Shared project</h4>
             <span class="shared-status ${initialStatus.cls}" id="sp-status">${esc(initialStatus.text)}</span>
+            ${enabled ? (paused
+                ? '<span class="badge amber" id="sp-work-state">Work paused</span>'
+                : '<span class="badge green" id="sp-work-state">Work running</span>') : ''}
             ${enabled ? `<button class="btn sm ${paused ? 'primary' : 'ghost'}" id="sp-work-toggle" type="button">${paused ? '▶ Resume work' : '❚❚ Pause work'}</button>` : ''}
         </div>
         ${enabled && paused ? `<div class="cor-warn" id="sp-paused-note">Autonomous work is paused${p.work_paused_by ? ` by ${esc(p.work_paused_by)}` : ''}. New chat messages are kept, but no agent will act until you resume. In-flight work finishes.</div>` : ''}
