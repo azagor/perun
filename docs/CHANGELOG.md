@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Project grid row balancing
+
+* The grid now chooses a column count that avoids a single card alone on the
+  last row (6 cards at a wide width become 4+2 instead of 5+1), caps cards at
+  520px, and keeps every card at one width; a partial last row is centered.
 
 ## v0.10.83
 

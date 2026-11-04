@@ -1360,18 +1360,25 @@ function sectionTitle(text, extra) {
 }
 
 function layoutProjectGrid(grid) {
-    // Give every card the same width for the current column count, so a partly
-    // filled last row is centered instead of stretched. The CSS fallback is
-    // 310px when JS has not measured the grid yet.
+    // Size every card to one width and choose a column count that avoids a
+    // single card stranded on the last row (6 cards at a wide width become
+    // 4+2, not 5+1). A partial last row is centered.
     if (!grid || !grid.isConnected) return;
     const width = grid.clientWidth;
     if (!width) return;
     const styles = getComputedStyle(grid);
     const gap = parseFloat(styles.columnGap || styles.gap) || 16;
     const min = 310;
-    const columns = Math.max(1, Math.floor((width + gap) / (min + gap)));
+    const maxCard = 520;
+    const count = grid.querySelectorAll(':scope > .proj-card').length;
+    if (!count) return;
+    const maxCols = Math.max(1, Math.floor((width + gap) / (min + gap)));
+    let columns = Math.min(maxCols, count);
+    for (let c = columns; c >= 2; c--) {
+        if (count % c !== 1) { columns = c; break; }
+    }
     const available = width - (columns - 1) * gap;
-    const card = Math.min(width, Math.floor(available / columns));
+    const card = Math.min(width, maxCard, Math.floor(available / columns));
     grid.style.setProperty('--proj-card-w', `${card}px`);
 }
 

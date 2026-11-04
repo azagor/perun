@@ -138,6 +138,9 @@ def test_the_project_grid_shares_a_partial_last_row():
     assert "layoutProjectGrid" in js
     assert "--proj-card-w" in js
     assert "requestAnimationFrame(() => layoutProjectGrid(grid))" in js
+    # The column count avoids a single card on the last row.
+    assert "count % c !== 1" in js
+    assert "maxCard = 520" in js
 
 
 def test_an_uncertain_terminal_launch_is_not_finalized():
