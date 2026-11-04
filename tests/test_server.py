@@ -2942,3 +2942,26 @@ def test_a_tui_run_cannot_resume_another_projects_session(client, tmp_path):
 
     assert r.status_code == 400, r.text
     assert "does not belong to this project" in r.json()["detail"]
+
+
+def test_a_headless_run_cannot_claim_another_projects_session(client, tmp_path):
+    """The ownership rule lives in start_run, so every run path gets it."""
+    from perun import registry
+    from perun.server import ORCH
+
+    owner = _check_project(tmp_path, "run-owner")
+    other = _check_project(tmp_path, "run-other")
+    foreign = registry.create_session(
+        other["id"], "ses_foreign_run", title="Another project's chat")
+
+    with pytest.raises(ValueError):
+        ORCH.start_run(owner["slug"], "hi", session_pk=foreign["id"])
+
+    r = client.post("/api/runs", json={
+        "project": owner["slug"],
+        "prompt": "hi",
+        "session_pk": foreign["id"],
+    })
+
+    assert r.status_code == 400, r.text
+    assert "does not belong to this project" in r.json()["detail"]

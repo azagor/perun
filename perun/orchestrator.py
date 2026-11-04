@@ -834,6 +834,20 @@ class Orchestrator:
         project = registry.get_project(project_ref)
         if not project:
             raise ValueError(f"no such project: {project_ref}")
+
+        # A run may only claim a session that belongs to its own project. The
+        # TUI endpoint checks this too; validating here covers headless runs,
+        # MCP tools and every other caller of start_run, so usage can never be
+        # attributed across projects.
+        try:
+            session_pk = int(session_pk) if session_pk else None
+        except (TypeError, ValueError):
+            raise ValueError("session_pk must be an integer") from None
+        if session_pk is not None:
+            session = registry.get_session(session_pk)
+            if not session or int(session.get("project_id") or 0) != int(project["id"]):
+                raise ValueError("session_pk does not belong to this project")
+
         prompt = (prompt or "").strip() or DEFAULT_SESSION_PROMPT
 
         # Callers that need a predictable, externally addressable run id (the

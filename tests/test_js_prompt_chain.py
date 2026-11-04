@@ -32,3 +32,8 @@ def test_the_coroutine_wizard_composes_selected_project_tasks():
     assert "buildCoroutinePrompt" in src
     assert "prompt: coroutinePrompt(w)" in src
     assert "Project tasks" in src
+
+
+def test_the_coroutine_wizard_explains_editing_existing_tasks():
+    src = (REPO_ROOT / "web" / "js" / "perun.js").read_text(encoding="utf-8")
+    assert "Earlier selections are already part of the saved prompt" in src

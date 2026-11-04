@@ -1412,11 +1412,13 @@ function projectCard(p) {
             // launch a second terminal. Disable the button until it settles.
             if (btn.disabled) return;
             btn.disabled = true;
-            Promise.resolve(resumeLatestProjectTui(p)).finally(() => {
-                // A successful launch re-renders the card; only re-enable if
-                // this element is still on the page.
-                if (btn.isConnected) btn.disabled = false;
-            });
+            Promise.resolve(resumeLatestProjectTui(p))
+                .catch(() => { /* already toasted inside the launch flow */ })
+                .finally(() => {
+                    // A successful launch re-renders the card; only re-enable if
+                    // this element is still on the page.
+                    if (btn.isConnected) btn.disabled = false;
+                });
             return;
         }
         goto('#/project/' + p.slug);
@@ -1434,6 +1436,11 @@ async function fetchProjectSessions(p) {
     }
 }
 
+/* One terminal launch per project at a time. The session lookup is a network
+   round-trip, and the card can be re-rendered (or the caret used) while it is
+   in flight; a second click must never open a second terminal. */
+const tuiLaunchInFlight = new Set();
+
 function openResumedSession(p, session) {
     return openProjectTui(p, {
         sessionId: session.opencode_session_id,
@@ -1445,6 +1452,7 @@ function openResumedSession(p, session) {
 async function resumeLatestProjectTui(p) {
     // The fast path: the newest session for this project, or a fresh one when
     // the project has none yet.
+    if (!p || tuiLaunchInFlight.has(p.slug)) return;
     const sessions = await fetchProjectSessions(p);
     if (sessions.length) return openResumedSession(p, sessions[0]);
     return openProjectTui(p, {});
@@ -1502,11 +1510,15 @@ async function openTuiMenu(p) {
 }
 
 async function openProjectTui(p, opts = {}) {
+    if (!p || !p.path) {
+        toast('This project has no folder path. Re-register or rediscover it.', 'err');
+        return;
+    }
+    // One launch per project at a time: the card may be re-rendered (or the
+    // caret used) while the session lookup is in flight.
+    if (tuiLaunchInFlight.has(p.slug)) return;
+    tuiLaunchInFlight.add(p.slug);
     try {
-        if (!p || !p.path) {
-            toast('This project has no folder path. Re-register or rediscover it.', 'err');
-            return;
-        }
         const sessionId = String(opts.sessionId || '').trim();
         const sessionPk = opts.sessionPk || null;
         const sessionTitle = String(opts.sessionTitle || '').trim();
@@ -1527,9 +1539,15 @@ async function openProjectTui(p, opts = {}) {
             project: p.slug, cwd: p.path, model: p.model, agent: p.agent,
             tui: true, runUid, sessionId,
         });
-        if (opened) {
-            toast(sessionId ? 'Resumed session' : 'Started a new session', 'ok');
+        if (!opened) {
+            // The run row was created before the launch. Without a terminal it
+            // would stay "running" and keep the card lit, so finish it now.
+            try { await api(`/api/runs/${runUid}/finish`, { method: 'POST' }); }
+            catch (_) { /* finalization is best effort */ }
+            await refreshPresence();
+            return;
         }
+        toast(sessionId ? 'Resumed session' : 'Started a new session', 'ok');
         await refreshPresence();
         if (runUid) {
             // Optimistically show working state so the card lights up immediately,
@@ -1546,6 +1564,7 @@ async function openProjectTui(p, opts = {}) {
             }
         }
     } catch (e) { toast(e.message, 'err'); }
+    finally { tuiLaunchInFlight.delete(p.slug); }
 }
 
 async function focusProjectTerminal(runUid) {
@@ -7977,7 +7996,9 @@ function openCoroutineWizard(existing, opts = {}) {
         } else if (w._step === 1) {
             if (w.scope === 'project') {
                 pane.appendChild(field('Project tasks', coroutineTaskBox(w, render),
-                    'Optional. Selected tasks are composed with the prompt. A skill task becomes a structured instruction for the headless run, not a TUI slash command.'));
+                    isEdit
+                        ? 'Optional. Earlier selections are already part of the saved prompt; adding tasks appends new blocks (they are not shown as chips when editing).'
+                        : 'Optional. Selected tasks are composed with the prompt. A skill task becomes a structured instruction for the headless run, not a TUI slash command.'));
             }
             const ta = el('textarea', { rows: '7', placeholder: 'What should the agent do on each run?' });
             ta.value = w.prompt || '';

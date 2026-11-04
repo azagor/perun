@@ -91,3 +91,14 @@ def test_the_console_skips_sessions_without_an_opencode_id():
     """A session with no OpenCode id cannot be resumed."""
     src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
     assert "if (!String(s.opencode_session_id || '').trim()) continue;" in src
+
+
+def test_terminal_launches_are_single_flight_and_finalized_on_failure():
+    """A re-render or a second click must not open a second terminal, and a
+    failed launch must not leave a phantom running card."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "const tuiLaunchInFlight = new Set();" in src
+    assert "if (tuiLaunchInFlight.has(p.slug)) return;" in src
+    assert "tuiLaunchInFlight.delete(p.slug);" in src
+    assert "if (!opened)" in src
+    assert "await api(`/api/runs/${runUid}/finish`" in src

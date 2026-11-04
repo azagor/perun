@@ -7,9 +7,13 @@ endpoint is exercised with the activation layer stubbed.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from perun import registry, terminal_focus
+
+_REAL_READ_CONSOLE_HWND = terminal_focus._read_console_hwnd
 
 
 def _win(hwnd, pid, title="Terminal", order=0, cls="ConsoleWindowClass", visible=True):
@@ -487,7 +491,8 @@ def test_focus_uses_the_console_window_before_title_matching(monkeypatch):
     monkeypatch.setattr(terminal_focus, "supported", lambda: True)
     monkeypatch.setattr(terminal_focus.process_tracker.TRACKER,
                         "run_terminal_pid", lambda uid: 100)
-    monkeypatch.setattr(terminal_focus, "console_host_window", lambda pid: 900)
+    monkeypatch.setattr(terminal_focus, "console_host_window",
+                        lambda pid, run_uid="": 900)
     monkeypatch.setattr(terminal_focus, "_api", lambda: (None, _Kernel()))
     monkeypatch.setattr(terminal_focus, "_window_title", lambda hwnd: "OC | title")
     monkeypatch.setattr(terminal_focus, "_activate",
@@ -512,7 +517,8 @@ def test_a_blocked_console_window_reports_the_flash(monkeypatch):
     monkeypatch.setattr(terminal_focus, "supported", lambda: True)
     monkeypatch.setattr(terminal_focus.process_tracker.TRACKER,
                         "run_terminal_pid", lambda uid: 100)
-    monkeypatch.setattr(terminal_focus, "console_host_window", lambda pid: 900)
+    monkeypatch.setattr(terminal_focus, "console_host_window",
+                        lambda pid, run_uid="": 900)
     monkeypatch.setattr(terminal_focus, "_api", lambda: (None, _Kernel()))
     monkeypatch.setattr(terminal_focus, "_window_title", lambda hwnd: "OC | title")
     monkeypatch.setattr(terminal_focus, "_activate", lambda hwnd: ("flash", False))
@@ -523,3 +529,53 @@ def test_a_blocked_console_window_reports_the_flash(monkeypatch):
     assert out["focused"] is False
     assert "flashed" in out["reason"]
     assert out["hwnd"] == 900
+
+
+def test_the_console_cache_is_per_run(monkeypatch):
+    """A recycled pid must not hand one run another run's cached window."""
+    calls = []
+
+    def probe(pid):
+        calls.append(pid)
+        return 777
+
+    monkeypatch.setattr(terminal_focus, "_read_console_hwnd", probe)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (_User32(), _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_class",
+                        lambda hwnd: "ConsoleWindowClass")
+    terminal_focus._console_hwnd.clear()
+
+    assert terminal_focus.console_host_window(4242, "run-a") == 777
+    assert terminal_focus.console_host_window(4242, "run-a") == 777
+    assert calls == [4242]
+    assert terminal_focus.console_host_window(4242, "run-b") == 777
+    assert calls == [4242, 4242]
+
+
+def test_a_closed_cached_window_is_probed_again(monkeypatch):
+    calls = []
+    user32 = _User32()
+
+    def probe(pid):
+        calls.append(pid)
+        return 777
+
+    monkeypatch.setattr(terminal_focus, "_read_console_hwnd", probe)
+    monkeypatch.setattr(terminal_focus, "_api", lambda: (user32, _Kernel()))
+    monkeypatch.setattr(terminal_focus, "_window_class",
+                        lambda hwnd: "ConsoleWindowClass")
+    terminal_focus._console_hwnd.clear()
+
+    assert terminal_focus.console_host_window(4242, "run") == 777
+    user32.valid = False  # the cached window closed
+    assert terminal_focus.console_host_window(4242, "run") == 0
+    assert calls == [4242, 4242]
+
+
+def test_the_console_probe_is_safe_on_this_machine():
+    """The real helper must never raise or hang for a live pid (0 is fine when
+    there is no console, e.g. in a headless CI)."""
+    if not terminal_focus.supported():
+        pytest.skip("console probing needs Windows and psutil")
+    hwnd = _REAL_READ_CONSOLE_HWND(os.getpid())
+    assert isinstance(hwnd, int) and hwnd >= 0

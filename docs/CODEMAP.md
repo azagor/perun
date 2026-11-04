@@ -618,7 +618,9 @@ Start / stream / cancel headless `opencode run`.
 * `_SlotLimiter` (mutable, `threading.Condition`-based concurrency limiter; `set_max()`),
   `_child_env(depth)` (strips raw secret env vars, sets `PERUN_DEPTH`, injects the
   resolved Telegram token as `PERUN_TELEGRAM_TOKEN`).
-* `Orchestrator`: `start_run()`, `run_and_wait()`, `wait_for_run()` (the
+* `Orchestrator`: `start_run()` (it also enforces that a supplied `session_pk`
+  belongs to the run's project, so headless runs, MCP callers and the TUI endpoint
+  share one ownership rule), `run_and_wait()`, `wait_for_run()` (the
   event wait that `run_and_wait()` delegates to; also used by the PerunChat
   bridge to avoid duplicate runs), `cancel()` (idempotent; also cancels queued
   runs), `FINAL_STATUSES` (done/failed/cancelled/timeout/provider_error/
@@ -762,7 +764,9 @@ Raise the terminal window that hosts a run's TUI session (the card's Focus butto
   run's console, and `_terminal_hwnd` accepts the console window itself (classic
   console) or its **owner** (the Windows Terminal window hosting a pseudoconsole
   tab). It is deterministic: no title, project name or OpenCode call is involved,
-  and AttachConsole never runs inside the server (it is process-wide).
+  and AttachConsole never runs inside the server (it is process-wide). The cached
+  window is keyed by `(pid, run_uid)`, so a recycled pid cannot raise another
+  run's window.
 * When the console link is unavailable, window enumeration matches the shell
   itself, an ancestor (Windows Terminal) or a descending conhost/OpenConsole;
   the run's **session title** (`OpenCodeAPI.session()`, only when the service is
@@ -1592,7 +1596,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   copy).
   `perun.js` renders/syncs the button from it, so an active
   card can never offer a second launch - the regression when Stop was suppressed
-  for standalone runs while Run stayed hardcoded. Exposed as `window.CardControls`
+  for standalone runs while Run stayed hardcoded. `perun.js` also serializes
+  launches per project (`tuiLaunchInFlight`) and finishes the run row when the
+  terminal launch fails, so a re-render or a second click cannot open two
+  terminals or leave a phantom working card. Exposed as `window.CardControls`
   and as a CommonJS module.
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
   `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `multiSelect()`,

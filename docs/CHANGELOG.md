@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Follow-ups from the production audit
+
+* A failed TUI launch now finishes the run record it created instead of leaving a
+  phantom "working" card, and launches are single-flight per project, so a
+  re-rendered card or a second click (including via the caret) cannot open two
+  terminals.
+* `Orchestrator.start_run()` enforces the same `session_pk` ownership rule as
+  `/api/runs/tui`, so headless runs, MCP tools, Telegram and the project-session
+  endpoint can no longer attach another project's usage.
+* Focus caches its resolved window per `(pid, run_uid)`, so a recycled pid cannot
+  raise another run's terminal.
+* The coroutine Work step explains that editing a job keeps its already-composed
+  task blocks; adding tasks appends new ones.
 
 ## v0.10.74
 

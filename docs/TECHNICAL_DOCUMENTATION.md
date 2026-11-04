@@ -693,7 +693,9 @@ Free-form notes rendered on the project page.
 
 ## 7. Orchestrator
 
-`Orchestrator.start_run(project, prompt, …)`:
+`Orchestrator.start_run(project, prompt, …)`. Before anything is created, a
+supplied `session_pk` must belong to the resolved project (`ValueError`, hence
+HTTP 400); `/api/runs/tui` enforces the same rule on its own path. Then:
 
 1. resolves the **agent** first, then the **model**:
    * `agent`: explicit call arg → `project.agent` → (control plane only)
@@ -758,7 +760,8 @@ returns its window, whose **owner** is the exact Windows Terminal window hosting
 the tab (a classic console owns its window directly). AttachConsole is
 process-wide, so it must never run inside the server; the helper keeps the
 server's own console intact. This is deterministic and needs no title, project
-name, or OpenCode call.
+name, or OpenCode call. The resolved window is cached per `(pid, run_uid)`, so a
+recycled pid cannot raise another run's window.
 
 When the console link is unavailable, Focus enumerates top-level windows,
 matches the shell, an ancestor (Windows Terminal) or a descendant
@@ -1074,7 +1077,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/discover/scan` | dry-run scan |
 | GET | `/api/runs` | recent runs (`?project=`) |
 | GET | `/api/runs/active` | queued/running runs joined with their project (the live storm layer) |
-| POST | `/api/runs` | start a headless run `{project,prompt?,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator; an omitted `prompt` uses a default starter prompt |
+| POST | `/api/runs` | start a headless run `{project,prompt?,model?,agent?,session_pk?}`; `project` is optional and defaults to the orchestrator; an omitted `prompt` uses a default starter prompt; a `session_pk` from another project is refused with 400 |
 | POST | `/api/runs/tui` | create a lightweight `running` run record for an externally-launched TUI session `{project,prompt?,model?,agent?,opencode_session_id?,session_pk?}`; a `session_pk` from another project is refused with 400 |
 | GET | `/api/runs/{run_uid}` | run status/output |
 | POST | `/api/runs/{run_uid}/cancel` | cancel a headless run **and** terminate a tracked TUI/terminal session; the run is always offered to the tracker, so a restarted server still closes the terminal from `runs.pid` + its `PERUN_RUN_UID` marker |
@@ -2519,6 +2522,10 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
   and `/api/runs/active` reports `focus_supported`. `visibleRuns(runs, projects)`
   drops runs whose project the UI may not list, so cards and "Working now" match
   the project list (the hidden control plane on an installed copy).
+  The launch flow is single-flight per project (`tuiLaunchInFlight`), so a
+  re-rendered card or the caret cannot open a second terminal while the session
+  lookup is in flight; if the terminal launch fails, `openProjectTui()` finishes
+  the run row it created instead of leaving a phantom working card.
 * **Orchestrator chat** targets the control plane; it streams in place and works
   with zero other projects registered. Its Settings card edits the orchestrator's
   **model**, **agent**, and **custom instructions**.

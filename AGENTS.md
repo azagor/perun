@@ -222,7 +222,11 @@ with `python -m perun project-roots --add <name> <path>`.
   (age window only as a fallback). **Run resumes the latest session by default**
   (`opencode --session <id>`); the card's caret starts a new session or picks
   another, and the Agent Console picker defaults to the latest. A repeated Run
-  must not silently create a new session.
+  must not silently create a new session. **Focus resolves the window through the
+  run's console handle** (a detached `AttachConsole` helper; the pseudoconsole's
+  owner is the exact Windows Terminal window), never by title alone. `AttachConsole`
+  is process-wide: it must never run inside the server, and the cached window is
+  keyed by `(pid, run_uid)`.
 * **A working card never offers Run.** The first card action comes from
   `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for *any*
   active run (headless cancel, or closing the TUI terminal Perun opened). A

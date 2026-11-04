@@ -77,7 +77,9 @@ _session_titles_lock = threading.Lock()
 #: for its console window and reports the owner instead.
 CONSOLE_QUERY_TIMEOUT = 2.5
 CONSOLE_HWND_TTL = 30.0
-_console_hwnd: dict[int, tuple[float, int]] = {}
+#: Keyed by ``(pid, run_uid)``: a recycled pid must never reuse another run's
+#: cached window.
+_console_hwnd: dict[tuple[int, str], tuple[float, int]] = {}
 _console_hwnd_lock = threading.Lock()
 
 _CONSOLE_HWND_SCRIPT = r"""
@@ -250,7 +252,7 @@ def _terminal_hwnd(hwnd: int) -> int:
     return target
 
 
-def console_host_window(pid: int) -> int:
+def console_host_window(pid: int, run_uid: str = "") -> int:
     """The window hosting *pid*'s console, resolved through the console itself.
 
     This is the deterministic link the process tree cannot give on Windows 11:
@@ -260,25 +262,27 @@ def console_host_window(pid: int) -> int:
     title, project name or OpenCode service call needed.
 
     Cached briefly because repeated Focus clicks are common and the window does
-    not move between them.
+    not move between them. The key includes the run so a recycled pid cannot
+    raise the previous run's window.
     """
     pid = int(pid or 0)
     if pid <= 0:
         return 0
+    key = (pid, str(run_uid or ""))
     now = time.monotonic()
     with _console_hwnd_lock:
-        cached = _console_hwnd.get(pid)
+        cached = _console_hwnd.get(key)
     if cached and now - cached[0] < CONSOLE_HWND_TTL:
         if _terminal_hwnd(cached[1]):
             return cached[1]
         # The window closed (or its handle was recycled): ask again.
         with _console_hwnd_lock:
-            _console_hwnd.pop(pid, None)
+            _console_hwnd.pop(key, None)
     hwnd = _terminal_hwnd(_read_console_hwnd(pid))
     # Cache a hit only: a miss may be transient (the tab is still starting).
     if hwnd:
         with _console_hwnd_lock:
-            _console_hwnd[pid] = (now, hwnd)
+            _console_hwnd[key] = (now, hwnd)
     return hwnd
 
 
@@ -567,7 +571,7 @@ def focus_run_terminal(run_uid: str) -> dict[str, Any]:
     # Windows 11 the shell has no live process-tree link to Windows Terminal (the
     # ConPTY host exits), and the tab title belongs to OpenCode, so title
     # matching is only a fallback.
-    direct = console_host_window(pid)
+    direct = console_host_window(pid, run_uid)
     if direct and direct != own_console:
         title = _window_title(direct)
         method, focused = _activate(direct)
