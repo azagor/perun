@@ -1082,6 +1082,39 @@ def expire_stale() -> int:
     return registry.expire_attention()
 
 
+def reconcile_proposals() -> int:
+    """Close approval cards for proposals that are no longer pending.
+
+    A proposal can be approved from the dashboard, the room, an auto-approve
+    policy, or simply expire. Without this sweep the card kept asking for a
+    decision that had already been made, which made the operator inbox (and any
+    “nothing pending” read) lie.
+    """
+    from . import action_proposals
+
+    closed = 0
+    for item in registry.open_attention_of_kind("proposal"):
+        proposal = action_proposals.get(str(item.get("target_id") or ""))
+        if not proposal:
+            state, reason = "cancelled", "proposal no longer exists"
+        else:
+            status = str(proposal.get("status") or "")
+            if status == "pending":
+                continue
+            if status in ("approved", "claimed", "executing", "executed"):
+                state = "approved"
+            elif status == "rejected":
+                state = "rejected"
+            else:
+                state = "cancelled"
+            reason = f"proposal is {status}"
+        if registry.close_attention(
+            item["id"], state, answer=reason, answered_by="system",
+        ):
+            closed += 1
+    return closed
+
+
 def drain_outbox(limit: int = 20) -> int:
     """Post operator answers queued while the PerunChat socket was down.
 

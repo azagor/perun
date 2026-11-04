@@ -879,7 +879,11 @@ dispatched by that target, never by inference from "the current project".
   `set_delivery()` (⚡ promote queue→steer in place), `undo()`
   (↩ cancel an undelivered inbox item and reopen), `wait()` (blocking wait used by
   `perun_ask_operator`; the heartbeat is what prevents double delivery),
-  `expire_stale()`, `drain_outbox()` (posts room replies queued while the socket was down, on reconnect and on every notifier tick; a rejected post is retried, not lost).
+  `expire_stale()`, `reconcile_proposals()` (closes a proposal card once the
+  proposal is approved/claimed/executing/executed/rejected or gone, so the inbox
+  cannot disagree with the board), `drain_outbox()` (posts room replies queued
+  while the socket was down, on reconnect and on every notifier tick; a rejected
+  post is retried, not lost).
 * Adapters: `permission` → `reply_permission`; `form` → `reply_form` (one
   `key: value` line per field, a JSON object, or a button answer; a single-field
   form takes the bare message; the card lists the real keys, titles, required

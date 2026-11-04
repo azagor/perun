@@ -355,6 +355,10 @@ def _poll_once_locked(api: Optional["opencode_api.OpenCodeAPI"] = None) -> Dict[
         registry.expire_attention()
     except Exception:  # pragma: no cover - expiry is best effort
         LOG.debug("attention watcher: expire failed", exc_info=True)
+    try:
+        attention.reconcile_proposals()
+    except Exception:  # pragma: no cover - inbox hygiene is best effort
+        LOG.debug("attention watcher: proposal reconcile failed", exc_info=True)
 
     for directory in sorted({loc for loc in {str(l) for l in locations} if loc}):
         project = attention.project_for_location(directory)

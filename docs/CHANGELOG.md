@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Proposal cards leave the inbox when the proposal is decided
+
+* `attention.reconcile_proposals()` — run by the watcher — closes an approval
+  card once its proposal is `approved`/`claimed`/`executing`/`executed`,
+  `rejected`, or no longer exists. The inbox and the proposal board can no longer
+  disagree about what is still waiting, which was the root of the “nothing
+  pending” reply while eleven approved proposals sat unexecuted.
 
 ## v0.10.68
 

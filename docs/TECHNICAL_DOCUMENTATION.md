@@ -1619,7 +1619,10 @@ location-scoped (`?location[directory]=…`); session routes are not.
 so the existing bot-token `PidLock` makes it a singleton) polls
 `GET /api/session/active`, then permissions/forms per active location, plus a
 five-minute `/api/debug/location` sweep, and creates one item per request id.
-`_reconcile()` closes an item whose request vanished (answered in the TUI).
+`_reconcile()` closes an item whose request vanished (answered in the TUI);
+`attention.reconcile_proposals()` closes a proposal card once the proposal is
+approved, claimed, executing, executed, rejected or gone, so the inbox cannot
+keep asking for a decision that was already made.
 Detection is **event-driven by default** (`attention_ingest_events`): the watcher
 subscribes to the shared `EventHub` as a global subscriber — a permission can
 arrive for a session nobody admitted yet — and a `permission.asked` /
