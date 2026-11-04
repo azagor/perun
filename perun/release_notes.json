@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T15:56:33+00:00",
+  "generated": "2026-11-04T15:59:43+00:00",
   "releases": [
+    {
+      "version": "0.10.85",
+      "date": "2026-11-04",
+      "body": "### Project card size restored\n\n* The grid uses the maximum column count again (restoring the previous\n  first-row card size), keeps one computed width for every card, and a partly\n  filled last row starts at the first column instead of being rebalanced or\n  centered."
+    },
     {
       "version": "0.10.84",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.76",
       "date": "2026-11-04",
       "body": "### Resume skips machine-created sessions\n\n* `GET /api/projects/{slug}/sessions` now reports `tui` per session: `true` when\n  the session's **first** linked run was a TUI launch, `false` when it was a\n  headless job, and `null` when there is no run evidence (manual/legacy). A later\n  resume never flips a headless session into a chat.\n* The card's main **Run** resumes the newest TUI/unknown session and starts a\n  fresh one when only headless sessions exist. The caret picker and the Agent\n  Console list every session with a `TUI chat` / `headless run` label, and the\n  console default skips headless sessions.\n* This keeps a machine session (including one created by an old run with a\n  malformed instruction prompt) from being reopened as if it were the\n  operator's chat."
-    },
-    {
-      "version": "0.10.75",
-      "date": "2026-11-04",
-      "body": "### Follow-ups from the production audit\n\n* A failed TUI launch now finishes the run record it created instead of leaving a\n  phantom \"working\" card, and launches are single-flight per project, so a\n  re-rendered card or a second click (including via the caret) cannot open two\n  terminals.\n* `Orchestrator.start_run()` enforces the same `session_pk` ownership rule as\n  `/api/runs/tui`, so headless runs, MCP tools, Telegram and the project-session\n  endpoint can no longer attach another project's usage.\n* Focus caches its resolved window per `(pid, run_uid)`, so a recycled pid cannot\n  raise another run's terminal.\n* The coroutine Work step explains that editing a job keeps its already-composed\n  task blocks; adding tasks appends new ones."
     }
   ]
 }

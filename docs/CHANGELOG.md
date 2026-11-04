@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.85
+
+*Released 2026-11-04.*
+
 ### Project card size restored
 
 * The grid uses the maximum column count again (restoring the previous
