@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T09:10:42+00:00",
+  "generated": "2026-11-04T09:19:26+00:00",
   "releases": [
+    {
+      "version": "0.10.73",
+      "date": "2026-11-04",
+      "body": "### Project coroutines can include project tasks\n\n* The coroutine wizard's **Work** step now lists the execution project's enabled\n  tasks. Several can be selected at once, shown as removable chips, and composed\n  with the optional extra prompt by `buildCoroutinePrompt`. A skill task becomes\n  a structured instruction for the headless run, not a TUI slash command.\n* The composed prompt is saved once; editing the project's tasks later does not\n  rewrite an existing coroutine. A job with tasks and no extra prompt is valid.\n* Quick create keeps its single-prompt shortcut; use **New coroutine** for task\n  selection."
+    },
     {
       "version": "0.10.72",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.64",
       "date": "2026-11-03",
       "body": "### The exact proposal is visible and reachable\n\n* The Shared tab now shows each proposal's `prop_…` id as a copy chip, so a chat\n  reference can be matched to the exact row (and copied back into the room).\n* **Open in project** now really lands on that row: the focus ran before the card\n  was inserted into the DOM, so the lookup found nothing and the pending id was\n  consumed. It focuses after insertion, re-renders when the Shared tab is already\n  open and the card is still loading, expands the completed section, and scrolls\n  and flashes the row. Chip status lookups are cached for the chat re-renders."
-    },
-    {
-      "version": "0.10.63",
-      "date": "2026-11-03",
-      "body": "### Proposal references in chat are actionable\n\n* Every `prop_…` named in a PerunChat message is now a chip coloured by its\n  status (the project is in the tooltip). Clicking it opens a peek card with the\n  project, status, requester, intent, targets and result; **Open in project**\n  jumps to the Shared tab, expands the completed section when needed, scrolls to\n  the row and flashes it. A new `GET /api/proposals/{id}` resolves a proposal\n  across projects, so the operator no longer has to guess which project a chat\n  mention belongs to.\n* Fixed the **Approve only** confirmation: it referenced an undefined `targets`\n  variable and threw before sending the approval.\n\n### Updates refresh the global install"
     }
   ]
 }

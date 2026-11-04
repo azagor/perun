@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.73
+
+*Released 2026-11-04.*
+
 ### Project coroutines can include project tasks
 
 * The coroutine wizard's **Work** step now lists the execution project's enabled
