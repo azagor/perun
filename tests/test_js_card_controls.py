@@ -122,3 +122,14 @@ def test_shared_projects_expose_a_work_pause_control():
     assert "sp-paused-note" in src
     assert "work_paused" in src
     assert 'badge amber">paused' in src
+
+
+def test_an_uncertain_terminal_launch_is_not_finalized():
+    """Only a definitive server failure may finish/untrack the run."""
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "definitive: !!(e && e.status)" in src
+    assert "if (!opened || !opened.ok)" in src
+    assert "if (opened && opened.definitive)" in src
+    assert "terminal launch outcome unknown" in src
+    # The project-card badge is refreshed after a pause toggle.
+    assert "await loadProjects();" in src

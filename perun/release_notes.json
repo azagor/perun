@@ -1,15 +1,15 @@
 {
-  "generated": "2026-11-04T11:28:07+00:00",
+  "generated": "2026-11-04T11:42:14+00:00",
   "releases": [
     {
       "version": "0.10.78",
       "date": "2026-11-04",
-      "body": ""
+      "body": "### Operator mentions survive a work pause\n\n* A room message naming the operator still creates an attention item while the\n  project's autonomous work is paused; a notification is not agent work, and the\n  operator needs the ask to decide whether to resume."
     },
     {
       "version": "0.10.77",
       "date": "2026-11-04",
-      "body": "### Pause autonomous work in a shared project\n\n* The Shared tab has **Pause work** / **Resume work** (durable\n  `projects.work_paused`, with the actor and timestamp); the project card is\n  badged `paused`. While paused the bridge posts no room replies, does not feed\n  the room's messages to coroutine triggers, skips the autonomous proposal\n  review, and policy auto-approve leaves new proposals pending. In-flight runs\n  finish; human chat and explicit approvals remain available.\n* Members can keep chatting: paused messages stay in room history for the agent\n  to catch up after a resume. The bridge posts one notice per pause period so the\n  room knows why the agent is silent; operator-directed mentions are still\n  raised (a notification, not agent work)."
+      "body": "### Pause autonomous work in a shared project\n\n* The Shared tab has **Pause work** / **Resume work** (durable\n  `projects.work_paused`, with the actor and timestamp); the project card is\n  badged `paused`. While paused the bridge posts no room replies, does not feed\n  the room's messages to coroutine triggers, skips the autonomous proposal\n  review, and policy auto-approve leaves new proposals pending. In-flight runs\n  finish; human chat and explicit approvals remain available.\n* Members can keep chatting: paused messages stay in room history for the agent\n  to catch up after a resume. The bridge posts one notice per pause period so the\n  room knows why the agent is silent."
     },
     {
       "version": "0.10.76",

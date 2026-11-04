@@ -3010,3 +3010,20 @@ def test_work_pause_endpoint_is_durable_and_validates_input(client, tmp_path):
     bad = client.post(f"/api/projects/{project['slug']}/work",
                       json={"paused": "yes"})
     assert bad.status_code == 400
+
+
+def test_work_pause_succeeds_when_activity_logging_fails(
+        client, tmp_path, monkeypatch):
+    from perun import registry
+
+    project = _check_project(tmp_path, "work-log-fail")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("activity store down")
+
+    monkeypatch.setattr(registry, "log_activity", boom)
+    r = client.post(f"/api/projects/{project['slug']}/work",
+                    json={"paused": True})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["project"]["work_paused"] is True

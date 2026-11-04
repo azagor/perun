@@ -573,10 +573,13 @@ const launchInTerminal = async ({ cwd, model, agent, sessionId, prompt, tui, run
             },
         });
         toast(tui ? `Opened ${r.shell} (TUI)` : `Opened ${r.shell}`, 'ok');
-        return r;
+        return { ok: true, ...r };
     } catch (e) {
         toast(`Could not open terminal: ${e.message || 'unknown error'}`, 'err');
-        return null;
+        // A server response (4xx/5xx) means the launch definitely failed. A
+        // network error/timeout is uncertain: the terminal may have opened
+        // before the response was lost, so the caller must not finalize the run.
+        return { ok: false, definitive: !!(e && e.status), error: e };
     }
 };
 const copyCommandToClipboard = (cmd) => {
@@ -1557,11 +1560,15 @@ async function openProjectTui(p, opts = {}) {
             project: p.slug, cwd: p.path, model: p.model, agent: p.agent,
             tui: true, runUid, sessionId,
         });
-        if (!opened) {
-            // The run row was created before the launch. Without a terminal it
-            // would stay "running" and keep the card lit, so finish it now.
-            try { await api(`/api/runs/${runUid}/finish`, { method: 'POST' }); }
-            catch (_) { /* finalization is best effort */ }
+        if (!opened || !opened.ok) {
+            // The run row was created before the launch. A definitive failure
+            // means no terminal exists, so finish it now. An uncertain failure
+            // (network/timeout) may have opened one: leave the run reachable by
+            // Stop instead of untracking a live terminal.
+            if (opened && opened.definitive) {
+                try { await api(`/api/runs/${runUid}/finish`, { method: 'POST' }); }
+                catch (_) { /* finalization is best effort */ }
+            }
             await refreshPresence();
             return;
         }
@@ -2726,6 +2733,7 @@ async function sharedProjectCard(detail) {
                 });
                 toast(res.project && res.project.work_paused
                     ? 'Autonomous work paused' : 'Autonomous work resumed', 'ok');
+                await loadProjects();
                 viewProject(p.slug, 'shared');
             } catch (e) {
                 toast(e.message, 'err');
@@ -4106,7 +4114,28 @@ function mountConsole(host, initial) {
             await refreshPresence();
             perunFx.flash($('#perun-sigil'));
             if (!p.path) { toast('Selected project has no folder path.', 'err'); return; }
-            await launchInTerminal({ project: p.slug, cwd: p.path, model: p.model, agent: p.agent, prompt, tui: true, runUid: currentRun, sessionId });
+            const opened = await launchInTerminal({
+                project: p.slug, cwd: p.path, model: p.model, agent: p.agent,
+                prompt, tui: true, runUid: currentRun, sessionId,
+            });
+            if (!opened || !opened.ok) {
+                if (opened && opened.definitive) {
+                    // No terminal exists: finalize the run record so the console
+                    // does not show a phantom session.
+                    try { await api(`/api/runs/${currentRun}/cancel`, { method: 'POST' }); }
+                    catch (_) { /* best effort */ }
+                    currentRun = null;
+                    runBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    logLine('terminal launch failed; run finalized');
+                    await refreshPresence();
+                } else {
+                    // The terminal may have opened before the response was lost:
+                    // keep the run so Stop can finalize it.
+                    logLine('terminal launch outcome unknown; use Stop to finalize the run');
+                }
+                return;
+            }
             promptEl().value = '';
             taskQueue = [];
             updateQueue();

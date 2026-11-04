@@ -257,12 +257,16 @@ operator configuration, not an approved target.
 - **FR-33** While paused, the bridge must not auto-reply to room messages, must
   not ingest them for project-room coroutine triggers, must not start the
   autonomous proposal review, and policy auto-approve must leave new proposals
-  `pending`. In-flight runs finish. A room message can never clear the flag.
+  `pending`. In-flight runs finish. A room message can never clear the flag; a
+  transient binding-read failure must not silently unpause a recently paused
+  room.
 - **FR-34** Members keep their chat: paused messages are retained in room
   history so the agent can catch up after a resume. The bridge posts one notice
   per pause period explaining why the agent is silent; operator-directed
-  mentions are still raised (a notification, not agent work); explicit human
-  approvals/executions remain available.
+  mentions are still raised (a notification, not agent work); a peer-review
+  request for a pending proposal is annotated as paused; explicit human
+  approvals/executions remain available. Scheduled/time-based coroutines keep
+  their own Pause control - this flag covers room-driven autonomy only.
 
 ---
 

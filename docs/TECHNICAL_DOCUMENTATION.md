@@ -1994,7 +1994,12 @@ their messages are retained in the room history so the agent can catch up after
 a resume. The bridge posts one notice per pause period (the `work_paused_at`
 stamp) explaining why the agent is silent, and the project card is badged
 `paused`. Operator-directed mentions are still raised while paused (a
-notification, not agent work). Resume clears the flag and the actor; explicit
+notification, not agent work). A peer-review request for a pending proposal is
+annotated as paused so peers hold the review. Scheduled/time-based coroutines
+are not stopped by this flag - pause them from the Coroutines page; only
+room-driven autonomy is covered. A transient binding-read failure keeps a
+recently paused room paused for a short grace period rather than silently
+resuming autonomy. Resume clears the flag and the actor; explicit
 human approvals and executions remain available - the pause stops autonomy, not
 the operator.
 

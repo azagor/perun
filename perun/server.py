@@ -1550,11 +1550,14 @@ def api_set_project_work(slug: str, payload: dict[str, Any] = Body(...)) -> dict
         raise HTTPException(status_code=400, detail="paused must be true or false")
     actor = _approver_identity()
     updated = registry.set_work_paused(project["id"], paused, actor=actor)
-    registry.log_activity(
-        project["id"], "work",
-        f"Autonomous work {'paused' if paused else 'resumed'} by {actor}",
-        {"paused": paused},
-    )
+    try:
+        registry.log_activity(
+            project["id"], "work",
+            f"Autonomous work {'paused' if paused else 'resumed'} by {actor}",
+            {"paused": paused},
+        )
+    except Exception:  # pragma: no cover - telemetry must not fail the toggle
+        pass
     return _ok(project=updated)
 
 

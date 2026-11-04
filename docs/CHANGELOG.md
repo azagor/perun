@@ -4,11 +4,29 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Hardening for the work pause and TUI launch
+
+* A TUI launch only finishes/untracks its run on a **definitive** server error;
+  a network-uncertain failure leaves the run stopable because the terminal may
+  have opened.
+* Paused projects annotate peer-review requests for pending proposals so peers
+  hold the review; activity logging is best effort and the project-card `paused`
+  badge refreshes immediately after a toggle. A transient binding-read failure
+  keeps a recently paused room paused for a grace period instead of silently
+  resuming autonomy.
+* Scheduled/time-based coroutines keep their own Pause control; the project flag
+  suppresses room-driven autonomy only (replies, room events, review, policy
+  auto-approve).
 
 ## v0.10.78
 
 *Released 2026-11-04.*
+
+### Operator mentions survive a work pause
+
+* A room message naming the operator still creates an attention item while the
+  project's autonomous work is paused; a notification is not agent work, and the
+  operator needs the ask to decide whether to resume.
 
 ## v0.10.77
 
@@ -24,8 +42,7 @@ _No unreleased changes yet._
   finish; human chat and explicit approvals remain available.
 * Members can keep chatting: paused messages stay in room history for the agent
   to catch up after a resume. The bridge posts one notice per pause period so the
-  room knows why the agent is silent; operator-directed mentions are still
-  raised (a notification, not agent work).
+  room knows why the agent is silent.
 
 ## v0.10.76
 

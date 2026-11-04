@@ -146,6 +146,9 @@ _MAX_PROMPT_CHARS = 12_000
 # without inlining the whole conversation. Older transcripts are pruned when
 # the limit is exceeded.
 _MAX_ROOM_TRANSCRIPT_FACTS = 250
+# If the project binding cannot be read (DB hiccup), a recently paused room
+# stays paused for this grace period instead of silently resuming autonomy.
+_WORK_PAUSED_CACHE_TTL = 300.0
 
 _MIN_REPLY_INTERVAL_SECONDS = 2.0
 _TYPING_DELAY_MIN = 0.6
@@ -577,6 +580,10 @@ class PerunChatBridge:
         # Room -> pause stamp already announced. One notice per pause period;
         # the next message after a resume clears the entry.
         self._paused_notice: Dict[str, str] = {}
+        # Room -> (work_paused, monotonic) from the last successful binding. If
+        # the binding read fails, a recently paused room stays paused for a
+        # short grace period rather than silently resuming autonomy.
+        self._work_paused_cache: Dict[str, Tuple[bool, float]] = {}
         # Consecutive-reply budget per room: two autonomous agents whose replies
         # end in "?" otherwise answer each other forever (~3 model runs/min each).
         self._room_burst: Dict[str, Tuple[int, float]] = {}
@@ -949,6 +956,27 @@ class PerunChatBridge:
         except Exception:
             return ""
         return str(chat.get("managed_by") or "").strip()
+
+    def _room_work_state(
+        self, room_id: str
+    ) -> Tuple[bool, Optional[Tuple[Dict[str, Any], Dict[str, Any]]]]:
+        """Resolve the room's project binding and paused state.
+
+        A binding failure (DB hiccup) falls back to the last known paused state
+        for a grace period, so a pause cannot be bypassed by a transient read
+        error. The fallback only applies to a room that was paused; an unpaused
+        or non-project room behaves exactly as before.
+        """
+        binding = self._project_binding(room_id) if room_id else None
+        if binding:
+            paused = bool((binding[0] or {}).get("work_paused"))
+            self._work_paused_cache[str(room_id)] = (paused, time.monotonic())
+            return paused, binding
+        cached = self._work_paused_cache.get(str(room_id))
+        if (cached and cached[0]
+                and time.monotonic() - cached[1] < _WORK_PAUSED_CACHE_TTL):
+            return True, None
+        return False, None
 
     def _notice_paused(self, project: Dict[str, Any], room_id: str) -> None:
         """Announce a paused project once per pause period (best effort).
@@ -1739,12 +1767,11 @@ class PerunChatBridge:
         # review or policy auto-approve. In-flight runs finish; human chat and
         # explicit approvals remain available. Read per frame so the dashboard
         # toggle takes effect without a bridge restart.
-        binding = self._project_binding(room) if room else None
-        paused = bool(binding and (binding[0] or {}).get("work_paused"))
+        paused, binding = self._room_work_state(room)
         if paused:
             early_text = frame.get("payload")
             is_typing_frame = content_type == "application/perun-typing"
-            if (not is_typing_frame and isinstance(early_text, str)
+            if (binding and not is_typing_frame and isinstance(early_text, str)
                     and early_text.strip()):
                 self._notice_paused(binding[0], room)
         else:
@@ -2994,11 +3021,9 @@ class PerunChatBridge:
         # project even though neither is on the global trust list. Without
         # this, the local room owner posting from the dashboard got a generic
         # reply with no project context at all.
-        binding = self._project_binding(room_id) if room_id else None
-        if binding and (binding[0] or {}).get("work_paused"):
-            logger.info(
-                "PerunChat reply suppressed: project %s is paused",
-                (binding[0] or {}).get("slug"))
+        binding_paused, binding = self._room_work_state(room_id)
+        if binding_paused:
+            logger.info("PerunChat reply suppressed: project work is paused")
             return
         is_project_member = self._is_project_member(room_id, sender, binding=binding)
         if is_project_member and not is_trusted:
@@ -3612,6 +3637,13 @@ class PerunChatBridge:
         # do not ask for review after the fact.
         if proposal.get("status") != "pending":
             return
+        project = _project
+        if project is None:
+            try:
+                project = registry.get_project(int(proposal["project_id"]))
+            except Exception:
+                project = None
+        paused = bool(project and project.get("work_paused"))
         owner = self._room_owner(room_id) or "owner"
         summary = self._proposal_summary(proposal)
         text = (
@@ -3621,6 +3653,10 @@ class PerunChatBridge:
             f"Another rw participant (e.g. @{owner}) can approve with the "
             f"perun-proposals_approve tool.]"
         )
+        if paused:
+            # Keep the request durable (the poller advances past it) but make
+            # the pause explicit so peers hold the review until it resumes.
+            text += " Work on this project is paused; please hold the review until it resumes."
         try:
             self.post_to_room(
                 room_id, self._redact_internal_info(text, room_id)

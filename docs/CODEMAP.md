@@ -1030,7 +1030,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   before event ingestion or the reply queue, so room coroutines do not fire and
   the agent stays silent; `_reply()` re-checks the flag as a second guard.
   `_maybe_schedule_agent_review()` also skips a paused project. Operator-directed
-  mentions are still raised before the paused return (notification, not work).
+  mentions are still raised before the paused return (notification, not work);
+  a peer-review request is annotated as paused so peers hold it. Scheduled
+  coroutines keep their own Pause control - this flag covers room-driven
+  autonomy only. `_room_work_state()` caches the paused state and keeps a
+  recently paused room paused for a grace period if the binding read fails.
   Unbound/public rooms use the control
   plane. State-changing requests are sent through the `propose` tool, not
   executed directly. A background activity-table poller posts review requests
@@ -1618,7 +1622,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   for standalone runs while Run stayed hardcoded. `perun.js` also serializes
   launches per project (`tuiLaunchInFlight`) and finishes the run row when the
   terminal launch fails, so a re-render or a second click cannot open two
-  terminals or leave a phantom working card. Exposed as `window.CardControls`
+  terminals or leave a phantom working card. Only a **definitive** server error
+  finishes the row; a network-uncertain failure leaves it stopable because the
+  terminal may have opened. Exposed as `window.CardControls`
   and as a CommonJS module.
 * `web/js/perun.js` — SPA: `api()`, `toast()`, `modal()`, `confirmDialog()`,
   `router()`, `renderMarkdown()`, `modelSelect()`, `agentSelect()`, `multiSelect()`,

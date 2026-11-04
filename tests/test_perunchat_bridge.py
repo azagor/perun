@@ -4042,3 +4042,90 @@ def test_a_paused_project_skips_the_autonomous_review(settings, monkeypatch):
     )
 
     assert called == []
+
+
+def test_a_second_pause_is_announced_again(settings, monkeypatch):
+    from perun.perunchat_bridge import _ReplyDecision
+
+    settings.perunchat_ingest_events = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    project = _paused_project()
+    monkeypatch.setattr(bridge, "_project_binding",
+                        lambda room: (project, {"shared": True}))
+    monkeypatch.setattr(bridge, "_store_transcript_fact", lambda frame: None)
+    monkeypatch.setattr(bridge, "_raise_operator_mention",
+                        lambda frame, room: None)
+    monkeypatch.setattr(bridge, "_should_reply_to",
+                        lambda frame: _ReplyDecision(False, "test"))
+    notices = []
+    monkeypatch.setattr(bridge, "_post_execution_notice",
+                        lambda room, text: notices.append(text) or True)
+    frame = {"type": "CHAT", "room_id": "grp:t:p",
+             "sender": {"agent_id": "frambo"}, "payload": "hello"}
+
+    bridge._on_frame({**frame, "id": "m1"}, None)
+    assert len(notices) == 1
+
+    # Resume clears the marker; the next pause (new stamp) announces again.
+    project["work_paused"] = False
+    bridge._on_frame({**frame, "id": "m2"}, None)
+    assert len(notices) == 1
+    project["work_paused"] = True
+    project["work_paused_at"] = "2026-11-04T11:00:00+00:00"
+    bridge._on_frame({**frame, "id": "m3"}, None)
+    assert len(notices) == 2
+
+
+def test_a_binding_failure_does_not_unpause_a_recently_paused_room(settings, monkeypatch):
+    from perun import coroutines
+
+    settings.perunchat_ingest_events = True
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "perun-local"
+    project = _paused_project()
+    calls = {"n": 0}
+
+    def binding(room):
+        calls["n"] += 1
+        return (project, {"shared": True}) if calls["n"] == 1 else None
+
+    monkeypatch.setattr(bridge, "_project_binding", binding)
+    monkeypatch.setattr(bridge, "_store_transcript_fact", lambda frame: None)
+    monkeypatch.setattr(bridge, "_raise_operator_mention", lambda frame, room: None)
+    monkeypatch.setattr(bridge, "_post_execution_notice", lambda room, text: True)
+    ingest = MagicMock()
+    monkeypatch.setattr(coroutines, "ingest_room_message", ingest)
+    frame = {"type": "CHAT", "room_id": "grp:t:p",
+             "sender": {"agent_id": "frambo"}, "payload": "hello"}
+
+    bridge._on_frame({**frame, "id": "m1"}, None)  # caches the paused state
+    with patch.object(bridge, "_reply") as mock_reply:
+        bridge._on_frame({**frame, "id": "m2"}, None)  # binding read fails
+        bridge._drain_room_queues()
+        assert not mock_reply.called
+    ingest.assert_not_called()
+
+
+def test_a_paused_project_annotates_the_review_request(settings, monkeypatch):
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    project = _paused_project()
+    monkeypatch.setattr(bridge, "_room_id_for_project", lambda pid: "grp:t:p")
+    monkeypatch.setattr(bridge, "_room_owner", lambda room: "owner")
+    monkeypatch.setattr("perun.registry.get_project", lambda ref: project)
+    posted = []
+    monkeypatch.setattr(
+        bridge, "post_to_room",
+        lambda room, text, *args, **kwargs: posted.append(text) or True)
+    scheduled = []
+    monkeypatch.setattr(bridge, "_maybe_schedule_agent_review",
+                        lambda proposal, room: scheduled.append(room))
+
+    bridge._on_proposal_created(
+        {"id": "prop_1", "status": "pending", "requester": "frambo",
+         "project_id": 1},
+        None,
+    )
+
+    assert posted and "paused" in posted[0].lower()
+    assert scheduled == ["grp:t:p"]
