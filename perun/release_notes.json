@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T15:59:43+00:00",
+  "generated": "2026-11-04T16:01:24+00:00",
   "releases": [
+    {
+      "version": "0.10.86",
+      "date": "2026-11-04",
+      "body": "### Equal-height project cards\n\n* Every project card now receives the tallest card's height as well as one\n  computed width, so a card on a shorter row (PerunChat alone) is the same size\n  as the first-row cards. Actions are pinned to the card bottom; the height is\n  recomputed on render, resize and presence updates."
+    },
     {
       "version": "0.10.85",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.77",
       "date": "2026-11-04",
       "body": "### Pause autonomous work in a shared project\n\n* The Shared tab has **Pause work** / **Resume work** (durable\n  `projects.work_paused`, with the actor and timestamp); the project card is\n  badged `paused`. While paused the bridge posts no room replies, does not feed\n  the room's messages to coroutine triggers, skips the autonomous proposal\n  review, and policy auto-approve leaves new proposals pending. In-flight runs\n  finish; human chat and explicit approvals remain available.\n* Members can keep chatting: paused messages stay in room history for the agent\n  to catch up after a resume. The bridge posts one notice per pause period so the\n  room knows why the agent is silent."
-    },
-    {
-      "version": "0.10.76",
-      "date": "2026-11-04",
-      "body": "### Resume skips machine-created sessions\n\n* `GET /api/projects/{slug}/sessions` now reports `tui` per session: `true` when\n  the session's **first** linked run was a TUI launch, `false` when it was a\n  headless job, and `null` when there is no run evidence (manual/legacy). A later\n  resume never flips a headless session into a chat.\n* The card's main **Run** resumes the newest TUI/unknown session and starts a\n  fresh one when only headless sessions exist. The caret picker and the Agent\n  Console list every session with a `TUI chat` / `headless run` label, and the\n  console default skips headless sessions.\n* This keeps a machine session (including one created by an old run with a\n  malformed instruction prompt) from being reopened as if it were the\n  operator's chat."
     }
   ]
 }

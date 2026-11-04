@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.85 (see §15). Restore the previous project-card size; every card keeps one consistent width and a partial row starts at the first column.
+**Latest release:** v0.10.86 (see §15). Project cards share one width and height; a card on a short row matches the first row.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2647,6 +2647,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.86: Project cards share one width and height; a card on a short row matches the first row.
+
 ### 2026-11-04 — v0.10.85: Restore the previous project-card size; every card keeps one consistent width and a partial row starts at the first column.
 
 ### 2026-11-04 — v0.10.84: Project grid rows are balanced (4+2 instead of 5+1) with one card width.

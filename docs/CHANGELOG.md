@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.86
+
+*Released 2026-11-04.*
+
 ### Equal-height project cards
 
 * Every project card now receives the tallest card's height as well as one
