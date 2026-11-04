@@ -92,3 +92,16 @@ test('visibleRuns tolerates empty inputs', () => {
     assert.deepEqual(controls.visibleRuns([{ run_uid: 'x', project_slug: 'a' }], []), []);
     assert.deepEqual(controls.visibleRuns([null, undefined], [{ slug: 'a' }]), []);
 });
+
+test('an idle card offers the new/choose caret next to Run', () => {
+    const spec = controls.runMenuSpec(null);
+    assert.equal(spec.kind, 'run-menu');
+    assert.equal(spec.attr, 'data-tui-menu');
+    assert.equal(spec.uid, '');
+    assert.match(spec.title, /new session/i);
+});
+
+test('an active card offers neither Run nor its caret', () => {
+    assert.equal(controls.runMenuSpec(headless), null);
+    assert.equal(controls.runMenuSpec(tui), null);
+});

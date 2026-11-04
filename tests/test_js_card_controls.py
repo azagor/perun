@@ -59,3 +59,22 @@ def test_perun_js_filters_presence_to_listed_projects():
     assert "CardControls.visibleRuns(" in src
     # A stale cached module must not crash the presence renderer.
     assert "visibleRuns: (runs, projects) =>" in src
+
+def test_the_card_run_is_resume_latest_with_a_new_or_choose_menu():
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "CardControls.runMenuSpec(" in src
+    assert "resumeLatestProjectTui(p)" in src
+    assert "data-tui-menu" in src
+    assert "Resume latest" in src
+    assert "Choose an existing session" in src
+    # A stale cached card_controls.js must not crash the card renderer.
+    assert "runMenuSpec: (run) =>" in src
+    # The run record and `opencode --session` both receive the chosen id.
+    assert "opencode_session_id: sessionId" in src
+    assert "session_pk: sessionPk" in src
+
+
+def test_the_console_defaults_its_session_picker_to_the_latest():
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "const latest = [...sel.options].find" in src
+    assert "if (latest) sel.value = latest.value;" in src

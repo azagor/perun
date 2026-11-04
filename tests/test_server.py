@@ -2904,3 +2904,22 @@ def test_a_hidden_projects_proposal_lookup_needs_the_owner_workspace(
     allowed = client.get(f"/api/proposals/{proposal_id}")
     assert allowed.status_code == 200
     assert allowed.json()["project"]["slug"] == project["slug"]
+
+def test_a_tui_run_can_resume_an_existing_session(client, tmp_path):
+    from perun import registry
+
+    project = _check_project(tmp_path, "tui-resume")
+    session = registry.create_session(
+        project["id"], "ses_resume", title="Earlier chat")
+
+    r = client.post("/api/runs/tui", json={
+        "project": project["slug"],
+        "opencode_session_id": "ses_resume",
+        "session_pk": session["id"],
+        "prompt": "Resumed: Earlier chat",
+    })
+
+    assert r.status_code == 200, r.text
+    run = r.json()["run"]
+    assert run["opencode_session_id"] == "ses_resume"
+    assert run["session_pk"] == session["id"]

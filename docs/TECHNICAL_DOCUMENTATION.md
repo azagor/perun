@@ -730,6 +730,15 @@ OpenCode's own project defaults (including the values mirrored into
 `opencode.json` by `sync_opencode_config()`) — the TUI cannot be told
 `--model`/`--agent` directly.
 
+**Session choice.** The project card's main **Run** resumes the latest OpenCode
+session for that project (`opencode --session <id>`) — the fast path; the caret
+next to it starts a **new** session or opens a picker of the project's existing
+sessions. A project with no sessions starts fresh. The Agent Console's session
+picker defaults to the latest session and keeps **New session** as the first,
+explicit choice; the TUI run record carries `opencode_session_id` and
+`session_pk` so Finish captures the session's usage. **Stop is unchanged**: it
+closes the terminal Perun opened, which ends every session in that terminal.
+
 `--model` is passed whenever a non-empty model was resolved (so `model_explicit`
 is `1`); `--agent` is passed only when an agent value is set. With `cwd` set to the
 **target project path** — no

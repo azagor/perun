@@ -1575,9 +1575,12 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   of `perun.js` so `node --test` can cover it: `runControlSpec(run)` returns
   **Run** for no run and **Stop** for any active run (a headless cancel, or closing
   the TUI terminal Perun opened via `/api/runs/{uid}/cancel`), plus
-  `runControlAttr(run)`. `focusControlSpec(run)` gates the Focus button to a
-  tracked TUI run, and `visibleRuns(runs, projects)` drops runs whose project the
-  dashboard may not list (the hidden control plane on an installed copy).
+  `runControlAttr(run)`. `runMenuSpec(run)` is the idle card's caret: the main
+  Run resumes the latest project session, while the caret starts a new session or
+  opens the existing-session picker. `focusControlSpec(run)` gates the Focus
+  button to a tracked TUI run, and `visibleRuns(runs, projects)` drops runs whose
+  project the dashboard may not list (the hidden control plane on an installed
+  copy).
   `perun.js` renders/syncs the button from it, so an active
   card can never offer a second launch - the regression when Stop was suppressed
   for standalone runs while Run stayed hardcoded. Exposed as `window.CardControls`

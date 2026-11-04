@@ -35,7 +35,7 @@
             return {
                 kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
                 label: '\u25b6 Run',
-                title: "Run OpenCode in this project's directory",
+                title: "Resume the latest session (use the caret for a new or other session)",
             };
         }
         return {
@@ -53,6 +53,25 @@
      */
     function runControlAttr(run) {
         return runControlSpec(run).attr;
+    }
+
+    /**
+     * Describe the caret next to an idle card's Run control.
+     *
+     * The main Run is the fast path (resume the latest session); the caret opens
+     * the new/choose menu. An active card has neither.
+     *
+     * @param {object|null|undefined} run the project's active run
+     * @returns {null|{kind: string, uid: string, cls: string, attr: string,
+     *                label: string, title: string}}
+     */
+    function runMenuSpec(run) {
+        if (run) return null;
+        return {
+            kind: 'run-menu', uid: '', cls: 'btn sm ghost', attr: 'data-tui-menu',
+            label: '\u25be',
+            title: 'Start a new session or choose an existing one',
+        };
     }
 
     /**
@@ -98,5 +117,5 @@
             (r) => r && r.project_slug && listed.has(r.project_slug));
     }
 
-    return { runControlSpec, runControlAttr, focusControlSpec, visibleRuns };
+    return { runControlSpec, runControlAttr, runMenuSpec, focusControlSpec, visibleRuns };
 });

@@ -219,7 +219,10 @@ with `python -m perun project-roots --add <name> <path>`.
   closing it by hand), including a nested `opencode serve` shared with other
   sessions. Telegram's `/stop` and `/cancel` take the same path (bridge →
   `ORCH.cancel` + `ProcessTracker.terminate`). Sweep the run when the pid is gone
-  (age window only as a fallback).
+  (age window only as a fallback). **Run resumes the latest session by default**
+  (`opencode --session <id>`); the card's caret starts a new session or picks
+  another, and the Agent Console picker defaults to the latest. A repeated Run
+  must not silently create a new session.
 * **A working card never offers Run.** The first card action comes from
   `web/js/card_controls.js` (`runControlSpec`): Run when idle, Stop for *any*
   active run (headless cancel, or closing the TUI terminal Perun opened). A

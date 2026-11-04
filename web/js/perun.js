@@ -785,7 +785,11 @@ const CardControls = window.CardControls || {
         ? { kind: 'stop', uid: run.run_uid || '', cls: 'btn sm danger', attr: 'data-stop',
             label: '\u25a0 Stop', title: 'Cancel this run' }
         : { kind: 'run', uid: '', cls: 'btn sm primary', attr: 'data-tui',
-            label: '\u25b6 Run', title: "Run OpenCode in this project's directory" }),
+            label: '\u25b6 Run', title: "Resume the latest session (use the caret for a new or other session)" }),
+    runMenuSpec: (run) => (run ? null : {
+        kind: 'run-menu', uid: '', cls: 'btn sm ghost', attr: 'data-tui-menu',
+        label: '\u25be', title: 'Start a new session or choose an existing one',
+    }),
     focusControlSpec: () => null,
     visibleRuns: (runs, projects) => {
         const listed = new Set((projects || [])
@@ -869,6 +873,18 @@ function syncRunControl(card, run) {
             if (anchor) anchor.insertAdjacentElement('afterend', fresh);
             else actions.insertBefore(fresh, actions.firstElementChild || null);
         }
+    }
+    // The caret belongs to an idle card only. It is the new/choose menu; the
+    // main Run is the resume-latest fast path.
+    const menuSpec = CardControls.runMenuSpec(run);
+    const currentMenu = actions.querySelector('[data-tui-menu]');
+    if (!menuSpec) {
+        if (currentMenu) currentMenu.remove();
+    } else if (!currentMenu) {
+        const fresh = runControlButton(menuSpec);
+        const anchor = actions.querySelector('[data-tui]');
+        if (anchor) anchor.insertAdjacentElement('afterend', fresh);
+        else actions.insertBefore(fresh, actions.firstElementChild || null);
     }
 }
 
@@ -1351,6 +1367,8 @@ function projectCard(p) {
     const running = run ? `<div class="pc-running">${run.standalone ? '🖥' : '⚡'} <span class="pr-prompt">${esc((run.prompt || '').slice(0, 140))}</span>${run.standalone ? ' <span class="muted">TUI session</span>' : ''}</div>` : '';
     // Never render Run next to a working card: the control belongs to the run.
     const runBtn = runControlButton(CardControls.runControlSpec(run)).outerHTML;
+    const runMenuSpec = CardControls.runMenuSpec(run);
+    const runMenuBtn = runMenuSpec ? runControlButton(runMenuSpec).outerHTML : '';
     // Focus is only meaningful for a tracked TUI run (it raises its window).
     const focusSpec = CardControls.focusControlSpec(run, { focusSupported: state.focusSupported });
     const focusBtn = focusSpec ? runControlButton(focusSpec).outerHTML : '';
@@ -1369,6 +1387,7 @@ function projectCard(p) {
          </div>
          <div class="pc-actions">
             ${runBtn}
+            ${runMenuBtn}
             ${focusBtn}
             <button class="btn sm" data-open>Open</button>
             <button class="btn sm ghost" data-index>Index docs</button>
@@ -1381,9 +1400,14 @@ function projectCard(p) {
         if (focus) { e.stopPropagation(); focusProjectTerminal(focus.dataset.runUid); return; }
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
+        if (e.target.closest('[data-tui-menu]')) {
+            e.stopPropagation();
+            openTuiMenu(p);
+            return;
+        }
         if (e.target.closest('[data-tui]')) {
             e.stopPropagation();
-            openProjectTui(p);
+            resumeLatestProjectTui(p);
             return;
         }
         goto('#/project/' + p.slug);
@@ -1391,22 +1415,112 @@ function projectCard(p) {
     return card;
 }
 
-async function openProjectTui(p) {
+async function fetchProjectSessions(p) {
+    try {
+        const res = await api(`/api/projects/${encodeURIComponent(p.slug)}/sessions`);
+        return (res.sessions || []).filter(
+            (s) => String(s.opencode_session_id || '').trim());
+    } catch (_) {
+        return [];
+    }
+}
+
+function openResumedSession(p, session) {
+    return openProjectTui(p, {
+        sessionId: session.opencode_session_id,
+        sessionPk: session.id,
+        sessionTitle: session.title,
+    });
+}
+
+async function resumeLatestProjectTui(p) {
+    // The fast path: the newest session for this project, or a fresh one when
+    // the project has none yet.
+    const sessions = await fetchProjectSessions(p);
+    if (sessions.length) return openResumedSession(p, sessions[0]);
+    return openProjectTui(p, {});
+}
+
+function chooseProjectSession(p, sessions) {
+    const body = el('div');
+    const list = el('div', { class: 'list' });
+    for (const session of sessions) {
+        const row = el('div', { class: 'list-row' },
+            `<span class="grow"><div class="msg truncate">${esc(session.title || '(untitled)')}</div>
+             <div class="meta">${esc(timeAgo(session.updated_at))} · ${esc(session.status || '')} · ${esc(session.opencode_session_id || '')}</div></span>`);
+        const resume = el('button', { class: 'btn sm primary' }, 'Resume');
+        resume.addEventListener('click', () => {
+            closeModal();
+            openResumedSession(p, session);
+        });
+        row.appendChild(resume);
+        list.appendChild(row);
+    }
+    body.appendChild(list);
+    modal(`Sessions · ${p.name || p.slug}`, body, [
+        { label: 'New session', class: 'primary', onClick: () => { closeModal(); openProjectTui(p, {}); } },
+        { label: 'Cancel', class: 'ghost', onClick: closeModal },
+    ]);
+}
+
+async function openTuiMenu(p) {
+    const sessions = await fetchProjectSessions(p);
+    const latest = sessions[0];
+    const body = el('div');
+    const add = (label, desc, cls, onClick) => {
+        const row = el('button', {
+            class: 'btn ' + cls,
+            style: 'display:block;width:100%;text-align:left;margin:6px 0;white-space:normal',
+        }, `<b>${esc(label)}</b>${desc ? `<div class="meta">${esc(desc)}</div>` : ''}`);
+        row.addEventListener('click', () => { closeModal(); onClick(); });
+        body.appendChild(row);
+    };
+    if (latest) {
+        add('Resume latest',
+            `${latest.title || '(untitled)'} · ${timeAgo(latest.updated_at)}`,
+            'primary', () => openResumedSession(p, latest));
+    }
+    add('Start a new session',
+        latest ? 'Open a fresh OpenCode session' : 'No previous session for this project',
+        latest ? 'ghost' : 'primary', () => openProjectTui(p, {}));
+    if (sessions.length) {
+        add('Choose an existing session…', `${sessions.length} session(s)`, 'ghost',
+            () => chooseProjectSession(p, sessions));
+    }
+    modal(`Run · ${p.name || p.slug}`, body, [
+        { label: 'Cancel', class: 'ghost', onClick: closeModal },
+    ]);
+}
+
+async function openProjectTui(p, opts = {}) {
     try {
         if (!p || !p.path) {
             toast('This project has no folder path. Re-register or rediscover it.', 'err');
             return;
         }
-        // Project-card launch behaves like running `opencode` in the project
-        // directory: no forced prompt, so OpenCode uses its own session/model
-        // resolution instead of starting a fresh chat.
+        const sessionId = String(opts.sessionId || '').trim();
+        const sessionPk = opts.sessionPk || null;
+        const sessionTitle = String(opts.sessionTitle || '').trim();
+        // A resumed TUI opens `opencode --session <id>`; a new one behaves like
+        // running `opencode` in the directory.
         const res = await api('/api/runs/tui', {
             method: 'POST',
-            body: { project: p.slug, model: p.model, agent: p.agent },
+            body: {
+                project: p.slug, model: p.model, agent: p.agent,
+                opencode_session_id: sessionId,
+                session_pk: sessionPk,
+                prompt: sessionTitle ? `Resumed: ${sessionTitle}` : '',
+            },
         });
         const runUid = res.run && res.run.run_uid;
         if (!runUid) { throw new Error('Perun did not return a run id'); }
-        await launchInTerminal({ project: p.slug, cwd: p.path, model: p.model, agent: p.agent, tui: true, runUid });
+        const opened = await launchInTerminal({
+            project: p.slug, cwd: p.path, model: p.model, agent: p.agent,
+            tui: true, runUid, sessionId,
+        });
+        if (opened) {
+            toast(sessionId ? 'Resumed session' : 'Started a new session', 'ok');
+        }
         await refreshPresence();
         if (runUid) {
             // Optimistically show working state so the card lights up immediately,
@@ -3876,6 +3990,11 @@ function mountConsole(host, initial) {
                 o.dataset.oc = s.opencode_session_id || '';
                 sel.appendChild(o);
             }
+            // Default to resuming the latest real session; "New session" stays
+            // the first, explicit choice.
+            const latest = [...sel.options].find(
+                (o) => o.dataset && o.dataset.oc);
+            if (latest) sel.value = latest.value;
         } catch (_) { /* ignore */ }
         await loadProjectTasks();
     }
@@ -3897,10 +4016,12 @@ function mountConsole(host, initial) {
             // this run's usage (a TUI launched without one has no session id).
             const sessionOpt = $('#c-session').selectedOptions[0];
             const sessionId = sessionOpt ? (sessionOpt.dataset.oc || '') : '';
+            const sessionPk = sessionOpt && sessionOpt.value
+                ? Number(sessionOpt.value) || null : null;
             const res = await api('/api/runs/tui', {
                 method: 'POST',
                 body: { project: slug, prompt, model: p.model, agent: p.agent,
-                        opencode_session_id: sessionId },
+                        opencode_session_id: sessionId, session_pk: sessionPk },
             });
             const runUid = res && res.run && res.run.run_uid;
             if (!runUid) { throw new Error('Perun did not return a run id'); }

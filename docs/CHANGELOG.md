@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Run resumes the latest TUI session
+
+* The project card's main **Run** now resumes the latest OpenCode session for
+  that project (`opencode --session <id>`) instead of always starting a new one.
+  The caret next to it starts a **new** session or opens a picker of the
+  project's existing sessions; a project with no sessions starts fresh.
+* The Agent Console's session picker defaults to the latest session and keeps
+  **New session** as the first, explicit choice. The TUI run record carries
+  `opencode_session_id` and `session_pk`, so Finish captures that session's
+  usage.
+* **Stop is unchanged**: it closes the terminal Perun opened, ending every
+  session in that terminal.
 
 ## v0.10.71
 
