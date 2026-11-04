@@ -3614,7 +3614,7 @@ def test_operator_mention_in_a_room_creates_a_room_item(settings, tmp_path, monk
     frame = {"id": "msg_1", "room_id": room,
              "payload": "Piotr, can you grant the permission?",
              "sender": {"agent_id": "frambo"}}
-    bridge._raise_operator_mention(frame, room, SimpleNamespace(reason="no trigger matched"))
+    bridge._raise_operator_mention(frame, room)
 
     items = registry.open_attention()
     assert [i["target_kind"] for i in items] == ["room"]
@@ -3638,7 +3638,7 @@ def test_a_mention_without_the_operator_name_is_silent(settings, tmp_path, monke
 
     frame = {"id": "msg_2", "room_id": room, "payload": "the tests are green",
              "sender": {"agent_id": "frambo"}}
-    bridge._raise_operator_mention(frame, room, SimpleNamespace(reason="no trigger matched"))
+    bridge._raise_operator_mention(frame, room)
 
     assert registry.open_attention() == []
 
@@ -3827,3 +3827,38 @@ def test_an_operator_message_in_a_group_still_needs_to_address_perun(settings):
     decision = bridge._should_reply_to(frame)
     assert decision.should_reply is True
     assert "addressed by" in decision.reason
+
+
+def test_operator_echoes_do_not_create_mention_items(settings, tmp_path, monkeypatch):
+    """The operator's own words and Perun's echo are not new asks."""
+    from types import SimpleNamespace
+
+    from perun import config, registry
+
+    project, room = _make_shared_project(tmp_path)
+    monkeypatch.setattr(
+        config.Settings, "load",
+        staticmethod(lambda: SimpleNamespace(
+            attention_enabled=True, attention_operator_names=["piotr"],
+        )),
+    )
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    bridge._agent_id = "peruntheoverseer"
+    monkeypatch.setattr(bridge, "_project_binding", lambda rid: (project, {}))
+
+    operator_frame = {
+        "id": "msg_op", "room_id": room,
+        "payload": "Piotr, can you check this?",
+        "sender": {"agent_id": "peruntheoverseer-operator",
+                   "runtime": "peruntheoverseer-operator"},
+    }
+    bridge._raise_operator_mention(operator_frame, room)
+
+    echo_frame = {
+        "id": "msg_echo", "room_id": room,
+        "payload": "Piotr, can you check this?",
+        "sender": {"agent_id": "peruntheoverseer"},
+    }
+    bridge._raise_operator_mention(echo_frame, room)
+
+    assert registry.open_attention() == []

@@ -184,7 +184,8 @@ function proposalBadge(status) {
     return `<span class="badge ${cls}">${esc(name)}</span>`;
 }
 
-function syncProposalChip(proposalId, status, projectName) {
+function syncProposalChip(proposalId, status, projectName, expiresAt) {
+    const active = ['pending', 'approved', 'claimed', 'executing'].includes(String(status));
     document.querySelectorAll(
         `.proposal-ref[data-proposal="${CSS.escape(proposalId)}"]`,
     ).forEach((chip) => {
@@ -194,8 +195,10 @@ function syncProposalChip(proposalId, status, projectName) {
             }
         }
         if (status) chip.classList.add(`proposal-${status}`);
-        chip.title = `Proposal ${proposalId} — ${status || 'unknown'}`
+        let title = `Proposal ${proposalId} — ${status || 'unknown'}`
             + (projectName ? ` · ${projectName}` : '');
+        if (active && expiresAt) title += ` · ${timeLeft(expiresAt)} left`;
+        chip.title = title;
     });
 }
 
@@ -279,7 +282,8 @@ async function runProposalAction(loaded, action, refresh, proposalId) {
         const fresh = await refresh();
         if (fresh) {
             syncProposalChip(id, (fresh.proposal || {}).status,
-                             (fresh.project || {}).name);
+                             (fresh.project || {}).name,
+                             (fresh.proposal || {}).expires_at);
         }
     } catch (e) { toast(e.message, 'err'); }
 }
@@ -340,6 +344,10 @@ async function openProposalPeek(proposalId) {
         if (prop.result) {
             lines.push(`<span class="k">Result</span><span class="v">${esc(String(prop.result).slice(0, 500))}</span>`);
         }
+        if (['pending', 'approved', 'claimed', 'executing'].includes(String(prop.status))
+            && prop.expires_at) {
+            lines.push(`<span class="k">Expires</span><span class="v">${esc(timeLeft(prop.expires_at))} <span class="muted">(${esc(new Date(prop.expires_at * 1000).toLocaleString())})</span></span>`);
+        }
         const details = prop.details && Object.keys(prop.details).length
             ? JSON.stringify(prop.details) : '';
         const actionButtons = proposalActionButtons(prop);
@@ -386,6 +394,15 @@ async function openProposalPeek(proposalId) {
 }
 
 /* --------------------------------------------------------- formatting --- */
+function timeLeft(epochSeconds) {
+    const seconds = Number(epochSeconds) - Date.now() / 1000;
+    if (!Number.isFinite(seconds)) return '';
+    if (seconds <= 0) return 'expired';
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
 function timeAgo(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
@@ -1132,6 +1149,7 @@ const routes = {
     '#/mcp': viewMcp,
     '#/telegram': viewTelegram,
     '#/perunchat': viewPerunChat,
+    '#/attention': viewAttention,
     '#/providers': viewProviders,
     '#/settings': viewSettings,
     '#/updates': viewUpdates,
@@ -2649,6 +2667,10 @@ async function proposalsCard(detail) {
         // operator can copy it back to the room.
         const idChip = `<button class="chip chip-link proposal-id" data-copy="${esc(prop.id)}" type="button" title="Copy this proposal id">${esc(prop.id)}</button>`;
         let meta = `${idChip} · ${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
+        if (['pending', 'approved', 'claimed', 'executing'].includes(prop.status)
+            && prop.expires_at) {
+            meta += ` · expires ${timeLeft(prop.expires_at)}`;
+        }
         if (prop.status === 'executing') {
             meta += ' · headless run in progress…';
         }
@@ -4917,6 +4939,7 @@ async function viewPerunChat() {
     // ---- Chat panel --------------------------------------------------------
     const chatCard = el('div', { class: 'card mt' },
         `<div class="card-head"><h4>Chat</h4><span id="pc-ws-status" class="badge">disconnected</span></div>
+         <div id="pc-needs-you" class="perunchat-needs-you" style="display:none"></div>
          <div id="pc-chat-log" class="perunchat-chat-log"></div>
          <div id="pc-reply-bar" class="perunchat-reply-bar"></div>
          <div class="form-row" style="align-items:flex-end">
@@ -4934,6 +4957,41 @@ async function viewPerunChat() {
              <button class="btn primary" id="pc-chat-send">Send</button>
          </div>`);
     v.appendChild(chatCard);
+
+    // Operator asks are durable inbox items now; surface the count in the chat
+    // itself so an "add these checks" request cannot scroll away unnoticed.
+    let chatNeedsTimer = null;
+    const loadChatNeedsYou = async () => {
+        const host = $('#pc-needs-you');
+        if (!host) {
+            if (chatNeedsTimer) { clearInterval(chatNeedsTimer); chatNeedsTimer = null; }
+            return;
+        }
+        let res;
+        try {
+            res = await api('/api/attention?state=open&limit=50');
+        } catch (_) {
+            return;
+        }
+        const items = (res.items || []).filter((it) => it.target_kind === 'room');
+        if (!items.length) {
+            host.style.display = 'none';
+            host.innerHTML = '';
+            return;
+        }
+        const latest = items[0];
+        host.style.display = 'block';
+        host.innerHTML = `<div class="row" style="gap:8px;align-items:baseline">
+            <span class="badge amber">${items.length}</span>
+            <b>operator ask${items.length === 1 ? '' : 's'} for you</b>
+            <span class="grow muted truncate">${esc(String(latest.question || '').slice(0, 140))}</span>
+            <button class="btn sm primary" id="pc-needs-open">Open inbox</button>
+        </div>`;
+        const open = host.querySelector('#pc-needs-open');
+        if (open) open.addEventListener('click', () => goto('#/attention'));
+    };
+    loadChatNeedsYou();
+    chatNeedsTimer = setInterval(loadChatNeedsYou, 30000);
 
     function inferRoomType(roomId) {
         if (!roomId) return 'PUBLIC';
@@ -5212,6 +5270,55 @@ async function viewPerunChat() {
         return isNaN(d) ? Number.MAX_SAFE_INTEGER : d;
     }
 
+    function chatPayloadText(payload) {
+        if (payload == null) return '';
+        if (typeof payload === 'string') return payload;
+        try {
+            return JSON.stringify(payload);
+        } catch (_) {
+            return String(payload);
+        }
+    }
+
+    function chatPayloadView(msg) {
+        const payload = msg.payload;
+        if (typeof payload === 'string') {
+            let html = esc(payload);
+            // Bound the fan-out: a hostile message could otherwise name hundreds
+            // of ids and make the dashboard issue that many lookups.
+            for (const id of ChatCore.proposalIds(payload).slice(0, 8)) {
+                const chip = `<button class="chip chip-link proposal-ref" data-proposal="${esc(id)}" type="button" title="Open this proposal">${esc(id)}</button>`;
+                html = html.split(id).join(chip);
+            }
+            return html;
+        }
+        let pretty = '';
+        try {
+            pretty = JSON.stringify(payload, null, 2);
+        } catch (_) {
+            pretty = String(payload);
+        }
+        const type = String(
+            (payload && (payload.type || payload.kind)) || msg.content_type || 'structured message'
+        );
+        const bits = [];
+        for (const key of ['proposal_id', 'id', 'status', 'action', 'intent', 'message']) {
+            if (payload && payload[key] != null) {
+                bits.push(`${key}: ${String(payload[key]).slice(0, 80)}`);
+            }
+        }
+        const candidate = String(
+            (payload && (payload.proposal_id || payload.id)) || ''
+        );
+        const pid = /^prop_[0-9a-f]{12}$/.test(candidate) ? candidate : '';
+        const chip = pid
+            ? `<button class="chip chip-link proposal-ref" data-proposal="${esc(pid)}" type="button" title="Open this proposal">${esc(pid)}</button>`
+            : '';
+        const summary = esc(type + (bits.length ? ' · ' + bits.join(' · ') : ''));
+        const body = esc(pretty.length > 20000 ? pretty.slice(0, 20000) + '\n…' : pretty);
+        return `<div class="chat-structured">${chip}<details class="chat-json"><summary>${summary}</summary><pre>${body}</pre></details></div>`;
+    }
+
     function sortChatLog(box) {
         if (!box) return;
         const children = Array.from(box.children);
@@ -5383,20 +5490,16 @@ async function viewPerunChat() {
             const original = messageHistory.find(m => m.id === msg.in_reply_to);
             const origOperator = original && ((original.sender && isOperatorRuntime(original.sender.runtime)) || operatorMessageIds.has(original.id) || original._perunOperator === true);
             const replyToWho = original ? formatSenderLabel(original.sender, origOperator) : 'unknown';
-            const replyToText = original ? esc(String(original.payload).slice(0, 60)) : '…';
+            const replyToText = original ? esc(chatPayloadText(original.payload).slice(0, 60)) : '…';
             replyHtml = `<div style="font-size:12px; color:var(--text-muted); margin-left:12px; border-left:2px solid var(--border-strong); padding-left:8px;">↩ replying to @${replyToWho}: ${replyToText}</div>`;
         }
 
         // Proposal ids are how the chat names work that needs the operator. Turn
         // each one into a chip; clicking it opens a status/intent card with an
-        // "Open in project" jump to the exact Shared-tab row.
-        let payloadHtml = esc(String(msg.payload));
-        // Bound the fan-out: a hostile message could otherwise name hundreds of
-        // ids and make the dashboard issue that many lookups.
-        for (const id of ChatCore.proposalIds(msg.payload).slice(0, 8)) {
-            const chip = `<button class="chip chip-link proposal-ref" data-proposal="${esc(id)}" type="button" title="Open this proposal">${esc(id)}</button>`;
-            payloadHtml = payloadHtml.split(id).join(chip);
-        }
+        // "Open in project" jump to the exact Shared-tab row. Structured
+        // payloads are rendered as an expandable JSON preview instead of
+        // "[object Object]".
+        const payloadHtml = chatPayloadView(msg);
         const lineHtml = `<div style="margin-bottom:4px;">
             <div class="row" style="gap:10px; align-items:baseline;">
                 <span style="color:${ownColor}; font-weight:600;">@${own}</span>
@@ -5426,7 +5529,7 @@ async function viewPerunChat() {
         if (btn) {
             btn.addEventListener('click', () => {
                 replyToId = msg.id;
-                replyToPreview = `@${own}: ${String(msg.payload).slice(0, 40)}`;
+                replyToPreview = `@${own}: ${chatPayloadText(msg.payload).slice(0, 40)}`;
                 const bar = $('#pc-reply-bar');
                 if (bar) bar.innerHTML = `↩ ${esc(replyToPreview)} <button class="btn ghost small" id="pc-clear-reply">Cancel</button>`;
                 bar.style.display = 'block';
@@ -5446,7 +5549,7 @@ async function viewPerunChat() {
                 if (!res) return;
                 const prop = res.proposal || {};
                 const project = res.project || {};
-                syncProposalChip(id, prop.status, project.name);
+                syncProposalChip(id, prop.status, project.name, prop.expires_at);
             });
         });
     }
@@ -6013,6 +6116,17 @@ async function loadRoutingPanel() {
 }
 
 let attentionTimer = null;
+
+async function viewAttention() {
+    $('#topbar-title').textContent = 'Needs you';
+    const v = $('#view');
+    v.innerHTML = '';
+    v.appendChild(el('div', { class: 'card' },
+        `<div class="card-head"><h4>Needs you</h4><span class="badge" id="attention-count">—</span></div>
+         <p class="secondary">Room mentions, questions, permission requests, forms, proposals and handoffs waiting on you. A reply goes back to the exact room or session.</p>
+         <div id="attention-panel"><div class="meta">loading…</div></div>`));
+    await loadAttentionPanel();
+}
 
 async function loadAttentionPanel() {
     const host = $('#attention-panel');

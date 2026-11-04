@@ -66,3 +66,20 @@ def test_proposal_focus_runs_after_the_card_is_inserted():
     card = src[src.index("async function proposalsCard("):
                src.index("function projectConfigForm(")]
     assert "pendingProposalFocus = null" not in card
+
+
+def test_object_payloads_render_as_a_json_preview():
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    assert "function chatPayloadView" in src
+    assert "chat-structured" in src
+    assert "String(msg.payload)" not in src
+
+
+def test_the_operator_inbox_is_a_page_and_surfaced_in_the_chat():
+    src = (JS_DIR / "perun.js").read_text(encoding="utf-8")
+    page = (REPO_ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    assert "'#/attention': viewAttention" in src
+    assert "async function viewAttention" in src
+    assert "pc-needs-you" in src
+    assert "loadChatNeedsYou" in src
+    assert 'data-route="#/attention"' in page

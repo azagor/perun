@@ -298,6 +298,7 @@ def list_proposals(status: str | None = None) -> list[dict[str, Any]]:
             "approved_by": p.get("approved_by"),
             "intent": p["intent"],
             "targets": p["targets"],
+            "expires_at": p.get("expires_at", 0),
         }
         for p in proposals
     ]
@@ -324,6 +325,7 @@ def get_proposal(proposal_id: str) -> dict[str, Any]:
         "execution_mode": proposal.get("execution_mode") or "",
         "intent": proposal["intent"],
         "targets": proposal["targets"],
+        "expires_at": proposal.get("expires_at", 0),
         "result": proposal.get("result", ""),
         "details": proposal.get("details", {}),
     }

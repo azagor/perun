@@ -1733,16 +1733,20 @@ once per project room (idempotent via a `project_room_welcome` activity row):
 the project's operator is `perun_owner_name` (or the explicit
 `attention_operator_names` override), a mention of that name is forwarded to
 their Telegram, and the reply is posted back into the room. The same derivation
-drives `_raise_operator_mention`, so there is no per-project configuration. The
-notice names *this project's* operator and says that an agent answering to a
-different human reaches that person through its own system. Perun's own room
-agent can also call `perun_ask_operator` (allowed in the `perunchat` agent) and
-answer with the operator's reply.
+drives `_raise_operator_mention`, so there is no per-project configuration. A
+mention creates a durable `room` item **even when Perun also answers** — an ask
+like “register these two checks” is a human task, not a conversational reply that
+may scroll away. The operator's own messages, Perun's echo and object payloads
+are ignored. The notice names *this project's* operator and says that an agent
+answering to a different human reaches that person through its own system.
+Perun's own room agent can also call `perun_ask_operator` (allowed in the
+`perunchat` agent) and answer with the operator's reply.
 
 **Surfaces.** Telegram (`/pending`, `/answer`, `/cancel`, `/mute`, `/unmute`,
-reply-to, inline buttons), the REST API (`/api/attention…`), and the dashboard's
-"Needs you" card all use the same store, so a Telegram outage never blocks
-answering.
+reply-to, inline buttons), the REST API (`/api/attention…`), the dedicated
+**`#/attention`** page (also in the nav), the Settings card, and a compact
+“N operator asks for you” strip above the PerunChat log. All use the same store,
+so a Telegram outage never blocks answering.
 
 **Settings** (all opt-in; the master switch is off by default):
 `attention_enabled`, `attention_shadow`, `attention_projects`,
@@ -1949,6 +1953,14 @@ joinedRoom)` (drop frames for another room, the same id, or the same
 runs through `tests/test_js_chat_core.py` (skipped when `node` is absent). If the
 module fails to load, `perun.js` logs one error and falls back to rendering
 everything, so a stale cache never blanks the log.
+
+**Structured payloads.** `payloadKey()` (in `chat_core.js`) gives an object
+payload a real identity, so two different objects are not collapsed as
+`[object Object]` and a replay is still deduped. `chatPayloadView()` renders a
+summary (content type or `type`/`kind`, proposal id, status, action) and a
+collapsible pretty-printed JSON block; if the object names a `prop_…`, a proposal
+chip is added so the operator can open or manage it. Reply previews use the same
+compact text.
 
 **Proposal references in chat.** A room message names work by `prop_…`, not by
 project. `ChatCore.proposalIds(text)` (unit-tested, deduped, first-seen order)

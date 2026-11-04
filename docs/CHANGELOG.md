@@ -4,7 +4,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Operator asks are durable, structured messages are readable, proposals show expiry
+
+* A room message that names the operator now creates a `room` attention item
+  **even when Perun also answers**. The PerunChat page shows an “N operator asks
+  for you” strip, and a new **Needs you** page (and nav entry) lists room
+  mentions alongside permissions, forms, proposals and handoffs; replying there
+  posts back to the exact room.
+* Structured (object) room payloads render as an expandable JSON preview with a
+  type/status summary and a proposal chip, instead of `[object Object]`. Object
+  dedupe uses a real payload key, not `String(payload)`.
+* Active proposals show their expiry in the peek, the Shared row and the chip
+  tooltip. The proposal MCP tools now return `expires_at`, and the room persona
+  treats `approved` (awaiting claim or execution) as pending — never “nothing
+  pending” while an approved proposal has no executor.
 
 ## v0.10.67
 

@@ -15,6 +15,17 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
+    /** A stable identity for a string or an object payload. */
+    function payloadKey(payload) {
+        if (payload == null) return '';
+        if (typeof payload === 'string') return payload;
+        try {
+            return JSON.stringify(payload);
+        } catch (_) {
+            return String(payload);
+        }
+    }
+
     /** Whether *msg* should be inserted into the log. */
     function shouldRender(existing, msg, joinedRoom) {
         if (!msg || !msg.id) return false;
@@ -22,12 +33,13 @@
         if (msg.room_id && joinedRoom && msg.room_id !== joinedRoom) return false;
         const rows = Array.isArray(existing) ? existing : [];
         if (rows.some((m) => m && m.id === msg.id)) return false;
-        // Same message with a fresh id (reconnect/replay): same identity.
+        // Same message with a fresh id (reconnect/replay): same identity. Object
+        // payloads need a real key, not String(payload) === '[object Object]'.
         const agent = msg.sender && msg.sender.agent_id;
         return !rows.some((m) => m
             && (m.sender && m.sender.agent_id) === agent
             && m.timestamp === msg.timestamp
-            && String(m.payload) === String(msg.payload));
+            && payloadKey(m.payload) === payloadKey(msg.payload));
     }
 
     /** Whether this send is not a double Enter/click of the previous one. */
@@ -65,5 +77,5 @@
         return [];
     }
 
-    return { shouldRender, shouldSend, proposalIds, proposalActions };
+    return { shouldRender, shouldSend, payloadKey, proposalIds, proposalActions };
 });

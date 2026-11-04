@@ -276,6 +276,7 @@ Rules for your reply:
 - External execution handoff (rw participants only): an rw participant may claim an already-approved proposal and upload a ZIP package of file changes over PerunChat using `application/perun-execution` control frames and `application/perun-package` chunks. Only the approved target paths may be modified; Perun validates and applies the package locally without using its own model tokens. Read-only participants cannot claim or upload packages.
 - `perun-proposals_approve` defaults to `execute=false`, leaving the proposal `approved` for `claim_execution` or explicit local execution. Pass `execute=true` only when Perun itself should start the headless run; for a remote rw participant who will claim and deliver, use the default.
 - Shared project approval: a proposal you raise belongs to your own agent identity, and the reviewer is any other agent participating in the project - never the person who asked for the change. An approval exists only when a different participant calls the `perun-proposals_approve` tool. Never claim that something was approved, executed, or written to disk without an `approve` tool result or an execution/state digest saying so.
+- "Pending" means work still waiting on a human or executor: `pending`, `approved` (awaiting claim or execution), `claimed`, and `executing`. Never say "nothing pending" while an approved proposal has no executor; list the ids and their expiry (`expires_at` from the proposal tools), and say when one is close to lapsing.
 - Verify executed proposals by reading the target. After an execution/state digest, call `perun-guard_guard_read_file` on each target (or `perun-guard_guard_list_directory` / `perun-guard_guard_search_files` for directories) and report the actual content or a clear "file missing" result. Do not treat the digest alone as proof; a digest that says "executed" without the target content is not verification.
 - When an executed proposal delivered a script and someone asks you to run it, call `perun_perun_verify_proposal` with the proposal id (the server may show it as `perun_verify_proposal`). It derives the command from the approved script, shows the operator the exact command and sha256, and runs only after they confirm. Never claim a script passed unless that tool returned exit 0; a refusal or a pending confirmation is not a pass. If no tool is available, say so and ask the operator to declare a check with `perun checks add`.
 - Output only the reply text and any `[FACT: ...]` markers: no markdown formatting, no quotes, no explanations or reasoning.
@@ -416,6 +417,7 @@ Rules:
 - External execution handoff (rw participants only): an rw participant may claim an already-approved proposal and upload a ZIP package of file changes over PerunChat using `application/perun-execution` control frames and `application/perun-package` chunks. Only the approved target paths may be modified; Perun validates and applies the package locally without using its own model tokens. Read-only participants cannot claim or upload packages.
 - `perun-proposals_approve` defaults to `execute=false`, leaving the proposal `approved` for `claim_execution` or explicit local execution. Pass `execute=true` only when Perun itself should start the headless run; for a remote rw participant who will claim and deliver, use the default.
 - Shared project approval: a proposal you raise belongs to your own agent identity, and the reviewer is any other agent participating in the project - never the person who asked for the change. An approval exists only when a different participant calls the `perun-proposals_approve` tool. Never claim that something was approved, executed, or written to disk without an `approve` tool result or an execution/state digest saying so.
+- "Pending" means work still waiting on a human or executor: `pending`, `approved` (awaiting claim or execution), `claimed`, and `executing`. Never say "nothing pending" while an approved proposal has no executor; list the ids and their expiry (`expires_at` from the proposal tools), and say when one is close to lapsing.
 - Verify executed proposals by reading the target. After an execution/state digest, call `perun-guard_guard_read_file` on each target (or `perun-guard_guard_list_directory` / `perun-guard_guard_search_files` for directories) and report the actual content or a clear "file missing" result. Do not treat the digest alone as proof; a digest that says "executed" without the target content is not verification.
 - When an executed proposal delivered a script and someone asks you to run it, call `perun_perun_verify_proposal` with the proposal id (the server may show it as `perun_verify_proposal`). It derives the command from the approved script, shows the operator the exact command and sha256, and runs only after they confirm. Never claim a script passed unless that tool returned exit 0; a refusal or a pending confirmation is not a pass. If no tool is available, say so and ask the operator to declare a check with `perun checks add`.
 - Output only the reply text and any `[FACT: ...]` markers: no markdown formatting, no quotes, no explanations or reasoning.
@@ -2640,15 +2642,22 @@ class PerunChatBridge:
         for room_id in self._rooms():
             self._welcome_room(room_id)
 
-    def _raise_operator_mention(self, frame: Dict[str, Any], room_id: str,
-                                decision: _ReplyDecision) -> None:
-        """Notify the operator when a room message asks *them*, not Perun.
+    def _raise_operator_mention(self, frame: Dict[str, Any], room_id: str) -> None:
+        """Gather a room message that asks the operator *them*, not Perun.
 
-        Only fires for messages Perun deliberately did not answer and only when
-        the text names an operator alias; a normal lull in conversation must not
-        turn into a Telegram ping.
+        This fires even when Perun also answers: an ask like "register these two
+        checks" is a human task, and replying to the room would otherwise let it
+        scroll away. The item lands in the operator inbox and Telegram; its reply
+        adapter posts the answer back into the room.
         """
-        if decision.reason != "no trigger matched":
+        sender_frame = frame.get("sender") or {}
+        runtime = str(sender_frame.get("runtime") or "").lower()
+        sender = str(sender_frame.get("agent_id") or "").strip()
+        # Never notify the operator about their own message, or about Perun's
+        # own echo of an ask (that would create a duplicate item).
+        if "operator" in runtime or "operator" in sender.lower():
+            return
+        if self._agent_id and sender.lower() == str(self._agent_id).lower():
             return
         try:
             settings = config.Settings.load()
@@ -2672,7 +2681,6 @@ class PerunChatBridge:
         if not binding:
             return
         project, _cfg = binding
-        sender = str((frame.get("sender") or {}).get("agent_id") or "").strip()
         try:
             from . import attention
 
@@ -2691,9 +2699,11 @@ class PerunChatBridge:
         msg_id = frame.get("id")
         room_id = frame.get("room_id")
         decision = self._should_reply_to(frame)
+        # Gather an operator-directed ask even when Perun also answers; otherwise
+        # the request is lost in the room.
+        self._raise_operator_mention(frame, room_id)
         if not decision.should_reply:
             logger.info("PerunChat decided not to reply to %s: %s", msg_id, decision.reason)
-            self._raise_operator_mention(frame, room_id, decision)
             return
         logger.info("PerunChat decided to reply to %s: %s", msg_id, decision.reason)
 

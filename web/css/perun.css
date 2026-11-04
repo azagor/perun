@@ -501,6 +501,10 @@ select { cursor: pointer; }
 /* ---------- perunchat view ---------- */
 .perunchat-chat-log { height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 12px 0; background: var(--bg-inset); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; }
 .perunchat-chat-log > div { margin-bottom: 6px; overflow-wrap: anywhere; }
+.chat-structured { display: flex; flex-direction: column; gap: 5px; }
+.chat-json summary { cursor: pointer; color: var(--text-secondary); font-size: .78rem; }
+.chat-json pre { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin: 4px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: .72rem; }
+.perunchat-needs-you { border: 1px solid var(--amber); border-radius: var(--radius-sm); padding: 8px 10px; margin: 8px 0; background: rgba(224, 168, 60, .08); font-size: .86rem; }
 .perunchat-list-box { min-height: 80px; }
 .perunchat-list-box .row:last-child { border-bottom: none; }
 .perunchat-reply-bar { display: none; margin-bottom: 8px; padding: 8px 10px; border-radius: 6px; background: rgba(201, 162, 39, 0.08); border: 1px solid var(--border-strong); font-size: 13px; }

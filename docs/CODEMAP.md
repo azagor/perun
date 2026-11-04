@@ -1553,8 +1553,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   joinedRoom)` (room filter, id dedupe, identity dedupe of replayed frames),
   `shouldSend(lastText, lastAt, text, now, windowMs)` (double Enter/click
   guard), `proposalIds(text)` (the `prop_…` ids named in a message, unique and in
-  first-seen order, used to render actionable chips), and `proposalActions(status)`
-  (the management actions the peek offers for a state). Exposed as
+  first-seen order, used to render actionable chips), `proposalActions(status)`
+  (the management actions the peek offers for a state), and `payloadKey(payload)`
+  (a stable identity for string/object frames, so object payloads dedupe
+  correctly instead of collapsing as `[object Object]`). Exposed as
   `window.ChatCore` and as a CommonJS module.
 * `web/js/coroutine_schedule.js` - pure coroutine UI logic, unit-tested with
   `node --test`: `humanTrigger()`, `cronHuman()`, `intervalHuman()`,

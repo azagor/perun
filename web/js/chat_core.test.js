@@ -109,3 +109,29 @@ test('each proposal state offers the expected management actions', () => {
     assert.deepEqual(core.proposalActions('unknown'), []);
     assert.deepEqual(core.proposalActions(null), []);
 });
+
+test('distinct object payloads are not collapsed as [object Object]', () => {
+    const first = row('msg_1', { payload: { status: 'approved', n: 1 } });
+    const second = row('msg_2', {
+        payload: { status: 'approved', n: 2 },
+        timestamp: first.timestamp,
+    });
+    assert.equal(core.shouldRender([first], second,
+        'grp:perun:ai-playground:chat'), true);
+});
+
+test('a replayed object payload is still a duplicate', () => {
+    const first = row('msg_1', { payload: { status: 'approved', n: 1 } });
+    const replay = row('msg_2', {
+        payload: { status: 'approved', n: 1 },
+        timestamp: first.timestamp,
+    });
+    assert.equal(core.shouldRender([first], replay,
+        'grp:perun:ai-playground:chat'), false);
+});
+
+test('payloadKey is stable for strings, objects and null', () => {
+    assert.equal(core.payloadKey('x'), 'x');
+    assert.equal(core.payloadKey({ a: 1 }), '{"a":1}');
+    assert.equal(core.payloadKey(null), '');
+});

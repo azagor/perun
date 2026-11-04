@@ -227,6 +227,12 @@ with `python -m perun project-roots --add <name> <path>`.
   restart, so suppressing Stop for standalone runs reverted an active card to Run
   and invited a second session — that was a real regression. Keep the decision in
   that module (it is unit-tested) instead of hardcoding a button.
+* **Operator-directed room asks are durable.** A room message that names the
+  operator creates a `room` attention item **even when Perun also answers** — a
+  task like "register these two checks" must not live only in the chat scroll.
+  The PerunChat page shows the open-ask count and links to `#/attention`; the
+  operator's own messages, Perun's echo and object payloads are ignored. A reply
+  in the inbox is posted back to the exact room.
 * **Notifications carry a typed target.** `attention_requests.target_kind` +
   `target_id` decide where a reply goes; never infer the context from the current
   project or the newest session. Producers only write rows — the process that owns
