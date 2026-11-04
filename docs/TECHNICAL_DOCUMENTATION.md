@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.71 (see §15). Mention dedupe is message-based, the proposal inbox sweep is batched, and huge payload identities stay bounded.
+**Latest release:** v0.10.72 (see §15). Run resumes the latest TUI session by default; the card caret starts a new session or picks an existing one.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2598,6 +2598,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.72: Run resumes the latest TUI session by default; the card caret starts a new session or picks an existing one.
+
 ### 2026-11-04 — v0.10.71: Mention dedupe is message-based, the proposal inbox sweep is batched, and huge payload identities stay bounded.
 
 ### 2026-11-04 — v0.10.70: Audit follow-ups: inbox reconciliation runs even with delivery off, the chat needs-you timer is cleared on re-render, and a payload-less frame no longer breaks the structured preview.

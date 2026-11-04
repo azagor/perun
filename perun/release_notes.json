@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T09:03:40+00:00",
+  "generated": "2026-11-04T09:10:42+00:00",
   "releases": [
+    {
+      "version": "0.10.72",
+      "date": "2026-11-04",
+      "body": "### Run resumes the latest TUI session\n\n* The project card's main **Run** now resumes the latest OpenCode session for\n  that project (`opencode --session <id>`) instead of always starting a new one.\n  The caret next to it starts a **new** session or opens a picker of the\n  project's existing sessions; a project with no sessions starts fresh.\n* The Agent Console's session picker defaults to the latest session and keeps\n  **New session** as the first, explicit choice. The TUI run record carries\n  `opencode_session_id` and `session_pk`, so Finish captures that session's\n  usage.\n* **Stop is unchanged**: it closes the terminal Perun opened, ending every\n  session in that terminal."
+    },
     {
       "version": "0.10.71",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.63",
       "date": "2026-11-03",
       "body": "### Proposal references in chat are actionable\n\n* Every `prop_…` named in a PerunChat message is now a chip coloured by its\n  status (the project is in the tooltip). Clicking it opens a peek card with the\n  project, status, requester, intent, targets and result; **Open in project**\n  jumps to the Shared tab, expands the completed section when needed, scrolls to\n  the row and flashes it. A new `GET /api/proposals/{id}` resolves a proposal\n  across projects, so the operator no longer has to guess which project a chat\n  mention belongs to.\n* Fixed the **Approve only** confirmation: it referenced an undefined `targets`\n  variable and threw before sending the approval.\n\n### Updates refresh the global install"
-    },
-    {
-      "version": "0.10.62",
-      "date": "2026-11-03",
-      "body": "### Updates refresh the global install\n\n* `perun update apply` on a git checkout now re-runs the additive global install\n  (`perun install --no-index`) after the pull, so the managed `AGENTS.md` kernel,\n  the slash commands and the MCP entry match the release that was just installed.\n  Previously only fresh installs and installer upgrades refreshed them, leaving\n  git users on old always-on rules. The step backs up before writing and is\n  best-effort: a locked or read-only config logs a warning and never fails a\n  successful update."
     }
   ]
 }

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.72
+
+*Released 2026-11-04.*
+
 ### Run resumes the latest TUI session
 
 * The project card's main **Run** now resumes the latest OpenCode session for
