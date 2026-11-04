@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.79
+
+*Released 2026-11-04.*
+
 ### Hardening for the work pause and TUI launch
 
 * A TUI launch only finishes/untracks its run on a **definitive** server error;

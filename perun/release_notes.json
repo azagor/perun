@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T11:42:14+00:00",
+  "generated": "2026-11-04T11:42:22+00:00",
   "releases": [
+    {
+      "version": "0.10.79",
+      "date": "2026-11-04",
+      "body": "### Hardening for the work pause and TUI launch\n\n* A TUI launch only finishes/untracks its run on a **definitive** server error;\n  a network-uncertain failure leaves the run stopable because the terminal may\n  have opened.\n* Paused projects annotate peer-review requests for pending proposals so peers\n  hold the review; activity logging is best effort and the project-card `paused`\n  badge refreshes immediately after a toggle. A transient binding-read failure\n  keeps a recently paused room paused for a grace period instead of silently\n  resuming autonomy.\n* Scheduled/time-based coroutines keep their own Pause control; the project flag\n  suppresses room-driven autonomy only (replies, room events, review, policy\n  auto-approve)."
+    },
     {
       "version": "0.10.78",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.70",
       "date": "2026-11-04",
       "body": ""
-    },
-    {
-      "version": "0.10.69",
-      "date": "2026-11-04",
-      "body": "### Proposal cards leave the inbox when the proposal is decided\n\n* `attention.reconcile_proposals()` — run by the watcher — closes an approval\n  card once its proposal is `approved`/`claimed`/`executing`/`executed`,\n  `rejected`, or no longer exists. The inbox and the proposal board can no longer\n  disagree about what is still waiting, which was the root of the “nothing\n  pending” reply while eleven approved proposals sat unexecuted."
     }
   ]
 }
