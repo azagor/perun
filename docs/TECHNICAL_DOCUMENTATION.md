@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.11.0 — External handoff v2: typed create/edit/delete preconditions, a server-derived pre/post manifest, package-level approval of the exact archive digest, atomic apply with postconditions and rollback, plus the Shared-tab review UI and MCP package tools.
+**Latest release:** v0.11.0 (see §15). External handoff v2: typed operations and package approval
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2685,6 +2685,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.11.0: External handoff v2: typed operations and package approval
+
 ### 2026-11-04 — v0.10.87: Project grid layout hardening: a pure tested planner, font re-measure, equal card heights, and graceful stale-module fallback.
 
 ### 2026-11-04 — v0.10.86: Project cards share one width and height; a card on a short row matches the first row.
