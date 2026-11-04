@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.75
+
+*Released 2026-11-04.*
+
 ### Follow-ups from the production audit
 
 * A failed TUI launch now finishes the run record it created instead of leaving a

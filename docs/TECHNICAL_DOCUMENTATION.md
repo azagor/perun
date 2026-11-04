@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.74 (see §15). Focus finds the terminal through its console handle, and TUI session resume is hardened.
+**Latest release:** v0.10.75 (see §15). Failed TUI launches are finalized, launches are single-flight, and session ownership is enforced on every run path.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2623,6 +2623,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.75: Failed TUI launches are finalized, launches are single-flight, and session ownership is enforced on every run path.
+
 ### 2026-11-04 — v0.10.74: Focus finds the terminal through its console handle, and TUI session resume is hardened.
 
 ### 2026-11-04 — v0.10.73: Project coroutines can compose one or more project tasks into the saved prompt.

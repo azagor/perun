@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T09:47:23+00:00",
+  "generated": "2026-11-04T10:17:56+00:00",
   "releases": [
+    {
+      "version": "0.10.75",
+      "date": "2026-11-04",
+      "body": "### Follow-ups from the production audit\n\n* A failed TUI launch now finishes the run record it created instead of leaving a\n  phantom \"working\" card, and launches are single-flight per project, so a\n  re-rendered card or a second click (including via the caret) cannot open two\n  terminals.\n* `Orchestrator.start_run()` enforces the same `session_pk` ownership rule as\n  `/api/runs/tui`, so headless runs, MCP tools, Telegram and the project-session\n  endpoint can no longer attach another project's usage.\n* Focus caches its resolved window per `(pid, run_uid)`, so a recycled pid cannot\n  raise another run's terminal.\n* The coroutine Work step explains that editing a job keeps its already-composed\n  task blocks; adding tasks appends new ones."
+    },
     {
       "version": "0.10.74",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.66",
       "date": "2026-11-03",
       "body": "### Proposal lookup hardening\n\n* `GET /api/proposals/{id}` now hides a hidden project's proposal unless the\n  caller is in the owner workspace (or `PERUN_SHOW_HIDDEN_PROJECTS`), so a\n  shared id cannot bypass the hidden-project rule.\n* The chat lookup cache is capped at 200 entries and no longer caches failures:\n  a transient outage, or a server still on an older build, retries instead of\n  pinning a neutral chip forever. **Open in project** is disabled until the peek\n  has loaded.\n* Regression tests now assert that the fallback shim covers every `ChatCore`\n  call and that the proposal focus runs after the card is inserted into the DOM\n  (the bug that landed on the tab but never on the row)."
-    },
-    {
-      "version": "0.10.65",
-      "date": "2026-11-03",
-      "body": "### Chat fallback and chip font\n\n* When `chat_core.js` is missing (a stale cache or a truncated deploy), the\n  permissive shim now includes `proposalIds: () => []`. Without it\n  `renderMessage` threw on exactly the degraded path the fallback exists to keep\n  alive.\n* The proposal chip uses the real monospace stack; `var(--mono)` was undefined,\n  so the declaration was invalid."
     }
   ]
 }
