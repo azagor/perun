@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T12:13:00+00:00",
+  "generated": "2026-11-04T15:51:09+00:00",
   "releases": [
+    {
+      "version": "0.10.82",
+      "date": "2026-11-04",
+      "body": "### Project grid shares a partial last row\n\n* The Projects grid now uses flex-wrap with growable cards, so a partly filled\n  last row (for example PerunChat alone at two columns) fills the width instead\n  of squeezing the last card into one grid column. Long names and descriptions\n  wrap instead of forcing a wider track.\n\n### Documentation refresh\n\n* README, DESIGN, and the retrievable context docs now describe TUI session\n  resume/selection, the console-handle Focus path, the shared-project **Pause\n  work** control, coroutine task composition, and the release-notes/changelog\n  placement rule."
+    },
     {
       "version": "0.10.81",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.73",
       "date": "2026-11-04",
       "body": "### Project coroutines can include project tasks\n\n* The coroutine wizard's **Work** step now lists the execution project's enabled\n  tasks. Several can be selected at once, shown as removable chips, and composed\n  with the optional extra prompt by `buildCoroutinePrompt`. A skill task becomes\n  a structured instruction for the headless run, not a TUI slash command.\n* The composed prompt is saved once; editing the project's tasks later does not\n  rewrite an existing coroutine. A job with tasks and no extra prompt is valid.\n* Quick create keeps its single-prompt shortcut; use **New coroutine** for task\n  selection."
-    },
-    {
-      "version": "0.10.72",
-      "date": "2026-11-04",
-      "body": "### Run resumes the latest TUI session\n\n* The project card's main **Run** now resumes the latest OpenCode session for\n  that project (`opencode --session <id>`) instead of always starting a new one.\n  The caret next to it starts a **new** session or opens a picker of the\n  project's existing sessions; a project with no sessions starts fresh.\n* The Agent Console's session picker defaults to the latest session and keeps\n  **New session** as the first, explicit choice. The TUI run record carries\n  `opencode_session_id` and `session_pk`, so Finish captures that session's\n  usage.\n* **Stop is unchanged**: it closes the terminal Perun opened, ending every\n  session in that terminal."
     }
   ]
 }

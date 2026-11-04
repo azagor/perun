@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.10.81 (see §15). Regenerate the bundled release notes so v0.10.80's header change appears in the update card.
+**Latest release:** v0.10.82 (see §15). The project grid shares a partly filled last row so the final card is no longer squeezed.
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2647,6 +2647,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-04 — v0.10.82: The project grid shares a partly filled last row so the final card is no longer squeezed.
+
 ### 2026-11-04 — v0.10.81: Regenerate the bundled release notes so v0.10.80's header change appears in the update card.
 
 ### 2026-11-04 — v0.10.80: The Shared header separates the chat binding from the project work state (Chat active + Work paused/running).

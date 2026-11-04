@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.10.82
+
+*Released 2026-11-04.*
+
 ### Project grid shares a partial last row
 
 * The Projects grid now uses flex-wrap with growable cards, so a partly filled
