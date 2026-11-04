@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T10:17:56+00:00",
+  "generated": "2026-11-04T10:47:49+00:00",
   "releases": [
+    {
+      "version": "0.10.76",
+      "date": "2026-11-04",
+      "body": "### Resume skips machine-created sessions\n\n* `GET /api/projects/{slug}/sessions` now reports `tui` per session: `true` when\n  the session's **first** linked run was a TUI launch, `false` when it was a\n  headless job, and `null` when there is no run evidence (manual/legacy). A later\n  resume never flips a headless session into a chat.\n* The card's main **Run** resumes the newest TUI/unknown session and starts a\n  fresh one when only headless sessions exist. The caret picker and the Agent\n  Console list every session with a `TUI chat` / `headless run` label, and the\n  console default skips headless sessions.\n* This keeps a machine session (including one created by an old run with a\n  malformed instruction prompt) from being reopened as if it were the\n  operator's chat."
+    },
     {
       "version": "0.10.75",
       "date": "2026-11-04",
@@ -45,11 +50,6 @@
       "version": "0.10.67",
       "date": "2026-11-03",
       "body": "### Manage a proposal from the chat peek, and keep the focus\n\n* The peek card now offers the state-appropriate actions directly: **Approve &\n  run / Approve only / Reject / Delete** (pending), **Run now / Withdraw /\n  Delete** (approved), **Revoke claim** (claimed), **Cancel** (executing), and\n  **Retry / Delete** (completed). Each action re-fetches the proposal, recolours\n  the chat chip and updates the card; Retry opens the new proposal.\n* The focus is encoded in the URL (`#/project/<slug>/shared/<prop_…>`) and\n  re-applied on every render, poll and reload, so the row is not lost when the\n  view refreshes. The Shared tab now waits for **both** cards (settings and\n  proposals) before scrolling — the settings card loading above the list used to\n  move the row off-screen. The gold highlight persists while the id is in the\n  URL and clears when another tab is opened."
-    },
-    {
-      "version": "0.10.66",
-      "date": "2026-11-03",
-      "body": "### Proposal lookup hardening\n\n* `GET /api/proposals/{id}` now hides a hidden project's proposal unless the\n  caller is in the owner workspace (or `PERUN_SHOW_HIDDEN_PROJECTS`), so a\n  shared id cannot bypass the hidden-project rule.\n* The chat lookup cache is capped at 200 entries and no longer caches failures:\n  a transient outage, or a server still on an older build, retries instead of\n  pinning a neutral chip forever. **Open in project** is disabled until the peek\n  has loaded.\n* Regression tests now assert that the fallback shim covers every `ChatCore`\n  call and that the proposal focus runs after the card is inserted into the DOM\n  (the bug that landed on the tab but never on the row)."
     }
   ]
 }
