@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.8
+
+*Released 2026-11-05.*
+
 ### Typed delete enforcement in the guard
 
 * `guard_delete_file` now requires a **delete proposal in `executing` state**;
