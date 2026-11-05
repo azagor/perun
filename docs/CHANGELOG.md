@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Security: chat persona cannot delete files
+
+* The `perunchat` agent permissions now deny `<server>_guard_delete_file`
+  (alongside write/edit), and the prompt names delete as forbidden. The guarded
+  delete tool was added for the local `perun-shared` executor; without this
+  deny, the room persona's broad guard allow would have let it delete a project
+  file through the chat tool surface. `perun-shared` keeps delete so an approved
+  `delete` proposal can execute.
 
 ## v0.11.6
 

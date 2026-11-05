@@ -2120,10 +2120,10 @@ actor file under `PERUN_HOME/perunchat_actors/`; `perun-proposals` reads them
 when `PERUN_CHAT_SENDER` / `PERUN_CHAT_AGENT` are absent and ignores files older
 than one hour, so `approve`/`reject` work from the bridge without leaving a
 stale authorization path or impersonating the requester. The dedicated
-`perunchat` agent denies the real
-V2 guard action names (`<server>_guard_write_file` / `<server>_guard_edit_file`)
-and allows `perun_perunchat_room_memory` for older room context, keeping chat
-sessions read-only apart from explicit proposals.
+`perunchat` agent denies the real V2 guard action names
+(`<server>_guard_write_file`, `<server>_guard_edit_file`,
+`<server>_guard_delete_file`) and allows `perun_perunchat_room_memory` for older
+room context, keeping chat sessions read-only apart from explicit proposals.
 
 **MCP config shape.** Because OpenCode V2 moved servers to `mcp.servers.<name>` and
 replaced `enabled` with `disabled` (V1 kept names directly under `mcp`), the writer

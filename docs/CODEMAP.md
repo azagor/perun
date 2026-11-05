@@ -1015,7 +1015,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `perun/instructions/perunchat_chat.md` persona, which names the prefixed
   guard tools and requires a guard read-back to verify executed proposals).
   The installed `perunchat` agent allows the guard/proposal/memory tools and
-  denies the built-in `skill` loader. Both the installed agent and the runtime
+  denies the built-in `skill` loader and the guard write/edit/delete tools.
+  Both the installed agent and the runtime
   prompt state that the guard/proposals servers are loaded in a bound project
   room, require retrying the exact prefixed tool name, and forbid claiming they
   are unavailable without a failed tool result. The shared-project prompt note

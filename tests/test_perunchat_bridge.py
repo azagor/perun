@@ -766,6 +766,7 @@ def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
         assert _resolve_permission(perms, f"{server}_guard_list_directory") == "allow"
         assert _resolve_permission(perms, f"{server}_guard_write_file") == "deny"
         assert _resolve_permission(perms, f"{server}_guard_edit_file") == "deny"
+        assert _resolve_permission(perms, f"{server}_guard_delete_file") == "deny"
 
     # Proposal and room-memory tools must stay allowed.
     assert _resolve_permission(perms, "perun-proposals_propose") == "allow"
@@ -785,6 +786,7 @@ def test_perunchat_agent_uses_v2_permissions_with_last_match_wins():
 
     # The prompt must name the exact read tools and require a read-back.
     assert "perun-guard_guard_read_file" in _OPENCODE_AGENT_MD
+    assert "guard_delete_file" in _OPENCODE_AGENT_MD
     assert "Verify executed proposals by reading the target" in _OPENCODE_AGENT_MD
     assert "Verify executed proposals by reading the target" in _DEFAULT_CHAT_PROMPT
 
