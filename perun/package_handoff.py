@@ -322,7 +322,7 @@ def validate_package(
     proposal: dict[str, Any],
     files: dict[str, bytes],
 ) -> list[str]:
-    """Return a list of errors for files outside the proposal targets/allowlist."""
+    """Deprecated compatibility helper; external handoff uses derive_package()."""
     root = project["path"]
     cfg = shared_projects.load(root)
     external_deps = cfg.get("external_deps", [])
@@ -362,7 +362,7 @@ def apply_package(
     project: dict[str, Any],
     files: dict[str, bytes],
 ) -> list[str]:
-    """Apply a validated package as a unit and return the relative paths applied.
+    """Deprecated compatibility helper; external handoff uses apply_operations().
 
     All files are staged and existing targets are backed up before any replace.
     If a write fails, previously applied files are restored and newly created

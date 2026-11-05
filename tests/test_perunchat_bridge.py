@@ -4158,3 +4158,20 @@ def test_chat_prompts_do_not_claim_guard_tools_are_unavailable():
         assert "do not conclude the tools are unavailable" in prompt
         assert "perun-guard_guard_read_file" in prompt
         assert "perun-guard_guard_list_directory" in prompt
+
+
+def test_shared_project_note_allows_read_only_guard_tools(settings, tmp_path):
+    project, room = _make_shared_project(tmp_path)
+    bridge = PerunChatBridge(MagicMock(settings=settings))
+    frame = {
+        "type": "CHAT",
+        "id": "msg_guard_note",
+        "room_id": room,
+        "sender": {"agent_id": "frambo"},
+        "payload": "what files are here?",
+    }
+
+    prompt = bridge._build_prompt(frame, include_internal_context=True)
+
+    assert "may use the read-only `perun-guard_guard_*` tools" in prompt
+    assert "may not execute tools" not in prompt

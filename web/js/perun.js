@@ -3002,8 +3002,8 @@ async function proposalsCard(detail) {
         }
         const row = el('div', { class: 'list-row' },
             `<span class="badge ${prop.status === 'executed' ? 'green' : prop.status === 'failed' ? 'red' : prop.status === 'approved' || prop.status === 'executing' ? 'blue' : prop.status === 'rejected' || prop.status === 'cancelled' ? 'muted' : 'amber'}">${esc(prop.status)}</span>
-             <span class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
-             <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}${packageHtml}</span>
+             <div class="intent"><div class="msg truncate">${esc(prop.intent)}</div>
+             <div class="meta">${meta}</div>${detailsHtml}${outcomeHtml}${packageHtml}</div>
              <span class="row" style="gap:6px">${actions.join('')}</span>`);
         row.dataset.proposal = prop.id;
         row.querySelectorAll('.proposal-target').forEach((btn) => {

@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Follow-up audit cleanup
+
+* The shared-project prompt note no longer says "you may not execute tools";
+  it now explicitly permits the read-only `perun-guard_guard_*` inspection tools
+  and the `perun-proposals_*` coordination tools, while still forbidding direct
+  edits, shell, web and subagents.
+* The per-proposal package lock map is a `WeakValueDictionary`, so it cannot
+  grow without bound over the life of a long-running bridge.
+* The proposal row uses a block `<div class="intent">` instead of a `<span>`
+  wrapping the package `<details>` preview, making the generated HTML valid.
+* `validate_package()`/`apply_package()` are marked as deprecated compatibility
+  helpers; the production handoff uses `derive_package()`/`apply_operations()`.
 
 ## v0.11.4
 

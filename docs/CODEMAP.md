@@ -685,8 +685,8 @@ applies it locally.
   stages through `mkstemp` temp files, verifies every postcondition
   (create/edit must be a regular file, delete must be gone), and restores all
   backups on any failure; `delete` ignores uploaded bytes.
-* `validate_package()` / `apply_package()` — the earlier path-level validator and
-  byte-oriented apply retained for direct/legacy callers.
+* `validate_package()` / `apply_package()` — deprecated compatibility helpers;
+  the production handoff uses `derive_package()` / `apply_operations()`.
 * The external download path is restricted to the proposal's approved targets;
   a claimant cannot request arbitrary project paths. External-dependency
   targets are rejected for external handoff (they require local execution).
@@ -1020,7 +1020,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   denies the built-in `skill` loader. Both the installed agent and the runtime
   prompt state that the guard/proposals servers are loaded in a bound project
   room, require retrying the exact prefixed tool name, and forbid claiming they
-  are unavailable without a failed tool result.
+  are unavailable without a failed tool result. The shared-project prompt note
+  explicitly permits the read-only guard tools while still forbidding direct
+  edits, shell, web and subagents.
 * `PerunChatBridge` — background thread: `status()`, `start()`, `stop()`,
   `restart()`; connects to the gateway via the configured API key,
   auto-joins `perunchat_auto_join` rooms, listens for incoming messages, and

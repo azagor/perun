@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import uuid
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -770,7 +771,9 @@ EXTERNAL_PACKAGE_TTL_SECONDS = 24 * 3600
 # ``package_state`` check and the archive/DB write. The bridge is a singleton,
 # so a process-local per-proposal lock is sufficient; the SQL guard below is
 # defence in depth.
-_PACKAGE_LOCKS: dict[str, threading.Lock] = {}
+_PACKAGE_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = (
+    weakref.WeakValueDictionary()
+)
 _PACKAGE_LOCKS_GUARD = threading.Lock()
 
 

@@ -3903,8 +3903,11 @@ class PerunChatBridge:
             shared_context = self._shared_project_context(room, binding=binding)
             if shared_context:
                 shared_action_note = (
-                    "\nNote: this is a shared project room. You may not execute "
-                    "tools or edit files directly. When a participant requests a "
+                    "\nNote: this is a shared project room. You may use the "
+                    "read-only `perun-guard_guard_*` tools to inspect the project "
+                    "and the `perun-proposals_*` tools to coordinate changes; do "
+                    "not edit files or run shell/web/subagent tools directly. "
+                    "When a participant requests a "
                     "project change, call `perun-proposals_propose` with "
                     "intent, action_type, and targets (relative paths). Another "
                     "rw participant (which may be the room owner) must then call "
