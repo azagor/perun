@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-04T23:51:33+00:00",
+  "generated": "2026-11-05T00:01:14+00:00",
   "releases": [
+    {
+      "version": "0.11.4",
+      "date": "2026-11-05",
+      "body": "### Interrupted-apply cleanup\n\n* `reconcile_interrupted()` now also marks a stranded package state as `failed`\n  and records the restart reason, so a proposal left mid-apply does not keep\n  advertising a pending/approved package after the archive is discarded."
+    },
     {
       "version": "0.11.3",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.10.83",
       "date": "2026-11-04",
       "body": "### Project grid balance\n\n* Every project card now uses the same computed width for the current column\n  count; a partly filled last row is centered instead of stretching the final\n  card across the row (PerunChat alone no longer becomes full-width)."
-    },
-    {
-      "version": "0.10.82",
-      "date": "2026-11-04",
-      "body": "### Project grid shares a partial last row\n\n* The Projects grid now uses flex-wrap with growable cards, so a partly filled\n  last row (for example PerunChat alone at two columns) fills the width instead\n  of squeezing the last card into one grid column. Long names and descriptions\n  wrap instead of forcing a wider track.\n\n### Documentation refresh\n\n* README, DESIGN, and the retrievable context docs now describe TUI session\n  resume/selection, the console-handle Focus path, the shared-project **Pause\n  work** control, coroutine task composition, and the release-notes/changelog\n  placement rule."
     }
   ]
 }

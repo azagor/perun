@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.4
+
+*Released 2026-11-05.*
+
 ### Interrupted-apply cleanup
 
 * `reconcile_interrupted()` now also marks a stranded package state as `failed`
