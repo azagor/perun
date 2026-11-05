@@ -1840,7 +1840,7 @@ Perun's own room agent can also call `perun_ask_operator` (allowed in the
 
 **Surfaces.** Telegram (`/pending`, `/answer`, `/cancel`, `/mute`, `/unmute`,
 reply-to, inline buttons), the REST API (`/api/attention…`), the dedicated
-**`#/attention`** page (also in the nav), the Settings card, and a compact
+**`#/attention`** page (also in the nav), the Settings link to it, and a compact
 “N operator asks for you” strip above the PerunChat log. All use the same store,
 so a Telegram outage never blocks answering.
 
