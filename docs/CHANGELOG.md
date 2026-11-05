@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.5
+
+*Released 2026-11-05.*
+
 ### Follow-up audit cleanup
 
 * The shared-project prompt note no longer says "you may not execute tools";

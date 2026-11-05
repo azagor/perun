@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-05T00:01:14+00:00",
+  "generated": "2026-11-05T07:58:25+00:00",
   "releases": [
+    {
+      "version": "0.11.5",
+      "date": "2026-11-05",
+      "body": "### Follow-up audit cleanup\n\n* The shared-project prompt note no longer says \"you may not execute tools\";\n  it now explicitly permits the read-only `perun-guard_guard_*` inspection tools\n  and the `perun-proposals_*` coordination tools, while still forbidding direct\n  edits, shell, web and subagents.\n* The per-proposal package lock map is a `WeakValueDictionary`, so it cannot\n  grow without bound over the life of a long-running bridge.\n* The proposal row uses a block `<div class=\"intent\">` instead of a `<span>`\n  wrapping the package `<details>` preview, making the generated HTML valid.\n* `validate_package()`/`apply_package()` are marked as deprecated compatibility\n  helpers; the production handoff uses `derive_package()`/`apply_operations()`."
+    },
     {
       "version": "0.11.4",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.10.84",
       "date": "2026-11-04",
       "body": "### Project grid row balancing\n\n* The grid now chooses a column count that avoids a single card alone on the\n  last row (6 cards at a wide width become 4+2 instead of 5+1), caps cards at\n  520px, and keeps every card at one width; a partial last row is centered."
-    },
-    {
-      "version": "0.10.83",
-      "date": "2026-11-04",
-      "body": "### Project grid balance\n\n* Every project card now uses the same computed width for the current column\n  count; a partly filled last row is centered instead of stretching the final\n  card across the row (PerunChat alone no longer becomes full-width)."
     }
   ]
 }
