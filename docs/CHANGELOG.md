@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.6
+
+*Released 2026-11-05.*
+
 ### Legacy package helpers removed
 
 * Removed `package_handoff.validate_package()` / `apply_package()`. The external

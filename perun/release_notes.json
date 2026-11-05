@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-05T07:58:25+00:00",
+  "generated": "2026-11-05T08:28:23+00:00",
   "releases": [
+    {
+      "version": "0.11.6",
+      "date": "2026-11-05",
+      "body": "### Legacy package helpers removed\n\n* Removed `package_handoff.validate_package()` / `apply_package()`. The external\n  handoff has a single production path now: `derive_package()` computes the typed\n  pre/post manifest and `apply_operations()` applies it atomically with rollback.\n  Their tests were converted to the typed functions, including a mid-write\n  rollback case and an external-dependency rejection."
+    },
     {
       "version": "0.11.5",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.10.85",
       "date": "2026-11-04",
       "body": "### Project card size restored\n\n* The grid uses the maximum column count again (restoring the previous\n  first-row card size), keeps one computed width for every card, and a partly\n  filled last row starts at the first column instead of being rebalanced or\n  centered."
-    },
-    {
-      "version": "0.10.84",
-      "date": "2026-11-04",
-      "body": "### Project grid row balancing\n\n* The grid now chooses a column count that avoids a single card alone on the\n  last row (6 cards at a wide width become 4+2 instead of 5+1), caps cards at\n  520px, and keeps every card at one width; a partial last row is centered."
     }
   ]
 }
