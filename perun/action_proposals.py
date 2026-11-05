@@ -1904,7 +1904,11 @@ def reconcile_interrupted() -> list[dict[str, Any]]:
         ids = [row["id"] for row in rows]
         for proposal_id in ids:
             conn.execute(
-                "UPDATE action_proposals SET status='failed', result=?, updated_at=? "
+                "UPDATE action_proposals SET status='failed', result=?, updated_at=?, "
+                "package_state=CASE WHEN package_state IS NULL OR package_state='' "
+                "THEN '' ELSE 'failed' END, "
+                "package_error=CASE WHEN package_state IS NULL OR package_state='' "
+                "THEN package_error ELSE 'execution interrupted by a Perun restart' END "
                 "WHERE id=? AND status='executing'",
                 (
                     "Execution interrupted by a Perun restart; the run did not complete.",

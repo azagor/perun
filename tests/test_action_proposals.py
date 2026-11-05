@@ -2017,7 +2017,8 @@ def test_reconcile_interrupted_discards_a_stale_archive(tmp_path):
     action_proposals.package_handoff.store_archive(proposal["id"], b"stale")
     with db.db() as conn:
         conn.execute(
-            "UPDATE action_proposals SET status='executing' WHERE id=?",
+            "UPDATE action_proposals SET status='executing', package_state='pending' "
+            "WHERE id=?",
             (proposal["id"],),
         )
 
@@ -2026,7 +2027,9 @@ def test_reconcile_interrupted_discards_a_stale_archive(tmp_path):
     from perun import config
 
     assert not (config.PACKAGES_DIR / f"{proposal['id']}.zip").exists()
-    assert action_proposals.get(proposal["id"])["status"] == "failed"
+    current = action_proposals.get(proposal["id"])
+    assert current["status"] == "failed"
+    assert current["package_state"] == "failed"
 
 
 def test_concurrent_uploads_keep_one_archive(tmp_path):

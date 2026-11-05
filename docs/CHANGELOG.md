@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Interrupted-apply cleanup
+
+* `reconcile_interrupted()` now also marks a stranded package state as `failed`
+  and records the restart reason, so a proposal left mid-apply does not keep
+  advertising a pending/approved package after the archive is discarded.
 
 ## v0.11.3
 
