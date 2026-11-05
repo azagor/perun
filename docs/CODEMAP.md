@@ -1324,7 +1324,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `package_handoff.apply_operations()`. `reject_external_package()` marks the
   package rejected and keeps the claim. `complete_external_execution()` is now a
   staging-only alias. `expire_stale()` rejects an unapproved staged package and
-  discards its archive. Targets
+  discards its archive. A missing/empty stored manifest fails closed at apply,
+  and a peer/owner approval of a manifest-less package is refused. Targets
   are de-duplicated and must be strings; the typed postcondition for every
   target is checked before a run is recorded `executed`.
 * `auto_approve_and_execute()` — when a project's **policy auto-approve**

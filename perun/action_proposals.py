@@ -813,6 +813,9 @@ def _package_approver_allowed(
         raise ValueError("a package cannot be approved by its requester or executor")
     manifest = proposal.get("package_manifest") or {}
     operations = manifest.get("operations") if isinstance(manifest, dict) else []
+    if not operations:
+        raise ValueError(
+            "package manifest is missing; reload the package before approval")
     if any(isinstance(op, dict) and op.get("op") == "delete" for op in operations):
         raise ValueError(
             "a package containing a delete must be approved by the local operator")
@@ -1099,7 +1102,10 @@ def _apply_external_package(
         _fail_package(proposal, reason)
         raise ValueError(reason)
     stored = proposal.get("package_manifest") or {}
-    if stored and stored.get("operations") != operations:
+    if not isinstance(stored, dict) or not stored.get("operations"):
+        _fail_package(proposal, "stored package manifest is missing")
+        raise ValueError("stored package manifest is missing")
+    if stored.get("operations") != operations:
         _fail_package(proposal, "package manifest does not match the stored approval")
         raise ValueError("package manifest does not match the stored approval")
 

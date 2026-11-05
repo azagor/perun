@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Missing package manifest fails closed
+
+* A package with an empty/missing derived manifest can no longer be peer-approved,
+  and the operator apply path fails closed instead of skipping the manifest
+  comparison. A valid pending package always carries its server-derived
+  operations; an empty manifest means the row/archive pair is not trustworthy.
 
 ## v0.11.8
 

@@ -2119,3 +2119,28 @@ def test_delete_package_requires_the_local_operator(tmp_path):
         proposal["id"], "operator", operator=True)
     assert result["status"] == "executed"
     assert not (project["path"] / "gone.py").exists()
+
+
+def test_package_without_a_manifest_fails_closed(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal, _ = _stage(project, action="edit", target=target,
+                         entries={"api.py": b"new"})
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET package_manifest='' WHERE id=?",
+            (proposal["id"],),
+        )
+
+    with pytest.raises(ValueError, match="manifest is missing"):
+        action_proposals.approve_external_package(
+            proposal["id"], "peer", owner="owner",
+            trusted=["peer", "frambo"], operator=False)
+
+    with pytest.raises(ValueError, match="stored package manifest is missing"):
+        action_proposals.approve_external_package(
+            proposal["id"], "operator", operator=True)
+    current = action_proposals.get(proposal["id"])
+    assert current["status"] == "failed"
+    assert (project["path"] / "api.py").read_text() == "old"

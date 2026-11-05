@@ -1306,8 +1306,11 @@ claim and package windows, applies through staged temp files, verifies every
 post-image and rolls the whole package back on any failure. `delete` unlinks the
 target and ignores uploaded bytes; a digest mismatch fails closed.
 `expire_stale()` also fails an abandoned `executing` row after 12 hours.
-ZIP entries are rejected on case-insensitive duplicates, shell-expansion
-characters (`$`, `%`, `~`) or backslashes, and staging uses `mkstemp`. Proposal
+A missing or empty stored manifest fails closed: peer/owner approval is refused,
+and the operator apply path fails the package instead of skipping the
+manifest comparison. ZIP entries are rejected on case-insensitive duplicates,
+shell-expansion characters (`$`, `%`, `~`) or backslashes, and staging uses
+`mkstemp`. Proposal
 targets are de-duplicated and must be strings; `create`/`edit`/`delete` all
 enforce their postcondition before a run is recorded `executed`.
 
