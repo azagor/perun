@@ -108,13 +108,14 @@ true/false, ...}`.
    rejects.
 2. Agent posts package frames (`seq` 0..N-1).
 3. Agent sends `package_end`.
-4. Perun verifies completeness and `sha256`, unpack the ZIP, and **derives the
+4. Perun verifies completeness and `sha256`, unpacks the ZIP, and **derives the
    operation manifest itself** (no agent-authored manifest is trusted): exactly
-   one operation per approved target, with `pre_sha256` and `post_sha256`
-   computed by Perun. Typed preconditions are enforced: an `edit`/`delete`
-   target must already exist, a `create` target must be absent, and no target
-   may have changed since approval or claim. Files outside the approved targets
-   are rejected. **Nothing is written at this stage.**
+   one operation per target in the proposal's changeset (`operations`), with
+   `pre_sha256` and `post_sha256` computed by Perun. A single package may mix
+   `create`, `edit` and `delete`. Typed preconditions are enforced: an
+   `edit`/`delete` target must already exist, a `create` target must be absent,
+   and no target may have changed since approval or claim. Files outside the
+   approved targets are rejected. **Nothing is written at this stage.**
 5. Perun stages the archive and replies `package_pending {digest, operations,
    expires_at}`. A second, separate approval of the exact archive digest and
    its derived manifest is now required. The claimant **cannot** approve its

@@ -10,6 +10,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import io
+import json
 import os
 import posixpath
 import re
@@ -335,31 +336,38 @@ def derive_package(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     """Derive the typed operation manifest for an uploaded package.
 
-    The external agent uploads files only; Perun derives every operation and
-    pre/post hash. That makes it impossible for the package to lie about its
-    own path set, operation type or digests.
-
-    Returns ``(manifest, operations, errors)``. At least one error means the
-    package must be rejected without touching the project.
+    The proposal declares a per-target changeset; the external agent uploads
+    file content only. Perun derives the pre/post hashes and refuses anything
+    the changeset does not declare. At least one error means the package must be
+    rejected without touching the project.
     """
     root = Path(project["path"]).resolve()
-    action = str(proposal.get("action_type") or "").strip().lower()
-    targets = [str(t) for t in (proposal.get("targets") or [])]
-    errors: list[str] = []
-    if action not in ("edit", "create", "delete"):
-        return {}, [], [
-            f"external handoff supports edit/create/delete, not {action or 'unknown'}"
-        ]
-    if not targets:
-        return {}, [], ["a proposal must declare at least one target"]
-    if len(set(targets)) != len(targets):
-        return {}, [], ["a proposal target is declared more than once"]
+    raw_ops = proposal.get("operations")
+    if isinstance(raw_ops, str):
+        try:
+            raw_ops = json.loads(raw_ops)
+        except (TypeError, ValueError):
+            raw_ops = []
+    if not isinstance(raw_ops, list) or not raw_ops:
+        return {}, [], ["a proposal must declare at least one operation"]
 
     cfg = shared_projects.load(root)
     external_deps = cfg.get("external_deps", [])
-    plans: list[tuple[str, str, Path]] = []
+    plans: list[tuple[str, str, Path, str]] = []
     rels: set[str] = set()
-    for target in targets:
+    errors: list[str] = []
+    for item in raw_ops:
+        if not isinstance(item, dict):
+            errors.append("each proposal operation must be an object")
+            continue
+        target = str(item.get("path") or "").strip()
+        action = str(item.get("op") or "").strip().lower()
+        if not target:
+            errors.append("proposal operation path is required")
+            continue
+        if action not in ("edit", "create", "delete"):
+            errors.append(f"unsupported operation {action!r} for {target}")
+            continue
         try:
             resolved, rel = _target_rel(root, target)
         except PackageError as exc:
@@ -383,17 +391,18 @@ def derive_package(
             errors.append(
                 f"{rel} is not a regular file; use local execution for directories")
             continue
-        plans.append((target, rel, resolved))
+        plans.append((target, rel, resolved, action))
     if errors:
         return {}, [], errors
 
+    targets = [plan[0] for plan in plans]
     try:
         current = fs_audit.target_digests(project, targets)
     except Exception as exc:
         return {}, [], [f"could not fingerprint the targets: {exc}"]
     claims = claim_hashes if isinstance(claim_hashes, dict) else {}
     operations: list[dict[str, Any]] = []
-    allowed = {rel for _target, rel, _resolved in plans}
+    allowed = {plan[1] for plan in plans}
     extra = sorted(set(files) - allowed)
     if extra:
         errors.append(
@@ -401,7 +410,7 @@ def derive_package(
         )
         return {}, [], errors
 
-    for target, rel, _resolved in plans:
+    for target, rel, _resolved, action in plans:
         now = current.get(target)
         if claims:
             claimed = claims.get(target, "__missing__")
@@ -446,10 +455,13 @@ def derive_package(
                 "size": int(now.get("size") or 0),
             })
 
+    if errors:
+        return {}, [], errors
+    kinds = {plan[3] for plan in plans}
     manifest = {
-        "version": 1,
+        "version": 2,
         "proposal_id": str(proposal.get("id") or ""),
-        "action_type": action,
+        "action_type": next(iter(kinds)) if len(kinds) == 1 else "mixed",
         "operations": operations,
     }
     return manifest, operations, errors

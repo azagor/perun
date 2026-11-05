@@ -280,7 +280,7 @@ def test_proposal_approval_uses_configured_owner_name(client, tmp_path, monkeypa
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "ada-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     assert r.status_code == 200, r.text
     prop_id = r.json()["proposal"]["id"]
@@ -307,8 +307,7 @@ def test_dashboard_can_approve_own_proposal(client, tmp_path, monkeypatch):
     project = registry.get_project(slug)
     proposal = action_proposals.create(
         project, "Ada Lovelace",
-        {"intent": "self-approved", "targets": [str(target / "main.py")],
-         "action_type": "create"},
+        {"intent": "self-approved", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
         owner="Ada Lovelace",
     )
 
@@ -331,7 +330,7 @@ def test_proposal_api_rejects_read_only_requester(client, tmp_path, monkeypatch)
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "ro-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     assert r.status_code == 400
     assert "read-only" in r.json()["detail"]
@@ -351,7 +350,7 @@ def test_approve_and_execute_starts_a_background_run(client, tmp_path, monkeypat
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "run-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     assert r.status_code == 200, r.text
     prop_id = r.json()["proposal"]["id"]
@@ -407,7 +406,7 @@ def test_create_proposal_policy_auto_approves_when_enabled(client, tmp_path, mon
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "run-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     assert r.status_code == 200, r.text
     prop_id = r.json()["proposal"]["id"]
@@ -449,7 +448,7 @@ def test_create_proposal_returns_proposal_when_policy_auto_approve_fails(client,
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "run-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     assert r.status_code == 200, r.text
     prop_id = r.json()["proposal"]["id"]
@@ -554,7 +553,7 @@ def test_post_proposal_rejected_notifies_project_chat(client, tmp_path, monkeypa
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "reject-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     prop_id = r.json()["proposal"]["id"]
 
@@ -637,7 +636,7 @@ def test_retry_proposal_creates_new_pending(client, tmp_path, monkeypatch):
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "retry-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     prop_id = r.json()["proposal"]["id"]
     client.post(f"/api/projects/{slug}/proposals/{prop_id}/reject", json={"reason": "no time"})
@@ -664,7 +663,7 @@ def test_delete_proposal_removes_it(client, tmp_path, monkeypatch):
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "del-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     prop_id = r.json()["proposal"]["id"]
 
@@ -2045,7 +2044,7 @@ def _create_claimable_project(client, tmp_path, monkeypatch, *, owner_agent="per
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": rw_participant,
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     assert r.status_code == 200, r.text
     prop_id = r.json()["proposal"]["id"]
@@ -2109,7 +2108,7 @@ def test_claim_endpoint_rejects_non_approved_proposal(client, tmp_path, monkeypa
 
     r = client.post(f"/api/projects/{slug}/proposals", json={
         "requester": "rw-bot",
-        "envelope": {"intent": "add logging", "targets": [str(target / "main.py")], "action_type": "create"},
+        "envelope": {"intent": "add logging", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     })
     prop_id = r.json()["proposal"]["id"]
 
@@ -2201,8 +2200,7 @@ def test_cancel_endpoint_withdraws_an_approved_proposal(client, tmp_path, monkey
         "requester": "cancel-bot",
         "envelope": {
             "intent": "obsolete change",
-            "targets": [str(target / "main.py")],
-            "action_type": "create",
+            "operations": [{"path": str(target / "main.py"), "op": "create"}],
         },
     })
     prop_id = r.json()["proposal"]["id"]
@@ -2237,8 +2235,7 @@ def test_proposal_list_hides_approval_state(client, tmp_path, monkeypatch):
         "requester": "list-bot",
         "envelope": {
             "intent": "add logging",
-            "targets": [str(target / "main.py")],
-            "action_type": "create",
+            "operations": [{"path": str(target / "main.py"), "op": "create"}],
         },
     })
     prop_id = r.json()["proposal"]["id"]
@@ -2271,7 +2268,7 @@ def test_legacy_cancellations_get_the_cancelled_status(client, tmp_path, monkeyp
 
     proposal = action_proposals.create(
         project, "legacy-bot",
-        {"intent": "old", "targets": [str(target / "main.py")], "action_type": "create"},
+        {"intent": "old", "operations": [{"path": str(target / "main.py"), "op": "create"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     with db.db() as conn:
@@ -3051,7 +3048,7 @@ def _stage_package_for_api(client, tmp_path, monkeypatch, *, reject=False):
 
     proposal = action_proposals.create(
         project, "pkg-bot",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "pkg-bot", owner="owner")

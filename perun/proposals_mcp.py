@@ -191,11 +191,14 @@ def _proposal_summary(proposal: dict[str, Any]) -> str:
 @mcp.tool()
 def propose(
     intent: str,
-    action_type: str,
-    targets: list[str],
+    operations: list[dict[str, Any]],
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create a pending action proposal for the current project and sender."""
+    """Create a pending changeset proposal for the current project and sender.
+
+    ``operations`` is a non-empty list of ``{"path": "relative/path",
+    "op": "create|edit|delete"}`` entries. One path may appear once.
+    """
     project_path = _project_path()
     project = _find_project(project_path)
     cfg = shared_projects.load(project["path"])
@@ -209,8 +212,7 @@ def propose(
 
     envelope: dict[str, Any] = {
         "intent": intent,
-        "action_type": action_type,
-        "targets": targets,
+        "operations": operations,
         "details": details or {},
         "room_id": room_id,
         "manifest_rev": shared_projects.get_manifest_rev(cfg),
@@ -330,6 +332,8 @@ def get_proposal(proposal_id: str) -> dict[str, Any]:
         "executed_by": proposal.get("executed_by", ""),
         "execution_mode": proposal.get("execution_mode") or "",
         "intent": proposal["intent"],
+        "operations": proposal.get("operations", []),
+        "action_type": proposal.get("action_type", ""),
         "targets": proposal["targets"],
         "expires_at": proposal.get("expires_at", 0),
         "result": proposal.get("result", ""),

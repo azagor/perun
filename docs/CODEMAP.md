@@ -673,11 +673,11 @@ applies it locally.
   archive lives under `PERUN_HOME/packages/<proposal>.zip`; the sha256 of these
   exact bytes is the approved artifact.
 * `derive_package()` — the authoritative typed manifest. One operation per
-  approved target (`create`/`edit`/`delete`) with server-computed
-  `pre_sha256`/`post_sha256`; refuses extra files, duplicate targets, unknown
-  actions, directories, symlinks, sensitive paths and external-dependency
-  targets. `create` requires an absent target, `edit`/`delete` require an existing
-  one, and a claim hash mismatch is refused.
+  proposal target (`create`/`edit`/`delete`); the proposal's `operations` may mix
+  all three. Server-computed `pre_sha256`/`post_sha256`; refuses extra files,
+  duplicate targets, unknown operations, directories, symlinks, sensitive paths
+  and external-dependency targets. `create` requires an absent target,
+  `edit`/`delete` require an existing file, and a claim hash mismatch is refused.
 * `build_preview()` — a bounded unified diff / binary summary per operation for
   the approval UI, capped in bytes and lines. It stats an old target before
   reading it and never loads a file above the 200 KB diff budget.
@@ -1198,15 +1198,16 @@ Autonomous PerunChat chat participant for the Orchestrator.
   directories, and falls back to pass-through when unset. When the per-run env
   is absent (`standalone=False`), `_active_targets()` derives the target scope
   from the project's `executing` proposal; multiple concurrent executions fail
-  closed. `guard_delete_file` deletes a file inside the approved target scope,
-  using the same path checks as the write tools, but only while an approved
-  `delete` proposal is executing; write/edit tools are refused during a delete
-  run, and the chat persona's agent permissions deny delete outright. It also
+  closed. `guard_delete_file` deletes only when the executing changeset declares
+  `delete` for that exact target; write/edit tools are refused for a delete
+  target, and the chat persona's agent permissions deny delete outright. It also
   exposes `guard_list_checks` / `guard_run_check`: the room
   persona's only execution path, restricted to names the operator declared.
 * `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
   Exposes `propose`, `approve`, `approve_package`, `reject_package`,
-  `list_proposals` and `get_proposal`; uses
+  `list_proposals` and `get_proposal`; `propose(intent, operations)` takes a
+  list of `{path, op}` entries (create/edit/delete, one per path), not a global
+  action/target pair. It uses
   `PERUN_PROJECT_PATH` / `PERUN_CHAT_SENDER` (requester) /
   `PERUN_CHAT_AGENT` (the bot's own approval identity) / `PERUN_ROOM_ID` from
   the chat run environment to validate rw/trust/owner rules server-side. When
@@ -1262,8 +1263,11 @@ Autonomous PerunChat chat participant for the Orchestrator.
   cannot run the same confirmed script twice. Every run records exit code,
   duration and output in `check_runs` and logs
   `check_ok`/`check_failed`/`check_timeout`/`check_error` activity.
-* `perun/action_proposals.py` — proposal lifecycle: validated/bounded envelopes,
-  CAS approve/reject/cancel, atomic `approved → executing` claim, synchronous
+* `perun/action_proposals.py` — proposal lifecycle: validated/bounded
+  **changesets** (`operations` is the source of truth: one `{path, op}` per
+  target, `op` in create/edit/delete; mixed changesets are allowed and atomic;
+  `action_type` is only a derived summary), CAS approve/reject/cancel, atomic
+  `approved → executing` claim, synchronous
   `execute`
   and non-blocking `start_execution`, `claim_execution`/`revoke_execution_claim`
   for the external rw handoff, startup `reconcile_interrupted`, post-run audit
@@ -1273,11 +1277,15 @@ Autonomous PerunChat chat participant for the Orchestrator.
   per proposal. `cancel()`
   withdraws an approved-but-unclaimed proposal (`approved → cancelled`, reason in
   `result`) and is restricted to the requester or the project owner,
-  because `reject()` only accepts `pending`. `approve()` stores
+  because `reject()` only accepts `pending`. `normalize_operations()` validates
+  the changeset (one operation per path, no duplicates, no aliases),
+  `proposal_operations()` reads it, and `operations_targets()` /
+  `operations_summary()` derive the target list and the display summary.
+  `approve()` stores
   `approval_snapshot` (per-target digests from `fs_audit.target_digests()`) and
-  enforces the typed pre-image: `edit`/`delete` targets exist, `create` targets
-  are absent (`_assert_action_targets()`; `other`/unknown is refused for external
-  handoff). `claim_execution()`, `upload_external_package()` and
+  enforces the typed pre-image per operation: `create` targets are absent and
+  `edit`/`delete` targets are regular files (`_assert_action_targets()`).
+  `claim_execution()`, `upload_external_package()` and
   `approve_external_package()` refuse a target that changed in between.
   `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
@@ -1291,25 +1299,26 @@ Autonomous PerunChat chat participant for the Orchestrator.
   expiry sweeps update a row first and discard its archive only when their CAS
   won, so an approve that moved the row to `executing` keeps its artifact.
   `reconcile_interrupted()` marks a restart-stranded row failed and discards its
-  archive. `retry()` refuses a copied action whose typed pre-image no longer
-  matches, with a `cannot retry: …` error.
+  archive. `retry()` refuses a copied changeset whose typed pre-image no longer
+  matches, with a `cannot retry: …` error. `create()` requires `operations`,
+  derives `targets`/`action_type`, and binds dashboard/API proposals to the
+  project's `project_chats.room_id` when the envelope carries none.
   `_prepare_execution()`
   fails early with “guard MCP not registered” when the project config lacks
   `perun-guard`, probes the guard server for `guard_write_file`, re-checks the
   typed pre-image and approval drift, and runs use the
   running OpenCode service (`standalone=False`) so the project's MCP servers are
-  loaded. `_build_execution_prompt()` names the
-  prefixed `perun-guard_guard_*` tools (including `guard_delete_file`) and
-  instructs the model not to use the `skill` tool or to give up after an
-  “Unable to load skill …” error.
+  loaded. `_build_execution_prompt()` lists each changeset operation with its
+  matching guard tool and names the prefixed `perun-guard_guard_*` tools
+  (including `guard_delete_file`); it instructs the model not to use the `skill`
+  tool or to give up after an “Unable to load skill …” error.
   External execution claims are room/sender-bound and target-scoped, and expire
   after one hour by default (`external_execution_claim_ttl`, clamped to
   `[1 s, APPROVED_TTL_SECONDS]`); `claimed` proposals are returned
   to `approved` by revoke or by the expiration sweep. `executed_by` records the
   actor that attempted/applied the change (`perun` for local runs, the package
   approver for external handoffs), is cleared on revoke/expiry, and must be read
-  with `status`; `create()` binds dashboard/API proposals to the project's
-  `project_chats.room_id` when the envelope carries none.
+  with `status`.
   **Package handoff:** `upload_external_package()` validates and *stages* the
   archive (`package_state='pending'`, digest, manifest, preview, 24 h window),
   returning `package_pending` instead of writing; uploads are serialized per

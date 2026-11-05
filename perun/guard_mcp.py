@@ -87,20 +87,34 @@ def _active_targets(project_path: Path) -> tuple[list[Path], bool]:
         return [], False
     try:
         return [
-            path_guard.resolve_target(project_path, str(target))
-            for target in proposal.get("targets", [])
+            path_guard.resolve_target(project_path, str(op.get("path") or ""))
+            for op in (proposal.get("operations") or [])
+            if isinstance(op, dict) and str(op.get("path") or "").strip()
         ], False
     except Exception:
         return [], False
 
 
-def _guard_action() -> str:
-    """The active proposal's typed action, or "" when none can be proven."""
+def _operation_for(target: Path) -> str:
+    """Return the active changeset's operation for *target*, or "" if none."""
     try:
-        return str(_active_local_proposal(Path(_project()["path"]))[0]
-                   .get("action_type") or "").strip().lower()
+        project = _project()
+        proposal, ambiguous = _active_local_proposal(Path(project["path"]))
+        if ambiguous or proposal is None:
+            return ""
+        for op in proposal.get("operations") or []:
+            if not isinstance(op, dict):
+                continue
+            try:
+                candidate = path_guard.resolve_target(
+                    project["path"], str(op.get("path") or ""))
+            except Exception:
+                continue
+            if candidate == target:
+                return str(op.get("op") or "").strip().lower()
     except Exception:
         return ""
+    return ""
 
 
 def _allowlist() -> tuple[Path, list[tuple[Path, str]], list[Path]]:
@@ -222,9 +236,12 @@ def guard_list_directory(path: str = ".") -> list[dict[str, Any]]:
 @mcp.tool()
 def guard_write_file(path: str, content: str) -> str:
     """Write *content* to *path* (create or overwrite)."""
-    if _guard_action() == "delete":
-        raise ValueError("guarded writes are not valid for a delete operation")
     target = _check(path, require_write=True)
+    operation = _operation_for(target)
+    if operation == "delete":
+        raise ValueError("guarded writes are not valid for a delete operation")
+    if operation and operation not in ("create", "edit"):
+        raise ValueError(f"guarded writes are not valid for a {operation} operation")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"wrote {len(content)} chars to {target}"
@@ -233,9 +250,12 @@ def guard_write_file(path: str, content: str) -> str:
 @mcp.tool()
 def guard_edit_file(path: str, old_string: str, new_string: str) -> str:
     """Replace *old_string* with *new_string* in *path*."""
-    if _guard_action() == "delete":
-        raise ValueError("guarded edits are not valid for a delete operation")
     target = _check(path, require_write=True)
+    operation = _operation_for(target)
+    if operation == "delete":
+        raise ValueError("guarded edits are not valid for a delete operation")
+    if operation and operation not in ("create", "edit"):
+        raise ValueError(f"guarded edits are not valid for a {operation} operation")
     if not target.exists():
         raise FileNotFoundError(f"not found: {target}")
     text = target.read_text(encoding="utf-8", errors="replace")
@@ -248,17 +268,17 @@ def guard_edit_file(path: str, old_string: str, new_string: str) -> str:
 
 @mcp.tool()
 def guard_delete_file(path: str) -> str:
-    """Delete *path*, only while an approved ``delete`` operation is executing.
+    """Delete *path*, only while its declared operation is ``delete``.
 
-    Deleting is a declared operation: the path must be inside the approved
-    target list for the executing delete proposal, never merely inside the
-    project. The chat persona cannot call it at all (its agent permissions deny
-    it), and this check is the backstop for any other tool path.
+    Deleting is a declared operation: the path must be inside the active
+    changeset and that target's operation must be ``delete``. The chat persona
+    cannot call it at all (its agent permissions deny delete), and this check is
+    the backstop for any other tool path.
     """
-    if _guard_action() != "delete":
-        raise ValueError(
-            "guard_delete_file requires an approved delete operation in progress")
     target = _check(path, require_write=True)
+    if _operation_for(target) != "delete":
+        raise ValueError(
+            "guard_delete_file requires a delete operation on this target")
     if not target.exists():
         raise FileNotFoundError(f"not found: {target}")
     if not target.is_file():

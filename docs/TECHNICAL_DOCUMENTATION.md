@@ -1269,15 +1269,16 @@ approval captures the current content. Proposals approved before this column
 existed have an empty snapshot and keep the old behaviour, so an upgrade cannot
 strand in-flight handoffs.
 
-**Typed preconditions.** `action_type` is a contract, not a label. `edit` and
-`delete` require every target to exist; `create` requires every target to be
-absent; `other`/unknown is refused for external handoff. `_assert_action_targets()`
-runs at approval, external claim, package upload/apply and local execution, and
-`_normalize_action_type()` maps the small alias set (`modify`/`update` → `edit`,
-`new`/`add` → `create`, `remove`/`rm` → `delete`). An approval therefore cannot be
-created against a misleading pre-image, and a later change cannot bypass the
-check. `approve()` is also strict about drift: it captures the current content
-and refuses a proposal whose target no longer matches its declared kind.
+**Typed changesets.** A proposal is a list of `{path, op}` operations, one per
+target, with `op` in `create`/`edit`/`delete`. One proposal may mix all three and
+is applied as one atomic changeset; `action_type` is only a derived summary
+(`mixed` when the operations differ). `create` requires an absent path;
+`edit`/`delete` require an existing regular file. `normalize_operations()`
+rejects duplicate paths, missing paths, and unknown ops at creation.
+`_assert_action_targets()` runs at approval, external claim, package upload/apply
+and local execution, so an approval cannot be created against a misleading
+pre-image, and a later change cannot bypass the check. `approve()` is also strict
+about drift: it captures the current content and refuses a target that changed.
 
 A target above the verification budget (256 MiB per file, 512 MiB in total) is
 recorded as `unverifiable` and an external claim is **refused** rather than
@@ -1286,7 +1287,7 @@ the 50 MiB handoff package cap, so an ordinary handoff is always fully hashed.
 
 **Server-derived package and second approval.** The uploaded archive is *staged*,
 never applied on upload. `package_handoff.derive_package()` derives one typed
-operation per approved target with `pre_sha256`/`post_sha256` (create: absent →
+operation per proposal target with `pre_sha256`/`post_sha256` (create: absent →
 file; edit: file → file; delete: file → absent). Files outside the targets,
 duplicate targets, directories, symlinks and external-dependency targets are
 refused. Perun stores the archive under `PERUN_HOME/packages/<proposal>.zip`, its
@@ -1360,8 +1361,8 @@ before treating a run as trusted. When the guard server is started by the
 OpenCode service (`standalone=False`), it lacks the per-run `PERUN_ALLOWLIST`;
 it derives the active proposal's targets from the database instead, and refuses
 writes if more than one local execution is active. `guard_delete_file` is
-available only while the executing proposal's `action_type` is `delete`; during
-that run `guard_write_file`/`guard_edit_file` are refused, and the chat persona's
+available only when the executing changeset declares `delete` for that exact
+target; write/edit tools are refused for a delete target, and the chat persona's
 agent permissions deny delete outright. Approved local runs use the
 running OpenCode service rather than a private `--standalone` server, so the
 project's MCP servers are loaded; `_prepare_execution()` also fails early with

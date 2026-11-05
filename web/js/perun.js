@@ -2887,13 +2887,22 @@ async function proposalsCard(detail) {
     completed.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
     const renderRow = (prop) => {
-        const targetList = prop.targets || [];
-        const targetChips = targetList.length
-            ? targetList.map((t) => {
-                const target = String(t).trim();
-                return `<button class="chip chip-link proposal-target" data-target="${esc(target)}" type="button" title="Open ${esc(target)}">${esc(target)}</button>`;
+        const operations = Array.isArray(prop.operations) ? prop.operations : [];
+        const targetList = operations.length
+            ? operations.map((op) => String(op.path || '').trim())
+            : (prop.targets || []);
+        const targetChips = operations.length
+            ? operations.map((op) => {
+                const target = String(op.path || '').trim();
+                const kind = String(op.op || 'op');
+                return `<button class="chip chip-link proposal-target" data-target="${esc(target)}" type="button" title="${esc(kind)} ${esc(target)}"><span class="muted">${esc(kind)}</span> ${esc(target)}</button>`;
               }).join('')
-            : '<span class="muted">(no targets)</span>';
+            : (targetList.length
+                ? targetList.map((t) => {
+                    const target = String(t).trim();
+                    return `<button class="chip chip-link proposal-target" data-target="${esc(target)}" type="button" title="Open ${esc(target)}">${esc(target)}</button>`;
+                  }).join('')
+                : '<span class="muted">(no targets)</span>');
         const actions = [];
         const packageState = String(prop.package_state || '');
         const packagePending = prop.status === 'claimed' && packageState === 'pending';
@@ -2921,7 +2930,7 @@ async function proposalsCard(detail) {
         // Show the id in the row: a chat reference can be matched to it, and the
         // operator can copy it back to the room.
         const idChip = `<button class="chip chip-link proposal-id" data-copy="${esc(prop.id)}" type="button" title="Copy this proposal id">${esc(prop.id)}</button>`;
-        const actionType = String(prop.action_type || 'unknown');
+        const actionType = String(prop.action_type || (operations.length ? 'mixed' : 'unknown'));
         let meta = `${idChip} · <span class="chip">${esc(actionType)}</span> · ${esc(prop.requester)} · ${targetChips} · ${esc(timeAgo(prop.created_at))}`;
         if (['pending', 'approved', 'claimed', 'executing'].includes(prop.status)
             && prop.expires_at) {

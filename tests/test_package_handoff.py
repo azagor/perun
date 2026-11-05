@@ -157,7 +157,7 @@ def test_derive_package_rejects_sensitive_extra_file(tmp_path):
     (root / "api.py").write_text("old", encoding="utf-8")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
 
     _manifest, ops, errors = package_handoff.derive_package(
@@ -180,8 +180,7 @@ def test_derive_package_rejects_external_dependency_targets(tmp_path):
     project = registry.get_project(project["slug"])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit dep", "targets": [str(dep / "lib.py")],
-         "action_type": "edit"},
+        {"intent": "edit dep", "operations": [{"path": str(dep / "lib.py"), "op": "edit"}]},
     )
 
     _manifest, ops, errors = package_handoff.derive_package(
@@ -247,7 +246,9 @@ def test_unpack_rejects_shell_or_backslash_names(name):
 def _proposal(project, action, targets):
     return action_proposals.create(
         project, "frambo",
-        {"intent": "x", "targets": targets, "action_type": action},
+        {"intent": "x", "operations": [
+            {"path": str(path), "op": action} for path in targets
+        ]},
     )
 
 
@@ -335,15 +336,18 @@ def test_derive_package_refuses_create_over_existing_target(tmp_path):
     assert any("already exists" in e for e in errors)
 
 
-def test_derive_package_refuses_unknown_action(tmp_path):
+def test_derive_package_refuses_unknown_operation(tmp_path):
     project = _make_shared_project(tmp_path)
-    proposal = _proposal(project, "other", ["api.py"])
+    proposal = {
+        "id": "prop_unknown",
+        "operations": [{"path": "api.py", "op": "other"}],
+    }
 
     _manifest_obj, ops, errors = package_handoff.derive_package(
         project, proposal, {"api.py": b"new"})
 
     assert ops == []
-    assert any("supports edit/create/delete" in e for e in errors)
+    assert any("unsupported operation" in e for e in errors)
 
 
 def test_derive_package_refuses_a_directory_target(tmp_path):

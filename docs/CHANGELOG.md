@@ -4,7 +4,25 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Breaking: proposals are typed changesets
+
+* A proposal now carries **`operations`**, one `{path, op}` entry per target
+  (`create`/`edit`/`delete`). One proposal can mix all three and is applied as a
+  single atomic changeset, so a change that adds a file and edits another no
+  longer needs a proposal chain. `action_type` is only a derived summary
+  (`mixed` when the operations differ).
+* `create()`/the REST envelope/the `perun-proposals_propose` MCP tool now require
+  `operations`; the old `action_type` + `targets` input is removed. Existing DB
+  rows are migrated once from their typed fields; `other` rows become invalid.
+* `_assert_action_targets()`, `derive_package()`, the guard, the local prompt and
+  the post-run check all use each target’s own operation. `guard_delete_file`
+  requires a `delete` operation on that exact target; write/edit are refused for
+  a delete target. A package containing a delete remains operator-only.
+* The Shared-tab proposal row renders per-operation chips (`create path`,
+  `edit path`, `delete path`) and shows `mixed` when the changeset differs.
+* Tests cover mixed create+edit, mixed create+delete, mixed local execution,
+  duplicate/invalid operations, legacy-row migration, and the existing package
+  approval/rollback paths.
 
 ## v0.11.10
 

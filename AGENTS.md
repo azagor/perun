@@ -107,11 +107,13 @@ with `python -m perun project-roots --add <name> <path>`.
   target, and claim/apply refuse a target that changed since. Never bypass that
   check to "unblock" a handoff: cancel and re-propose so the approver sees the
   current content.
-* **`action_type` is a typed contract.** `edit`/`delete` targets must exist and
-  `create` targets must be absent at approval, claim, upload/apply and local run;
-  `other`/unknown is refused for external handoff. Do not grandfather an
-  edit-on-missing proposal: re-propose it as `create` (or create the file, then
-  re-approve an edit against the new content).
+* **A proposal is a changeset.** `operations` is the source of truth: one
+  `{path, op}` entry per target (`create`/`edit`/`delete`), and one proposal may
+  mix all three atomically. `create` targets must be absent and `edit`/`delete`
+  targets must exist as regular files at approval, claim, upload/apply and local
+  run. `action_type` is only a derived summary (`mixed` when the operations
+  differ). Never split one logical change into a proposal chain just because it
+  adds a file and edits another.
 * **External packages are staged, then approved as a whole.** An upload is never
   applied directly. Perun derives the typed manifest and pre/post hashes itself
   (never trust an agent-authored manifest), stores the archive digest, and waits
@@ -120,13 +122,13 @@ with `python -m perun project-roots --add <name> <path>`.
   package. `reject_external_package()` keeps the claim so a new archive can be
   uploaded. Apply is atomic, re-checks every pre/postcondition, rolls back on
   failure, and discards the archive on apply/reject/expiry/revoke/delete.
-* **Delete is a typed operation.** `guard_delete_file` works only while an
-  executing proposal's `action_type` is `delete`; write/edit tools are refused
-  during that run, and the chat persona's agent permissions deny delete outright.
-  A package whose manifest contains a `delete` is operator-only: peer/room-owner
-  MCP approval must be refused, so the human applies it from the dashboard (or
-  the explicit `policy_auto_approve` path). Never widen the chat agent's guard
-  allow to include delete.
+* **Delete is a typed operation.** `guard_delete_file` works only when the
+  executing changeset declares `delete` for that exact target; write/edit tools
+  are refused for a delete target, and the chat persona's agent permissions deny
+  delete outright. A package whose manifest contains a `delete` is operator-only:
+  peer/room-owner MCP approval must be refused, so the human applies it from the
+  dashboard (or the explicit `policy_auto_approve` path). Never widen the chat
+  agent's guard allow to include delete.
 * **Pausing project work stops autonomy, not people.** `projects.work_paused` is
   durable; while set, the bridge must not auto-reply in the project room, must
   not ingest its messages for coroutine triggers, must not start the autonomous

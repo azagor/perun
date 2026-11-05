@@ -175,12 +175,13 @@ external) are readable/writable.
 
 ### 3.5a External Handoff v2: Typed Operations and Package Approval (v0.11.0)
 
-- **FR-22b** Typed preconditions: `action_type` is a contract. `edit` and
-  `delete` require every declared target to exist; `create` requires every target
-  to be absent; `other`/unknown is refused for external handoff (it requires
-  local execution). The check runs at approval, external claim, package
-  upload/apply and before a local run, so a proposal cannot be approved against a
-  misleading pre-image.
+- **FR-22b** Typed changeset: a proposal declares one `{path, op}` operation per
+  target, with `op` in `create`/`edit`/`delete`; one proposal may mix all three
+  and is applied atomically. `action_type` is only a derived summary (`mixed` when
+  needed). `create` requires an absent target; `edit`/`delete` require an existing
+  regular file. The check runs at approval, external claim, package upload/apply
+  and before a local run, so a proposal cannot be approved against a misleading
+  pre-image or forced into a chain just because it adds a file and edits another.
 - **FR-22c** Server-derived manifest: the uploading agent supplies files only.
   Perun derives exactly one operation per approved target with pre/post SHA-256
   values. Extra files, duplicate targets, directories, symlinks and external

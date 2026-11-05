@@ -11,6 +11,7 @@ bridge, and the MCP server can all write safely without sharing connections.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -276,8 +277,9 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     room_id         TEXT,
     requester       TEXT NOT NULL,
     action_type     TEXT NOT NULL,
+    operations      TEXT DEFAULT '[]',  -- JSON list of {path, op}; source of truth
     intent          TEXT NOT NULL,
-    targets         TEXT NOT NULL,  -- JSON list of paths
+    targets         TEXT NOT NULL,  -- derived JSON list of paths
     details         TEXT NOT NULL,  -- JSON extra parameters
     manifest_rev    INTEGER DEFAULT 1,
     status          TEXT DEFAULT 'pending',
@@ -808,6 +810,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("package_applied_at", "TEXT DEFAULT ''"),
         ("package_error", "TEXT DEFAULT ''"),
         ("claim_hashes", "TEXT DEFAULT ''"),
+        # Per-target operations (v0.12): the changeset source of truth. A
+        # legacy row is migrated from action_type + targets on startup.
+        ("operations", "TEXT DEFAULT '[]'"),
     ],
     # The room binding was not persisted before v0.8.40, so a transfer
     # restored after a restart could not be continued (it looked like it
@@ -880,6 +885,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
     except sqlite3.OperationalError:
         pass
+    # v0.12 changesets: ``operations`` is the source of truth. One-time migrate
+    # typed rows written with the old global action_type. ``other`` rows keep an
+    # empty operations list and are refused by the new guards.
+    try:
+        rows = conn.execute(
+            "SELECT id, action_type, targets, operations FROM action_proposals"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    for row in rows:
+        raw_ops = row["operations"] or ""
+        if raw_ops and raw_ops != "[]":
+            continue
+        action = str(row["action_type"] or "").strip().lower()
+        if action not in ("create", "edit", "delete"):
+            continue
+        try:
+            targets = json.loads(row["targets"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(targets, list):
+            continue
+        ops = [
+            {"path": str(t), "op": action}
+            for t in targets
+            if isinstance(t, str) and t.strip()
+        ]
+        if ops:
+            conn.execute(
+                "UPDATE action_proposals SET operations=? WHERE id=?",
+                (json.dumps(ops, ensure_ascii=False), row["id"]),
+            )
     # Cancellations were initially recorded as ``rejected`` with a
     # ``cancelled: <reason>`` result. Give them their own terminal status.
     try:

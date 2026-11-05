@@ -100,8 +100,9 @@ them all — no matter which folder you happened to open.
   skips peer review and lets the system approve and execute proposals
   immediately. A remote rw participant can claim an approved proposal,
   download a target-scoped ZIP, upload a package over PerunChat using its own
-  model/tokens, and Perun validates, applies, and audits it. The v2 handoff is
-  typed: `edit`/`delete` targets must exist, `create` targets must be absent,
+  model/tokens, and Perun validates, applies, and audits it. A proposal is a
+  changeset: one proposal can create, edit and delete in the same atomic package.
+  `edit`/`delete` targets must exist, `create` targets must be absent,
   Perun derives the pre/post manifest itself, and the upload is **staged for a
   second package-level approval** of the exact archive digest. A package that
   contains a `delete` is operator-only, and the local executor can only call

@@ -117,7 +117,7 @@ def test_propose_creates_pending_proposal(tool_runner, tmp_path, _settings):
         "propose",
         project,
         "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     assert result["status"] == "pending"
@@ -135,7 +135,7 @@ def test_propose_rejects_untrusted_sender(tool_runner, tmp_path, _settings):
             "propose",
             project,
             "frambo",
-            {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+            {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
         )
 
 
@@ -147,7 +147,7 @@ def test_propose_owner_bypasses_trust_list(tool_runner, tmp_path, _settings):
         "propose",
         project,
         "peruntheoverseer",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     assert result["requester"] == "peruntheoverseer"
@@ -159,7 +159,7 @@ def test_list_proposals_treats_null_string_as_no_filter(tool_runner, tmp_path, _
     project, room = _make_project(tmp_path)
     prop = tool_runner(
         "propose", project, "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
     listed = tool_runner("list_proposals", project, "frambo", {"status": "null"})
     assert [p["proposal_id"] for p in listed] == [prop["proposal_id"]]
@@ -221,7 +221,7 @@ def test_reject_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, _
     monkeypatch.setenv("PERUN_PROJECT_PATH", str(Path(project["path"]).resolve()))
     monkeypatch.setenv("PERUN_CHAT_SENDER", "frambo")
     monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
-    prop = propose(intent="add README", action_type="create", targets=["README.md"])
+    prop = propose(intent="add README", operations=[{"path": "README.md", "op": "create"}])
 
     monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
     actor = tmp_path / "actor.json"
@@ -243,7 +243,7 @@ def test_approve_uses_actor_file_when_sender_env_missing(tmp_path, monkeypatch, 
     monkeypatch.setenv("PERUN_PROJECT_PATH", str(Path(project["path"]).resolve()))
     monkeypatch.setenv("PERUN_CHAT_SENDER", "frambo")
     monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
-    prop = propose(intent="add README", action_type="create", targets=["README.md"])
+    prop = propose(intent="add README", operations=[{"path": "README.md", "op": "create"}])
 
     monkeypatch.delenv("PERUN_CHAT_SENDER", raising=False)
     actor = tmp_path / "actor.json"
@@ -268,7 +268,7 @@ def test_approve_defaults_to_approve_only(
     project, room = _make_project(tmp_path)
     prop = tool_runner(
         "propose", project, "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
     started = []
     monkeypatch.setattr(
@@ -289,7 +289,7 @@ def test_approve_execute_true_starts_execution(
     project, room = _make_project(tmp_path)
     prop = tool_runner(
         "propose", project, "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
     started = []
     monkeypatch.setattr(
@@ -313,7 +313,7 @@ def test_approve_peer_proposal_by_owner(tool_runner, tmp_path, _settings, monkey
         "propose",
         project,
         "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     # Owner approves; execution is started. Monkey-patch start_execution so the
@@ -340,7 +340,7 @@ def test_approve_rejects_self_approval(tool_runner, tmp_path, _settings):
         "propose",
         project,
         "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     with pytest.raises(ValueError, match="cannot be approved by its requester"):
@@ -360,7 +360,7 @@ def test_reject_proposal(tool_runner, tmp_path, _settings):
         "propose",
         project,
         "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     result = tool_runner(
@@ -383,7 +383,7 @@ def test_list_and_get_proposals(tool_runner, tmp_path, _settings):
         "propose",
         project,
         "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     listed = tool_runner("list_proposals", project, "frambo", {"status": "pending"})
@@ -411,7 +411,7 @@ def test_propose_auto_approves_when_policy_auto_approve(tool_runner, tmp_path, _
         "propose",
         project,
         "frambo",
-        {"intent": "add README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}]},
     )
 
     assert result["status"] == "approved"
@@ -429,7 +429,7 @@ def test_propose_rejects_unregistered_project(tool_runner, tmp_path, _settings, 
 
     with pytest.raises(ValueError, match="project is not registered"):
         proposals_mcp_module.propose(
-            intent="add README", action_type="create", targets=["README.md"]
+            intent="add README", operations=[{"path": "README.md", "op": "create"}]
         )
 
 
@@ -451,8 +451,8 @@ def _stage_external_package(project, room, sender="frambo"):
 
     proposal = action_proposals.create(
         project, sender,
-        {"intent": "add README", "action_type": "create",
-         "targets": ["README.md"], "room_id": room},
+        {"intent": "add README", "operations": [{"path": "README.md", "op": "create"}],
+         "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], sender, owner="owner")

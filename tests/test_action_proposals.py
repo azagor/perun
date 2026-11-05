@@ -36,6 +36,13 @@ def _edit_target_path(project, name="api.py", content="old"):
     return path
 
 
+def _ops(paths, op):
+    """Build a changeset for the tests."""
+    if isinstance(paths, str):
+        paths = [paths]
+    return [{"path": str(path), "op": op} for path in paths]
+
+
 def test_create_proposal(tmp_path):
     project = _make_project(tmp_path)
     _enable_shared(project)
@@ -44,7 +51,7 @@ def test_create_proposal(tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "add validation", "targets": [target], "action_type": "edit"},
+        {"intent": "add validation", "operations": _ops([target], "edit")},
     )
     assert proposal["status"] == "pending"
     assert proposal["requester"] == "frambo"
@@ -64,7 +71,7 @@ def test_create_proposal_binds_bound_room_when_envelope_omits_it(tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "add validation", "targets": [target], "action_type": "edit"},
+        {"intent": "add validation", "operations": _ops([target], "edit")},
     )
 
     assert proposal["room_id"] == room_id
@@ -84,8 +91,7 @@ def test_create_proposal_prefers_envelope_room_over_bound_room(tmp_path):
         "frambo",
         {
             "intent": "add validation",
-            "targets": [target],
-            "action_type": "edit",
+            "operations": _ops([target], "edit"),
             "room_id": "grp:perun:explicit:chat",
         },
     )
@@ -99,7 +105,7 @@ def test_self_approval_is_blocked_in_core(tmp_path):
     target = _edit_target(project)
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "x", "targets": [target], "action_type": "edit"},
+        {"intent": "x", "operations": _ops([target], "edit")},
     )
 
     with pytest.raises(ValueError, match="cannot be approved by its requester"):
@@ -120,7 +126,7 @@ def test_create_proposal_rejects_outside_allowlist(tmp_path):
         action_proposals.create(
             project,
             "frambo",
-            {"intent": "bad", "targets": [outside], "action_type": "edit"},
+            {"intent": "bad", "operations": _ops([outside], "edit")},
         )
 
 
@@ -133,7 +139,7 @@ def test_create_proposal_rejects_read_only_participant(tmp_path):
         action_proposals.create(
             project,
             "frambo",
-            {"intent": "add validation", "targets": [target], "action_type": "edit"},
+            {"intent": "add validation", "operations": _ops([target], "edit")},
         )
 
 
@@ -145,7 +151,7 @@ def test_create_proposal_allows_rw_participant(tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "add validation", "targets": [target], "action_type": "edit"},
+        {"intent": "add validation", "operations": _ops([target], "edit")},
     )
     assert proposal["status"] == "pending"
 
@@ -158,7 +164,7 @@ def test_room_owner_may_propose_without_being_a_participant(tmp_path):
     proposal = action_proposals.create(
         project,
         "peruntheoverseer",
-        {"intent": "add validation", "targets": [target], "action_type": "edit"},
+        {"intent": "add validation", "operations": _ops([target], "edit")},
         owner="peruntheoverseer",
     )
     assert proposal["status"] == "pending"
@@ -168,7 +174,7 @@ def test_room_owner_may_propose_without_being_a_participant(tmp_path):
         action_proposals.create(
             project,
             "intruder",
-            {"intent": "add validation", "targets": [target], "action_type": "edit"},
+            {"intent": "add validation", "operations": _ops([target], "edit")},
             owner="peruntheoverseer",
         )
 
@@ -183,8 +189,7 @@ def test_proposal_bounds_chat_supplied_payloads(tmp_path):
         "frambo",
         {
             "intent": "x" * (action_proposals.MAX_INTENT_CHARS + 50),
-            "targets": [target],
-            "action_type": "edit",
+            "operations": _ops([target], "edit"),
         },
     )
     assert len(proposal["intent"]) == action_proposals.MAX_INTENT_CHARS + 1  # + ellipsis
@@ -196,8 +201,7 @@ def test_proposal_bounds_chat_supplied_payloads(tmp_path):
             "frambo",
             {
                 "intent": "too many",
-                "targets": [target] * (action_proposals.MAX_TARGETS + 1),
-                "action_type": "edit",
+                "operations": _ops([target] * (action_proposals.MAX_TARGETS + 1), "edit"),
             },
         )
 
@@ -207,8 +211,7 @@ def test_proposal_bounds_chat_supplied_payloads(tmp_path):
             "frambo",
             {
                 "intent": "too detailed",
-                "targets": [target],
-                "action_type": "edit",
+                "operations": _ops([target], "edit"),
                 "details": {"blob": "x" * (action_proposals.MAX_DETAILS_CHARS + 1)},
             },
         )
@@ -219,28 +222,50 @@ def test_proposal_envelope_rejects_malformed_shapes(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
 
-    with pytest.raises(ValueError, match="targets must be a list"):
+    with pytest.raises(ValueError, match="operations must be a list"):
         action_proposals.create(
             project, "frambo",
-            {"intent": "x", "targets": target, "action_type": "edit"},
+            {"intent": "x", "operations": target},
+        )
+    with pytest.raises(ValueError, match="each proposal operation must be an object"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "operations": [target]},
+        )
+    with pytest.raises(ValueError, match="operation must be one of"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "operations": [{"path": target, "op": "rename"}]},
+        )
+    with pytest.raises(ValueError, match="path is required"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "operations": [{"op": "edit"}]},
+        )
+    with pytest.raises(ValueError, match="more than once"):
+        action_proposals.create(
+            project, "frambo",
+            {"intent": "x", "operations": [
+                {"path": target, "op": "edit"},
+                {"path": target, "op": "edit"},
+            ]},
         )
     with pytest.raises(ValueError, match="details must be an object"):
         action_proposals.create(
             project, "frambo",
-            {"intent": "x", "targets": [target], "action_type": "edit", "details": []},
+            {"intent": "x", "operations": _ops([target], "edit"), "details": []},
         )
     with pytest.raises(ValueError, match="control characters"):
         action_proposals.create(
             project, "frambo",
-            {"intent": "x", "targets": [target + "\nsecond"], "action_type": "edit"},
+            {"intent": "x", "operations": _ops([target + "\nsecond"], "edit")},
         )
 
     proposal = action_proposals.create(
         project, "frambo",
         {
             "intent": "x",
-            "targets": [target],
-            "action_type": "edit",
+            "operations": _ops([target], "edit"),
             "manifest_rev": "not-a-number",
         },
     )
@@ -255,13 +280,13 @@ def test_create_rejects_untrusted_requester_unless_owner(tmp_path):
     with pytest.raises(ValueError, match="not on the PerunChat trust list"):
         action_proposals.create(
             project, "frambo",
-            {"intent": "x", "targets": [target], "action_type": "edit"},
+            {"intent": "x", "operations": _ops([target], "edit")},
             trusted=["someone-else"],
         )
 
     proposal = action_proposals.create(
         project, "perun-local",
-        {"intent": "x", "targets": [target], "action_type": "edit"},
+        {"intent": "x", "operations": _ops([target], "edit")},
         owner="perun-local",
         trusted=[],
     )
@@ -273,7 +298,7 @@ def test_approve_issues_token(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
 
     approved = action_proposals.approve(proposal["id"], "owner")
@@ -287,7 +312,7 @@ def test_reject_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
 
     rejected = action_proposals.reject(proposal["id"], "owner", reason="no time")
@@ -305,8 +330,7 @@ def test_sensitive_targets_are_rejected(tmp_path):
                 "frambo",
                 {
                     "intent": "read a secret",
-                    "targets": [str(project["path"] / name)],
-                    "action_type": "read",
+                    "operations": _ops([str(project["path"] / name)], "edit"),
                 },
             )
 
@@ -316,7 +340,7 @@ def test_cas_rejects_duplicate_approve_and_reject(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -357,7 +381,7 @@ def test_retry_creates_new_pending_from_terminal_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals._set_status(proposal["id"], "failed", "provider error")
 
@@ -378,7 +402,7 @@ def test_retry_binds_legacy_proposal_to_current_room(tmp_path):
     registry.set_project_chat(project["id"], room_id, "owner", "active", 1)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     # Simulate a record created before the room fallback existed.
     with db.db() as conn:
@@ -397,7 +421,7 @@ def test_retry_refuses_non_terminal_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
 
     with pytest.raises(ValueError, match="only terminal proposals"):
@@ -413,7 +437,7 @@ def test_delete_removes_proposal_and_logs_activity(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
 
     assert action_proposals.delete(proposal["id"], deleted_by="owner") is True
@@ -427,7 +451,7 @@ def test_delete_refuses_executing_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals._set_status(proposal["id"], "executing")
 
@@ -440,7 +464,7 @@ def test_cas_rejects_duplicate_reject(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.reject(proposal["id"], "owner", reason="first")
 
@@ -469,7 +493,7 @@ def test_execute_approved_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target_path(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([str(target)], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -497,7 +521,7 @@ def test_execute_marks_failed_when_no_target_changed(tmp_path):
     _enable_shared(project)
     target = project["path"] / "api.py"
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "create"}
+        project, "frambo", {"intent": "x", "operations": _ops([str(target)], "create")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -518,7 +542,7 @@ def test_execution_passes_prompt_as_file(tmp_path):
     _enable_shared(project)
     target = _edit_target_path(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([str(target)], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -540,7 +564,7 @@ def test_start_execution_is_non_blocking_and_single_shot(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -596,7 +620,7 @@ def test_prepare_execution_fails_when_guard_mcp_missing(tmp_path, monkeypatch):
     target = _edit_target(project)
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "x", "targets": [target], "action_type": "edit"},
+        {"intent": "x", "operations": _ops([target], "edit")},
     )
     action_proposals.approve(proposal["id"], "reviewer")
     monkeypatch.setattr(
@@ -616,7 +640,7 @@ def test_prepare_execution_fails_when_guard_probe_fails(tmp_path, monkeypatch):
     target = _edit_target(project)
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "x", "targets": [target], "action_type": "edit"},
+        {"intent": "x", "operations": _ops([target], "edit")},
     )
     action_proposals.approve(proposal["id"], "reviewer")
     monkeypatch.setattr(
@@ -633,7 +657,7 @@ def test_execution_marks_failed_when_audit_finds_a_violation(tmp_path, monkeypat
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -657,7 +681,7 @@ def test_execution_marks_failed_when_audit_detects_an_escape(tmp_path, monkeypat
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -684,7 +708,7 @@ def test_execution_marks_failed_when_audit_cannot_run(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -708,7 +732,7 @@ def test_execution_preparation_failure_does_not_leave_executing(tmp_path, monkey
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -731,7 +755,7 @@ def test_orchestrator_construction_failure_marks_failed(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -753,7 +777,7 @@ def test_missing_shared_agent_fails_preparation(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -770,7 +794,7 @@ def test_settings_load_failure_does_not_leave_executing(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -797,7 +821,7 @@ def test_reconcile_interrupted_marks_executing_proposals_failed(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     with db.db() as conn:
         conn.execute(
@@ -817,10 +841,10 @@ def test_list_by_project(tmp_path):
     _enable_shared(project)
     target = _edit_target(project, "file.txt")
     p1 = action_proposals.create(
-        project, "frambo", {"intent": "a", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "a", "operations": _ops([target], "edit")}
     )
     p2 = action_proposals.create(
-        project, "frambo", {"intent": "b", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "b", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(p1["id"], "owner")
 
@@ -836,7 +860,7 @@ def test_pending_proposals_expire(tmp_path):
     _enable_shared(project)
     target = _edit_target(project, "file.txt")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     with db.db() as conn:
         conn.execute(
@@ -852,7 +876,7 @@ def test_auto_approve_does_nothing_when_disabled(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project, "file.txt")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     monkeypatch.setattr(action_proposals.shared_projects, "is_auto_approve", lambda _path: False)
 
@@ -871,7 +895,7 @@ def test_policy_auto_approve_allows_sole_rw_requester(tmp_path, monkeypatch):
     _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     target = _edit_target(project, "file.txt")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     monkeypatch.setattr(
         action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True
@@ -898,7 +922,7 @@ def test_policy_auto_approve_ignores_non_pending_proposal(tmp_path, monkeypatch)
     _enable_shared(project)
     target = _edit_target(project, "file.txt")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     approved = action_proposals.approve(proposal["id"], "owner")
     monkeypatch.setattr(
@@ -929,7 +953,7 @@ def test_policy_auto_approve_uses_autonomous_policy_identity(tmp_path, monkeypat
     )
     target = _edit_target(project, "file.txt")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     monkeypatch.setattr(action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True)
 
@@ -956,7 +980,7 @@ def test_policy_auto_approve_leaves_proposal_approved_if_execution_fails(tmp_pat
     _enable_shared(project, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     target = _edit_target(project, "file.txt")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     monkeypatch.setattr(action_proposals.shared_projects, "is_policy_auto_approve", lambda _path: True)
 
@@ -978,7 +1002,7 @@ def test_claim_execution_reserves_approved_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     claimed = action_proposals.claim_execution(proposal["id"], "frambo")
@@ -993,7 +1017,7 @@ def test_claim_execution_honours_and_clamps_ttl(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1021,7 +1045,7 @@ def test_claim_execution_rejects_ro_participant(tmp_path):
     proposal = action_proposals.create(
         project,
         "owner",
-        {"intent": "x", "targets": [target], "action_type": "edit"},
+        {"intent": "x", "operations": _ops([target], "edit")},
         owner="owner",
     )
     action_proposals.approve(proposal["id"], "reviewer")
@@ -1034,7 +1058,7 @@ def test_claim_execution_rejects_double_claim(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1047,7 +1071,7 @@ def test_revoke_execution_claim_returns_to_approved(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1065,7 +1089,7 @@ def test_claim_expiry_sweep_returns_to_approved(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1085,7 +1109,7 @@ def test_approved_proposal_expires_after_ttl(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     with db.db() as conn:
@@ -1112,7 +1136,7 @@ def test_concurrent_claim_race_leaves_only_one_winner(tmp_path, monkeypatch):
     )
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1145,7 +1169,7 @@ def test_start_execution_refuses_claimed_proposal(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1158,7 +1182,7 @@ def test_delete_refuses_claimed_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1174,7 +1198,7 @@ def test_complete_external_execution_marks_executed(tmp_path):
     target = str(root / "api.py")
     (root / "api.py").write_text("old")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1213,7 +1237,7 @@ def test_external_execution_records_executor_and_room(tmp_path):
     target = str(root / "api.py")
     (root / "api.py").write_text("old")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1246,7 +1270,7 @@ def test_complete_external_execution_keeps_claimed_on_validation_failure(tmp_pat
     target = str(root / "api.py")
     (root / "api.py").write_text("old")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1269,7 +1293,7 @@ def test_complete_external_execution_fails_on_no_target_changes(tmp_path, monkey
     target = str(root / "api.py")
     (root / "api.py").write_text("old")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1303,7 +1327,7 @@ def test_external_apply_rejects_stale_claim(tmp_path, monkeypatch):
     target = str(root / "api.py")
     (root / "api.py").write_text("old")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1330,7 +1354,7 @@ def test_expire_stale_fails_abandoned_executing(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     with db.db() as conn:
         conn.execute(
@@ -1347,7 +1371,7 @@ def test_cancel_withdraws_an_approved_unclaimed_proposal(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1371,7 +1395,7 @@ def test_cancel_requires_requester_or_owner(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1388,7 +1412,7 @@ def test_new_proposal_has_no_execution_mode(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     assert proposal["execution_mode"] == ""
 
@@ -1403,7 +1427,7 @@ def test_claim_requires_a_valid_approval_token(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     with db.db() as conn:
@@ -1428,7 +1452,7 @@ def test_claim_refuses_a_target_changed_since_approval(tmp_path):
     (root / "api.py").write_text("approved content")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     (root / "api.py").write_text("someone else's newer work")
@@ -1447,7 +1471,7 @@ def test_claim_refuses_a_target_created_since_approval(tmp_path):
     target = str(root / "new_file.md")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "create"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "create")}
     )
     action_proposals.approve(proposal["id"], "owner")
     (root / "new_file.md").write_text("appeared later")
@@ -1464,7 +1488,7 @@ def test_claim_refuses_a_target_deleted_since_approval(tmp_path):
     (root / "api.py").write_text("content")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     (root / "api.py").unlink()
@@ -1481,7 +1505,7 @@ def test_claim_allows_unchanged_targets(tmp_path):
     (root / "api.py").write_text("stable")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     claimed = action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1497,7 +1521,7 @@ def test_claim_of_a_legacy_proposal_without_snapshot_is_allowed(tmp_path):
     (root / "api.py").write_text("content")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     with db.db() as conn:
@@ -1521,7 +1545,7 @@ def test_apply_refuses_a_target_changed_during_upload(tmp_path):
     (root / "api.py").write_text("approved content")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -1554,7 +1578,7 @@ def test_utime_cannot_hide_an_edit(tmp_path):
     before = path.stat()
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1582,7 +1606,7 @@ def test_oversized_target_is_refused_for_an_external_claim(tmp_path, monkeypatch
     (root / "big.bin").write_bytes(b"a" * 64)
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1618,8 +1642,7 @@ def test_total_digest_budget_marks_remaining_targets_unverifiable(
         "frambo",
         {
             "intent": "x",
-            "targets": [str(first), str(second)],
-            "action_type": "edit",
+            "operations": _ops([str(first), str(second)], "edit"),
         },
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -1638,7 +1661,7 @@ def test_small_targets_use_a_content_hash(tmp_path):
     (root / "api.py").write_text("content")
 
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
     snapshot = json.loads(action_proposals.get(proposal["id"])["approval_snapshot"])
@@ -1658,7 +1681,7 @@ def test_execution_triggers_the_docs_step(tmp_path, monkeypatch):
     _enable_shared(project)
     target = _edit_target_path(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [str(target)], "action_type": "edit"}
+        project, "frambo", {"intent": "x", "operations": _ops([str(target)], "edit")}
     )
     action_proposals.approve(proposal["id"], "owner")
 
@@ -1706,7 +1729,7 @@ def _zip_bytes(entries: dict[str, bytes]) -> bytes:
 def _stage(project, *, action, target, entries, name="frambo", owner="owner"):
     proposal = action_proposals.create(
         project, name,
-        {"intent": "x", "targets": [target], "action_type": action},
+        {"intent": "x", "operations": _ops([target], action)},
     )
     action_proposals.approve(proposal["id"], "reviewer")
     action_proposals.claim_execution(proposal["id"], name, owner=owner)
@@ -1725,7 +1748,7 @@ def test_approve_refuses_missing_target_for_edit_and_delete(
     _enable_shared(project)
     target = str(project["path"] / target_name)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": action})
+        project, "frambo", {"intent": "x", "operations": _ops([target], action)})
 
     with pytest.raises(ValueError, match=error):
         action_proposals.approve(proposal["id"], "owner")
@@ -1737,7 +1760,7 @@ def test_approve_refuses_create_when_the_target_already_exists(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "create"})
+        project, "frambo", {"intent": "x", "operations": _ops([target], "create")})
 
     with pytest.raises(ValueError, match="create target already exists"):
         action_proposals.approve(proposal["id"], "owner")
@@ -1901,7 +1924,7 @@ def test_local_execution_refuses_a_target_deleted_after_approval(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")})
     action_proposals.approve(proposal["id"], "owner")
     (project["path"] / "api.py").unlink()
 
@@ -1916,7 +1939,7 @@ def test_local_delete_postcondition_is_enforced(tmp_path):
     _enable_shared(project)
     target = _edit_target(project, "gone.py", "bye")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "delete"})
+        project, "frambo", {"intent": "x", "operations": _ops([target], "delete")})
     action_proposals.approve(proposal["id"], "owner")
 
     orch = type("NoopOrchestrator", (), {})()
@@ -1974,7 +1997,7 @@ def test_external_apply_ignores_unrelated_changes_during_review(tmp_path):
 
 
 def test_local_delete_postcondition_covers_a_directory_target(tmp_path):
-    """A delete target that is a directory must not be reported as deleted."""
+    """A directory delete is refused at approval, before it can be reported done."""
     project = _make_project(tmp_path)
     _enable_shared(project)
     root = project["path"]
@@ -1982,17 +2005,13 @@ def test_local_delete_postcondition_covers_a_directory_target(tmp_path):
     target = str(root / "olddir")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "remove old dir", "targets": [target], "action_type": "delete"},
+        {"intent": "remove old dir", "operations": _ops([target], "delete")},
     )
-    action_proposals.approve(proposal["id"], "owner")
 
-    orch = type("NoopOrchestrator", (), {})()
-    orch.run_and_wait = lambda *a, **kw: {"run": {"status": "done"}, "reply": "done"}
+    with pytest.raises(ValueError, match="delete target does not exist or is not a regular file"):
+        action_proposals.approve(proposal["id"], "owner")
 
-    result = action_proposals.execute(proposal["id"], orchestrator_instance=orch)
-
-    assert result["status"] == "failed"
-    assert "POSTCONDITION FAILED" in result["result"]
+    assert action_proposals.get(proposal["id"])["status"] == "pending"
     assert (root / "olddir").is_dir()
 
 
@@ -2001,7 +2020,7 @@ def test_retry_refuses_a_stale_typed_action(tmp_path):
     _enable_shared(project)
     target = str(project["path"] / "later.py")
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")})
     action_proposals._set_status(proposal["id"], "failed", "provider error")
 
     with pytest.raises(ValueError, match="cannot retry: edit target does not exist"):
@@ -2013,7 +2032,7 @@ def test_reconcile_interrupted_discards_a_stale_archive(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")})
     action_proposals.package_handoff.store_archive(proposal["id"], b"stale")
     with db.db() as conn:
         conn.execute(
@@ -2039,7 +2058,7 @@ def test_concurrent_uploads_keep_one_archive(tmp_path):
     _enable_shared(project)
     target = _edit_target(project)
     proposal = action_proposals.create(
-        project, "frambo", {"intent": "x", "targets": [target], "action_type": "edit"})
+        project, "frambo", {"intent": "x", "operations": _ops([target], "edit")})
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
 
@@ -2144,3 +2163,110 @@ def test_package_without_a_manifest_fails_closed(tmp_path):
     current = action_proposals.get(proposal["id"])
     assert current["status"] == "failed"
     assert (project["path"] / "api.py").read_text() == "old"
+
+
+def test_mixed_create_and_edit_package_applies(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    (root / "edit.py").write_text("old", encoding="utf-8")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "add and edit", "operations": [
+            {"path": "new.py", "op": "create"},
+            {"path": "edit.py", "op": "edit"},
+        ]},
+    )
+    assert proposal["action_type"] == "mixed"
+    assert proposal["targets"] == ["new.py", "edit.py"]
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+    staged = action_proposals.upload_external_package(
+        proposal["id"], "frambo",
+        _zip_bytes({"new.py": b"created", "edit.py": b"new"}),
+        owner="owner",
+    )
+    assert staged["package_state"] == "pending"
+    assert {op["op"] for op in staged["operations"]} == {"create", "edit"}
+
+    result = action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+
+    assert result["status"] == "executed"
+    assert (root / "new.py").read_text() == "created"
+    assert (root / "edit.py").read_text() == "new"
+
+
+def test_mixed_create_and_delete_package_applies(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    (root / "gone.py").write_text("bye", encoding="utf-8")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "replace gone", "operations": [
+            {"path": "new.py", "op": "create"},
+            {"path": "gone.py", "op": "delete"},
+        ]},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
+    staged = action_proposals.upload_external_package(
+        proposal["id"], "frambo", _zip_bytes({"new.py": b"created"}), owner="owner")
+    assert staged["package_state"] == "pending"
+
+    result = action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+
+    assert result["status"] == "executed"
+    assert (root / "new.py").read_text() == "created"
+    assert not (root / "gone.py").exists()
+
+
+def test_legacy_row_operations_are_migrated(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO action_proposals (id, project_id, requester, action_type, "
+            "intent, targets, details, status, expires_at, execution_mode, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("prop_legacy_ops", project["id"], "frambo", "edit", "x",
+             '["api.py"]', "{}", "pending", 9_999_999_999, "",
+             "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        db._migrate(conn)
+        row = db.one(conn, "SELECT operations FROM action_proposals WHERE id=?",
+                     ("prop_legacy_ops",))
+    assert row["operations"] == '[{"path": "api.py", "op": "edit"}]'
+
+
+def test_local_mixed_changeset_postconditions(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    (root / "edit.py").write_text("old", encoding="utf-8")
+    (root / "gone.py").write_text("bye", encoding="utf-8")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "mixed local", "operations": [
+            {"path": "new.py", "op": "create"},
+            {"path": "edit.py", "op": "edit"},
+            {"path": "gone.py", "op": "delete"},
+        ]},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    class Orch:
+        def run_and_wait(self, *a, **kw):
+            (root / "new.py").write_text("created", encoding="utf-8")
+            (root / "edit.py").write_text("new", encoding="utf-8")
+            (root / "gone.py").unlink()
+            return {"run": {"status": "done"}, "reply": "done"}
+
+    result = action_proposals.execute(proposal["id"], orchestrator_instance=Orch())
+
+    assert result["status"] == "executed"
+    assert (root / "new.py").read_text() == "created"
+    assert (root / "edit.py").read_text() == "new"
+    assert not (root / "gone.py").exists()

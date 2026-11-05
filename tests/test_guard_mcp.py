@@ -66,7 +66,7 @@ def test_guard_scopes_writes_to_executing_proposal_targets(tmp_path, monkeypatch
     manifest.save(str(project_path), data, body="# p")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "x", "targets": ["allowed.txt"], "action_type": "create"},
+        {"intent": "x", "operations": [{"path": "allowed.txt", "op": "create"}]},
     )
     action_proposals.approve(proposal["id"], "reviewer")
     action_proposals._set_status(proposal["id"], "executing")
@@ -277,13 +277,13 @@ def test_guard_delete_file_requires_a_delete_execution(tmp_path, monkeypatch):
     (project_path / "gone.txt").write_text("bye", encoding="utf-8")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "remove gone", "targets": ["gone.txt"], "action_type": "delete"},
+        {"intent": "remove gone", "operations": [{"path": "gone.txt", "op": "delete"}]},
     )
     action_proposals.approve(proposal["id"], "reviewer")
 
     monkeypatch.chdir(project_path)
     monkeypatch.setenv("PERUN_PROJECT_PATH", str(project_path))
-    with pytest.raises(ValueError, match="approved delete operation"):
+    with pytest.raises(ValueError, match="delete operation on this target"):
         guard_mcp.guard_delete_file("gone.txt")
     assert (project_path / "gone.txt").exists()
 
@@ -297,10 +297,9 @@ def test_guard_write_tools_refuse_during_a_delete_execution(tmp_path, monkeypatc
 
     project, project_path = _make_shared_guard_project(tmp_path, "guard-del-write")
     (project_path / "gone.txt").write_text("bye", encoding="utf-8")
-    (project_path / "other.txt").write_text("old", encoding="utf-8")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "remove gone", "targets": ["gone.txt"], "action_type": "delete"},
+        {"intent": "remove gone", "operations": [{"path": "gone.txt", "op": "delete"}]},
     )
     action_proposals.approve(proposal["id"], "reviewer")
     action_proposals._set_status(proposal["id"], "executing")
@@ -308,7 +307,7 @@ def test_guard_write_tools_refuse_during_a_delete_execution(tmp_path, monkeypatc
     monkeypatch.chdir(project_path)
     monkeypatch.setenv("PERUN_PROJECT_PATH", str(project_path))
     with pytest.raises(ValueError, match="not valid for a delete operation"):
-        guard_mcp.guard_write_file("other.txt", "new")
+        guard_mcp.guard_write_file("gone.txt", "new")
     with pytest.raises(ValueError, match="not valid for a delete operation"):
-        guard_mcp.guard_edit_file("other.txt", "old", "new")
-    assert (project_path / "other.txt").read_text() == "old"
+        guard_mcp.guard_edit_file("gone.txt", "bye", "new")
+    assert (project_path / "gone.txt").read_text() == "bye"

@@ -798,8 +798,9 @@ def test_chat_instructions_include_shared_project_guidance():
     assert "perun-proposals" in body.lower()
     assert "propose" in body.lower()
     assert "approve" in body.lower()
-    assert "action_type" in body
-    assert "targets" in body
+    assert "operations" in body
+    assert '"op"' in body
+    assert "relative/path" in body
     assert "must approve" in body.lower()
     assert "room owner" in body.lower() or "another participant" in body.lower()
     # A project chat must answer about the bound project, not about Perun.
@@ -933,7 +934,7 @@ def test_untrusted_participant_cannot_propose_via_mcp(bridge_env, tmp_path, monk
 
     with pytest.raises(ValueError, match="not on the PerunChat trust list"):
         proposals_mcp_module.propose(
-            intent="change", action_type="edit", targets=["api.py"]
+            intent="change", operations=[{"path": "api.py", "op": "edit"}]
         )
 
 
@@ -1061,7 +1062,7 @@ def test_proposal_poller_posts_created_and_approved_notices(bridge_env, tmp_path
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "add a README", "action_type": "create", "targets": ["README.md"]},
+        {"intent": "add a README", "operations": [{"path": "README.md", "op": "create"}]},
     )
     bridge._poll_proposal_activity()
 
@@ -1103,8 +1104,7 @@ def test_agent_review_scheduled_for_peer_proposal(bridge_env, tmp_path, monkeypa
 
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "write a file", "action_type": "create",
-         "targets": [str(Path(project["path"]) / "a.txt")]},
+        {"intent": "write a file", "operations": [{"path": str(Path(project["path"]) / "a.txt"), "op": "create"}]},
         owner="peruntheoverseer", trusted=["frambo"],
     )
     prompt = bridge._build_agent_review_prompt(proposal, project)
@@ -1124,8 +1124,7 @@ def test_agent_review_scheduled_for_peer_proposal(bridge_env, tmp_path, monkeypa
     # A proposal created by the bot itself is not reviewed.
     own = action_proposals.create(
         project, "peruntheoverseer",
-        {"intent": "own", "action_type": "create",
-         "targets": [str(Path(project["path"]) / "b.txt")]},
+        {"intent": "own", "operations": [{"path": str(Path(project["path"]) / "b.txt"), "op": "create"}]},
         owner="peruntheoverseer", trusted=["frambo"],
     )
     bridge._reviewing.clear()
@@ -1151,7 +1150,7 @@ def test_proposal_poller_posts_completed_digest(bridge_env, tmp_path, monkeypatc
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "add a README", "action_type": "create", "targets": [str(target)]},
+        {"intent": "add a README", "operations": [{"path": str(target), "op": "create"}]},
     )
     action_proposals.approve(proposal["id"], "peruntheoverseer")
 
@@ -2100,7 +2099,7 @@ def test_upload_transfer_registers_and_receives_chunks(settings, tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     proposal = action_proposals.approve(proposal["id"], "owner")
     proposal = action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2157,7 +2156,7 @@ def test_package_begin_rejects_duplicate_transfer_id(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2218,12 +2217,12 @@ def test_package_begin_does_not_steal_another_claim_transfer(settings, tmp_path)
     (root / "api.py").write_text("old", encoding="utf-8")
     proposal_a = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     proposal_b = action_proposals.create(
         project, "other",
-        {"intent": "edit other", "targets": ["other.py"], "action_type": "edit",
+        {"intent": "edit other", "operations": [{"path": "other.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal_a["id"], "owner")
@@ -2310,7 +2309,7 @@ def test_package_begin_rejects_db_row_owned_by_other_sender(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2373,7 +2372,7 @@ def test_package_begin_fails_closed_when_db_store_fails(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2417,7 +2416,7 @@ def test_package_begin_caps_concurrent_transfers(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2475,7 +2474,7 @@ def test_package_end_sha_mismatch_keeps_transfer(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2536,7 +2535,7 @@ def test_upload_transfer_persists_to_db_and_reloads(settings, tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     proposal = action_proposals.approve(proposal["id"], "owner")
     proposal = action_proposals.claim_execution(proposal["id"], "frambo")
@@ -2594,7 +2593,7 @@ def test_download_transfer_publishes_package_frames(settings, tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit", "room_id": room},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}], "room_id": room},
     )
     proposal = action_proposals.approve(proposal["id"], "owner")
     proposal = action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
@@ -2646,8 +2645,10 @@ def test_download_names_declared_targets_that_do_not_exist(settings, tmp_path):
         "frambo",
         {
             "intent": "edit api and pin a manifest",
-            "targets": ["api.py", "MANIFEST.sha256"],
-            "action_type": "edit",
+            "operations": [
+                {"path": "api.py", "op": "edit"},
+                {"path": "MANIFEST.sha256", "op": "edit"},
+            ],
             "room_id": room,
         },
     )
@@ -2677,7 +2678,7 @@ def test_download_rejects_paths_outside_targets(settings, tmp_path):
     (root / "other.py").write_text("other")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -2710,7 +2711,7 @@ def test_package_chunk_from_other_room_rejected(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -2752,7 +2753,7 @@ def test_package_begin_rejects_huge_chunk_count(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -2788,7 +2789,7 @@ def test_execution_status_does_not_leak_approval_token(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "details": {"content": "new"}, "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -2829,7 +2830,7 @@ def test_package_chunk_exceeding_total_size_rejected(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -2875,7 +2876,7 @@ def test_package_begin_requires_sha256(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -2913,7 +2914,7 @@ def test_download_transfer_rejected_without_claim(settings, tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit", "room_id": room},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}], "room_id": room},
     )
     proposal = action_proposals.approve(proposal["id"], "owner")
 
@@ -2953,7 +2954,7 @@ def test_package_end_rejects_size_mismatch(settings, tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit", "room_id": room},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}], "room_id": room},
     )
     proposal = action_proposals.approve(proposal["id"], "owner")
     proposal = action_proposals.claim_execution(proposal["id"], "frambo", owner="owner")
@@ -3006,7 +3007,7 @@ def test_external_package_upload_end_to_end(settings, tmp_path):
     (root / "api.py").write_text("old", encoding="utf-8")
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit",
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}],
          "room_id": room},
     )
     action_proposals.approve(proposal["id"], "owner")
@@ -3133,7 +3134,7 @@ def test_accepted_chunk_refreshes_idle_deadline(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -3170,7 +3171,7 @@ def test_rejected_chunk_does_not_extend_slot_life(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -3201,7 +3202,7 @@ def test_package_ttl_is_configurable_with_a_floor(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -3233,7 +3234,7 @@ def test_package_begin_rejects_malformed_sha256(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -3271,7 +3272,7 @@ def test_chunk_without_seq_is_rejected(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -3320,7 +3321,7 @@ def test_transient_finalize_failure_keeps_the_upload(settings, tmp_path):
         tmp_path, participants=[{"agent_id": "frambo", "roles": ["rw"]}])
     proposal = action_proposals.create(
         project, "frambo",
-        {"intent": "edit api", "targets": ["api.py"], "action_type": "edit"},
+        {"intent": "edit api", "operations": [{"path": "api.py", "op": "edit"}]},
     )
     action_proposals.approve(proposal["id"], "owner")
     action_proposals.claim_execution(proposal["id"], "frambo")
@@ -3607,8 +3608,7 @@ def test_proposal_creation_raises_an_attention_item(settings, tmp_path):
     proposal = action_proposals.create(
         project,
         "frambo",
-        {"intent": "edit the monthly totals", "targets": ["api.py"],
-         "action_type": "edit", "room_id": room},
+        {"intent": "edit the monthly totals", "operations": [{"path": "api.py", "op": "edit"}], "room_id": room},
     )
 
     item = registry.get_attention(registry.open_attention()[0]["id"])
