@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-05T16:27:11+00:00",
+  "generated": "2026-11-05T17:28:30+00:00",
   "releases": [
+    {
+      "version": "0.11.10",
+      "date": "2026-11-05",
+      "body": "### One operator inbox\n\n* Settings no longer mounts a second full copy of the \"Needs you\" inbox. The\n  dedicated `#/attention` page is the canonical inbox; Settings now has a short\n  card that links to it. This removes the duplicated panel/count and the extra\n  30-second poller that ran while the Settings view was open."
+    },
     {
       "version": "0.11.9",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.11.1",
       "date": "2026-11-04",
       "body": "### Package replacement guard\n\n* A staged package awaiting approval can no longer be silently replaced by a\n  second upload. `upload_external_package()` refuses while\n  `package_state='pending'`; the claimant must `reject_package` first (or let the\n  24 h window expire). This closes a TOCTOU gap where an executor could swap the\n  archive between the operator reviewing it and clicking Approve."
-    },
-    {
-      "version": "0.11.0",
-      "date": "2026-11-04",
-      "body": "### External handoff v2: typed operations and package-level approval\n\n* **Typed preconditions.** A proposal's `action_type` is now a contract, not a\n  label: `edit` and `delete` targets must exist, `create` targets must be absent,\n  and `other`/unknown is refused for external handoff. The check runs at\n  approval, claim, upload/apply and before a local run, so an approval cannot be\n  created against a misleading pre-image and a later change cannot bypass it.\n  The two in-flight `edit` proposals against missing files (`prop_a704ff6ddda4`,\n  `prop_3645d3495174`) are refused at claim; re-propose them as `create` (or run\n  the prerequisite creators first and re-approve the edits against the new\n  content).\n* **Server-derived manifest.** An external agent uploads files only. Perun\n  derives one typed operation per approved target with `pre_sha256` and\n  `post_sha256`; extra files, duplicate targets, directories and external-dep\n  targets are refused. No agent-authored manifest is trusted.\n* **Package-level approval.** Uploading now *stages* the exact archive digest and\n  derived manifest (`package_pending`). A second, separate approval is required\n  before anything is written: the operator dashboard, another rw trusted\n  participant / room owner, or `policy_auto_approve`. The requester and the\n  executor cannot approve their own package. Rejecting a package keeps the claim\n  so a new archive can be uploaded.\n* **Atomic apply with postconditions and delete.** Apply re-checks every\n  pre-image, writes through staged temp files, verifies every postcondition and\n  rolls the whole package back on any failure. `delete` unlinks the target and\n  ignores uploaded bytes. A digest mismatch, an expired claim/package, or a\n  changed pre-image fails closed.\n* **Expiry and revocation clean up.** Claim expiry discards a staged archive and\n  clears the package fields; the package approval window (24 h) rejects an\n  unapproved package independently while keeping the claim. Revoke and delete\n  discard the archive too.\n* **Local execution gains the same contract.** `_prepare_execution()` refuses a\n  stale typed pre-image before claiming, and the post-run outcome check enforces\n  create/edit/delete postconditions. `guard_delete_file` is now available to the\n  restricted executor and named in the execution prompt.\n* **UI and tools.** The Shared tab renders the package digest, derived\n  operations, per-file diffs and **Approve package**/**Reject package** actions.\n  The MCP surface adds `approve_package`/`reject_package` and exposes package\n  state in `get_proposal`; the dashboard adds\n  `POST …/proposals/{id}/package/approve|reject`.\n* **MCP probe.** `mcp_servers.probe()` now performs the modern\n  `server/discover` handshake (with the version in `params._meta`) and falls back\n  to the legacy `initialize`, so current `mcp` 2.x releases are probed correctly."
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.11.9 (see §15). Fail closed on a missing package manifest
+**Latest release:** v0.11.10 (see §15). Single operator inbox: Settings links to the Needs you page
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2709,6 +2709,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-05 — v0.11.10: Single operator inbox: Settings links to the Needs you page
+
 ### 2026-11-05 — v0.11.9: Fail closed on a missing package manifest
 
 ### 2026-11-05 — v0.11.8: Typed delete enforcement and operator-only delete packages

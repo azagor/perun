@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.10
+
+*Released 2026-11-05.*
+
 ### One operator inbox
 
 * Settings no longer mounts a second full copy of the "Needs you" inbox. The
