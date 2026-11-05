@@ -1696,9 +1696,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `mountGit`, `mountManifest`, `manifestOverview`, `openManifestPath()`,
   `openManifestLink()`, `wireManifestLinks()`, `projectInstructionsForm`,
   `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,
-  `viewPerunChat`, `viewSettings`), `mountConsole()`, `streamRun()`, `streamOrchestrator()`,
-  the operator inbox (`loadAttentionPanel()` — "Needs you" card with reply,
-  choice, ⚡ and dismiss actions; `loadRoutingPanel()` — routing decisions),
+  `viewPerunChat`, `viewSettings`, `viewAttention`), `mountConsole()`, `streamRun()`,
+  `streamOrchestrator()`,
+  the operator inbox (`viewAttention()` / `loadAttentionPanel()` — the dedicated
+  "Needs you" page with reply, choice, ⚡ and dismiss actions; Settings links to
+  it rather than mounting a second copy; `loadRoutingPanel()` — routing decisions),
   `projectConfigForm()` (project Config tab: name, description, Plan model,
   Build model, Default model, Agent override; saves `agent_models` merged with
   existing per-agent defaults),

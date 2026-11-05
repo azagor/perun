@@ -6693,11 +6693,11 @@ async function viewSettings() {
     v.appendChild(routingPanel);
     loadRoutingPanel();
 
-    const attentionPanel = el('div', { class: 'card' },
-        `<div class="card-head"><h4>Needs you</h4><span class="badge" id="attention-count">—</span></div>
-         <div id="attention-panel"><div class="meta">loading…</div></div>`);
-    v.appendChild(attentionPanel);
-    loadAttentionPanel();
+    const attentionLink = el('div', { class: 'card' },
+        `<div class="card-head"><h4>Needs you</h4></div>
+         <p class="secondary">Questions, permissions, forms, proposals and handoffs waiting on you live in the dedicated inbox.</p>
+         <a class="btn sm" href="#/attention">Open Needs you</a>`);
+    v.appendChild(attentionLink);
 
     await loadModels();
     await loadAgents();

@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### One operator inbox
+
+* Settings no longer mounts a second full copy of the "Needs you" inbox. The
+  dedicated `#/attention` page is the canonical inbox; Settings now has a short
+  card that links to it. This removes the duplicated panel/count and the extra
+  30-second poller that ran while the Settings view was open.
 
 ## v0.11.9
 
