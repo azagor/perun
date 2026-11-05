@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-05T08:28:23+00:00",
+  "generated": "2026-11-05T09:11:46+00:00",
   "releases": [
+    {
+      "version": "0.11.7",
+      "date": "2026-11-05",
+      "body": "### Security: chat persona cannot delete files\n\n* The `perunchat` agent permissions now deny `<server>_guard_delete_file`\n  (alongside write/edit), and the prompt names delete as forbidden. The guarded\n  delete tool was added for the local `perun-shared` executor; without this\n  deny, the room persona's broad guard allow would have let it delete a project\n  file through the chat tool surface. `perun-shared` keeps delete so an approved\n  `delete` proposal can execute."
+    },
     {
       "version": "0.11.6",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.10.86",
       "date": "2026-11-04",
       "body": "### Equal-height project cards\n\n* Every project card now receives the tallest card's height as well as one\n  computed width, so a card on a shorter row (PerunChat alone) is the same size\n  as the first-row cards. Actions are pinned to the card bottom; the height is\n  recomputed on render, resize and presence updates."
-    },
-    {
-      "version": "0.10.85",
-      "date": "2026-11-04",
-      "body": "### Project card size restored\n\n* The grid uses the maximum column count again (restoring the previous\n  first-row card size), keeps one computed width for every card, and a partly\n  filled last row starts at the first column instead of being rebalanced or\n  centered."
     }
   ]
 }

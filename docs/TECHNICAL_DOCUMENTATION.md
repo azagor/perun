@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.11.6 (see §15). Remove deprecated legacy package helpers
+**Latest release:** v0.11.7 (see §15). Security: chat persona cannot delete files
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2700,6 +2700,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-05 — v0.11.7: Security: chat persona cannot delete files
+
 ### 2026-11-05 — v0.11.6: Remove deprecated legacy package helpers
 
 ### 2026-11-05 — v0.11.5: Follow-up audit cleanup and shared-project tool note

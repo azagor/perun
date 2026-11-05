@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.7
+
+*Released 2026-11-05.*
+
 ### Security: chat persona cannot delete files
 
 * The `perunchat` agent permissions now deny `<server>_guard_delete_file`
