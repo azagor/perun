@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.12.0
+
+*Released 2026-11-06.*
+
 ### Breaking: proposals are typed changesets
 
 * A proposal now carries **`operations`**, one `{path, op}` entry per target

@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-05T17:28:30+00:00",
+  "generated": "2026-11-05T23:41:35+00:00",
   "releases": [
+    {
+      "version": "0.12.0",
+      "date": "2026-11-06",
+      "body": "### Breaking: proposals are typed changesets\n\n* A proposal now carries **`operations`**, one `{path, op}` entry per target\n  (`create`/`edit`/`delete`). One proposal can mix all three and is applied as a\n  single atomic changeset, so a change that adds a file and edits another no\n  longer needs a proposal chain. `action_type` is only a derived summary\n  (`mixed` when the operations differ).\n* `create()`/the REST envelope/the `perun-proposals_propose` MCP tool now require\n  `operations`; the old `action_type` + `targets` input is removed. Existing DB\n  rows are migrated once from their typed fields; `other` rows become invalid.\n* `_assert_action_targets()`, `derive_package()`, the guard, the local prompt and\n  the post-run check all use each target’s own operation. `guard_delete_file`\n  requires a `delete` operation on that exact target; write/edit are refused for\n  a delete target. A package containing a delete remains operator-only.\n* The Shared-tab proposal row renders per-operation chips (`create path`,\n  `edit path`, `delete path`) and shows `mixed` when the changeset differs.\n* Tests cover mixed create+edit, mixed create+delete, mixed local execution,\n  duplicate/invalid operations, legacy-row migration, and the existing package\n  approval/rollback paths."
+    },
     {
       "version": "0.11.10",
       "date": "2026-11-05",
@@ -45,11 +50,6 @@
       "version": "0.11.2",
       "date": "2026-11-05",
       "body": "### Production-readiness audit fixes\n\n* **External apply audit baseline.** The policy audit now takes a fresh\n  target-scoped snapshot immediately before `apply_operations()` instead of\n  using the claim-time snapshot. A package that waits up to 24 h for its second\n  approval can no longer be marked `failed` because an unrelated file changed\n  while the operator was reviewing it.\n* **Delete postcondition.** Local execution requires a `delete` target to be\n  gone (`exists()`), not merely not-a-regular-file; a directory target is now\n  reported as a postcondition failure instead of a successful delete.\n* **Package replacement and expiry races.** Uploads for one proposal are\n  serialized per proposal and the CAS excludes a pending package. Reject and\n  both expiry sweeps update the row first and discard the archive only if they\n  won the CAS, so an approve that moved the proposal to `executing` keeps its\n  artifact. `reconcile_interrupted()` also discards a dead archive.\n* **Retry with a stale pre-image.** `retry()` refuses to copy an `edit`/`delete`\n  proposal whose target no longer exists (or a `create` whose target now\n  exists) with a clear `cannot retry: …` error instead of creating a proposal\n  guaranteed to fail at approval.\n* **Preview memory bound.** `build_preview()` stats a target before reading it\n  and never loads a file above the 200 KB diff budget just to discard it.\n* **MCP schema bootstrap.** The proposals MCP server runs `db.init_db()` at\n  startup so `approve_package`/`reject_package` work even when an MCP client is\n  the first process after an upgrade.\n* **Room prompt hardening.** The PerunChat agent and instruction files now state\n  that the guard/proposals servers are loaded in a bound project room, tell the\n  model to retry the exact prefixed tool name, and forbid claiming the tools are\n  unavailable without a failed tool result. Verified directly:\n  `opencode run --agent perunchat` in `ai-playground` returns the tree through\n  `perun-guard_guard_list_directory`."
-    },
-    {
-      "version": "0.11.1",
-      "date": "2026-11-04",
-      "body": "### Package replacement guard\n\n* A staged package awaiting approval can no longer be silently replaced by a\n  second upload. `upload_external_package()` refuses while\n  `package_state='pending'`; the claimant must `reject_package` first (or let the\n  24 h window expire). This closes a TOCTOU gap where an executor could swap the\n  archive between the operator reviewing it and clicking Approve."
     }
   ]
 }
