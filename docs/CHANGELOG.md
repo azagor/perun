@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.11.9
+
+*Released 2026-11-05.*
+
 ### Missing package manifest fails closed
 
 * A package with an empty/missing derived manifest can no longer be peer-approved,
