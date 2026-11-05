@@ -205,8 +205,13 @@ is enabled, a peer `rw` participant or the bridge's bounded autonomous reviewer
 can approve the proposal with `execute=false`, leaving it `approved` for a
 remote claim or an explicit local run; the HITL signing secret / approver
 identity are configurable. A remote rw claimant can download a target-scoped
-ZIP of the approved paths and upload an edited package, which Perun validates,
-applies with rollback on failure, and audits. Approval is pinned to the content
+ZIP of the approved paths and upload a package, which Perun validates, applies
+with rollback on failure, and audits. The v2 handoff is typed: `edit`/`delete`
+targets must exist and `create` targets must be absent, Perun derives the
+pre/post manifest itself, and the upload is staged for a **second package-level
+approval** of the exact archive digest. A package containing a `delete` is
+operator-only, and the local executor's `guard_delete_file` only works during an
+approved delete run. Approval is pinned to the content
 it saw: Perun fingerprints every declared target, and a claim or apply is refused
 if a target changed, appeared or disappeared in the meantime, so a stale package
 can never overwrite newer work. An approver can also **withdraw** an unused

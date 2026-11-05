@@ -99,8 +99,14 @@ them all — no matter which folder you happened to open.
   remote claim or an explicit local run. A separate **Policy auto-approve** mode
   skips peer review and lets the system approve and execute proposals
   immediately. A remote rw participant can claim an approved proposal,
-  download a target-scoped ZIP, upload the edited package over PerunChat using
-  its own model/tokens, and Perun validates, applies, and audits it. Approval is
+  download a target-scoped ZIP, upload a package over PerunChat using its own
+  model/tokens, and Perun validates, applies, and audits it. The v2 handoff is
+  typed: `edit`/`delete` targets must exist, `create` targets must be absent,
+  Perun derives the pre/post manifest itself, and the upload is **staged for a
+  second package-level approval** of the exact archive digest. A package that
+  contains a `delete` is operator-only, and the local executor can only call
+  `guard_delete_file` during an approved delete run. Apply is atomic with
+  postconditions and rollback. Approval is
   pinned to the content the approver saw: a claim or apply is refused if a target
   changed since, and an unused approval can be withdrawn (`cancelled`).
   Lifecycle notices (started, completed, failed, withdrawn) are posted back to the
@@ -305,7 +311,7 @@ for details.
 | **Checks** | `perun checks …`, project page → Checks | Operator-declared verification commands; a room agent runs one by name, or verifies an executed proposal only after a hash-pinned operator confirmation |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL or autonomous peer review for actions |
-| **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, durable **Pause work** (replies, room events, review, auto-approve), `perun-guard` MCP + post-run audit, external ZIP handoff, configurable approver/HITL secret |
+| **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, durable **Pause work** (replies, room events, review, auto-approve), `perun-guard` MCP + post-run audit, typed external ZIP handoff with package-level approval, configurable approver/HITL secret |
 | **CLI** | `python -m perun …` | `serve`, `bridge`, `discover`, `recall`, … |
 | **One-click start** | `Perun.cmd` (Windows) | Idempotent dashboard launcher; never starts a second bridge |
 | **Installer** | `installer\Output\PerunSetup.exe` (Windows wizard), `installer/macos/Output/PerunSetup.pkg` (macOS), or `setup.ps1` / `setup.sh` (web) or `bootstrap.ps1` / `perun install --machine` (local) | Prereqs + deps + global install + optional `PerunBridge` task |
@@ -403,7 +409,7 @@ perun/                     the Python package
   orchestrator_agent.py    the control-plane `perun-orchestrator` identity
   backups.py               pre-change config copies under `PERUN_HOME/backups/`
   fs_audit.py              before/after filesystem audit for shared runs
-  package_handoff.py       external execution ZIP pack/unpack/validate/apply
+  package_handoff.py       typed external-execution package derive/apply with rollback
   proposals_mcp.py         the `perun-proposals` coordination MCP server
   perunchat_bridge.py      autonomous PerunChat bridge, review, and handoff
   updater.py               GitHub release check + self-update runner
