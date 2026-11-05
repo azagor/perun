@@ -1295,7 +1295,10 @@ diff preview in `package_preview`; the proposal stays `claimed` with
 `package_state='pending'`. A second approval of the exact digest is required:
 the dashboard operator, another rw trusted participant / room owner, or
 `policy_auto_approve`. The requester and the executor cannot approve their own
-package. Rejecting (`package_state='rejected'`) keeps the claim so a new archive
+package. A package whose derived manifest contains a `delete` operation is
+**operator-only**: peer/room-owner MCP approval is refused, so the human applies
+it from the dashboard (or the explicit policy path). Rejecting
+(`package_state='rejected'`) keeps the claim so a new archive
 can be uploaded. The package approval window is 24 hours; claim expiry discards
 the archive and clears the package fields. On approval Perun re-runs the typed
 and drift checks, moves `claimed → executing` with a CAS that also verifies the
@@ -1353,7 +1356,10 @@ enforcement backed by the audit, not an OS-level sandbox: review the audit outpu
 before treating a run as trusted. When the guard server is started by the
 OpenCode service (`standalone=False`), it lacks the per-run `PERUN_ALLOWLIST`;
 it derives the active proposal's targets from the database instead, and refuses
-writes if more than one local execution is active. Approved local runs use the
+writes if more than one local execution is active. `guard_delete_file` is
+available only while the executing proposal's `action_type` is `delete`; during
+that run `guard_write_file`/`guard_edit_file` are refused, and the chat persona's
+agent permissions deny delete outright. Approved local runs use the
 running OpenCode service rather than a private `--standalone` server, so the
 project's MCP servers are loaded; `_prepare_execution()` also fails early with
 “guard MCP not registered” if `perun-guard` is missing from the project config,

@@ -64,6 +64,8 @@ def store_archive(proposal_id: str, data: bytes) -> Path:
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_name, path)
     finally:
         try:

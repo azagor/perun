@@ -2102,3 +2102,20 @@ def test_expiry_sweep_does_not_discard_an_archive_owned_by_an_apply(tmp_path):
     current = action_proposals.get(proposal["id"])
     assert current["status"] == "executing"
     assert current["package_state"] == "pending"
+
+
+def test_delete_package_requires_the_local_operator(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project, "gone.py", "bye")
+    proposal, _ = _stage(project, action="delete", target=target, entries={})
+
+    with pytest.raises(ValueError, match="containing a delete"):
+        action_proposals.approve_external_package(
+            proposal["id"], "reviewer", owner="owner",
+            trusted=["reviewer", "frambo"], operator=False)
+
+    result = action_proposals.approve_external_package(
+        proposal["id"], "operator", operator=True)
+    assert result["status"] == "executed"
+    assert not (project["path"] / "gone.py").exists()

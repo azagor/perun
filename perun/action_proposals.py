@@ -811,6 +811,11 @@ def _package_approver_allowed(
     if _same_actor(approver_id, proposal.get("requester")) or _same_actor(
             approver_id, proposal.get("executor_id")):
         raise ValueError("a package cannot be approved by its requester or executor")
+    manifest = proposal.get("package_manifest") or {}
+    operations = manifest.get("operations") if isinstance(manifest, dict) else []
+    if any(isinstance(op, dict) and op.get("op") == "delete" for op in operations):
+        raise ValueError(
+            "a package containing a delete must be approved by the local operator")
     cfg = shared_projects.load(project["path"])
     owner_id = str(owner or "").strip().lower()
     if owner_id and approver_id == owner_id:

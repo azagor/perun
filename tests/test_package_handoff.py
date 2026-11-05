@@ -511,3 +511,29 @@ def test_build_preview_does_not_load_a_huge_old_target(tmp_path, monkeypatch):
 
     assert preview[0]["summary"].startswith("edit · binary")
     assert "250000" in preview[0]["summary"]
+
+
+def test_apply_operations_rolls_back_a_delete_on_a_later_failure(tmp_path, monkeypatch):
+    project = _make_shared_project(tmp_path)
+    root = Path(project["path"])
+    (root / "gone.txt").write_text("old-gone", encoding="utf-8")
+    (root / "edit.txt").write_text("old-edit", encoding="utf-8")
+    ops = [
+        {"path": "gone.txt", "op": "delete",
+         "pre_sha256": package_handoff.sha256_hex(b"old-gone"),
+         "post_sha256": None, "size": 8},
+        {"path": "edit.txt", "op": "edit",
+         "pre_sha256": package_handoff.sha256_hex(b"old-edit"),
+         "post_sha256": package_handoff.sha256_hex(b"new-edit"), "size": 8},
+    ]
+    def flaky_replace(src, dst):
+        raise OSError("boom")
+
+    monkeypatch.setattr(package_handoff.os, "replace", flaky_replace)
+    with pytest.raises(OSError, match="boom"):
+        package_handoff.apply_operations(
+            project, ops, {"edit.txt": b"new-edit"})
+
+    assert (root / "gone.txt").read_text() == "old-gone"
+    assert (root / "edit.txt").read_text() == "old-edit"
+    assert not list(root.glob("*.perun-tmp"))

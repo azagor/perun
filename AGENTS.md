@@ -120,6 +120,13 @@ with `python -m perun project-roots --add <name> <path>`.
   package. `reject_external_package()` keeps the claim so a new archive can be
   uploaded. Apply is atomic, re-checks every pre/postcondition, rolls back on
   failure, and discards the archive on apply/reject/expiry/revoke/delete.
+* **Delete is a typed operation.** `guard_delete_file` works only while an
+  executing proposal's `action_type` is `delete`; write/edit tools are refused
+  during that run, and the chat persona's agent permissions deny delete outright.
+  A package whose manifest contains a `delete` is operator-only: peer/room-owner
+  MCP approval must be refused, so the human applies it from the dashboard (or
+  the explicit `policy_auto_approve` path). Never widen the chat agent's guard
+  allow to include delete.
 * **Pausing project work stops autonomy, not people.** `projects.work_paused` is
   durable; while set, the bridge must not auto-reply in the project room, must
   not ingest its messages for coroutine triggers, must not start the autonomous

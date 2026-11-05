@@ -4,7 +4,28 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Typed delete enforcement in the guard
+
+* `guard_delete_file` now requires a **delete proposal in `executing` state**;
+  a chat session or an edit/create run cannot call it. During a delete run,
+  `guard_write_file`/`guard_edit_file` are refused, so a delete cannot be
+  replaced by a write. The `perunchat` agent permissions already deny delete
+  outright; this is the guard-level backstop for every tool path.
+
+### Delete packages need the local operator
+
+* A package whose derived manifest contains a `delete` operation can no longer
+  be approved by a peer/room-owner MCP call. Only the local dashboard operator
+  (`operator=True`) or the explicit `policy_auto_approve` path may apply it.
+  This closes the gap where the chat persona (room owner) could approve a
+  remotely staged delete without the human seeing it.
+
+### Hardening
+
+* The modern MCP `server/discover` grace window is now 5 s (was 3 s), so a cold
+  Python MCP server is not incorrectly forced onto the legacy handshake.
+* Stored package archives are `flush()`ed and `fsync()`ed before the atomic
+  rename, so a crash cannot leave a zero-length or partial approved artifact.
 
 ## v0.11.7
 

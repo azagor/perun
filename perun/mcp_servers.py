@@ -50,6 +50,10 @@ MCP_PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_PROBE_TIMEOUT = 20.0
 # Hard ceiling for a single probe, regardless of what the caller asks for.
 MAX_PROBE_TIMEOUT = 60.0
+# A modern MCP server answers ``server/discover`` quickly, but a cold Python
+# interpreter can take a few seconds; do not fall back to the legacy handshake
+# too early. Legacy servers ignore the method, so this is the only wait cost.
+MODERN_DISCOVERY_GRACE_SECONDS = 5.0
 MAX_TOOLS = 500
 # Budget for captured stderr, used only to explain a failed handshake.
 STDERR_TAIL = 2000
@@ -620,7 +624,7 @@ def _probe_stdio(entry: dict[str, Any], timeout: float) -> dict[str, Any]:
                 "params": {"_meta": _client_meta(_MODERN_PROTOCOL_VERSION)},
             })
             try:
-                discover = _await(1, min(deadline, started + 3.0))
+                discover = _await(1, min(deadline, started + MODERN_DISCOVERY_GRACE_SECONDS))
             except TimeoutError:
                 discover = {}
             if isinstance(discover, dict) and "result" in discover:

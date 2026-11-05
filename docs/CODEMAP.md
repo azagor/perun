@@ -1199,8 +1199,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   is absent (`standalone=False`), `_active_targets()` derives the target scope
   from the project's `executing` proposal; multiple concurrent executions fail
   closed. `guard_delete_file` deletes a file inside the approved target scope,
-  using the same path checks as the write tools. It also exposes
-  `guard_list_checks` / `guard_run_check`: the room
+  using the same path checks as the write tools, but only while an approved
+  `delete` proposal is executing; write/edit tools are refused during a delete
+  run, and the chat persona's agent permissions deny delete outright. It also
+  exposes `guard_list_checks` / `guard_run_check`: the room
   persona's only execution path, restricted to names the operator declared.
 * `perun/proposals_mcp.py` — proposal-coordination MCP server for project chats.
   Exposes `propose`, `approve`, `approve_package`, `reject_package`,
@@ -1314,7 +1316,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   proposal and a second upload is refused while a package is pending (reject or
   let it expire first). `approve_external_package()`
   enforces the second-approval rules (operator, rw trusted peer/owner, or
-  `policy_auto_approve`; never the requester/executor), CAS-moves
+  `policy_auto_approve`; never the requester/executor). A derived manifest that
+  contains a `delete` operation is operator-only: peer/room-owner approval is
+  refused, so the human applies it from the dashboard (or the explicit policy
+  path). It then CAS-moves
   `claimed → executing` with both expiry windows, and calls
   `package_handoff.apply_operations()`. `reject_external_package()` marks the
   package rejected and keeps the claim. `complete_external_execution()` is now a

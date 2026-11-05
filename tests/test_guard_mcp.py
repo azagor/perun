@@ -255,3 +255,60 @@ def test_guard_cannot_run_a_command_that_is_not_declared(tmp_path, monkeypatch):
 
     assert "no check named" in text
     assert "declared: hello" in text
+
+
+def _make_shared_guard_project(tmp_path, name):
+    from perun import manifest, registry
+
+    project_path = tmp_path / name
+    project_path.mkdir()
+    project = registry.add_project(name, str(project_path))
+    data = manifest.from_project(project)
+    data["shared"] = True
+    data["participants"] = [{"agent_id": "frambo", "roles": ["rw"]}]
+    manifest.save(str(project_path), data, body="# p")
+    return project, project_path
+
+
+def test_guard_delete_file_requires_a_delete_execution(tmp_path, monkeypatch):
+    from perun import action_proposals
+
+    project, project_path = _make_shared_guard_project(tmp_path, "guard-del")
+    (project_path / "gone.txt").write_text("bye", encoding="utf-8")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "remove gone", "targets": ["gone.txt"], "action_type": "delete"},
+    )
+    action_proposals.approve(proposal["id"], "reviewer")
+
+    monkeypatch.chdir(project_path)
+    monkeypatch.setenv("PERUN_PROJECT_PATH", str(project_path))
+    with pytest.raises(ValueError, match="approved delete operation"):
+        guard_mcp.guard_delete_file("gone.txt")
+    assert (project_path / "gone.txt").exists()
+
+    action_proposals._set_status(proposal["id"], "executing")
+    guard_mcp.guard_delete_file("gone.txt")
+    assert not (project_path / "gone.txt").exists()
+
+
+def test_guard_write_tools_refuse_during_a_delete_execution(tmp_path, monkeypatch):
+    from perun import action_proposals
+
+    project, project_path = _make_shared_guard_project(tmp_path, "guard-del-write")
+    (project_path / "gone.txt").write_text("bye", encoding="utf-8")
+    (project_path / "other.txt").write_text("old", encoding="utf-8")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "remove gone", "targets": ["gone.txt"], "action_type": "delete"},
+    )
+    action_proposals.approve(proposal["id"], "reviewer")
+    action_proposals._set_status(proposal["id"], "executing")
+
+    monkeypatch.chdir(project_path)
+    monkeypatch.setenv("PERUN_PROJECT_PATH", str(project_path))
+    with pytest.raises(ValueError, match="not valid for a delete operation"):
+        guard_mcp.guard_write_file("other.txt", "new")
+    with pytest.raises(ValueError, match="not valid for a delete operation"):
+        guard_mcp.guard_edit_file("other.txt", "old", "new")
+    assert (project_path / "other.txt").read_text() == "old"

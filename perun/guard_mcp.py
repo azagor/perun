@@ -49,6 +49,29 @@ def _requester() -> str:
     return os.environ.get("PERUN_CHAT_SENDER", "").strip() or "perun"
 
 
+def _active_local_proposal(
+    project_path: Path,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Return (executing proposal, ambiguous) for a local run."""
+    try:
+        from perun import action_proposals, registry
+
+        project = registry.get_project_by_path(str(project_path))
+        if not project:
+            return None, False
+        executing = [
+            p for p in action_proposals.list_by_project(project["id"], status="executing")
+            if p.get("execution_mode") != "external"
+        ]
+        if not executing:
+            return None, False
+        if len(executing) > 1:
+            return None, True
+        return executing[0], False
+    except Exception:
+        return None, False
+
+
 def _active_targets(project_path: Path) -> tuple[list[Path], bool]:
     """Return (targets, ambiguous) for the project's active local execution.
 
@@ -57,26 +80,27 @@ def _active_targets(project_path: Path) -> tuple[list[Path], bool]:
     derive the target scope from the proposal currently in ``executing`` state.
     More than one executing proposal is ambiguous; the caller fails closed.
     """
+    proposal, ambiguous = _active_local_proposal(project_path)
+    if ambiguous:
+        return [], True
+    if proposal is None:
+        return [], False
     try:
-        from perun import action_proposals, registry
-
-        project = registry.get_project_by_path(str(project_path))
-        if not project:
-            return [], False
-        executing = [
-            p for p in action_proposals.list_by_project(project["id"], status="executing")
-            if p.get("execution_mode") != "external"
-        ]
-        if not executing:
-            return [], False
-        if len(executing) > 1:
-            return [], True
         return [
             path_guard.resolve_target(project_path, str(target))
-            for target in executing[0].get("targets", [])
+            for target in proposal.get("targets", [])
         ], False
     except Exception:
         return [], False
+
+
+def _guard_action() -> str:
+    """The active proposal's typed action, or "" when none can be proven."""
+    try:
+        return str(_active_local_proposal(Path(_project()["path"]))[0]
+                   .get("action_type") or "").strip().lower()
+    except Exception:
+        return ""
 
 
 def _allowlist() -> tuple[Path, list[tuple[Path, str]], list[Path]]:
@@ -198,6 +222,8 @@ def guard_list_directory(path: str = ".") -> list[dict[str, Any]]:
 @mcp.tool()
 def guard_write_file(path: str, content: str) -> str:
     """Write *content* to *path* (create or overwrite)."""
+    if _guard_action() == "delete":
+        raise ValueError("guarded writes are not valid for a delete operation")
     target = _check(path, require_write=True)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
@@ -207,6 +233,8 @@ def guard_write_file(path: str, content: str) -> str:
 @mcp.tool()
 def guard_edit_file(path: str, old_string: str, new_string: str) -> str:
     """Replace *old_string* with *new_string* in *path*."""
+    if _guard_action() == "delete":
+        raise ValueError("guarded edits are not valid for a delete operation")
     target = _check(path, require_write=True)
     if not target.exists():
         raise FileNotFoundError(f"not found: {target}")
@@ -220,11 +248,16 @@ def guard_edit_file(path: str, old_string: str, new_string: str) -> str:
 
 @mcp.tool()
 def guard_delete_file(path: str) -> str:
-    """Delete *path* (an approved target only).
+    """Delete *path*, only while an approved ``delete`` operation is executing.
 
     Deleting is a declared operation: the path must be inside the approved
-    target list for the executing proposal, never merely inside the project.
+    target list for the executing delete proposal, never merely inside the
+    project. The chat persona cannot call it at all (its agent permissions deny
+    it), and this check is the backstop for any other tool path.
     """
+    if _guard_action() != "delete":
+        raise ValueError(
+            "guard_delete_file requires an approved delete operation in progress")
     target = _check(path, require_write=True)
     if not target.exists():
         raise FileNotFoundError(f"not found: {target}")
