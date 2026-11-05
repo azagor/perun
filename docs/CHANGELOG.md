@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Legacy package helpers removed
+
+* Removed `package_handoff.validate_package()` / `apply_package()`. The external
+  handoff has a single production path now: `derive_package()` computes the typed
+  pre/post manifest and `apply_operations()` applies it atomically with rollback.
+  Their tests were converted to the typed functions, including a mid-write
+  rollback case and an external-dependency rejection.
 
 ## v0.11.5
 

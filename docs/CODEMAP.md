@@ -685,8 +685,6 @@ applies it locally.
   stages through `mkstemp` temp files, verifies every postcondition
   (create/edit must be a regular file, delete must be gone), and restores all
   backups on any failure; `delete` ignores uploaded bytes.
-* `validate_package()` / `apply_package()` — deprecated compatibility helpers;
-  the production handoff uses `derive_package()` / `apply_operations()`.
 * The external download path is restricted to the proposal's approved targets;
   a claimant cannot request arbitrary project paths. External-dependency
   targets are rejected for external handoff (they require local execution).
@@ -1141,7 +1139,7 @@ Autonomous PerunChat chat participant for the Orchestrator.
   package/entry/entry-count caps. Handoff frames set `recipient_id`: results and
   downloads are delivered only to the claimant, upload chunks only to the room
   owner, and the gateway rejects unaddressed package chunks or result frames
-  from non-owners. `apply_package()` stages files and rolls back
+  from non-owners. `apply_operations()` stages files and rolls back
   on a mid-apply failure. The local host agent should use the normal
   shared-project pipeline instead.
 * Shared-project chat flow: `_shared_project_context()` injects a trust-filtered
