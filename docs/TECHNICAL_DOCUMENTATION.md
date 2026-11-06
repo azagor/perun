@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.12.0 (see §15). Typed changesets: mixed create/edit/delete in one atomic proposal
+**Latest release:** v0.12.1 (see §15). Guard fails closed on an executing proposal with no operations
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2710,6 +2710,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-06 — v0.12.1: Guard fails closed on an executing proposal with no operations
+
 ### 2026-11-06 — v0.12.0: Typed changesets: mixed create/edit/delete in one atomic proposal
 
 ### 2026-11-05 — v0.11.10: Single operator inbox: Settings links to the Needs you page

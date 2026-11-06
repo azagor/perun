@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-05T23:41:35+00:00",
+  "generated": "2026-11-06T06:08:50+00:00",
   "releases": [
+    {
+      "version": "0.12.1",
+      "date": "2026-11-06",
+      "body": "### Guard fails closed for an executing proposal with no operations\n\n* A legacy/invalid `executing` row whose `operations` list is empty now makes\n  the guard target scope ambiguous instead of returning an empty scope. Writes\n  are refused rather than silently allowed anywhere in the project allowlist.\n  This can only happen for a pre-v0.12 `other` row or a corrupt row; typed\n  changesets always carry operations."
+    },
     {
       "version": "0.12.0",
       "date": "2026-11-06",
@@ -45,11 +50,6 @@
       "version": "0.11.3",
       "date": "2026-11-05",
       "body": "### PerunChat prompt parity\n\n* The `perunchat_chat.md` tool list now names `perun-proposals_approve_package`\n  and `perun-proposals_reject_package`, matching the installed agent prompt and\n  the external-handoff paragraph."
-    },
-    {
-      "version": "0.11.2",
-      "date": "2026-11-05",
-      "body": "### Production-readiness audit fixes\n\n* **External apply audit baseline.** The policy audit now takes a fresh\n  target-scoped snapshot immediately before `apply_operations()` instead of\n  using the claim-time snapshot. A package that waits up to 24 h for its second\n  approval can no longer be marked `failed` because an unrelated file changed\n  while the operator was reviewing it.\n* **Delete postcondition.** Local execution requires a `delete` target to be\n  gone (`exists()`), not merely not-a-regular-file; a directory target is now\n  reported as a postcondition failure instead of a successful delete.\n* **Package replacement and expiry races.** Uploads for one proposal are\n  serialized per proposal and the CAS excludes a pending package. Reject and\n  both expiry sweeps update the row first and discard the archive only if they\n  won the CAS, so an approve that moved the proposal to `executing` keeps its\n  artifact. `reconcile_interrupted()` also discards a dead archive.\n* **Retry with a stale pre-image.** `retry()` refuses to copy an `edit`/`delete`\n  proposal whose target no longer exists (or a `create` whose target now\n  exists) with a clear `cannot retry: …` error instead of creating a proposal\n  guaranteed to fail at approval.\n* **Preview memory bound.** `build_preview()` stats a target before reading it\n  and never loads a file above the 200 KB diff budget just to discard it.\n* **MCP schema bootstrap.** The proposals MCP server runs `db.init_db()` at\n  startup so `approve_package`/`reject_package` work even when an MCP client is\n  the first process after an upgrade.\n* **Room prompt hardening.** The PerunChat agent and instruction files now state\n  that the guard/proposals servers are loaded in a bound project room, tell the\n  model to retry the exact prefixed tool name, and forbid claiming the tools are\n  unavailable without a failed tool result. Verified directly:\n  `opencode run --agent perunchat` in `ai-playground` returns the tree through\n  `perun-guard_guard_list_directory`."
     }
   ]
 }

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.12.1
+
+*Released 2026-11-06.*
+
 ### Guard fails closed for an executing proposal with no operations
 
 * A legacy/invalid `executing` row whose `operations` list is empty now makes
