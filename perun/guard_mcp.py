@@ -85,10 +85,15 @@ def _active_targets(project_path: Path) -> tuple[list[Path], bool]:
         return [], True
     if proposal is None:
         return [], False
+    operations = proposal.get("operations") or []
+    if not operations:
+        # An executing proposal without a declared changeset is ambiguous;
+        # fail closed rather than granting an unrestricted write scope.
+        return [], True
     try:
         return [
             path_guard.resolve_target(project_path, str(op.get("path") or ""))
-            for op in (proposal.get("operations") or [])
+            for op in operations
             if isinstance(op, dict) and str(op.get("path") or "").strip()
         ], False
     except Exception:

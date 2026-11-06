@@ -311,3 +311,27 @@ def test_guard_write_tools_refuse_during_a_delete_execution(tmp_path, monkeypatc
     with pytest.raises(ValueError, match="not valid for a delete operation"):
         guard_mcp.guard_edit_file("gone.txt", "bye", "new")
     assert (project_path / "gone.txt").read_text() == "bye"
+
+
+def test_guard_fails_closed_when_an_executing_proposal_has_no_operations(
+        tmp_path, monkeypatch):
+    from perun import action_proposals, db
+
+    project, project_path = _make_shared_guard_project(tmp_path, "guard-empty-ops")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "create", "operations": [{"path": "allowed.txt", "op": "create"}]},
+    )
+    action_proposals.approve(proposal["id"], "reviewer")
+    action_proposals._set_status(proposal["id"], "executing")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET operations='[]' WHERE id=?",
+            (proposal["id"],),
+        )
+
+    monkeypatch.chdir(project_path)
+    monkeypatch.setenv("PERUN_PROJECT_PATH", str(project_path))
+    with pytest.raises(ValueError, match="outside the project allowlist"):
+        guard_mcp.guard_write_file("allowed.txt", "must not be written")
+    assert not (project_path / "allowed.txt").exists()

@@ -1198,7 +1198,7 @@ Autonomous PerunChat chat participant for the Orchestrator.
   directories, and falls back to pass-through when unset. When the per-run env
   is absent (`standalone=False`), `_active_targets()` derives the target scope
   from the project's `executing` proposal; multiple concurrent executions fail
-  closed. `guard_delete_file` deletes only when the executing changeset declares
+  closed, and an executing proposal with no operations also fails closed. `guard_delete_file` deletes only when the executing changeset declares
   `delete` for that exact target; write/edit tools are refused for a delete
   target, and the chat persona's agent permissions deny delete outright. It also
   exposes `guard_list_checks` / `guard_run_check`: the room

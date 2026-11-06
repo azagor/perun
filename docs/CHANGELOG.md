@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Guard fails closed for an executing proposal with no operations
+
+* A legacy/invalid `executing` row whose `operations` list is empty now makes
+  the guard target scope ambiguous instead of returning an empty scope. Writes
+  are refused rather than silently allowed anywhere in the project allowlist.
+  This can only happen for a pre-v0.12 `other` row or a corrupt row; typed
+  changesets always carry operations.
 
 ## v0.12.0
 
