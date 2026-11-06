@@ -1180,7 +1180,9 @@ short-lived HMAC token bound to the proposal; `execute` (or the one-click
 - a run that reports success without creating, modifying or deleting any of the
   approved targets is also downgraded to `failed`, with a
   `[NO TARGET CHANGES: …]` note. An instruction-reading, conversational no-op
-  must never be recorded as `executed`;
+  must never be recorded as `executed`. Completion compares the before/after
+  `fs_audit.target_digests()` content hashes per target, so an identical write is
+  a real no-op and a content change with a restored mtime is still detected;
 - the prompt is passed to `opencode` as a temporary file
   (`use_prompt_file=True`), not as a command-line argument: instruction preamble
   plus request plus details routinely exceed the Windows ~32 KB limit, and a
@@ -1336,8 +1338,9 @@ rejects malformed token/nonce/expiry types, and `HITLConfig` requires the nonce
 window to exceed the token TTL by at least 5 seconds. The signed payload is the
 changeset (`operations`). A token issued before v0.12 against
 `action_type`/`targets` is refreshed from the stored approval on claim/run and
-rebound to the current changeset; the stored approval (status + window) is the
-authority, not the old signature.
+rebound to the current changeset **only when the legacy signature verifies**; a
+tampered signature is refused. The stored approval (status + window) is the
+authority for a later run, but not a bypass of token integrity.
 
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools

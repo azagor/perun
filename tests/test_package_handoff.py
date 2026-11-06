@@ -541,3 +541,18 @@ def test_apply_operations_rolls_back_a_delete_on_a_later_failure(tmp_path, monke
     assert (root / "gone.txt").read_text() == "old-gone"
     assert (root / "edit.txt").read_text() == "old-edit"
     assert not list(root.glob("*.perun-tmp"))
+
+
+def test_derive_package_refuses_too_many_operations(tmp_path):
+    project = _make_shared_project(tmp_path)
+    proposal = {
+        "id": "prop_too_many",
+        "operations": [
+            {"path": f"file{i}.py", "op": "create"} for i in range(101)
+        ],
+    }
+
+    _manifest_obj, ops, errors = package_handoff.derive_package(project, proposal, {})
+
+    assert ops == []
+    assert any("too many operations" in e for e in errors)

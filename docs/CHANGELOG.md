@@ -4,7 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Non-blocking changeset hardening
+
+* Legacy HITL token migration is now **strict**: a pre-v0.12 token is refreshed
+  only when its legacy `action_type`+`targets` signature verifies. A tampered
+  signature fails both payloads and is refused.
+* `targets` and `action_type` are derived from `operations` when a proposal is
+  read, so the UI/summary cannot disagree with the guard/package changeset even
+  if the legacy columns are edited directly.
+* Pending/approved legacy `other` rows are marked `failed` during migration with
+  an explicit “re-propose with create/edit/delete operations” reason.
+* Local-run completion now compares **content hashes** per target: an identical
+  write is a real no-op (`NO TARGET CHANGES`), and a content change with a
+  restored mtime is still detected.
+* `derive_package()` refuses more than 100 operations defensively.
+* Added a source-level UI test for the per-operation proposal chips.
 
 ## v0.12.2
 

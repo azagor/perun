@@ -674,10 +674,11 @@ applies it locally.
   exact bytes is the approved artifact.
 * `derive_package()` — the authoritative typed manifest. One operation per
   proposal target (`create`/`edit`/`delete`); the proposal's `operations` may mix
-  all three. Server-computed `pre_sha256`/`post_sha256`; refuses extra files,
-  duplicate targets, unknown operations, directories, symlinks, sensitive paths
-  and external-dependency targets. `create` requires an absent target,
-  `edit`/`delete` require an existing file, and a claim hash mismatch is refused.
+  all three. Server-computed `pre_sha256`/`post_sha256`; refuses more than 100
+  operations, extra files, duplicate targets, unknown operations, directories,
+  symlinks, sensitive paths and external-dependency targets. `create` requires
+  an absent target, `edit`/`delete` require an existing file, and a claim hash
+  mismatch is refused.
 * `build_preview()` — a bounded unified diff / binary summary per operation for
   the approval UI, capped in bytes and lines. It stats an old target before
   reading it and never loads a file above the 200 KB diff budget.
@@ -1288,8 +1289,9 @@ Autonomous PerunChat chat participant for the Orchestrator.
   `claim_execution()`, `upload_external_package()` and
   `approve_external_package()` refuse a target that changed in between. A HITL
   token issued against the old `action_type`+`targets` payload is refreshed from
-  the stored approval (status + seven-day window) on claim/run and rebound to the
-  current `operations`.
+  the stored approval (status + seven-day window) on claim/run only when its
+  legacy signature verifies, and rebound to the current `operations`; a tampered
+  token is refused.
   `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
   `approve()`/`reject()`; the human dashboard routes and
@@ -1305,7 +1307,8 @@ Autonomous PerunChat chat participant for the Orchestrator.
   archive. `retry()` refuses a copied changeset whose typed pre-image no longer
   matches, with a `cannot retry: …` error. `create()` requires `operations`,
   derives `targets`/`action_type`, and binds dashboard/API proposals to the
-  project's `project_chats.room_id` when the envelope carries none.
+  project's `project_chats.room_id` when the envelope carries none. `_row_to_dict()`
+  re-derives `targets`/`action_type` from `operations` on every read.
   `_prepare_execution()`
   fails early with “guard MCP not registered” when the project config lacks
   `perun-guard`, probes the guard server for `guard_write_file`, re-checks the
@@ -1314,7 +1317,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   loaded. `_build_execution_prompt()` lists each changeset operation with its
   matching guard tool and names the prefixed `perun-guard_guard_*` tools
   (including `guard_delete_file`); it instructs the model not to use the `skill`
-  tool or to give up after an “Unable to load skill …” error.
+  tool or to give up after an “Unable to load skill …” error. Local completion
+  compares the before/after `fs_audit.target_digests()` content hashes per target:
+  an identical write is a real `NO TARGET CHANGES`, and a content change with a
+  restored mtime is still detected.
   External execution claims are room/sender-bound and target-scoped, and expire
   after one hour by default (`external_execution_claim_ttl`, clamped to
   `[1 s, APPROVED_TTL_SECONDS]`); `claimed` proposals are returned

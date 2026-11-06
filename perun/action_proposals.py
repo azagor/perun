@@ -458,6 +458,17 @@ def _execution_details(proposal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _legacy_execution_details(proposal: dict[str, Any]) -> dict[str, Any]:
+    """The pre-v0.12 token payload, used only to migrate a stored approval."""
+    return {
+        "proposal_id": str(proposal.get("id") or proposal.get("proposal_id") or ""),
+        "project_id": proposal.get("project_id"),
+        "action_type": proposal.get("action_type"),
+        "targets": proposal.get("targets"),
+        "details": proposal.get("details"),
+    }
+
+
 def _approval_window_open(proposal: dict[str, Any]) -> bool:
     """Whether the stored approval is still inside its seven-day window."""
     stamp = str(proposal.get("approved_at") or "")
@@ -729,23 +740,34 @@ def claim_execution(
         check_expiry=False,      # the row's window authorizes the handoff
         consume_nonce=False,     # a failed CAS must not burn the token
     )
-    if not ok and token.get("token"):
+    if not ok and token.get("token") and _approval_window_open(proposal):
         # The HITL payload changed from action_type/targets to the changeset in
-        # v0.12. The stored approval (status + approved_at + window) is the
-        # authority; re-issue a token bound to the new operations instead of
-        # stranding an approval that a human already made.
-        fresh = hitl.default_engine().issue(proposal_id, _execution_details(proposal))
-        _store_approval_token(proposal_id, fresh)
-        token = fresh
-        ok, reason = hitl.default_engine().verify(
+        # v0.12. A genuine pre-v0.12 token is still valid against the legacy
+        # payload; migrate only that token. A tampered signature fails both and
+        # is refused.
+        legacy_ok, _legacy_reason = hitl.default_engine().verify(
             token=str(token.get("token") or ""),
             proposal_id=str(proposal["id"]),
-            execution_details=_execution_details(proposal),
+            execution_details=_legacy_execution_details(proposal),
             expiry_epoch=int(token.get("expiry_epoch") or 0),
             nonce=str(token.get("nonce") or ""),
             check_expiry=False,
             consume_nonce=False,
         )
+        if legacy_ok:
+            fresh = hitl.default_engine().issue(
+                proposal_id, _execution_details(proposal))
+            _store_approval_token(proposal_id, fresh)
+            token = fresh
+            ok, reason = hitl.default_engine().verify(
+                token=str(token.get("token") or ""),
+                proposal_id=str(proposal["id"]),
+                execution_details=_execution_details(proposal),
+                expiry_epoch=int(token.get("expiry_epoch") or 0),
+                nonce=str(token.get("nonce") or ""),
+                check_expiry=False,
+                consume_nonce=False,
+            )
     if not ok:
         raise ValueError(f"approval token invalid: {reason}")
 
@@ -1614,18 +1636,31 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         # The 180 s token only proves "the approver clicked just now". A later
         # "Run now" is authorized by the stored approval itself (status approved,
         # inside the seven-day window), so mint a fresh token from it instead of
-        # making the proposal permanently unexecutable after three minutes. This
-        # also migrates a token issued against the pre-changeset payload
-        # (action_type/targets) to the current operations payload.
-        fresh = engine.issue(proposal_id, execution_details)
-        _store_approval_token(proposal_id, fresh)
-        ok, reason = engine.validate(
-            token=fresh["token"],
-            proposal_id=proposal_id,
-            execution_details=execution_details,
-            expiry_epoch=int(fresh["expiry_epoch"]),
-            nonce=fresh["nonce"],
-        )
+        # making the proposal permanently unexecutable after three minutes. A
+        # token issued against the pre-changeset payload is also migrated here,
+        # but only if its legacy signature verifies.
+        refresh = reason == "expired"
+        if not refresh and token.get("token"):
+            legacy_ok, _legacy_reason = engine.verify(
+                token=str(token.get("token") or ""),
+                proposal_id=proposal_id,
+                execution_details=_legacy_execution_details(proposal),
+                expiry_epoch=int(token.get("expiry_epoch") or 0),
+                nonce=str(token.get("nonce") or ""),
+                check_expiry=False,
+                consume_nonce=False,
+            )
+            refresh = legacy_ok
+        if refresh:
+            fresh = engine.issue(proposal_id, execution_details)
+            _store_approval_token(proposal_id, fresh)
+            ok, reason = engine.validate(
+                token=fresh["token"],
+                proposal_id=proposal_id,
+                execution_details=execution_details,
+                expiry_epoch=int(fresh["expiry_epoch"]),
+                nonce=fresh["nonce"],
+            )
     if not ok:
         _set_status(proposal_id, "expired" if reason == "expired" else "failed", reason)
         raise ValueError(f"approval token invalid: {reason}")
@@ -1716,6 +1751,10 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         prompt = _build_execution_prompt(proposal, project)
         allowlist_env = _build_allowlist_env(project, targets)
         before_snapshot = fs_audit.snapshot(project, targets=targets)
+        try:
+            before_hashes = fs_audit.target_digests(project, targets)
+        except Exception:  # pragma: no cover - hashing is a best-effort backstop
+            before_hashes = {}
     except Exception as exc:
         _set_status(proposal_id, "failed", f"could not prepare execution: {exc}")
         raise ValueError(f"could not prepare execution: {exc}") from exc
@@ -1725,6 +1764,7 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         "prompt": prompt,
         "allowlist_env": allowlist_env,
         "before_snapshot": before_snapshot,
+        "before_hashes": before_hashes,
         "settings": settings,
     }
 
@@ -1830,6 +1870,27 @@ def _run_execution(context: dict[str, Any], orch: Any) -> dict[str, Any]:
             target for target in target_paths
             if any(_path_under(path, target) for path in changed_paths)
         ]
+        before_hashes = context.get("before_hashes") or {}
+        after_hashes: dict[str, Any] = {}
+        try:
+            after_hashes = fs_audit.target_digests(
+                project, [str(target) for target in target_paths])
+        except Exception:  # pragma: no cover - hashing is a best-effort backstop
+            after_hashes = {}
+        if before_hashes and after_hashes:
+            def _content_changed(target: Path) -> bool:
+                key = str(target)
+                before = before_hashes.get(key, "__missing__")
+                after = after_hashes.get(key, "__missing__")
+                if before != after:
+                    return True
+                if (
+                    (isinstance(before, dict) and before.get("kind") == "unverifiable")
+                    or (isinstance(after, dict) and after.get("kind") == "unverifiable")
+                ):
+                    return any(_path_under(path, target) for path in changed_paths)
+                return False
+            touched = [target for target in target_paths if _content_changed(target)]
         missing = [t for t in target_paths if t not in touched]
         failed: list[str] = []
         for target in target_paths:
@@ -2091,6 +2152,13 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     d["package_manifest"] = _from_json(d.get("package_manifest") or "{}", {})
     d["package_preview"] = _from_json(d.get("package_preview") or "[]", [])
     d["operations"] = _from_json(d.get("operations") or "[]", [])
+    operations = d["operations"]
+    if isinstance(operations, list) and operations:
+        # The changeset is authoritative; the legacy columns are display data.
+        # Derive them on read so a direct DB edit or an older writer cannot make
+        # the UI/summary disagree with the guard/package operations.
+        d["targets"] = operations_targets(operations)
+        d["action_type"] = operations_summary(operations)
     return d
 
 

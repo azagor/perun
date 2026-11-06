@@ -2303,3 +2303,114 @@ def test_claim_refreshes_a_legacy_approval_token(tmp_path):
     assert claimed["status"] == "claimed"
     refreshed = json.loads(claimed["approval_token"])
     assert refreshed["token"] != legacy["token"]
+
+
+def test_claim_refuses_a_tampered_approval_token(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "x", "operations": [{"path": target, "op": "edit"}]},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET approval_token=?, approval_expiry=? WHERE id=?",
+            (json.dumps({
+                "token": "0" * 64,
+                "nonce": "0" * 32,
+                "expiry_epoch": int(time.time()) + 180,
+            }), int(time.time()) + 180, proposal["id"]),
+        )
+
+    with pytest.raises(ValueError, match="approval token invalid"):
+        action_proposals.claim_execution(proposal["id"], "frambo")
+    assert action_proposals.get(proposal["id"])["status"] == "approved"
+
+
+def test_read_derives_targets_and_summary_from_operations(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    root = project["path"]
+    (root / "edit.py").write_text("old", encoding="utf-8")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "mixed", "operations": [
+            {"path": "new.py", "op": "create"},
+            {"path": "edit.py", "op": "edit"},
+        ]},
+    )
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET targets=?, action_type=? WHERE id=?",
+            ('["wrong.py"]', "create", proposal["id"]),
+        )
+
+    refreshed = action_proposals.get(proposal["id"])
+    assert refreshed["targets"] == ["new.py", "edit.py"]
+    assert refreshed["action_type"] == "mixed"
+
+
+def test_legacy_other_rows_are_failed_on_migration(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    with db.db() as conn:
+        conn.execute(
+            "INSERT INTO action_proposals (id, project_id, requester, action_type, "
+            "intent, targets, details, status, expires_at, execution_mode, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("prop_legacy_other", project["id"], "frambo", "other", "x",
+             '["api.py"]', "{}", "pending", 9_999_999_999, "",
+             "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        db._migrate(conn)
+        row = db.one(conn, "SELECT status, result FROM action_proposals WHERE id=?",
+                     ("prop_legacy_other",))
+    assert row["status"] == "failed"
+    assert "not supported by the changeset model" in row["result"]
+
+
+def test_local_edit_with_identical_content_is_failed(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project, content="old")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit", "operations": [{"path": target, "op": "edit"}]},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    class Noop:
+        def run_and_wait(self, *a, **kw):
+            return {"run": {"status": "done"}, "reply": "done"}
+
+    result = action_proposals.execute(proposal["id"], orchestrator_instance=Noop())
+    assert result["status"] == "failed"
+    assert "NO TARGET CHANGES" in result["result"]
+    assert (project["path"] / "api.py").read_text() == "old"
+
+
+def test_local_edit_detected_even_when_mtime_is_preserved(tmp_path):
+    import os
+
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project, content="old")
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "edit", "operations": [{"path": target, "op": "edit"}]},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+    path = project["path"] / "api.py"
+    before = path.stat()
+
+    class Orch:
+        def run_and_wait(self, *a, **kw):
+            path.write_text("new", encoding="utf-8")
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return {"run": {"status": "done"}, "reply": "done"}
+
+    result = action_proposals.execute(proposal["id"], orchestrator_instance=Orch())
+    assert result["status"] == "executed"
+    assert path.read_text() == "new"

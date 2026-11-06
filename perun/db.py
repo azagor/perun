@@ -917,6 +917,24 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 "UPDATE action_proposals SET operations=? WHERE id=?",
                 (json.dumps(ops, ensure_ascii=False), row["id"]),
             )
+    # ``other`` was a free-form label in the old model. It has no typed
+    # operations, so it cannot be claimed or executed by the changeset pipeline.
+    # Mark pending/approved rows terminal with an explicit reason instead of
+    # leaving an unclaimable proposal in the active list.
+    try:
+        conn.execute(
+            "UPDATE action_proposals SET status='failed', result=?, updated_at=? "
+            "WHERE action_type='other' "
+            "AND (operations IS NULL OR operations IN ('', '[]')) "
+            "AND status IN ('pending', 'approved')",
+            (
+                "Legacy 'other' proposal is not supported by the changeset model; "
+                "re-propose it with create/edit/delete operations.",
+                time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            ),
+        )
+    except sqlite3.OperationalError:
+        pass
     # Cancellations were initially recorded as ``rejected`` with a
     # ``cancelled: <reason>`` result. Give them their own terminal status.
     try:

@@ -350,6 +350,8 @@ def derive_package(
             raw_ops = []
     if not isinstance(raw_ops, list) or not raw_ops:
         return {}, [], ["a proposal must declare at least one operation"]
+    if len(raw_ops) > 100:
+        return {}, [], ["proposal has too many operations (max 100)"]
 
     cfg = shared_projects.load(root)
     external_deps = cfg.get("external_deps", [])
