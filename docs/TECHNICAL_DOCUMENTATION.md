@@ -1133,7 +1133,7 @@ All responses are `{"ok": true, …}`; errors are `HTTPException` JSON.
 | GET | `/api/routing/decisions` | Recent `routing_decision` rows for the dashboard panel: `total`, `by_action`, `unknown_share`, `shadow` count, `enabled`/`shadow_mode` from settings, and per-decision action/project/confidence/`matched_by`/candidates (never the message text) |
 | POST | `/api/routing/decisions/{id}/misroute` | Record that a routing decision was wrong (`routing_misroute` activity row, used for threshold tuning); idempotent per decision, and a note that looks like a credential is stored as `[redacted]` |
 | DELETE | `/api/routing/decisions/{id}/misroute` | Undo a misroute report (`reported: false` in the panel row again) |
-| POST | `/api/projects/{slug}/proposals` | Create a proposal from an Action Envelope |
+| POST | `/api/projects/{slug}/proposals` | Create a changeset proposal from an Action Envelope (`operations`: one `{path, op}` per target; `create`/`edit`/`delete` may mix) |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/approve` | Approve a proposal and issue its short-lived HMAC token |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/reject` | Reject a proposal (only while `pending`) |
 | POST | `/api/projects/{slug}/proposals/{proposal_id}/cancel` | Withdraw an approved-but-unclaimed proposal (requester or owner); records the terminal `cancelled` status with the reason |
@@ -2092,7 +2092,7 @@ project. `ChatCore.proposalIds(text)` (unit-tested, deduped, first-seen order)
 extracts at most eight per message; `perun.js` turns each into a chip, then
 fetches `GET /api/proposals/{id}` once to colour it by status and put the project
 in its tooltip. Clicking the chip opens a peek card (project, status, requester,
-intent, targets, result) with the state-appropriate management actions and an
+intent, operations, targets, result) with the state-appropriate management actions and an
 **Open in project** action that navigates to
 `#/project/<slug>/shared/<prop_…>`. The proposal id stays in the URL: `viewProject`
 parses it, `setTab` preserves it, and the Shared card re-applies the focus on

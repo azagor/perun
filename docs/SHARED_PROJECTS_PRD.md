@@ -430,11 +430,12 @@ so I can re-verify or remove them.
 **US-7.1 — Chat intent becomes an action proposal**
 
 - **AC:** When a trusted participant asks for a change, the Chat Agent emits a
-  structured Action Envelope (intent, targets, proposed commands, scope)
+  structured Action Envelope (intent, operations, proposed commands, scope)
   instead of executing anything.
 - **AC:** The envelope is validated against trust + room membership +
-  `manifest_rev` + every target ∈ allowlist; invalid ones are answered with a
-  refusal reason in chat.
+  `manifest_rev` + every operation path ∈ allowlist; invalid ones are answered
+  with a refusal reason in chat. `operations` is one `{path, op}` per target;
+  `create`/`edit`/`delete` may be mixed in one changeset.
 
 **US-7.2 — HITL approval gates mutations**
 
@@ -611,7 +612,9 @@ The Chat Agent emits an **Action Envelope** JSON (not free text):
   "room_id": "grp:...",
   "requester": "frambo",
   "intent": "add validation to api.py",
-  "targets": ["<project-root>/perunchat/api.py"],
+  "operations": [
+    {"path": "<project-root>/perunchat/api.py", "op": "edit"}
+  ],
   "proposed_steps": [{"tool": "edit", "path": "...", "summary": "..."}],
   "manifest_rev": 7,
   "timestamp": "..."
@@ -622,7 +625,9 @@ Validation (in order):
 
 1. `requester` is trusted ∧ room member.
 2. `manifest_rev` is current.
-3. Every `target` ∈ allowlist.
+3. Every operation path ∈ allowlist.
+4. Exactly one operation per path; `create` target absent, `edit`/`delete`
+   target present as a regular file.
 
 Fail → refusal reason posted to chat, no proposal created.
 
