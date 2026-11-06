@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.12.2
+
+*Released 2026-11-06.*
+
 ### Existing approved proposals survive the changeset migration
 
 * A HITL approval token issued before v0.12 was bound to `action_type` +

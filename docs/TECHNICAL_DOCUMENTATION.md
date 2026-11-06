@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.12.1 (see §15). Guard fails closed on an executing proposal with no operations
+**Latest release:** v0.12.2 (see §15). Refresh legacy HITL tokens for the changeset payload
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2714,6 +2714,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-06 — v0.12.2: Refresh legacy HITL tokens for the changeset payload
+
 ### 2026-11-06 — v0.12.1: Guard fails closed on an executing proposal with no operations
 
 ### 2026-11-06 — v0.12.0: Typed changesets: mixed create/edit/delete in one atomic proposal

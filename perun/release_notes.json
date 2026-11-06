@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-06T06:08:50+00:00",
+  "generated": "2026-11-06T06:21:33+00:00",
   "releases": [
+    {
+      "version": "0.12.2",
+      "date": "2026-11-06",
+      "body": "### Existing approved proposals survive the changeset migration\n\n* A HITL approval token issued before v0.12 was bound to `action_type` +\n  `targets`. The changeset payload now binds `operations`, so an old token would\n  have failed on claim/run and stranded a human approval. `claim_execution()` and\n  `_prepare_execution()` now refresh the token from the **stored approval**\n  (status, approver, seven-day window) when the signature no longer matches, and\n  bind the fresh token to the current changeset. A legacy-token test covers the\n  claim path."
+    },
     {
       "version": "0.12.1",
       "date": "2026-11-06",
@@ -45,11 +50,6 @@
       "version": "0.11.4",
       "date": "2026-11-05",
       "body": "### Interrupted-apply cleanup\n\n* `reconcile_interrupted()` now also marks a stranded package state as `failed`\n  and records the restart reason, so a proposal left mid-apply does not keep\n  advertising a pending/approved package after the archive is discarded."
-    },
-    {
-      "version": "0.11.3",
-      "date": "2026-11-05",
-      "body": "### PerunChat prompt parity\n\n* The `perunchat_chat.md` tool list now names `perun-proposals_approve_package`\n  and `perun-proposals_reject_package`, matching the installed agent prompt and\n  the external-handoff paragraph."
     }
   ]
 }
