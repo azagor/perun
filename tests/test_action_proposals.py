@@ -2270,3 +2270,36 @@ def test_local_mixed_changeset_postconditions(tmp_path):
     assert (root / "new.py").read_text() == "created"
     assert (root / "edit.py").read_text() == "new"
     assert not (root / "gone.py").exists()
+
+
+def test_claim_refreshes_a_legacy_approval_token(tmp_path):
+    project = _make_project(tmp_path)
+    _enable_shared(project)
+    target = _edit_target(project)
+    proposal = action_proposals.create(
+        project, "frambo",
+        {"intent": "x", "operations": [{"path": target, "op": "edit"}]},
+    )
+    action_proposals.approve(proposal["id"], "owner")
+
+    # A token issued against the pre-changeset payload: action_type + targets.
+    from perun import hitl
+
+    legacy_details = {
+        "proposal_id": proposal["id"],
+        "project_id": project["id"],
+        "action_type": "edit",
+        "targets": [target],
+        "details": {},
+    }
+    legacy = hitl.default_engine().issue(proposal["id"], legacy_details)
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE action_proposals SET approval_token=?, approval_expiry=? WHERE id=?",
+            (json.dumps(legacy), legacy["expiry_epoch"], proposal["id"]),
+        )
+
+    claimed = action_proposals.claim_execution(proposal["id"], "frambo")
+    assert claimed["status"] == "claimed"
+    refreshed = json.loads(claimed["approval_token"])
+    assert refreshed["token"] != legacy["token"]

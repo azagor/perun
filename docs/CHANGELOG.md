@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Existing approved proposals survive the changeset migration
+
+* A HITL approval token issued before v0.12 was bound to `action_type` +
+  `targets`. The changeset payload now binds `operations`, so an old token would
+  have failed on claim/run and stranded a human approval. `claim_execution()` and
+  `_prepare_execution()` now refresh the token from the **stored approval**
+  (status, approver, seven-day window) when the signature no longer matches, and
+  bind the fresh token to the current changeset. A legacy-token test covers the
+  claim path.
 
 ## v0.12.1
 

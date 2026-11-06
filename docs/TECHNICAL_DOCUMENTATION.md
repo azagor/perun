@@ -1333,7 +1333,11 @@ even when an MCP client starts before the main service migrates the schema.
 HITL tokens are HMAC-SHA256 over the proposal id, a canonical JSON action hash,
 expiry and nonce. `validate()` checks the signature before consuming the nonce,
 rejects malformed token/nonce/expiry types, and `HITLConfig` requires the nonce
-window to exceed the token TTL by at least 5 seconds.
+window to exceed the token TTL by at least 5 seconds. The signed payload is the
+changeset (`operations`). A token issued before v0.12 against
+`action_type`/`targets` is refreshed from the stored approval on claim/run and
+rebound to the current changeset; the stored approval (status + window) is the
+authority, not the old signature.
 
 The `perun-guard` MCP server is the sanctioned filesystem path. The
 `perun-shared` agent allows only the prefixed `perun-guard_guard_*` tools

@@ -1286,7 +1286,10 @@ Autonomous PerunChat chat participant for the Orchestrator.
   enforces the typed pre-image per operation: `create` targets are absent and
   `edit`/`delete` targets are regular files (`_assert_action_targets()`).
   `claim_execution()`, `upload_external_package()` and
-  `approve_external_package()` refuse a target that changed in between.
+  `approve_external_package()` refuse a target that changed in between. A HITL
+  token issued against the old `action_type`+`targets` payload is refreshed from
+  the stored approval (status + seven-day window) on claim/run and rebound to the
+  current `operations`.
   `_same_actor()` enforces
   the requester-cannot-self-approve rule for agent callers inside
   `approve()`/`reject()`; the human dashboard routes and

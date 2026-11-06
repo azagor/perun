@@ -729,6 +729,23 @@ def claim_execution(
         check_expiry=False,      # the row's window authorizes the handoff
         consume_nonce=False,     # a failed CAS must not burn the token
     )
+    if not ok and token.get("token"):
+        # The HITL payload changed from action_type/targets to the changeset in
+        # v0.12. The stored approval (status + approved_at + window) is the
+        # authority; re-issue a token bound to the new operations instead of
+        # stranding an approval that a human already made.
+        fresh = hitl.default_engine().issue(proposal_id, _execution_details(proposal))
+        _store_approval_token(proposal_id, fresh)
+        token = fresh
+        ok, reason = hitl.default_engine().verify(
+            token=str(token.get("token") or ""),
+            proposal_id=str(proposal["id"]),
+            execution_details=_execution_details(proposal),
+            expiry_epoch=int(token.get("expiry_epoch") or 0),
+            nonce=str(token.get("nonce") or ""),
+            check_expiry=False,
+            consume_nonce=False,
+        )
     if not ok:
         raise ValueError(f"approval token invalid: {reason}")
 
@@ -1593,11 +1610,13 @@ def _prepare_execution(proposal_id: str) -> dict[str, Any]:
         expiry_epoch=int(expiry),
         nonce=token.get("nonce", ""),
     )
-    if not ok and reason == "expired" and _approval_window_open(proposal):
+    if not ok and _approval_window_open(proposal):
         # The 180 s token only proves "the approver clicked just now". A later
         # "Run now" is authorized by the stored approval itself (status approved,
         # inside the seven-day window), so mint a fresh token from it instead of
-        # making the proposal permanently unexecutable after three minutes.
+        # making the proposal permanently unexecutable after three minutes. This
+        # also migrates a token issued against the pre-changeset payload
+        # (action_type/targets) to the current operations payload.
         fresh = engine.issue(proposal_id, execution_details)
         _store_approval_token(proposal_id, fresh)
         ok, reason = engine.validate(
