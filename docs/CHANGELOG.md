@@ -4,7 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Proposal peek shows the changeset operations
+
+* Clicking a `prop_…` chip in PerunChat still opens the proposal peek; the peek
+  now lists each `create`/`edit`/`delete` operation with its path (instead of
+  only the derived target list). Legacy rows without operations keep the
+  Targets fallback.
 
 ## v0.12.3
 

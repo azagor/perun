@@ -324,15 +324,24 @@ async function openProposalPeek(proposalId) {
         const prop = loaded.proposal || {};
         const project = loaded.project || {};
         const targets = prop.targets || [];
+        const operations = Array.isArray(prop.operations) ? prop.operations : [];
+        const operationHtml = operations.length
+            ? operations.map((op) =>
+                `<span class="chip"><b>${esc(String(op.op || 'op'))}</b> ${esc(String(op.path || ''))}</span>`
+              ).join(' ')
+            : '<span class="muted">(none)</span>';
         const targetHtml = targets.length
             ? targets.map((t) => `<span class="chip">${esc(String(t))}</span>`).join(' ')
             : '<span class="muted">(none)</span>';
+        const changeHtml = operations.length
+            ? `<span class="k">Operations</span><span class="v">${operationHtml}</span>`
+            : `<span class="k">Targets</span><span class="v">${targetHtml}</span>`;
         const lines = [
             `<span class="k">Project</span><span class="v">${esc(project.name || project.slug || '?')}</span>`,
             `<span class="k">Status</span><span class="v">${proposalBadge(prop.status)}</span>`,
             `<span class="k">Requested by</span><span class="v">${esc(prop.requester || '?')}</span>`,
             `<span class="k">Intent</span><span class="v">${esc(prop.intent || '')}</span>`,
-            `<span class="k">Targets</span><span class="v">${targetHtml}</span>`,
+            changeHtml,
             `<span class="k">Created</span><span class="v">${esc(timeAgo(prop.created_at))}</span>`,
         ];
         if (prop.approved_by) {
