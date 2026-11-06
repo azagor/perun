@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-06T06:21:33+00:00",
+  "generated": "2026-11-06T06:47:41+00:00",
   "releases": [
+    {
+      "version": "0.12.3",
+      "date": "2026-11-06",
+      "body": "### Non-blocking changeset hardening\n\n* Legacy HITL token migration is now **strict**: a pre-v0.12 token is refreshed\n  only when its legacy `action_type`+`targets` signature verifies. A tampered\n  signature fails both payloads and is refused.\n* `targets` and `action_type` are derived from `operations` when a proposal is\n  read, so the UI/summary cannot disagree with the guard/package changeset even\n  if the legacy columns are edited directly.\n* Pending/approved legacy `other` rows are marked `failed` during migration with\n  an explicit “re-propose with create/edit/delete operations” reason.\n* Local-run completion now compares **content hashes** per target: an identical\n  write is a real no-op (`NO TARGET CHANGES`), and a content change with a\n  restored mtime is still detected.\n* `derive_package()` refuses more than 100 operations defensively.\n* Added a source-level UI test for the per-operation proposal chips."
+    },
     {
       "version": "0.12.2",
       "date": "2026-11-06",
@@ -45,11 +50,6 @@
       "version": "0.11.5",
       "date": "2026-11-05",
       "body": "### Follow-up audit cleanup\n\n* The shared-project prompt note no longer says \"you may not execute tools\";\n  it now explicitly permits the read-only `perun-guard_guard_*` inspection tools\n  and the `perun-proposals_*` coordination tools, while still forbidding direct\n  edits, shell, web and subagents.\n* The per-proposal package lock map is a `WeakValueDictionary`, so it cannot\n  grow without bound over the life of a long-running bridge.\n* The proposal row uses a block `<div class=\"intent\">` instead of a `<span>`\n  wrapping the package `<details>` preview, making the generated HTML valid.\n* `validate_package()`/`apply_package()` are marked as deprecated compatibility\n  helpers; the production handoff uses `derive_package()`/`apply_operations()`."
-    },
-    {
-      "version": "0.11.4",
-      "date": "2026-11-05",
-      "body": "### Interrupted-apply cleanup\n\n* `reconcile_interrupted()` now also marks a stranded package state as `failed`\n  and records the restart reason, so a proposal left mid-apply does not keep\n  advertising a pending/approved package after the archive is discarded."
     }
   ]
 }

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.12.3
+
+*Released 2026-11-06.*
+
 ### Non-blocking changeset hardening
 
 * Legacy HITL token migration is now **strict**: a pre-v0.12 token is refreshed
