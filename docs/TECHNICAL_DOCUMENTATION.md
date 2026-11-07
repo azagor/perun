@@ -1574,11 +1574,30 @@ nothing registered.
 
 Commands: `/start` `/help`, `/projects` (lists the orchestrator first),
 `/project <name|#>`, `/orchestrator` (`/perun`, `/overseer`) to switch to the
-control plane in place, `/new` `/reset`, `/status`, `/stop` `/cancel`,
-`/remember <fact>`, `/recall <query>`, `/index`, `/pair <code>`. Anything else is
+control plane in place, `/new` `/reset`, `/status`, `/stop` `/cancel`, `/now`,
+`/health`, `/runs`, `/usage`, `/resume`, `/diff`, `/routing`,
+`/remember <fact>`, `/recall <query>`, `/index`, `/pair <code>`, and the inbox
+commands `/pending`, `/answer`, `/cancel`, `/mute`, `/unmute`. The short list is
+also published as Telegram's native command menu (`setMyCommands`) at bridge
+start. Anything else is
 treated as a prompt and answered by a Perun-orchestrated run, with a typing
-indicator and reply threading. `format_html()` renders a safe subset of Markdown
-into Telegram HTML; `chunk()` splits at 3900 chars.
+indicator and reply threading.
+
+**Rendering.** `perun/telegram_format.py` turns a small Markdown subset (bold,
+italic, underline, strikethrough, spoiler, headings, links, code, `>`
+blockquotes) into safe Telegram HTML, expands `{{time:ISO}}` into `<tg-time>`
+for a live "3m ago", and chunks fence-aware at 3 900 chars. A message that
+Telegram refuses is retried as plain text **with the keyboard kept**; coloured
+or copy buttons are downgraded before the keyboard is ever dropped. Cards use a
+single emoji badge plus a bold title, and buttons carry Telegram's `style`
+(green = safe/affirmative, blue = neutral, red = destructive).
+
+**Live progress.** In private chats the bridge streams a `sendMessageDraft`
+preview while the run generates: an empty draft renders "Thinking…", later
+updates show the current tool and the tail of the output (throttled to 1.6 s).
+The draft's Stop button arrives as `stopped_message_generation` and cancels that
+exact run; the final answer is then sent as a normal message. Groups and Bot API
+servers without drafts keep the typing indicator.
 
 **Natural-language routing (opt-in).** With `Settings.routing_enabled` on, a
 plain message first goes through `perun.routing.route()` in `run_message()`:
@@ -1755,11 +1774,14 @@ dashboard, so a restart cannot flood the chat.
 **Digest (burst coalescing).** `attention_digest_seconds` (30, `0` disables) makes
 *informational* notices wait: a `room` item is held for the window, and everything
 for the same project that arrives meanwhile becomes one card — "🗂 N waiting in
-<project>" with up to five `• att_N — question` lines, each behind an **Open
-att_N** button. A lone item still arrives when the window closes; the wait is a
+<project>" with up to five kind-badged `att_N — question` lines, each behind a
+**📖 Open att_N** button, plus a **🔕 Mute <project>** row. A lone item still
+arrives when the window closes; the wait is a
 coalescing window, not a delay schedule. Decisions are never digested: a
 permission, form, proposal, handoff or `perun_ask_operator` goes out immediately,
-because those block work. Opening an item from a digest posts a **new** card and
+because those block work. Muting is per chat and reversible with
+`/unmute <project>`; the mute button is removed from the card after the tap.
+Opening an item from a digest posts a **new** card and
 records that delivery, so a reply-to maps to one item; a tap on an item's own card
 still edits it in place. A flush also writes an `attention_digest` activity row, so
 a restart does not list the same item again (the in-memory set does not survive
@@ -1780,7 +1802,14 @@ human's own words).
 decisions, proposal verdicts, the `options` an agent passed to
 `perun_ask_operator`, and a one-field form whose type is boolean (Yes/No),
 select-like (one row per value) or multiselect (tick/untick rows plus a
-`Send N selected` row). `callback_data` carries an *index* — `att:<id>:o<i>`,
+`Send N selected` row). Buttons carry Telegram's colour hint: `success` (green)
+for the safe or affirmative action, `primary` (blue) for neutral navigation, and
+`danger` (red) for a destructive action or a broad grant (Reject, confirm
+always-allow). The permission card keeps "Allow once" on its own first row and
+puts "Always allow" + "Reject" on the second. A Bot API server that predates
+button styles rejects them; the bridge retries with the same buttons minus
+`style`/`copy_text` before it ever drops the keyboard.
+`callback_data` carries an *index* — `att:<id>:o<i>`,
 `t<i>`, `d` — never a label, so it always fits Telegram's 64-byte cap and a card
 edit cannot change what an old button means. A tick stores the choice in
 `ref['toggles']` and re-renders; only `d` delivers, through the same

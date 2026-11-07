@@ -278,6 +278,14 @@ with `python -m perun project-roots --add <name> <path>`.
   project or the newest session. Producers only write rows — the process that owns
   the Telegram poller is the only sender, and every reply runs its adapter before
   the item is closed.
+* **Formatting never eats the keyboard.** All Telegram rendering goes through
+  `perun/telegram_format.py` (emoji badge + bold title, rich HTML, fence-aware
+  chunking, `<tg-time>`). A rejected message is retried as plain text **with
+  `reply_markup` kept**; unsupported `style`/`copy_text` fields are degraded
+  first, and the keyboard is dropped only as a last resort. Live progress uses
+  `sendMessageDraft` in private chats only, throttled, and must never delay or
+  duplicate the final reply; `stopped_message_generation` cancels that exact run.
+  Keep button text redacted like the card itself.
 * **Detection is event-driven, polling is the net.** The watcher subscribes to the
   shared `EventHub` as a global subscriber and polls once per debounced burst; the
   `attention_poll_seconds` timer only reconciles. Keep both paths — events make a

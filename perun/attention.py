@@ -25,6 +25,7 @@ from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import action_proposals, config, db, opencode_api, registry
+from . import telegram_format as tg
 
 LOG = logging.getLogger("perun.attention")
 
@@ -290,12 +291,37 @@ def project_label(item: Dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
+_KIND_LABELS = {
+    "permission": "Permission",
+    "form": "Form",
+    "proposal": "Proposal",
+    "room": "Room message",
+}
+
+
+def _meta_line(item: Dict[str, Any]) -> str:
+    """The dim second line: session, age, and the copyable attention id."""
+    bits = [f"🛰 `{_session_label(item)}`"]
+    age = tg.time_marker(str(item.get("created_at") or ""))
+    if age:
+        bits.append(f"🕒 {age}")
+    bits.append(f"`att_{item['id']}`")
+    return " · ".join(bits)
+
+
+def _quote(text: str) -> str:
+    lines = str(text or "").splitlines() or [""]
+    return "\n".join("> " + line if line else ">" for line in lines)
+
+
 def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
-    """Plain-text card body (the bridge applies Telegram's HTML conversion)."""
+    """Markdown-ish card body (the bridge applies Telegram's HTML conversion)."""
     ident = item["id"]
     kind = item["target_kind"]
     ref = item.get("ref") or {}
-    head = f"*{project_label(item)}* · {_session_label(item)} · att_{ident}"
+    label = _KIND_LABELS.get(kind, "Question")
+    head = tg.heading(kind, label, project=project_label(item))
+    meta = _meta_line(item)
 
     if kind == "permission":
         action = _clip(ref.get("action") or "use a tool", 40)
@@ -304,40 +330,40 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
             # A shell permission's resource *is* the command: show it (redacted),
             # never a basename.
             shown = ", ".join(_redact(_clip(r, 200)) for r in resources[:3])
+            if len(resources) > 3:
+                shown += f" (+{len(resources) - 3} more)"
+            ask = f"**{action}** wants to run:\n{_quote(shown)}"
         else:
             shown = ", ".join(
                 _redact(_display_resource(r, show_paths)) for r in resources[:3]
             )
-        if len(resources) > 3:
-            shown += f" (+{len(resources) - 3} more)"
-        lines = [
-            f"🔐 {head}",
-            f"Permission requested: *{action}*"
-            + (f" — {shown}" if shown else ""),
-        ]
+            if len(resources) > 3:
+                shown += f" (+{len(resources) - 3} more)"
+            ask = f"**{action}**" + (f" — {shown}" if shown else "")
+        lines = [head, meta, ask]
         save = ref.get("save") or []
         if save:
             saved = ", ".join(_redact(str(s)) for s in save[:3])
-            lines.append(f"⚙️ _Always allow_ would save: `{saved}`")
-        lines.append("Choose, or reply with feedback to reject.")
+            lines.append(f"⚙️ *Always allow* would save: `{saved}`")
+        lines.append("*Choose, or reply with feedback to reject.*")
         return "\n".join(lines)
 
     if kind == "form":
         fields = [f for f in (ref.get("fields") or []) if isinstance(f, dict)]
-        lines = [f"📝 {head}", _redact(item.get("question") or "")]
+        lines = [head, meta, _quote(_redact(item.get("question") or ""))]
         if not fields:
-            return "\n".join(lines + ["Reply with your answer."])
+            return "\n".join(lines + ["*Reply with your answer.*"])
         shown = fields[:6]
         hidden = len(fields) - len(shown)
         # When the choices are not on the keyboard, the text has to carry them:
         # never truncate in silence.
         tappable = keyboard(item) is not None
-        lines.append("Answer this field:" if len(fields) == 1
-                     else f"Answer these {len(fields)} fields:")
+        lines.append("*Answer this field:*" if len(fields) == 1
+                     else f"*Answer these {len(fields)} fields:*")
         for index, field in enumerate(shown, 1):
             key = str(field.get("key") or "")
             title = str(field.get("title") or "").strip()
-            label = f"*{_redact(title)}*" if title and title != key else f"`{key}`"
+            label = f"**{_redact(title)}**" if title and title != key else f"`{key}`"
             notes: List[str] = []
             if title and title != key:
                 notes.append(f"`{key}`")
@@ -360,11 +386,11 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
                           if 0 <= i < len(options)]
                 if picked:
                     lines.append("Selected: " + ", ".join(_redact(p) for p in picked))
-                lines.append("Tap the options below, then Send.")
+                lines.append("*Tap the options below, then Send.*")
             elif _form_answer_field(item) is not None:
-                lines.append("Pick one below.")
+                lines.append("*Pick one below.*")
             else:
-                lines.append("Reply with the value.")
+                lines.append("*Reply with the value.*")
         else:
             keys = [str(f.get("key")) for f in shown]
             lines.append("Reply with one line per field:")
@@ -378,25 +404,28 @@ def render(item: Dict[str, Any], *, show_paths: bool = False) -> str:
 
     if kind == "proposal":
         return "\n".join([
-            f"📋 {head}",
-            _redact(item.get("question") or ""),
-            "Approve or reject. Approving pins the current target contents.",
+            head,
+            meta,
+            _quote(_redact(item.get("question") or "")),
+            "*Approve or reject. Approving pins the current target contents.*",
         ])
 
     if kind == "room":
         return "\n".join([
-            f"💬 {head} · `{item.get('target_id')}`",
-            _redact(item.get("question") or ""),
+            head,
+            f"{meta} · `{item.get('target_id')}`",
+            _quote(_redact(item.get("question") or "")),
             *_option_lines(item),
-            "Reply to this message and it will be posted in that room.",
+            "*Reply to this message and it will be posted in that room.*",
         ])
 
     # session / handoff
     return "\n".join([
-        f"❓ {head}",
-        _redact(item.get("question") or ""),
+        head,
+        meta,
+        _quote(_redact(item.get("question") or "")),
         *_option_lines(item),
-        "Reply to this message; your answer goes into that session.",
+        "*Reply to this message; your answer goes into that session.*",
     ])
 
 
@@ -442,6 +471,19 @@ def _choice_value(field: Dict[str, Any], label: str) -> Any:
     return label
 
 
+def _button(text: str, data: str, style: str = "") -> Dict[str, str]:
+    """One inline button; ``style`` is Telegram's coloured-button field.
+
+    ``success`` = green (safe/primary), ``primary`` = blue (neutral),
+    ``danger`` = red (destructive or broad).  Older Bot API servers reject the
+    field, so :meth:`TelegramBridge.send` retries without the markup.
+    """
+    button: Dict[str, str] = {"text": str(text)[:60], "callback_data": data}
+    if style in ("success", "primary", "danger"):
+        button["style"] = style
+    return button
+
+
 def _choice_rows(item: Dict[str, Any], labels: List[str], *, prefix: str = "o",
                  toggled: Optional[set] = None) -> List[List[Dict[str, str]]]:
     rows = []
@@ -449,10 +491,11 @@ def _choice_rows(item: Dict[str, Any], labels: List[str], *, prefix: str = "o",
         # Button text leaves Perun just like card text, so it obeys the same
         # redaction rule; the *delivered* value stays the raw label.
         text = _redact(label)
+        style = "primary"
         if toggled is not None:
             text = ("✅ " if index in toggled else "⬜️ ") + text
-        rows.append([{"text": str(text)[:60],
-                      "callback_data": f"att:{item['id']}:{prefix}{index}"}])
+            style = "success" if index in toggled else "primary"
+        rows.append([_button(text, f"att:{item['id']}:{prefix}{index}", style)])
     return rows
 
 
@@ -464,19 +507,29 @@ def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     kind = item["target_kind"]
     if kind == "permission":
-        # Keep "Allow once" first, the destructive choices on their own rows.
+        # "Allow once" is the safe action (green); the persistent grant and the
+        # destructive refusal share a row so the card stays short.
         return {"inline_keyboard": [
-            [{"text": "Allow once", "callback_data": f"att:{item['id']}:once"}],
-            [{"text": "Always allow", "callback_data": f"att:{item['id']}:always"}],
-            [{"text": "Reject", "callback_data": f"att:{item['id']}:reject"}],
+            [_button("✅ Allow once", f"att:{item['id']}:once", "success")],
+            [_button("🔓 Always allow", f"att:{item['id']}:always", "primary"),
+             _button("⛔ Reject", f"att:{item['id']}:reject", "danger")],
         ]}
     if kind == "proposal":
         options = item.get("options") or PROPOSAL_OPTIONS
-        return {"inline_keyboard": [
-            [{"text": _redact(str(opt.get("label") or opt.get("id"))),
-              "callback_data": f"att:{item['id']}:{opt.get('id')}"}]
-            for opt in options
-        ]}
+        rows = []
+        for opt in options:
+            ident = str(opt.get("id") or "")
+            label = _redact(str(opt.get("label") or ident))
+            if ident in ("approve", "approve_run", "execute", "run"):
+                rows.append([_button(f"✅ {label}", f"att:{item['id']}:{ident}",
+                                     "success")])
+            elif ident in ("reject", "withdraw", "cancel"):
+                rows.append([_button(f"⛔ {label}", f"att:{item['id']}:{ident}",
+                                     "danger")])
+            else:
+                rows.append([_button(label, f"att:{item['id']}:{ident}",
+                                     "primary")])
+        return {"inline_keyboard": rows}
     if kind == "form":
         field = _form_answer_field(item)
         if field is None:
@@ -488,10 +541,10 @@ def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             toggled = _toggled(item)
             rows = _choice_rows(item, labels, prefix="t", toggled=toggled)
             chosen = len([i for i in toggled if 0 <= i < len(labels)])
-            rows.append([{
-                "text": f"✔️ Send {chosen} selected" if chosen else "✔️ Send selection",
-                "callback_data": f"att:{item['id']}:d",
-            }])
+            rows.append([_button(
+                f"✅ Send {chosen} selected" if chosen else "✅ Send selection",
+                f"att:{item['id']}:d", "success",
+            )])
             return {"inline_keyboard": rows}
         return {"inline_keyboard": _choice_rows(item, labels)}
     # session / room / handoff: the options an agent passed to
@@ -502,8 +555,8 @@ def keyboard(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     rows = []
     for index, opt in enumerate(options):
         label = str(opt.get("label") or opt.get("id") or f"Option {index + 1}")
-        rows.append([{"text": _redact(label)[:60],
-                      "callback_data": f"att:{item['id']}:o{index}"}])
+        rows.append([_button(_redact(label), f"att:{item['id']}:o{index}",
+                             "primary")])
     return {"inline_keyboard": rows}
 
 

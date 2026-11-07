@@ -47,63 +47,48 @@ import httpx
 
 from . import config, control, memory, registry, routing
 from .orchestrator import Orchestrator
+from .telegram_format import (
+    MAX_CHARS as TELEGRAM_MAX,
+    badge,
+    chunk_markdown,
+    format_html,
+    heading,
+    plain_text,
+    time_marker,
+)
 
 LOG = logging.getLogger("perun-telegram")
-TELEGRAM_MAX = 4096
 TYPING_INTERVAL = 4.0
 
 
 # --------------------------------------------------------------------------- #
 # Formatting helpers
 # --------------------------------------------------------------------------- #
-def _esc(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def format_html(md: str) -> str:
-    md = md.replace("\r\n", "\n")
-    blocks: List[tuple] = []
-
-    def _stash_block(m: "re.Match[str]") -> str:
-        blocks.append(((m.group(1) or "").strip(), m.group(2).rstrip("\n")))
-        return f"\x00CB{len(blocks) - 1}\x00"
-
-    md = re.sub(r"```([a-zA-Z0-9_+\-]*)\n?(.*?)```", _stash_block, md, flags=re.S)
-    inline: List[str] = []
-
-    def _stash_inline(m: "re.Match[str]") -> str:
-        inline.append(m.group(1))
-        return f"\x00IC{len(inline) - 1}\x00"
-
-    md = re.sub(r"`([^`\n]+)`", _stash_inline, md)
-    md = _esc(md)
-    md = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", md, flags=re.S)
-    md = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", md, flags=re.S)
-    md = re.sub(r"^#{1,6}\s*(.+?)\s*$", r"<b>\1</b>", md, flags=re.M)
-    md = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', md)
-    for i, c in enumerate(inline):
-        md = md.replace(f"\x00IC{i}\x00", f"<code>{_esc(c)}</code>")
-    for i, (lang, code) in enumerate(blocks):
-        cls = f' class="language-{lang}"' if lang else ""
-        md = md.replace(f"\x00CB{i}\x00", f"<pre><code{cls}>{_esc(code)}</code></pre>")
-    return md
-
-
 def chunk(text: str, size: int) -> List[str]:
-    if len(text) <= size:
-        return [text]
-    out: List[str] = []
-    rest = text
-    while len(rest) > size:
-        window = rest[:size]
-        cut = max(window.rfind("\n\n"), window.rfind("\n"), window.rfind(" "))
-        if cut < size // 2:
-            cut = size
-        out.append(rest[:cut].rstrip())
-        rest = rest[cut:].lstrip("\n")
-    if rest:
-        out.append(rest)
-    return out
+    """Backwards-compatible wrapper around the fence-aware chunker."""
+    return chunk_markdown(text, size)
+
+
+def _downgrade_markup(markup: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Strip fields an older Bot API server rejects (``style``, ``copy_text``).
+
+    Keeping the buttons matters more than keeping their colour: a local Bot API
+    server from before 9.4 answers 400 for the whole message, so degrading the
+    markup keeps the decision tappable.
+    """
+    if not isinstance(markup, dict):
+        return None
+    rows: List[List[Dict[str, Any]]] = []
+    for row in markup.get("inline_keyboard") or []:
+        buttons = [
+            {k: v for k, v in button.items()
+             if k not in ("style", "copy_text", "icon_custom_emoji_id")}
+            for button in row
+            if isinstance(button, dict)
+        ]
+        if buttons:
+            rows.append(buttons)
+    return {"inline_keyboard": rows} if rows else None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -266,6 +251,10 @@ class PerunTelegramBridge:
         # treated as an answer).
         self._pending_answers: Dict[str, str] = {}
         self._attention_logged: set[int] = set()
+        # Streaming drafts (private chats): draft_id -> run_uid, so the Stop
+        # button on the draft can cancel the exact run.
+        self._drafts: Dict[int, str] = {}
+        self._drafts_lock = threading.Lock()
         # Informational notices wait for a short window so a burst becomes one
         # card: ``{attention_id: first_seen}``. Items already listed on a digest
         # card are remembered so the next tick does not resend them as cards.
@@ -362,9 +351,22 @@ class PerunTelegramBridge:
                 payload["reply_markup"] = reply_markup
             res = self.api("sendMessage", **payload)
             if not res.get("ok"):
+                # Telegram can reject the HTML (a bad entity) or the keyboard (a
+                # stale callback payload). Retry as plain text but KEEP the
+                # keyboard: dropping every button because bold failed is worse
+                # than sending unformatted text.
                 payload.pop("parse_mode", None)
+                payload["text"] = plain_text(piece)
+                res = self.api("sendMessage", **payload)
+            if not res.get("ok") and "reply_markup" in payload:
+                # A coloured/copy button may be the problem on an older Bot API
+                # server. Degrade the markup before giving up the keyboard.
+                degraded = _downgrade_markup(payload["reply_markup"])
+                if degraded:
+                    payload["reply_markup"] = degraded
+                    res = self.api("sendMessage", **payload)
+            if not res.get("ok") and "reply_markup" in payload:
                 payload.pop("reply_markup", None)
-                payload["text"] = piece
                 res = self.api("sendMessage", **payload)
             if first_id is None:
                 try:
@@ -378,6 +380,113 @@ class PerunTelegramBridge:
     def _typing_loop(self, chat_id: str, done: threading.Event) -> None:
         while not done.wait(TYPING_INTERVAL):
             self.api("sendChatAction", chat_id=chat_id, action="typing")
+
+    # ---- live run drafts (private chats) ---------------------------------- #
+    DRAFT_MIN_INTERVAL = 1.6
+
+    @staticmethod
+    def _is_private_chat(chat_id: str) -> bool:
+        """Telegram user ids are positive; groups/supergroups are negative."""
+        raw = str(chat_id or "")
+        return raw.lstrip("-").isdigit() and not raw.startswith("-")
+
+    @staticmethod
+    def _draft_id(run_uid: str) -> int:
+        import hashlib
+
+        value = int(hashlib.sha1(str(run_uid).encode("utf-8")).hexdigest()[:8], 16)
+        return value or 1
+
+    def _start_draft(self, chat_id: str, uid: str) -> threading.Event:
+        stop = threading.Event()
+        draft_id = self._draft_id(uid)
+        with self._drafts_lock:
+            self._drafts[draft_id] = uid
+        threading.Thread(
+            target=self._draft_loop,
+            args=(chat_id, uid, draft_id, stop),
+            daemon=True,
+            name="perun-tg-draft",
+        ).start()
+        return stop
+
+    def _draft_loop(self, chat_id: str, uid: str, draft_id: int,
+                    stop: threading.Event) -> None:
+        """Stream a partial reply while the run generates (private chats only).
+
+        The draft is a temporary 30-second preview: updates keep it alive, and
+        the final ``sendMessage`` in the caller persists the answer.  Any
+        failure (old local Bot API server, revoked message, network) degrades to
+        the existing typing indicator instead of failing the run.
+        """
+        stream = getattr(self.orch, "stream", None)
+        if not callable(stream):
+            with self._drafts_lock:
+                self._drafts.pop(draft_id, None)
+            return
+        parts: List[str] = []
+        tool = ""
+        last = 0.0
+        try:
+            # An empty draft renders Telegram's native "Thinking…" placeholder.
+            first = self.api("sendMessageDraft", retries=1, chat_id=chat_id,
+                             draft_id=draft_id, text="", can_stop=True,
+                             keep_on_stop=False)
+            if not first.get("ok"):
+                # Old local Bot API server or drafts disabled for this chat:
+                # keep the typing indicator and send the final answer normally.
+                return
+            for event in stream(uid):
+                if stop.is_set():
+                    break
+                kind = event.get("type")
+                if kind == "text" and event.get("text"):
+                    parts.append(str(event["text"]))
+                    if sum(len(p) for p in parts) > 4000:
+                        parts = [("".join(parts))[-2000:]]
+                elif kind == "tool":
+                    tool = str(event.get("tool") or event.get("name") or "").strip()
+                elif kind == "error" and event.get("text"):
+                    parts.append(str(event["text"]))
+                if kind in ("end", "__eof__"):
+                    break
+                now = time.time()
+                if now - last < self.DRAFT_MIN_INTERVAL and kind not in ("tool",):
+                    continue
+                last = now
+                body = "\n\n".join(p for p in parts if p).strip()
+                text = f"⏳ **Working…**"
+                if tool:
+                    text += f"\n🔧 `{tool}`"
+                if body:
+                    text += "\n\n" + body[-1600:]
+                res = self.api(
+                    "sendMessageDraft", retries=1, chat_id=chat_id,
+                    draft_id=draft_id, text=format_html(text),
+                    parse_mode="HTML", can_stop=True, keep_on_stop=False,
+                )
+                if not res.get("ok"):
+                    break
+        except Exception:  # pragma: no cover - a draft must never break a run
+            LOG.debug("draft stream for %s failed", uid, exc_info=True)
+        finally:
+            with self._drafts_lock:
+                self._drafts.pop(draft_id, None)
+
+    def _handle_generation_stopped(self, payload: Dict[str, Any]) -> None:
+        """The operator tapped Stop on a draft: cancel that exact run."""
+        try:
+            draft_id = int(payload.get("draft_id") or 0)
+        except (TypeError, ValueError):
+            return
+        with self._drafts_lock:
+            uid = self._drafts.get(draft_id)
+        if not uid:
+            return
+        try:
+            self.orch.cancel(uid)
+        except Exception:  # pragma: no cover - the run may already be gone
+            LOG.debug("could not cancel %s from a draft stop", uid, exc_info=True)
 
     # ---- project/session resolution ---- #
     def _chat_state(self, chat_id: str) -> Dict[str, Any]:
@@ -423,7 +532,10 @@ class PerunTelegramBridge:
             payload = f"project:{slug}"
             if len(payload.encode("utf-8")) > 64:
                 payload = f"project:id:{p['id']}"
-            buttons.append([{"text": label, "callback_data": payload}])
+            button: Dict[str, Any] = {"text": label, "callback_data": payload}
+            if p.get("id") == current_id:
+                button["style"] = "primary"
+            buttons.append([button])
         return {"inline_keyboard": buttons}
 
     def _handle_callback(self, update: Dict[str, Any]) -> None:
@@ -432,6 +544,9 @@ class PerunTelegramBridge:
         data = (cq.get("data") or "").strip()
         if data.startswith("att:"):
             self._handle_attention_callback(cq, data)
+            return
+        if data.startswith("muteproj:"):
+            self._handle_mute_callback(cq, data)
             return
         if not data or not data.startswith("project:"):
             return
@@ -457,6 +572,47 @@ class PerunTelegramBridge:
         self.send(chat_id, f"✅ Now talking to *{project['name']}* (`{project['slug']}`).",
                   reply_to=message_id if message_id else None)
 
+    def _handle_mute_callback(self, cq: Dict[str, Any], data: str) -> None:
+        """Mute one project from a digest card, then drop that button."""
+        chat_id = str((cq.get("message", {}).get("chat") or {}).get("id"))
+        callback_id = cq.get("id")
+
+        def ack(text: str) -> None:
+            self.api("answerCallbackQuery", callback_query_id=callback_id, text=text[:190])
+
+        if not chat_id:
+            return
+        if not self.authorised(chat_id):
+            ack("Not authorised.")
+            return
+        try:
+            project = registry.get_project(int(data.split(":", 1)[1]))
+        except (TypeError, ValueError, IndexError):
+            project = None
+        if not project:
+            ack("Project not found.")
+            return
+        registry.mute_attention_project(chat_id, project["slug"])
+        registry.log_activity(
+            project["id"], "attention_muted",
+            f"{project['slug']} muted for a Telegram chat",
+            {"chat_id": chat_id},
+        )
+        ack(f"Muted {project['slug']} — /unmute {project['slug']} to undo")
+
+        # Keep the Open buttons, remove only the mute row from this card.
+        message = cq.get("message") or {}
+        message_id = int(message.get("message_id") or 0)
+        rows = [
+            row for row in ((message.get("reply_markup") or {}).get("inline_keyboard") or [])
+            if not any(str(b.get("callback_data") or "").startswith("muteproj:")
+                       for b in row)
+        ]
+        if message_id and rows:
+            self.api("editMessageReplyMarkup", chat_id=chat_id,
+                     message_id=message_id,
+                     reply_markup={"inline_keyboard": rows}, retries=2)
+
     def _health_report(self) -> str:
         """One-screen machine health, answered from this process (no agent run).
 
@@ -466,14 +622,14 @@ class PerunTelegramBridge:
         """
         from . import opencode_api
 
-        lines = ["*Health*"]
+        lines = ["🩺 **Health**"]
         try:
             info = opencode_api.default_api().info() or {}
         except Exception as exc:
-            lines.append(f"✗ opencode service — {type(exc).__name__}")
+            lines.append(f"❌ opencode service — {type(exc).__name__}")
         else:
             version = str(info.get("version") or info.get("app") or "").strip()
-            lines.append("✓ opencode service" + (f" — {version}" if version else ""))
+            lines.append("✅ opencode service" + (f" — {version}" if version else ""))
         host = ""
         try:
             host = str(config.Settings.load().ollama_host or "").rstrip("/")
@@ -483,16 +639,16 @@ class PerunTelegramBridge:
             try:
                 httpx.get(f"{host}/api/tags", timeout=2.0)
             except Exception:
-                lines.append(f"✗ ollama — {host} not reachable")
+                lines.append(f"❌ ollama — {host} not reachable")
             else:
-                lines.append("✓ ollama")
+                lines.append("✅ ollama")
         up = int(time.time() - self.started_at)
         lines.append(
-            f"✓ bridge — {up // 3600}h {(up % 3600) // 60}m · "
+            f"✅ bridge — {up // 3600}h {(up % 3600) // 60}m · "
             f"{self.work.qsize()} queued · {len(self.allowed)} paired chat(s)"
         )
         try:
-            lines.append(f"▶ {len(registry.list_active_runs())} run(s) active")
+            lines.append(f"⏳ {len(registry.list_active_runs())} run(s) active")
         except Exception:  # pragma: no cover - a DB hiccup must not hide the rest
             pass
         try:
@@ -511,25 +667,29 @@ class PerunTelegramBridge:
         root = parts[0].lower().split("@")[0]
         if root in ("/start", "/help"):
             self.send(chat_id,
-                      "🤖 *Perun bridge*\n\n"
+                      "🤖 **Perun bridge**\n\n"
                       "Talk to Perun itself or to any of your OpenCode projects.\n\n"
-                      "*Commands*\n"
+                      "**🛰 Switch**\n"
                       "`/orchestrator` — talk to Perun (manages all projects)\n"
-                      "`/projects` — list projects\n"
-                      "`/project <name|#>` — switch project\n"
+                      "`/projects` — list projects with buttons\n"
+                      "`/project <name|#>` — switch project\n\n"
+                      "**📊 Status**\n"
                       "`/status` — current project + session\n"
                       "`/now` — everything running right now\n"
                       "`/health` — opencode, ollama and bridge state\n"
                       "`/runs` — the last few runs and how they ended\n"
                       "`/usage` — tokens and cost in the last 24h\n"
-                      "`/resume` — list recent runs and continue one\n"
-                      "`/diff` — what changed in the working tree\n"
-                      "`/routing` — how much of the traffic the router understands\n"
-                      "`/new` — fresh session\n"
-                      "`/stop` — cancel *your* running reply\n"
+                      "`/routing` — how much of the traffic the router understands\n\n"
+                      "**🧠 Memory & docs**\n"
                       "`/remember <fact>` — store to memory\n"
                       "`/recall <query>` — search memory\n"
-                      "`/index` — re-index project docs\n"
+                      "`/index` — re-index project docs\n\n"
+                      "**▶ Work**\n"
+                      "`/new` — fresh session\n"
+                      "`/stop` — cancel *your* running reply\n"
+                      "`/resume` — continue one of the recent runs\n"
+                      "`/diff` — what changed in the working tree\n\n"
+                      "**🔑 Access**\n"
                       "`/pair <code>` — authorise this chat (code from the dashboard)\n\n"
                       "With no project selected, messages go to the orchestrator.\n"
                       "You can also just ask: _what's waiting?_ · _list projects_ · _help_",
@@ -601,11 +761,11 @@ class PerunTelegramBridge:
             link = self._chat_state(chat_id)
             up = int(time.time() - self.started_at)
             self.send(chat_id,
-                      f"*Perun bridge*\n"
-                      f"project: `{proj['slug'] if proj else '(none)'}`\n"
-                      f"session: `{link.get('session_pk') or '(new)'}`\n"
-                      f"queue: {self.work.qsize()}\n"
-                      f"uptime: {up // 3600}h {(up % 3600) // 60}m",
+                      f"{heading('orchestrator', 'Perun bridge')}\n"
+                      f"📁 project: `{proj['slug'] if proj else '(none)'}`\n"
+                      f"🧵 session: `{link.get('session_pk') or '(new)'}`\n"
+                      f"📥 queue: {self.work.qsize()}\n"
+                      f"⏱ uptime: {up // 3600}h {(up % 3600) // 60}m",
                       reply_to=message_id)
             return True
         if root in ("/now", "/running"):
@@ -613,20 +773,24 @@ class PerunTelegramBridge:
             if not active:
                 self.send(chat_id, "Nothing is running right now.", reply_to=message_id)
                 return True
-            lines = [f"*Running now* — {len(active)}"]
+            lines = [f"⏳ **Running now — {len(active)}**"]
             for run in active[:8]:
                 started = str(run.get("started_at") or run.get("admitted_at") or "")
                 age = ""
+                tg_time = ""
                 try:
                     from datetime import datetime as _dt
                     delta = _dt.now() - _dt.fromisoformat(started)
                     minutes = int(delta.total_seconds() // 60)
                     age = f"{minutes}m" if minutes < 60 else f"{minutes // 60}h{minutes % 60:02d}"
+                    tg_time = time_marker(started)
                 except Exception:  # pragma: no cover - a malformed timestamp
                     age = ""
-                tag = "⏸ queued" if run.get("status") == "queued" else "▶ running"
+                tag = "📥 queued" if run.get("status") == "queued" else "⏳ running"
                 model = str(run.get("model") or "default model")
-                lines.append(f"• `{run.get('project_slug') or '?'}` · {tag} · {age} · {model}")
+                shown_age = f"🕒 {tg_time}" if tg_time else age
+                lines.append(f"• `{run.get('project_slug') or '?'}` · {tag} · "
+                             f"{shown_age} · `{model}`")
             if len(active) > 8:
                 lines.append(f"＋{len(active) - 8} more — see the dashboard")
             self.send(chat_id, "\n".join(lines), reply_to=message_id)
@@ -1163,9 +1327,8 @@ class PerunTelegramBridge:
                 continue
             listed, rest = eligible[:5], eligible[5:]
             label = attention.project_label(listed[0])
-            # Markdown, like every other card: ``send()`` runs ``format_html`` and
-            # would otherwise escape the header into literal ``<b>`` tags.
-            lines = [f"🗂 *{len(eligible)} waiting in {label}*"]
+            # Markdown, like every other card: ``send()`` runs ``format_html``.
+            lines = [f"🗂 **{len(eligible)} waiting in {label}**"]
             for item in listed:
                 # Same redaction a single card would get: a room message can quote
                 # a token or an Authorization header, and a digest must not be the
@@ -1173,14 +1336,25 @@ class PerunTelegramBridge:
                 question = " ".join(attention.redact(item.get("question") or "").split())
                 if len(question) > 90:
                     question = question[:87] + "…"
-                lines.append(f"`att_{item['id']}` — {question}")
+                lines.append(f"{badge(item.get('target_kind'))} "
+                             f"`att_{item['id']}` — {question}")
             if rest:
                 lines.append(f"…and {len(rest)} more, in the next card.")
             text = "\n".join(lines)
-            markup = {"inline_keyboard": [
-                [{"text": f"Open att_{item['id']}", "callback_data": f"att:{item['id']}:show"}]
+            rows = [
+                [{"text": f"📖 Open att_{item['id']}",
+                  "callback_data": f"att:{item['id']}:show",
+                  "style": "primary"}]
                 for item in listed
-            ]}
+            ]
+            project_id = listed[0].get("project_id")
+            if project_id:
+                rows.append([{
+                    "text": f"🔕 Mute {label}",
+                    "callback_data": f"muteproj:{int(project_id)}",
+                    "style": "primary",
+                }])
+            markup = {"inline_keyboard": rows}
             if getattr(settings, "attention_shadow", True):
                 # Log once per item, send nothing, and keep them queued so
                 # turning shadow off does not silently lose the backlog.
@@ -1471,9 +1645,18 @@ class PerunTelegramBridge:
         res = self.api("editMessageText", retries=retries, **payload)
         if not res.get("ok"):
             # HTML rejected, or the message is too old / not modified: one plain
-            # retry covers "too old"; a genuine failure falls back to send().
+            # retry covers "too old"; keep the keyboard so a formatting problem
+            # never strips the operator's buttons.
             payload.pop("parse_mode", None)
-            payload["text"] = text
+            payload["text"] = plain_text(text)
+            res = self.api("editMessageText", retries=1, **payload)
+        if not res.get("ok") and "reply_markup" in payload:
+            degraded = _downgrade_markup(payload.get("reply_markup"))
+            if degraded:
+                payload["reply_markup"] = degraded
+                res = self.api("editMessageText", retries=1, **payload)
+        if not res.get("ok") and "reply_markup" in payload:
+            payload.pop("reply_markup", None)
             res = self.api("editMessageText", retries=1, **payload)
         return bool(res.get("ok"))
 
@@ -1593,9 +1776,11 @@ class PerunTelegramBridge:
                 f"*{attention.project_label(item)}* and applies to future requests.\n"
                 f"Confirm?  att_{attention_id}",
                 reply_markup={"inline_keyboard": [[
-                    {"text": "Confirm always allow",
-                     "callback_data": f"att:{attention_id}:always_yes"},
-                    {"text": "Cancel", "callback_data": f"att:{attention_id}:cancel"},
+                    {"text": "✅ Confirm always allow",
+                     "callback_data": f"att:{attention_id}:always_yes",
+                     "style": "danger"},
+                    {"text": "↩ Cancel", "callback_data": f"att:{attention_id}:cancel",
+                     "style": "primary"},
                 ]]},
             )
             return
@@ -1665,17 +1850,20 @@ class PerunTelegramBridge:
             if not items:
                 self.send(chat_id, "Nothing is waiting on you.", reply_to=message_id or None)
                 return True
-            lines = ["*Waiting on you*"]
+            lines = [f"🗂 **Waiting on you — {len(items)}**"]
             keyboard: List[List[Dict[str, Any]]] = []
             for item in items:
-                age = item.get("created_at", "")[:16].replace("T", " ")
+                when = time_marker(str(item.get("created_at") or "")) or \
+                    str(item.get("created_at") or "")[:16].replace("T", " ")
                 lines.append(
-                    f"• `att_{item['id']}` · {attention.project_label(item)} · "
-                    f"{item['target_kind']} · {age}"
+                    f"{badge(item.get('target_kind'))} `att_{item['id']}` · "
+                    f"{attention.project_label(item)} · "
+                    f"{item['target_kind']} · 🕒 {when}"
                 )
                 keyboard.append([{
-                    "text": f"att_{item['id']}",
+                    "text": f"📖 att_{item['id']}",
                     "callback_data": f"att:{item['id']}:show",
+                    "style": "primary",
                 }])
             self.send(chat_id, "\n".join(lines), reply_to=message_id or None,
                       reply_markup={"inline_keyboard": keyboard[:8]})
@@ -1770,6 +1958,7 @@ class PerunTelegramBridge:
 
         typing_done = threading.Event()
         threading.Thread(target=self._typing_loop, args=(chat_id, typing_done), daemon=True).start()
+        draft_stop = threading.Event()
         try:
             run = self.orch.start_run(proj["slug"], text, session_pk=session_pk,
                                       opencode_session_id=oc_sid)
@@ -1778,6 +1967,8 @@ class PerunTelegramBridge:
             self.send(chat_id, f"❌ Could not start run: {exc}", reply_to=message_id)
             return
         uid = run["run_uid"]
+        if self._is_private_chat(chat_id):
+            draft_stop = self._start_draft(chat_id, uid)
         with self._runs_lock:
             self._runs[chat_id] = uid
         try:
@@ -1787,6 +1978,7 @@ class PerunTelegramBridge:
                 time.sleep(1.0)
         finally:
             typing_done.set()
+            draft_stop.set()
             with self._runs_lock:
                 self._runs.pop(chat_id, None)
         final = registry.get_run(uid) or run
@@ -1940,6 +2132,9 @@ class PerunTelegramBridge:
                            "`/help` to see the commands.", reply_to=message_id)
 
     def _handle_update(self, update: Dict[str, Any]) -> None:
+        if update.get("stopped_message_generation"):
+            self._handle_generation_stopped(update["stopped_message_generation"])
+            return
         if update.get("callback_query"):
             self._handle_callback(update)
             return
@@ -2055,6 +2250,28 @@ class PerunTelegramBridge:
             return
         registry.finish_telegram_job(job["id"])
 
+    #: Telegram's native command menu (the ☰ button in the chat).  Kept short:
+    #: the menu is for discovery, `/help` carries the full list.
+    COMMANDS = [
+        ("status", "Current project, session and queue"),
+        ("pending", "What is waiting for you"),
+        ("projects", "List projects and switch"),
+        ("now", "Runs active right now"),
+        ("new", "Start a fresh session"),
+        ("stop", "Stop your running reply"),
+        ("help", "All commands"),
+    ]
+
+    def _register_commands(self) -> None:
+        """Publish the command menu; a failure is cosmetic, never fatal."""
+        try:
+            self.api("setMyCommands", commands=[
+                {"command": name, "description": text}
+                for name, text in self.COMMANDS
+            ])
+        except Exception:  # pragma: no cover - old server / offline
+            LOG.debug("could not publish the Telegram command menu", exc_info=True)
+
     def run(self) -> None:
         threading.Thread(target=self.worker, daemon=True).start()
         try:
@@ -2071,6 +2288,7 @@ class PerunTelegramBridge:
         boot = self.api("getUpdates", timeout=0, offset=-1)
         if boot.get("error_code") == 409:
             self._log_conflict(first=True)
+        self._register_commands()
         results = boot.get("result") or []
         self.offset = (results[-1]["update_id"] + 1) if results else 0
         LOG.info("perun telegram bridge online (allow=%s)",

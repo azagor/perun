@@ -132,7 +132,7 @@ def test_tick_sends_every_paired_chat_and_never_twice(bridge, project):
 
     assert bridge.attention_tick() == 1
     assert [m["chat_id"] for m in bridge.sent] == ["1"]
-    assert bridge.sent[0]["markup"]["inline_keyboard"][0][0]["text"] == "Allow once"
+    assert bridge.sent[0]["markup"]["inline_keyboard"][0][0]["text"].endswith("Allow once")
     assert "att_" in bridge.sent[0]["text"]
 
     bridge.sent.clear()
@@ -594,8 +594,11 @@ def test_a_burst_of_room_messages_waits_and_then_grows_one_card(bridge, project,
     card = bridge.sent[0]
     assert "2 waiting" in card["text"]
     assert f"att_{first['id']}" in card["text"] and f"att_{second['id']}" in card["text"]
-    buttons = [row[0]["callback_data"] for row in card["markup"]["inline_keyboard"]]
+    buttons = [row[0]["callback_data"] for row in card["markup"]["inline_keyboard"]
+               if str(row[0]["callback_data"]).startswith("att:")]
     assert buttons == [f"att:{first['id']}:show", f"att:{second['id']}:show"]
+    assert any(str(row[0]["callback_data"]).startswith("muteproj:")
+               for row in card["markup"]["inline_keyboard"])
 
     # Neither item is re-sent as its own card afterwards.
     bridge.sent.clear()
@@ -618,6 +621,31 @@ def test_a_lone_room_message_still_arrives_after_the_window(bridge, project, mon
     assert "1 waiting" in bridge.sent[0]["text"]
 
 
+def test_muting_a_project_from_a_digest_needs_one_tap(bridge, project, monkeypatch):
+    clock = {"now": 6_000.0}
+    monkeypatch.setattr(telegram.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(config.Settings, "load",
+                        staticmethod(lambda: _settings(attention_digest_seconds=30)))
+    _room_item(project, "msg_mute")
+    bridge.attention_tick()
+    clock["now"] += 31
+    bridge.attention_tick()
+
+    card = bridge.sent[-1]
+    mute = next(button for row in card["markup"]["inline_keyboard"]
+                for button in row
+                if str(button["callback_data"]).startswith("muteproj:"))
+    bridge._handle_update({"update_id": 99, "callback_query": {
+        "id": "cb-mute", "data": mute["callback_data"],
+        "message": {"message_id": bridge._next_id, "chat": {"id": "1"},
+                    "reply_markup": card["markup"]},
+    }})
+
+    assert project["slug"] in registry.attention_muted_projects("1")
+    assert any(method == "editMessageReplyMarkup"
+               for method, _ in bridge.api_calls)
+
+
 def test_a_permission_is_never_digested(bridge, project, monkeypatch):
     monkeypatch.setattr(config.Settings, "load",
                         staticmethod(lambda: _settings(attention_digest_seconds=30)))
@@ -625,7 +653,7 @@ def test_a_permission_is_never_digested(bridge, project, monkeypatch):
 
     assert bridge.attention_tick() == 1
     assert len(bridge.sent) == 1
-    assert bridge.sent[0]["markup"]["inline_keyboard"][0][0]["text"] == "Allow once"
+    assert bridge.sent[0]["markup"]["inline_keyboard"][0][0]["text"].endswith("Allow once")
 
 
 def test_a_digest_keeps_the_items_past_the_fifth(bridge, project, monkeypatch):

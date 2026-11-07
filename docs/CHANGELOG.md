@@ -4,15 +4,24 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-### Documentation refresh
+### Telegram UX: coloured buttons, emoji grammar and live run drafts
 
-* `docs/CODEMAP.md` now documents `openProposalPeek()` (one operation chip per
-  `operations` entry, with the legacy `targets` fallback), the
-  `coroutine_schedule.test.js` Node suite and
-  `tests/test_js_proposal_operations.py`.
-* `docs/DESIGN.md` no longer lists scheduled/cron runs as out of scope
-  (coroutines shipped in v0.10.51), and the `AGENTS_OPTIMIZATION.md` status and
-  Shared Projects PRD header now name the current release.
+* New `perun/telegram_format.py`: one visual grammar for every message — an emoji
+  badge plus a bold title, underline/strikethrough/spoiler, `>` blockquotes,
+  live `<tg-time>` timestamps, plain-text stripping, and a fence-aware chunker
+  that never splits a code block.
+* Inline buttons now use Telegram's `style` (green = safe/affirmative, blue =
+  neutral, red = destructive) and a clearer permission layout. An older Bot API
+  server degrades to uncoloured buttons instead of losing them.
+* A rejected HTML message is retried as plain text **with the keyboard kept**;
+  the markup is dropped only when the markup itself is invalid.
+* The bridge publishes its command menu with `setMyCommands`, and `/status`,
+  `/health`, `/now`, `/help` and `/pending` follow the shared badge grammar.
+* Digest cards prefix each item with its kind badge and add a one-tap
+  **Mute project** button; `/pending` shows the same badges and timestamps.
+* Private chats stream a live `sendMessageDraft` preview (tool + partial output)
+  while a run generates; the draft's Stop button cancels that exact run. Groups
+  keep the typing indicator.
 
 ## v0.12.4
 

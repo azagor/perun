@@ -141,9 +141,13 @@ def test_permission_keyboard_carries_all_three_choices(project):
     item = _permission(project)
     rows = attention.keyboard(item)["inline_keyboard"]
 
-    ids = [row[0]["callback_data"].rsplit(":", 1)[-1] for row in rows]
+    buttons = [button for row in rows for button in row]
+    ids = [button["callback_data"].rsplit(":", 1)[-1] for button in buttons]
     assert ids == ["once", "always", "reject"]
-    assert all(len(row[0]["callback_data"]) <= 64 for row in rows)
+    assert all(len(button["callback_data"]) <= 64 for button in buttons)
+    # Green for the safe action, red for the destructive refusal.
+    assert buttons[0]["style"] == "success"
+    assert buttons[-1]["style"] == "danger"
 
 
 def test_choose_permission_replies_and_closes(project, api):
@@ -277,7 +281,7 @@ def test_form_card_names_the_fields_and_shows_a_reply_template(project):
     text = attention.render(item)
 
     assert "Answer these 3 fields:" in text
-    assert "1. *Which audit?* — `q0`; required" in text
+    assert "1. **Which audit?** — `q0`; required" in text
     assert "2. `q1`" in text
     assert "3. `env` — one of: dev, prod" in text
     assert "`q0`: …" in text and "`q1`: …" in text and "`env`: …" in text
@@ -295,7 +299,7 @@ def test_a_single_field_form_asks_for_the_value(project):
     text = attention.render(item)
 
     assert "Answer this field:" in text and "1. `count`" in text
-    assert text.rstrip().endswith("Reply with the value.")
+    assert text.rstrip().endswith("*Reply with the value.*")
 
 
 def test_form_answer_accepts_one_line_per_field(project, api):

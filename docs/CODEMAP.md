@@ -892,6 +892,13 @@ dispatched by that target, never by inference from "the current project".
   `render()`, `keyboard()`, `confirmation()`, `followup_keyboard()`,
   `redact()` (the public wrapper every outgoing text must go through — headers,
   URL credentials, bearer tokens, `sk-…` keys and `--token` flags).
+* Card grammar: `render()` starts with one kind glyph + a bold title
+  (`heading()`), then `_meta_line()` (session, live relative age via
+  `{{time:…}}`, `att_N`), the question in `_quote()`, and a single italic hint.
+  `_button()` adds Telegram's coloured-button field: green (`success`) for the
+  safe/affirmative action, blue (`primary`) for neutral, red (`danger`) for
+  destructive or broad grants (Reject, confirm always-allow). The permission
+  card is two rows: Allow once, then Always allow + Reject.
 * Buttons: `keyboard()` renders a choice as an inline button wherever one exists
   — permissions, proposals, a `perun_ask_operator` question with `options`, and a
   one-field form whose type is boolean / select-like / multiselect (toggles plus
@@ -945,7 +952,13 @@ reconciliation loop never race on the same dedupe keys.
 
 ### `perun/telegram.py`
 Shared Telegram ⇄ Perun bridge.
-* Formatting: `format_html()`, `chunk()`, `_esc()`.
+* Formatting lives in `perun/telegram_format.py` (imported as `format_html`,
+  `plain_text`, `chunk_markdown`, `heading`, `badge`, `time_marker`); the local
+  `chunk()` wrapper keeps the old call sites. `_downgrade_markup()` strips
+  `style`/`copy_text` before a retry, so an older Bot API server degrades to an
+  uncoloured keyboard instead of losing the buttons.
+* `COMMANDS` + `_register_commands()` publish the native command menu with
+  `setMyCommands` at bridge start.
 * `PidLock` (single-instance; `acquire()`, `release()`, side-effect-free
   `is_held()`, `_default_mutex_name()` namespaces the mutex by `PERUN_HOME`),
   `_pid_alive()`. One poller machine-wide (`getUpdates` allows a single consumer);
@@ -971,14 +984,24 @@ Shared Telegram ⇄ Perun bridge.
   killed (runs interrupted within `telegram_interrupt_notice_minutes`, matched
   through `bridge_links.session_pk`, once per run via
   `run_interrupted_notice`); it runs on a daemon thread.
+* Live progress (private chats): `_is_private_chat()`, `_draft_id()`,
+  `_start_draft()` and `_draft_loop()` stream a `sendMessageDraft` preview — an
+  empty draft renders Telegram's "Thinking…", then the tool name and the last
+  1 600 chars, throttled to `DRAFT_MIN_INTERVAL` (1.6 s). The draft's Stop button
+  arrives as `stopped_message_generation`; `_handle_generation_stopped()` cancels
+  the exact run through the `_drafts` map. Groups and Bot API servers without
+  drafts keep the typing indicator.
 * Operator inbox: `send()` now returns the first Telegram `message_id`, which is
   what makes reply-to matching possible. `attention_tick()` creates cards for
   never-delivered items (eligibility, recipients, `attention_deliveries`),
   `_attention_startup_replay()` re-sends only open + undelivered items younger
   than `attention_replay_open_minutes` and marks older ones as skipped,
   `_flush_digest()` coalesces informational (`room`) items per project after
-  `attention_digest_seconds` into one card of up to five `Open att_N` buttons —
-  decisions are never digested — and `_attention_loop()` runs detection
+  `attention_digest_seconds` into one card of up to five badge-prefixed lines and
+  `📖 Open att_N` buttons (decisions are never digested), plus a
+  `🔕 Mute <project>` row handled by `_handle_mute_callback()` (per-chat mute,
+  reversible with `/unmute`; the button is removed from the card after the tap),
+  and `_attention_loop()` runs detection
   (`attention_watcher.poll_once()`) and
   delivery on a daemon thread when `attention_enabled`. `_handle_attention_reply()`
   (a reply-to on a card), `_maybe_attention_text()` (one-tap "Send to att_N?"
@@ -1007,6 +1030,25 @@ Shared Telegram ⇄ Perun bridge.
   per-source coverage from `routing_stats`) and `/pair`.
 * Entry: `run_bridge()` (generates/persists a one-time pairing code when no chats
   are configured; cancels all active runs on shutdown), `_setup_logging()`.
+
+### `perun/telegram_format.py`
+The single visual grammar for everything Perun sends to Telegram. Telegram has
+no coloured *text*; the colour lives on buttons (`style`) and the structure in
+the rich HTML subset.
+* `BADGES` + `badge(kind)`: one glyph per card kind (`✅` done, `❌` failed,
+  `⏳` working, `🔐` permission, `📝` form, `📋` proposal, `💬` room, `🗂` digest,
+  `🩺` health …). Every glyph is paired with a word, never the only signal.
+* `heading(kind, title, project="")`: `"🔐 **Permission · perun**"`.
+* `format_html()`: Markdown-ish → safe Telegram HTML. Supports bold, italic,
+  underline (`__…__`), strikethrough (`~~…~~`), spoiler (`||…||`), headings,
+  links, inline/fenced code, `> blockquote` and `{{time:ISO|fmt}}` →
+  `<tg-time>`; everything else is HTML-escaped and unclosed markup stays literal
+  so Telegram never rejects the whole message.
+* `plain_text()`: strips the markup for the retry after Telegram rejects HTML.
+* `chunk_markdown()`: fence-aware split for the 4 096-char limit; an open code
+  block is closed and reopened with its language on the next chunk.
+* `time_marker()` / `relative_time()`: live `<tg-time format="r">` plus a
+  "3m ago" fallback for clients that do not render date entities.
 
 ### `perun/perunchat_bridge.py`
 Autonomous PerunChat chat participant for the Orchestrator.
@@ -1908,6 +1950,12 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   statuses, and degradation when the service is absent.
 * `test_usage.py` - token/cost capture: the service snapshot, the registry store,
   provider attribution, and the `/api/usage` totals.
+* `test_telegram_format.py` - the rich-text layer: inline tags, escaping, code
+  blocks, blockquotes, live time markers, plain-text stripping, fence-aware
+  chunking, and the HTML → plain → degraded → no-markup send fallback.
+* `test_telegram_drafts.py` - live drafts: the empty "Thinking…" draft, partial
+  text plus the tool name, the stop button cancelling the matching run, and
+  groups never receiving drafts.
 * `test_attention.py` - the operator inbox: dedupe, permission/approval adapters,
   conditional close, queue→steer, undo, form coercion, room outbox, eligibility
   (flag, project allow-list, quiet hours), recipients, TTL expiry.
