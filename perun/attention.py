@@ -296,6 +296,8 @@ _KIND_LABELS = {
     "form": "Form",
     "proposal": "Proposal",
     "room": "Room message",
+    "handoff": "Handoff",
+    "session": "Question",
 }
 
 

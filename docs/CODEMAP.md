@@ -973,7 +973,8 @@ Shared Telegram ⇄ Perun bridge.
   ids for slugs that exceed Telegram's 64-byte `callback_data` limit),
   `_current_project()` (single-user-project auto-select, else the control plane),
   `_enqueue_update()` / `_job_dispatcher()` / `_run_job()` (durable
-  `telegram_jobs` queue: the poller only enqueues and advances the offset after
+  `telegram_jobs` queue for messages, callbacks and `stopped_message_generation`
+  draft stops: the poller only enqueues and advances the offset after
   the commit; one job per chat at a time, four workers, dead-letter + retry),
   `_handle_update()` (deduplicates redelivered messages by chat + message id,
   runs on a job worker),

@@ -428,8 +428,9 @@ class PerunTelegramBridge:
         tool = ""
         last = 0.0
         try:
+            target = int(chat_id)
             # An empty draft renders Telegram's native "Thinking…" placeholder.
-            first = self.api("sendMessageDraft", retries=1, chat_id=chat_id,
+            first = self.api("sendMessageDraft", retries=1, chat_id=target,
                              draft_id=draft_id, text="", can_stop=True,
                              keep_on_stop=False)
             if not first.get("ok"):
@@ -461,7 +462,7 @@ class PerunTelegramBridge:
                 if body:
                     text += "\n\n" + body[-1600:]
                 res = self.api(
-                    "sendMessageDraft", retries=1, chat_id=chat_id,
+                    "sendMessageDraft", retries=1, chat_id=target,
                     draft_id=draft_id, text=format_html(text),
                     parse_mode="HTML", can_stop=True, keep_on_stop=False,
                 )
@@ -2187,7 +2188,13 @@ class PerunTelegramBridge:
         is for.
         """
         try:
-            if update.get("callback_query"):
+            if update.get("stopped_message_generation"):
+                # The draft Stop button: no message/callback payload, so the
+                # generic branch below would drop it for a missing chat id.
+                stopped = update["stopped_message_generation"]
+                chat_id = str((stopped.get("chat") or {}).get("id") or "")
+                kind = "stopped"
+            elif update.get("callback_query"):
                 cq = update["callback_query"]
                 chat_id = str((cq.get("message", {}).get("chat") or {}).get("id") or "")
                 kind = "callback"

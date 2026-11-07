@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### The draft Stop button now reaches the bridge
+
+* `stopped_message_generation` updates were dropped by `_enqueue_update()`
+  because they carry no `message`/`callback_query` payload, so the live-draft
+  Stop button did nothing. They now enqueue under the draft chat id and cancel
+  the matching run (regression test covers the queue path).
+* Drafts address the private chat with an integer id, and session/handoff cards
+  keep their ❓ / 🤝 badges instead of falling back to 🔔.
 
 ## v0.13.0
 

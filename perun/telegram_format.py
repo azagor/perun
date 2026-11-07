@@ -46,6 +46,8 @@ BADGES = {
     "proposal": "📋",
     "room": "💬",
     "question": "❓",
+    "session": "❓",
+    "handoff": "🤝",
     "digest": "🗂",
     "orchestrator": "🛰",
     "tool": "🔧",
