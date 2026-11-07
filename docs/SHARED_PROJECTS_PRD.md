@@ -1,6 +1,6 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
-> **Implementation status (v0.11.0):** implemented as described below, plus the
+> **Implementation status (v0.12.4):** implemented as described below, plus the
 > post-v0.8.37 hardening: claim-locked external applies (`claimed → executing`
 > with a matching executor and unexpired lease), stricter ZIP/path validation,
 > HITL nonce/TTL invariants, and a target-drift guard (approval stores a content
@@ -9,7 +9,10 @@
 > refused rather than checked more weakly). **v0.11.0 adds the external-handoff
 > v2 protocol:** typed `create`/`edit`/`delete` preconditions, a server-derived
 > pre/post manifest, a second package-level approval of the exact archive digest,
-> atomic apply with postconditions/rollback and delete support. Withdrawing an
+> atomic apply with postconditions/rollback and delete support. **v0.12.0** made
+> `operations` the proposal source of truth: one `{path, op}` per target, mixed
+> `create`/`edit`/`delete` in one atomic changeset, with `action_type`/`targets`
+> derived only for display. Withdrawing an
 > approval records the terminal `cancelled` status instead of reusing `rejected`.
 > Browser WebSocket auth uses
 > short-lived tickets and agents rotate their own keys. See

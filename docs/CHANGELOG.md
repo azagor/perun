@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation refresh
+
+* `docs/CODEMAP.md` now documents `openProposalPeek()` (one operation chip per
+  `operations` entry, with the legacy `targets` fallback), the
+  `coroutine_schedule.test.js` Node suite and
+  `tests/test_js_proposal_operations.py`.
+* `docs/DESIGN.md` no longer lists scheduled/cron runs as out of scope
+  (coroutines shipped in v0.10.51), and the `AGENTS_OPTIMIZATION.md` status and
+  Shared Projects PRD header now name the current release.
 
 ## v0.12.4
 

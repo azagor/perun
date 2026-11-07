@@ -291,12 +291,15 @@ the dashboard runs. It never starts a second poller.
 ## 8. Deliberately out of scope
 
 * Multi-user / auth — it binds to `127.0.0.1` only (a loopback token still gates
-  state-changing API calls).
-* Scheduling / cron-style auto-runs.
+  state-changing API calls); remote participants reach it only through the
+  PerunChat gateway's own authentication.
 * **Running** deploy commands — the manifest-driven dependency graph and
   `deploy-plan` checklist are modelled, but Perun never executes a deploy
   command itself.
 * Cloud sync of the registry or memory.
 
-Still out of scope as of v0.8.37; the data model already leaves room
-(`projects.enabled`, `runs` history, `activity` meta, `tasks`).
+Still out of scope as of v0.12.4; the data model already leaves room
+(`projects.enabled`, `runs` history, `activity` meta, `tasks`). Scheduling and
+event-triggered agent jobs moved **into** scope with v0.10.51
+(`coroutines.py`, `#/coroutines`), as did operator-declared checks
+(`checks.py`).

@@ -1672,8 +1672,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   (a stable identity for string/object frames, so object payloads dedupe
   correctly instead of collapsing as `[object Object]`). Exposed as
   `window.ChatCore` and as a CommonJS module.
-* `web/js/coroutine_schedule.js` - pure coroutine UI logic, unit-tested with
-  `node --test`: `humanTrigger()`, `cronHuman()`, `intervalHuman()`,
+* `web/js/coroutine_schedule.js` - pure coroutine UI logic, unit-tested by
+  `web/js/coroutine_schedule.test.js` with `node --test`: `humanTrigger()`,
+  `cronHuman()`, `intervalHuman()`,
   `presetCron()`, `quickTrigger()` (quick-create daily/once payload),
   `triggerSentence()`, `modeHuman()`, and `validateStep()` for the wizard.
   Exposed as `window.CoroutineSchedule`.
@@ -1715,7 +1716,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `openManifestLink()`, `wireManifestLinks()`, `projectInstructionsForm`,
   `viewConsole`, `viewMemory`, `viewActivity`, `viewMcp`, `viewTelegram`, `mountTelegram`,
   `viewPerunChat`, `viewSettings`, `viewAttention`), `mountConsole()`, `streamRun()`,
-  `streamOrchestrator()`,
+  `streamOrchestrator()`, `openProposalPeek()` (the `prop_…` chip card: project,
+  status, requester, intent, and one `create`/`edit`/`delete` chip per
+  `operations` entry; legacy rows fall back to the derived `targets` list),
   the operator inbox (`viewAttention()` / `loadAttentionPanel()` — the dedicated
   "Needs you" page with reply, choice, ⚡ and dismiss actions; Settings links to
   it rather than mounting a second copy; `loadRoutingPanel()` — routing decisions),
@@ -2016,6 +2019,12 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   is stoppable, a standalone TUI run is stoppable too (Stop closes its terminal),
   `standalone` works as a number or a boolean, Focus needs a tracked TUI run, and
   `visibleRuns` drops runs for projects the UI may not list.
+* `test_js_proposal_operations.py` - reads `web/js/perun.js` and asserts the
+  proposal row and the peek card render one `create`/`edit`/`delete` chip per
+  `operations` entry, keeping the `targets` fallback for legacy rows.
+* `web/js/coroutine_schedule.test.js` - the `node --test` suite for
+  `coroutine_schedule.js` (cron/interval phrasing, presets, wizard validation).
+  Run it directly; there is no pytest wrapper for it yet.
 * `test_backups.py` — the config-copy helper: label sanitisation (a `.` or `..`
   label cannot escape the tree), second-resolution stamps never overwrite, a
   failed copy is swallowed, pruning keeps the newest N per stem and never touches

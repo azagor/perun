@@ -1,13 +1,14 @@
 # Perun — AGENTS.md context-budget optimisation
 
-> **Status:** phases 0-4, 6 and 7 **implemented** (2026-10-28); v0.8.31 shipped,
-> and the same context layer is unchanged through **v0.8.57**.
-> All five managed projects migrated, a production-readiness audit hardened the
-> implementation, and v0.8.31 completed anchor resolution, CODEMAP-aware
-> chunking, the compact CODEMAP outline, and local-embedding fallback. Phase 5 —
-> the eval-set half of the parity harness — remains outstanding. The `AGENTS.md`
-> rules added since are behavioural one-liners (browser tickets, self-service key
-> rotation), which stay inline by design.
+> **Status:** phases 0-4, 6 and 7 **implemented** (2026-10-28); v0.8.31 shipped
+> anchor resolution, CODEMAP-aware chunking, the compact CODEMAP outline and
+> local-embedding fallback. All five managed projects migrated and a
+> production-readiness audit hardened the implementation. The retrieval
+> mechanism is unchanged through **v0.12.4**; since v0.8.57 the context layer
+> only gained handbook entries (declared checks, operator-inbox tools). Phase 5
+> — the eval-set half of the parity harness — remains outstanding. The
+> `AGENTS.md` rules added since (browser tickets, self-service key rotation,
+> typed changesets and package approval) stay inline by design.
 > **Problem owner:** every Perun-managed project.
 > **Related:** [DESIGN.md](DESIGN.md) §2 (principles), [CODEMAP.md](CODEMAP.md),
 > [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) §3.
