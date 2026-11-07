@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.13.0
+
+*Released 2026-11-08.*
+
 ### Telegram UX: coloured buttons, emoji grammar and live run drafts
 
 * New `perun/telegram_format.py`: one visual grammar for every message — an emoji

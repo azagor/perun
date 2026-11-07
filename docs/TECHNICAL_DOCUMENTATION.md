@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.12.4 (see §15). Proposal peek shows the changeset operations
+**Latest release:** v0.13.0 (see §15). Telegram UX: coloured buttons, emoji grammar and live run drafts
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2746,6 +2746,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-08 — v0.13.0: Telegram UX: coloured buttons, emoji grammar and live run drafts
+
 ### 2026-11-07 — v0.12.4: Proposal peek shows the changeset operations
 
 ### 2026-11-06 — v0.12.3: Non-blocking changeset hardening

@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-07T00:08:34+00:00",
+  "generated": "2026-11-07T23:41:40+00:00",
   "releases": [
+    {
+      "version": "0.13.0",
+      "date": "2026-11-08",
+      "body": "### Telegram UX: coloured buttons, emoji grammar and live run drafts\n\n* New `perun/telegram_format.py`: one visual grammar for every message — an emoji\n  badge plus a bold title, underline/strikethrough/spoiler, `>` blockquotes,\n  live `<tg-time>` timestamps, plain-text stripping, and a fence-aware chunker\n  that never splits a code block.\n* Inline buttons now use Telegram's `style` (green = safe/affirmative, blue =\n  neutral, red = destructive) and a clearer permission layout. An older Bot API\n  server degrades to uncoloured buttons instead of losing them.\n* A rejected HTML message is retried as plain text **with the keyboard kept**;\n  the markup is dropped only when the markup itself is invalid.\n* The bridge publishes its command menu with `setMyCommands`, and `/status`,\n  `/health`, `/now`, `/help` and `/pending` follow the shared badge grammar.\n* Digest cards prefix each item with its kind badge and add a one-tap\n  **Mute project** button; `/pending` shows the same badges and timestamps.\n* Private chats stream a live `sendMessageDraft` preview (tool + partial output)\n  while a run generates; the draft's Stop button cancels that exact run. Groups\n  keep the typing indicator."
+    },
     {
       "version": "0.12.4",
       "date": "2026-11-07",
@@ -45,11 +50,6 @@
       "version": "0.11.7",
       "date": "2026-11-05",
       "body": "### Security: chat persona cannot delete files\n\n* The `perunchat` agent permissions now deny `<server>_guard_delete_file`\n  (alongside write/edit), and the prompt names delete as forbidden. The guarded\n  delete tool was added for the local `perun-shared` executor; without this\n  deny, the room persona's broad guard allow would have let it delete a project\n  file through the chat tool surface. `perun-shared` keeps delete so an approved\n  `delete` proposal can execute."
-    },
-    {
-      "version": "0.11.6",
-      "date": "2026-11-05",
-      "body": "### Legacy package helpers removed\n\n* Removed `package_handoff.validate_package()` / `apply_package()`. The external\n  handoff has a single production path now: `derive_package()` computes the typed\n  pre/post manifest and `apply_operations()` applies it atomically with rollback.\n  Their tests were converted to the typed functions, including a mid-write\n  rollback case and an external-dependency rejection."
     }
   ]
 }
