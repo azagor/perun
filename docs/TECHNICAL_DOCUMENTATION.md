@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.12.3 (see §15). Non-blocking changeset hardening
+**Latest release:** v0.12.4 (see §15). Proposal peek shows the changeset operations
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2717,6 +2717,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-07 — v0.12.4: Proposal peek shows the changeset operations
+
 ### 2026-11-06 — v0.12.3: Non-blocking changeset hardening
 
 ### 2026-11-06 — v0.12.2: Refresh legacy HITL tokens for the changeset payload

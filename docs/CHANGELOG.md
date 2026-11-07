@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.12.4
+
+*Released 2026-11-07.*
+
 ### Proposal peek shows the changeset operations
 
 * Clicking a `prop_…` chip in PerunChat still opens the proposal peek; the peek
