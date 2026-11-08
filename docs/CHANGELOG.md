@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.13.1
+
+*Released 2026-11-08.*
+
 ### The draft Stop button now reaches the bridge
 
 * `stopped_message_generation` updates were dropped by `_enqueue_update()`

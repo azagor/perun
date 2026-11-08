@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-07T23:41:40+00:00",
+  "generated": "2026-11-08T00:10:55+00:00",
   "releases": [
+    {
+      "version": "0.13.1",
+      "date": "2026-11-08",
+      "body": "### The draft Stop button now reaches the bridge\n\n* `stopped_message_generation` updates were dropped by `_enqueue_update()`\n  because they carry no `message`/`callback_query` payload, so the live-draft\n  Stop button did nothing. They now enqueue under the draft chat id and cancel\n  the matching run (regression test covers the queue path).\n* Drafts address the private chat with an integer id, and session/handoff cards\n  keep their ❓ / 🤝 badges instead of falling back to 🔔."
+    },
     {
       "version": "0.13.0",
       "date": "2026-11-08",
@@ -45,11 +50,6 @@
       "version": "0.11.8",
       "date": "2026-11-05",
       "body": "### Typed delete enforcement in the guard\n\n* `guard_delete_file` now requires a **delete proposal in `executing` state**;\n  a chat session or an edit/create run cannot call it. During a delete run,\n  `guard_write_file`/`guard_edit_file` are refused, so a delete cannot be\n  replaced by a write. The `perunchat` agent permissions already deny delete\n  outright; this is the guard-level backstop for every tool path.\n\n### Delete packages need the local operator\n\n* A package whose derived manifest contains a `delete` operation can no longer\n  be approved by a peer/room-owner MCP call. Only the local dashboard operator\n  (`operator=True`) or the explicit `policy_auto_approve` path may apply it.\n  This closes the gap where the chat persona (room owner) could approve a\n  remotely staged delete without the human seeing it.\n\n### Hardening\n\n* The modern MCP `server/discover` grace window is now 5 s (was 3 s), so a cold\n  Python MCP server is not incorrectly forced onto the legacy handshake.\n* Stored package archives are `flush()`ed and `fsync()`ed before the atomic\n  rename, so a crash cannot leave a zero-length or partial approved artifact."
-    },
-    {
-      "version": "0.11.7",
-      "date": "2026-11-05",
-      "body": "### Security: chat persona cannot delete files\n\n* The `perunchat` agent permissions now deny `<server>_guard_delete_file`\n  (alongside write/edit), and the prompt names delete as forbidden. The guarded\n  delete tool was added for the local `perun-shared` executor; without this\n  deny, the room persona's broad guard allow would have let it delete a project\n  file through the chat tool surface. `perun-shared` keeps delete so an approved\n  `delete` proposal can execute."
     }
   ]
 }
