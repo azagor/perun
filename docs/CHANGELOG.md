@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.13.2
+
+*Released 2026-11-08.*
+
 ### Harden the Telegram delivery fallbacks
 
 * Only a definite Telegram `400` now triggers the plain-text/degraded-keyboard
