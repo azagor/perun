@@ -242,6 +242,12 @@ class PerunTelegramBridge:
         # whole bridge, so one chat could kill another's run).
         self._runs: Dict[str, str] = {}
         self._runs_lock = threading.Lock()
+        # Per-chat message scheduling: a long agent run in one chat must not
+        # block plain messages from another chat. Ordering within a chat is
+        # preserved by only starting the next job after the previous one ends.
+        self._chat_active: set[str] = set()
+        self._chat_pending: Dict[str, List[Dict[str, Any]]] = {}
+        self._chat_lock = threading.Lock()
         self.started_at = time.time()
         self._allowed_runtime: List[str] = []
         self._pair_lock = threading.Lock()
@@ -413,18 +419,20 @@ class PerunTelegramBridge:
         value = int(hashlib.sha1(str(run_uid).encode("utf-8")).hexdigest()[:8], 16)
         return value or 1
 
-    def _start_draft(self, chat_id: str, uid: str) -> threading.Event:
+    def _start_draft(self, chat_id: str, uid: str
+                     ) -> tuple[threading.Event, threading.Thread]:
         stop = threading.Event()
         draft_id = self._draft_id(uid)
         with self._drafts_lock:
             self._drafts[draft_id] = uid
-        threading.Thread(
+        thread = threading.Thread(
             target=self._draft_loop,
             args=(chat_id, uid, draft_id, stop),
             daemon=True,
             name="perun-tg-draft",
-        ).start()
-        return stop
+        )
+        thread.start()
+        return stop, thread
 
     def _draft_loop(self, chat_id: str, uid: str, draft_id: int,
                     stop: threading.Event) -> None:
@@ -468,7 +476,9 @@ class PerunTelegramBridge:
                 if kind in ("end", "__eof__"):
                     break
                 now = time.time()
-                if now - last < self.DRAFT_MIN_INTERVAL and kind not in ("tool",):
+                if now - last < self.DRAFT_MIN_INTERVAL:
+                    # Tool events are throttled too: a tool-heavy run must not
+                    # turn into a burst of draft updates (Telegram rate-limits).
                     continue
                 last = now
                 body = "\n\n".join(p for p in parts if p).strip()
@@ -1982,6 +1992,7 @@ class PerunTelegramBridge:
         typing_done = threading.Event()
         threading.Thread(target=self._typing_loop, args=(chat_id, typing_done), daemon=True).start()
         draft_stop = threading.Event()
+        draft_thread: Optional[threading.Thread] = None
         try:
             run = self.orch.start_run(proj["slug"], text, session_pk=session_pk,
                                       opencode_session_id=oc_sid)
@@ -1991,7 +2002,7 @@ class PerunTelegramBridge:
             return
         uid = run["run_uid"]
         if self._is_private_chat(chat_id):
-            draft_stop = self._start_draft(chat_id, uid)
+            draft_stop, draft_thread = self._start_draft(chat_id, uid)
         with self._runs_lock:
             self._runs[chat_id] = uid
         try:
@@ -2002,6 +2013,10 @@ class PerunTelegramBridge:
         finally:
             typing_done.set()
             draft_stop.set()
+            # Wait for an in-flight draft update before the final message: a
+            # draft arriving afterwards would leave a stale "Working…" preview.
+            if draft_thread is not None and draft_thread.is_alive():
+                draft_thread.join(timeout=1.0)
             with self._runs_lock:
                 self._runs.pop(chat_id, None)
         final = registry.get_run(uid) or run
@@ -2076,18 +2091,61 @@ class PerunTelegramBridge:
 
     # ---- worker + poll ---- #
     def worker(self) -> None:
-        while not self.stop_event.is_set():
-            try:
-                job = self.work.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            try:
-                self.run_message(job["chat_id"], job["text"], job["message_id"])
-            except Exception:
-                LOG.exception("worker error")
-                self.send(job["chat_id"], "❌ Internal bridge error (see perun.log).")
-            finally:
-                self.work.task_done()
+        """Run per-chat message jobs concurrently, at most one run per chat.
+
+        The durable queue delivers updates in order, but this worker used to
+        execute them serially across *all* chats: one long agent run blocked
+        plain messages from every other chat. Jobs are now scheduled on a small
+        pool, with later messages for the same chat waiting for that chat's run.
+        Commands and callbacks (including `/stop` and a draft Stop) are handled
+        by the job dispatcher and are never blocked by this pool.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(max_workers=8,
+                                      thread_name_prefix="perun-tg-run")
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    job = self.work.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                chat_id = str(job.get("chat_id") or "")
+                with self._chat_lock:
+                    if chat_id in self._chat_active:
+                        self._chat_pending.setdefault(chat_id, []).append(job)
+                        job = None
+                    else:
+                        self._chat_active.add(chat_id)
+                if job is not None:
+                    executor.submit(self._run_chat_job, executor, job)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _run_chat_job(self, executor: Any, job: Dict[str, Any]) -> None:
+        """One message run for one chat; schedules that chat's next message."""
+        chat_id = str(job.get("chat_id") or "")
+        try:
+            self.run_message(job["chat_id"], job["text"], job["message_id"])
+        except Exception:
+            LOG.exception("worker error")
+            self.send(job["chat_id"], "❌ Internal bridge error (see perun.log).")
+        finally:
+            self.work.task_done()
+            nxt: Optional[Dict[str, Any]] = None
+            with self._chat_lock:
+                queued = self._chat_pending.get(chat_id) or []
+                if queued:
+                    nxt = queued.pop(0)
+                    if not queued:
+                        self._chat_pending.pop(chat_id, None)
+                else:
+                    self._chat_active.discard(chat_id)
+            if nxt is not None:
+                try:
+                    executor.submit(self._run_chat_job, executor, nxt)
+                except RuntimeError:  # pool shut down during exit
+                    self.work.task_done()
 
     def authorised(self, chat_id: str) -> bool:
         """True only for chats that were explicitly granted access.
@@ -2294,7 +2352,7 @@ class PerunTelegramBridge:
     def _register_commands(self) -> None:
         """Publish the command menu; a failure is cosmetic, never fatal."""
         try:
-            self.api("setMyCommands", commands=[
+            self.api("setMyCommands", retries=1, commands=[
                 {"command": name, "description": text}
                 for name, text in self.COMMANDS
             ])

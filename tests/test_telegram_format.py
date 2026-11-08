@@ -72,6 +72,12 @@ def test_plain_text_strips_every_marker():
     assert "tg-time" not in text
 
 
+def test_nul_placeholders_in_agent_text_cannot_corrupt_the_output():
+    out = format_html("before \x00ST0\x00 after **bold**")
+    assert "\x00" not in out
+    assert "<b>bold</b>" in out
+
+
 def test_chunking_never_leaves_a_code_fence_open():
     body = "\n".join(f"line {i} " + "x" * 20 for i in range(30))
     text = "intro\n```python\n" + body + "\n```\noutro"

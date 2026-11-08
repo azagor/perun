@@ -32,6 +32,7 @@ def test_a_private_chat_streams_a_draft_then_stops():
         return {"ok": True, "result": True}
 
     bridge.api = fake_api  # type: ignore[assignment]
+    bridge.DRAFT_MIN_INTERVAL = 0
     bridge._draft_loop("1", "run_1", 77, stop=threading.Event())
 
     assert calls[0][0] == "sendMessageDraft"

@@ -1596,8 +1596,16 @@ single emoji badge plus a bold title, and buttons carry Telegram's `style`
 preview while the run generates: an empty draft renders "Thinking…", later
 updates show the current tool and the tail of the output (throttled to 1.6 s).
 The draft's Stop button arrives as `stopped_message_generation` and cancels that
-exact run; the final answer is then sent as a normal message. Groups and Bot API
-servers without drafts keep the typing indicator.
+exact run; the final answer is then sent as a normal message. The run path joins
+the draft thread (up to 1 s) before that send, so an in-flight update cannot leave
+a stale preview behind. Groups and Bot API servers without drafts keep the typing
+indicator.
+
+**Per-chat message scheduling.** Plain messages are executed on a small worker
+pool with **at most one run per chat**; later messages for the same chat wait
+for its active run, while another chat's message can start immediately. Commands
+and callbacks are handled by the durable-job dispatcher and are never blocked by
+a running message.
 
 **Natural-language routing (opt-in).** With `Settings.routing_enabled` on, a
 plain message first goes through `perun.routing.route()` in `run_message()`:

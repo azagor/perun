@@ -981,6 +981,9 @@ Shared Telegram ⇄ Perun bridge.
   `run_message()`, `worker()`, `authorised()` (strict: an empty allow-list grants
   nobody), `_handle_pair()` (`/pair <code>`, `hmac.compare_digest`, dispatched
   *before* the auth gate), `pair_code()`, `active_runs()`, `run_for()`, `run()`.
+  `worker()` runs message jobs on an 8-thread pool with at most one run per chat
+  (`_chat_active` / `_chat_pending`), so different chats progress in parallel;
+  `_run_chat_job()` releases the chat and schedules its next queued message.
   On startup `_notify_interrupted_runs()` messages a chat whose run a restart
   killed (runs interrupted within `telegram_interrupt_notice_minutes`, matched
   through `bridge_links.session_pk`, once per run via
@@ -990,8 +993,9 @@ Shared Telegram ⇄ Perun bridge.
   empty draft renders Telegram's "Thinking…", then the tool name and the last
   1 600 chars, throttled to `DRAFT_MIN_INTERVAL` (1.6 s). The draft's Stop button
   arrives as `stopped_message_generation`; `_handle_generation_stopped()` cancels
-  the exact run through the `_drafts` map. Groups and Bot API servers without
-  drafts keep the typing indicator.
+  the exact run through the `_drafts` map. The run path joins the draft thread
+  before sending the final answer, so an in-flight update cannot outlive it.
+  Groups and Bot API servers without drafts keep the typing indicator.
 * Operator inbox: `send()` now returns the first Telegram `message_id`, which is
   what makes reply-to matching possible. `attention_tick()` creates cards for
   never-delivered items (eligibility, recipients, `attention_deliveries`),
@@ -1954,6 +1958,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `test_telegram_format.py` - the rich-text layer: inline tags, escaping, code
   blocks, blockquotes, live time markers, plain-text stripping, fence-aware
   chunking, and the HTML → plain → degraded → no-markup send fallback.
+* `test_telegram_worker.py` - per-chat message scheduling: different chats run
+  in parallel, two messages for one chat never run at once, and the second
+  starts only after the first finishes.
 * `test_telegram_drafts.py` - live drafts: the empty "Thinking…" draft, partial
   text plus the tool name, the stop button cancelling the matching run, and
   groups never receiving drafts.

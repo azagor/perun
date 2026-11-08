@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Telegram bridge: finish the audit follow-ups
+
+* The run path now joins the live-draft thread (up to 1 s) before sending the
+  final answer, so an in-flight draft update cannot leave a stale "Working…"
+  preview after the reply. Tool events obey the same 1.6 s throttle.
+* `setMyCommands` uses `retries=1` at startup, so an outage cannot delay the
+  poller by the full retry budget.
+* Plain messages from different chats now run concurrently (one run per chat),
+  so a long agent run in one chat no longer blocks messages from another. The
+  durable queue still delivers per-chat updates in order.
+* `format_html()` strips NUL bytes before inserting private placeholders, so
+  agent text containing a literal placeholder can no longer corrupt output.
 
 ## v0.13.2
 

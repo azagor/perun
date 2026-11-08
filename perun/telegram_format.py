@@ -170,7 +170,7 @@ def format_html(md: str) -> str:
     Unknown/unclosed markup is left as literal text rather than producing an
     unbalanced tag (Telegram rejects the whole message in that case).
     """
-    text = (md or "").replace("\r\n", "\n")
+    text = str(md or "").replace("\r\n", "\n").replace("\x00", "")
     # One stash namespace, one index: block content, inline code, spoilers,
     # blockquotes and time markers must never collide on a placeholder.
     stash: List[tuple] = []
