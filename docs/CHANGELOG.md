@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.13.3
+
+*Released 2026-11-08.*
+
 ### Telegram bridge: finish the audit follow-ups
 
 * The run path now joins the live-draft thread (up to 1 s) before sending the

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.13.2 (see §15). Harden Telegram delivery fallbacks
+**Latest release:** v0.13.3 (see §15). Finish the Telegram audit follow-ups
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2754,6 +2754,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-08 — v0.13.3: Finish the Telegram audit follow-ups
+
 ### 2026-11-08 — v0.13.2: Harden Telegram delivery fallbacks
 
 ### 2026-11-08 — v0.13.1: Fix the draft Stop update path and keep session badges

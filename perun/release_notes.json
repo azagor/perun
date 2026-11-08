@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-08T00:36:03+00:00",
+  "generated": "2026-11-08T08:33:35+00:00",
   "releases": [
+    {
+      "version": "0.13.3",
+      "date": "2026-11-08",
+      "body": "### Telegram bridge: finish the audit follow-ups\n\n* The run path now joins the live-draft thread (up to 1 s) before sending the\n  final answer, so an in-flight draft update cannot leave a stale \"Working…\"\n  preview after the reply. Tool events obey the same 1.6 s throttle.\n* `setMyCommands` uses `retries=1` at startup, so an outage cannot delay the\n  poller by the full retry budget.\n* Plain messages from different chats now run concurrently (one run per chat),\n  so a long agent run in one chat no longer blocks messages from another. The\n  durable queue still delivers per-chat updates in order.\n* `format_html()` strips NUL bytes before inserting private placeholders, so\n  agent text containing a literal placeholder can no longer corrupt output."
+    },
     {
       "version": "0.13.2",
       "date": "2026-11-08",
@@ -45,11 +50,6 @@
       "version": "0.11.10",
       "date": "2026-11-05",
       "body": "### One operator inbox\n\n* Settings no longer mounts a second full copy of the \"Needs you\" inbox. The\n  dedicated `#/attention` page is the canonical inbox; Settings now has a short\n  card that links to it. This removes the duplicated panel/count and the extra\n  30-second poller that ran while the Settings view was open."
-    },
-    {
-      "version": "0.11.9",
-      "date": "2026-11-05",
-      "body": "### Missing package manifest fails closed\n\n* A package with an empty/missing derived manifest can no longer be peer-approved,\n  and the operator apply path fails closed instead of skipping the manifest\n  comparison. A valid pending package always carries its server-derived\n  operations; an empty manifest means the row/archive pair is not trustworthy."
     }
   ]
 }
