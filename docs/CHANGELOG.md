@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Harden the Telegram delivery fallbacks
+
+* Only a definite Telegram `400` now triggers the plain-text/degraded-keyboard
+  fallback; a timeout or unreachable host no longer causes blind extra sends
+  that could duplicate a message the operator already received.
+* `api()` returns a non-429 `4xx` immediately instead of retrying it four times,
+  so a bad entity falls back to plain text at once rather than after ~14 s.
+* `editMessageText`'s "message is not modified" response counts as success, so
+  tapping an unchanged card can no longer post a duplicate card.
+* The draft Stop handler re-checks that the chat is authorised before cancelling.
 
 ## v0.13.1
 

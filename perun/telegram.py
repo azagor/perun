@@ -69,6 +69,11 @@ def chunk(text: str, size: int) -> List[str]:
     return chunk_markdown(text, size)
 
 
+def _not_modified(res: Dict[str, Any]) -> bool:
+    """Telegram's "message is not modified" is a success for an idempotent edit."""
+    return "not modified" in str(res.get("description") or "").lower()
+
+
 def _downgrade_markup(markup: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Strip fields an older Bot API server rejects (``style``, ``copy_text``).
 
@@ -311,6 +316,13 @@ class PerunTelegramBridge:
                         time.sleep(wait)
                         budget -= wait
                     continue
+                if 400 <= int(data.get("error_code") or 0) < 500:
+                    # A definite client rejection (bad entity, stale button,
+                    # unknown chat). Retrying cannot change the answer; callers
+                    # may still fall back to plain text without the markup.
+                    LOG.warning("telegram %s rejected: %s", method,
+                                data.get("description"))
+                    return data
                 LOG.warning("telegram %s error (%d/%d): %s", method, attempt, retries,
                             data.get("description"))
             except Exception as exc:
@@ -350,22 +362,26 @@ class PerunTelegramBridge:
             if reply_markup is not None:
                 payload["reply_markup"] = reply_markup
             res = self.api("sendMessage", **payload)
-            if not res.get("ok"):
+            if not res.get("ok") and res.get("error_code") == 400:
                 # Telegram can reject the HTML (a bad entity) or the keyboard (a
                 # stale callback payload). Retry as plain text but KEEP the
                 # keyboard: dropping every button because bold failed is worse
-                # than sending unformatted text.
+                # than sending unformatted text. Only a definite 400 triggers a
+                # retry: on a timeout an earlier attempt may already have
+                # delivered, and a blind retry would duplicate the message.
                 payload.pop("parse_mode", None)
                 payload["text"] = plain_text(piece)
                 res = self.api("sendMessage", **payload)
-            if not res.get("ok") and "reply_markup" in payload:
+            if (not res.get("ok") and res.get("error_code") == 400
+                    and "reply_markup" in payload):
                 # A coloured/copy button may be the problem on an older Bot API
                 # server. Degrade the markup before giving up the keyboard.
                 degraded = _downgrade_markup(payload["reply_markup"])
                 if degraded:
                     payload["reply_markup"] = degraded
                     res = self.api("sendMessage", **payload)
-            if not res.get("ok") and "reply_markup" in payload:
+            if (not res.get("ok") and res.get("error_code") == 400
+                    and "reply_markup" in payload):
                 payload.pop("reply_markup", None)
                 res = self.api("sendMessage", **payload)
             if first_id is None:
@@ -476,6 +492,9 @@ class PerunTelegramBridge:
 
     def _handle_generation_stopped(self, payload: Dict[str, Any]) -> None:
         """The operator tapped Stop on a draft: cancel that exact run."""
+        chat_id = str((payload.get("chat") or {}).get("id") or "")
+        if not chat_id or not self.authorised(chat_id):
+            return
         try:
             draft_id = int(payload.get("draft_id") or 0)
         except (TypeError, ValueError):
@@ -1644,22 +1663,25 @@ class PerunTelegramBridge:
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         res = self.api("editMessageText", retries=retries, **payload)
-        if not res.get("ok"):
-            # HTML rejected, or the message is too old / not modified: one plain
-            # retry covers "too old"; keep the keyboard so a formatting problem
-            # never strips the operator's buttons.
+        if not res.get("ok") and _not_modified(res):
+            return True
+        if not res.get("ok") and res.get("error_code") == 400:
+            # HTML rejected (or a stale card): one plain retry, keeping the
+            # keyboard so a formatting problem never strips the buttons.
             payload.pop("parse_mode", None)
             payload["text"] = plain_text(text)
             res = self.api("editMessageText", retries=1, **payload)
-        if not res.get("ok") and "reply_markup" in payload:
+        if (not res.get("ok") and res.get("error_code") == 400
+                and "reply_markup" in payload):
             degraded = _downgrade_markup(payload.get("reply_markup"))
             if degraded:
                 payload["reply_markup"] = degraded
                 res = self.api("editMessageText", retries=1, **payload)
-        if not res.get("ok") and "reply_markup" in payload:
+        if (not res.get("ok") and res.get("error_code") == 400
+                and "reply_markup" in payload):
             payload.pop("reply_markup", None)
             res = self.api("editMessageText", retries=1, **payload)
-        return bool(res.get("ok"))
+        return bool(res.get("ok")) or _not_modified(res)
 
     def _show_item_state(self, chat_id: str, message_id: int,
                          item: Dict[str, Any], note: str) -> None:

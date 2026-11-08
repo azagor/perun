@@ -435,6 +435,31 @@ def test_telegram_429_waits_as_instructed_then_retries(bridge, monkeypatch):
     assert sleeps == [3.0]
 
 
+def test_a_400_is_returned_without_retrying(bridge, monkeypatch):
+    calls = []
+
+    class Resp:
+        def json(self):
+            return {"ok": False, "error_code": 400,
+                    "description": "Bad Request: can't parse entities"}
+
+    class Client:
+        def post(self, url, json=None):  # noqa: A002
+            calls.append(json)
+            return Resp()
+
+        def close(self):
+            pass
+
+    bridge.client = Client()
+    bridge.api = PerunTelegramBridge.api.__get__(bridge)
+
+    result = bridge.api("sendMessage", chat_id="1", text="**broken")
+
+    assert result["error_code"] == 400
+    assert len(calls) == 1
+
+
 def test_a_button_tap_through_the_real_dispatch_answers_the_item(bridge, project, api):
     """Regression: ``att:`` callbacks must reach the handler via _handle_update.
 

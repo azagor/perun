@@ -96,7 +96,8 @@ def test_send_keeps_the_keyboard_when_html_is_rejected():
     def fake_api(method, **params):
         calls.append(dict(params))
         if params.get("parse_mode") == "HTML":
-            return {"ok": False, "description": "can't parse entities"}
+            return {"ok": False, "error_code": 400,
+                    "description": "can't parse entities"}
         return {"ok": True, "result": {"message_id": 11}}
 
     bridge.api = fake_api  # type: ignore[assignment]
@@ -119,7 +120,8 @@ def test_send_degrades_coloured_buttons_on_an_old_server():
         calls.append(dict(params))
         rows = (params.get("reply_markup") or {}).get("inline_keyboard") or []
         if any("style" in button for row in rows for button in row):
-            return {"ok": False, "description": "BUTTON_STYLE_INVALID"}
+            return {"ok": False, "error_code": 400,
+                    "description": "BUTTON_STYLE_INVALID"}
         return {"ok": True, "result": {"message_id": 12}}
 
     bridge.api = fake_api  # type: ignore[assignment]
@@ -140,7 +142,8 @@ def test_send_drops_the_keyboard_only_as_a_last_resort():
     def fake_api(method, **params):
         calls.append(dict(params))
         if "reply_markup" in params:
-            return {"ok": False, "description": "bad reply markup"}
+            return {"ok": False, "error_code": 400,
+                    "description": "bad reply markup"}
         return {"ok": True, "result": {"message_id": 12}}
 
     bridge.api = fake_api  # type: ignore[assignment]
@@ -151,3 +154,33 @@ def test_send_drops_the_keyboard_only_as_a_last_resort():
     assert message_id == 12
     assert "reply_markup" in calls[2]
     assert "reply_markup" not in calls[3]
+
+
+def test_send_does_not_retry_a_network_failure():
+    bridge = PerunTelegramBridge(None, token="test", allowed=[])
+    calls = []
+
+    def fake_api(method, **params):
+        calls.append(dict(params))
+        return {}                       # timeout / unreachable
+
+    bridge.api = fake_api  # type: ignore[assignment]
+    markup = {"inline_keyboard": [[{"text": "OK", "callback_data": "x"}]]}
+
+    assert bridge.send("1", "plain", reply_markup=markup) is None
+    assert len(calls) == 1              # a blind retry could duplicate it
+
+
+def test_an_unchanged_card_edit_is_a_success():
+    bridge = PerunTelegramBridge(None, token="test", allowed=[])
+    calls = []
+
+    def fake_api(method, **params):
+        calls.append(dict(params))
+        return {"ok": False, "error_code": 400,
+                "description": "Bad Request: message is not modified"}
+
+    bridge.api = fake_api  # type: ignore[assignment]
+
+    assert bridge._edit_card("1", 5, "same text") is True
+    assert len(calls) == 1              # no plain/degraded/drop retries
