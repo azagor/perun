@@ -956,7 +956,8 @@ Shared Telegram ⇄ Perun bridge.
   `plain_text`, `chunk_markdown`, `heading`, `badge`, `time_marker`); the local
   `chunk()` wrapper keeps the old call sites. `_downgrade_markup()` strips
   `style`/`copy_text` before a retry, so an older Bot API server degrades to an
-  uncoloured keyboard instead of losing the buttons.
+  uncoloured keyboard instead of losing the buttons; `_not_modified()` treats an
+  unchanged edit as success so it never posts a duplicate card.
 * `COMMANDS` + `_register_commands()` publish the native command menu with
   `setMyCommands` at bridge start.
 * `PidLock` (single-instance; `acquire()`, `release()`, side-effect-free
@@ -1048,7 +1049,8 @@ the rich HTML subset.
   underline (`__…__`), strikethrough (`~~…~~`), spoiler (`||…||`), headings,
   links, inline/fenced code, `> blockquote` and `{{time:ISO|fmt}}` →
   `<tg-time>`; everything else is HTML-escaped and unclosed markup stays literal
-  so Telegram never rejects the whole message.
+  so Telegram never rejects the whole message. NUL bytes are stripped before the
+  internal placeholders are inserted, so agent text cannot collide with them.
 * `plain_text()`: strips the markup for the retry after Telegram rejects HTML.
 * `chunk_markdown()`: fence-aware split for the 4 096-char limit; an open code
   block is closed and reopened with its language on the next chunk.

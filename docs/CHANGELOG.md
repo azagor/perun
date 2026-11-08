@@ -4,7 +4,11 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Documentation refresh
+
+* `README.md` and `docs/DESIGN.md` now describe the Telegram card grammar,
+  coloured buttons, live run drafts and per-chat message scheduling;
+  `AGENTS_OPTIMIZATION.md` and the Shared Projects PRD name v0.13.3.
 
 ## v0.13.3
 

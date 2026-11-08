@@ -175,7 +175,11 @@ consumer per token), enforced by a machine-global named mutex. `/start` `/help`,
 `/reset`, `/status`, `/stop` `/cancel`, `/remember`, `/recall`, `/index`, and
 `/pair <code>` to authorise a chat. Anything else is a prompt, answered by a
 Perun-orchestrated run. An empty allow-list grants **nobody** access until a chat
-pairs.
+pairs. Rendering lives in `telegram_format.py`: one emoji badge per card, bold
+titles, blockquotes, live relative timestamps and Telegram's coloured button
+styles (green safe, blue neutral, red destructive). In private chats a run
+streams a `sendMessageDraft` preview whose Stop button cancels it. Plain
+messages run on a per-chat pool: one run per chat, different chats in parallel.
 
 ### Manage models and MCP servers
 `#/providers` lists the provider catalog and the credentials OpenCode already

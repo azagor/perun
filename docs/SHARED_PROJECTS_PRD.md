@@ -1,6 +1,6 @@
 # PRD: Shared Projects (Perun × PerunChat)
 
-> **Implementation status (v0.12.4):** implemented as described below, plus the
+> **Implementation status (v0.13.3):** implemented as described below, plus the
 > post-v0.8.37 hardening: claim-locked external applies (`claimed → executing`
 > with a matching executor and unexpired lease), stricter ZIP/path validation,
 > HITL nonce/TTL invariants, and a target-drift guard (approval stores a content

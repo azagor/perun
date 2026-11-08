@@ -4,7 +4,7 @@
 > anchor resolution, CODEMAP-aware chunking, the compact CODEMAP outline and
 > local-embedding fallback. All five managed projects migrated and a
 > production-readiness audit hardened the implementation. The retrieval
-> mechanism is unchanged through **v0.12.4**; since v0.8.57 the context layer
+> mechanism is unchanged through **v0.13.3**; since v0.8.57 the context layer
 > only gained handbook entries (declared checks, operator-inbox tools). Phase 5
 > — the eval-set half of the parity harness — remains outstanding. The
 > `AGENTS.md` rules added since (browser tickets, self-service key rotation,

@@ -51,8 +51,10 @@ them all — no matter which folder you happened to open.
   key is verified before it is saved, stays masked, and the bridge restarts in
   one click.
 * **An inbox, not a firehose.** Permissions, forms, agent questions and proposals
-  arrive as typed Telegram cards answered with buttons; a burst of room messages
-  becomes one digest card, and `/pending` always lists what is waiting.
+  arrive as typed Telegram cards with an emoji badge, bold title and coloured
+  action buttons; private-chat runs stream a live draft of the reply, a burst of
+  room messages becomes one digest card with a one-tap mute, and `/pending`
+  always lists what is waiting.
 * **Ask the machine without spending a run.** A deterministic router answers
   status / pending / projects / runs / health / usage / diff / resume from the
   registry, sends everything else to the right project, and records coverage so
