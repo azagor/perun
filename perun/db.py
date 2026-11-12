@@ -726,6 +726,8 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("work_paused", "INTEGER DEFAULT 0"),
         ("work_paused_at", "TEXT DEFAULT ''"),
         ("work_paused_by", "TEXT DEFAULT ''"),
+        # VS Code integration (v0.14): link, workspace path, edit-follow mode.
+        ("ide", "TEXT DEFAULT '{}'"),
     ],
     "runs": [
         ("model_explicit", "INTEGER DEFAULT 0"),
@@ -753,6 +755,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("coroutine_outcome", "TEXT DEFAULT ''"),
         ("coroutine_accounting_at", "TEXT DEFAULT ''"),
         ("coroutine_accounted_at", "TEXT DEFAULT ''"),
+        # A TUI hosted by the VS Code companion reports its terminal id and pid.
+        ("terminal_id", "TEXT DEFAULT ''"),
+        ("terminal_owner", "TEXT DEFAULT ''"),
     ],
     # Per-session token/cost snapshot from the OpenCode service. A session total
     # is authoritative, so it is stored (overwritten), never accumulated.
@@ -966,7 +971,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 def init_db() -> None:

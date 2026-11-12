@@ -1,0 +1,54 @@
+"""The dashboard exposes the VS Code link, launch modes and selection flow."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from perun import config
+
+
+def _js() -> str:
+    return (config.REPO_ROOT / "web" / "js" / "perun.js").read_text(encoding="utf-8")
+
+
+def test_the_project_card_has_a_vscode_badge_and_action():
+    text = _js()
+    assert "vscode_linked" in text
+    assert "data-vscode" in text
+    assert "openProjectVsCode" in text
+
+
+def test_the_project_config_has_an_ide_card():
+    text = _js()
+    assert "pc-vscode-linked" in text
+    assert "pc-vscode-mode" in text
+    assert "pc-vscode-follow" in text
+    assert "/vscode/link" in text
+    assert "/vscode/unlink" in text
+
+
+def test_the_run_flow_can_host_the_tui_in_vscode():
+    text = _js()
+    assert "/vscode/open" in text
+    assert "vscode-terminal" in text
+    assert "external-terminal" in text
+    assert "Run in VS Code terminal" in text
+
+
+def test_the_wizard_can_link_the_new_project():
+    text = _js()
+    assert "vscode_link" in text
+    assert "Link with Visual Studio Code" in text
+
+
+def test_the_companion_package_is_a_valid_extension_manifest():
+    root = Path(config.REPO_ROOT) / "extensions" / "vscode"
+    package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    assert package["name"] == "perun-overseer"
+    assert package["main"] == "./dist/extension.js"
+    assert "onStartupFinished" in package["activationEvents"]
+    assert "perun.sendSelection" in {
+        command["command"] for command in package["contributes"]["commands"]
+    }
+    assert (root / "src" / "extension.js").is_file()

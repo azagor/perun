@@ -286,6 +286,14 @@ with `python -m perun project-roots --add <name> <path>`.
   `sendMessageDraft` in private chats only, throttled, and must never delay or
   duplicate the final reply; `stopped_message_generation` cancels that exact run.
   Keep button text redacted like the card itself.
+* **VS Code is optional and local.** The companion connects only over loopback,
+  with a single-use ticket bound to one workspace; never put a long-lived token
+  in a URL and never trust workspace-level `perun.*` settings (a cloned repo
+  could redirect the endpoint). Paths from the editor are validated against the
+  project root. `code` launches use a fixed argv; the extension cannot make Perun
+  run arbitrary commands. Mode B's terminal id/pid must stay bound to the run so
+  Stop/Focus survive a restart. A missing VS Code or extension degrades to the
+  `code --goto` reveal and clipboard selection, never to a broken service.
 * **Detection is event-driven, polling is the net.** The watcher subscribes to the
   shared `EventHub` as a global subscriber and polls once per debounced burst; the
   `attention_poll_seconds` timer only reconciles. Keep both paths — events make a

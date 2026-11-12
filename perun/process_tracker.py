@@ -72,6 +72,34 @@ class ProcessTracker:
         threading.Thread(target=self._remember_child, args=(run_uid,),
                          daemon=True).start()
 
+    def register_pid(self, run_uid: str, pid: int, *, owner: str = "vscode") -> None:
+        """Track a TUI whose terminal is owned by another process (VS Code).
+
+        There is no ``Popen`` handle, so liveness/focus/stop use the pid and the
+        same ``PERUN_RUN_UID`` marker as an external terminal. Persisting the pid
+        keeps the run stopable after a Perun restart.
+        """
+        try:
+            value = int(pid)
+        except (TypeError, ValueError):
+            return
+        if value <= 0:
+            return
+        with self._lock:
+            self._entries[run_uid] = {
+                "proc": None,
+                "pid": value,
+                "shell": "",
+                "run_uid": run_uid,
+                "started_at": time.time(),
+                "owner": owner,
+            }
+        try:
+            registry.update_run(run_uid, pid=value)
+        except Exception:  # pragma: no cover - tracking is best effort
+            pass
+        self._ensure_watcher()
+
     def get(self, run_uid: str) -> dict[str, Any] | None:
         with self._lock:
             return self._entries.get(run_uid)

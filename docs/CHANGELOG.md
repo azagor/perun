@@ -4,6 +4,26 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### VS Code deep integration
+
+* Link any project to a generated `.code-workspace` from the wizard, project card
+  or Config panel. Linked projects show a badge and an **Open in VS Code** action.
+* Two launch modes: host the TUI in VS Code's integrated terminal (seamless
+  `@file#lines` selection insertion) or keep the external terminal while VS Code
+  follows edits. A per-run override is available from the Run caret.
+* Live edit following: the global OpenCode event stream is mapped to a project,
+  validated against the project root, debounced and sent to the companion for
+  reveal + highlight. Without the companion, linked projects fall back to
+  `code --reuse-window --goto`.
+* Companion extension (`perun.perun-overseer`): status bar, ticket-authenticated
+  loopback WebSocket, selection command (`Ctrl+Alt+P`), terminal open/focus/close,
+  and `terminal.processId` binding so Stop/Focus keep working.
+* Security: single-use workspace-bound tickets, no long-lived token in a URL,
+  fixed message schema, loopback-only endpoints, ignored workspace-level
+  `perun.*` settings, path validation, and no silent VS Code install.
+* VSIX is built in the release workflow and installed per-user by the Windows
+  installer; the dashboard reports a missing/outdated companion.
+
 ### Documentation refresh
 
 * `README.md` and `docs/DESIGN.md` now describe the Telegram card grammar,

@@ -40,10 +40,11 @@ Name: "opencode"; Description: "OpenCode CLI"; Types: full
 Name: "ollama"; Description: "Ollama (for semantic memory)"; Types: full
 
 [Files]
-Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "\.git,\.gitignore,perun.md,AGENTS.md,README.md,docs,.perun,*.pyc,__pycache__,.pytest_cache,node_modules,installer\Output,installer\*.exe,installer\*.iss,installer\certs"
+Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "\.git,\.gitignore,perun.md,AGENTS.md,README.md,docs,.perun,*.pyc,__pycache__,.pytest_cache,node_modules,installer\Output,installer\*.exe,installer\*.iss,installer\certs,extensions\vscode\node_modules,extensions\vscode\dist,extensions\vscode\tests"
 Source: "install-prereqs.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "..\web\assets\perun.ico"; DestDir: "{app}\web\assets"; Flags: ignoreversion
+Source: "vscode\perun-overseer.vsix"; DestDir: "{app}\vscode"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\Perun"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\web\assets\perun.ico"
@@ -51,9 +52,11 @@ Name: "{autodesktop}\Perun"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"; Flags: checkedonce
+Name: "vscodeext"; Description: "Install the Perun companion for Visual Studio Code (if code is on PATH)"; GroupDescription: "Editor integration:"; Flags: checkedonce
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\installer\install-prereqs.ps1"" -PerunDir ""{app}""{code:GetPrereqSwitches}"; StatusMsg: "Installing dependencies and finishing Perun setup..."; Flags: runhidden waituntilterminated
+Filename: "cmd.exe"; Parameters: "/c code --install-extension ""{app}\vscode\perun-overseer.vsix"" --force"; StatusMsg: "Installing the Perun VS Code companion..."; Flags: runhidden waituntilterminated runasoriginaluser; Tasks: vscodeext
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\installer\uninstall.ps1"" -PerunDir ""{app}"""; RunOnceId: "PerunUninstall"; Flags: runhidden waituntilterminated

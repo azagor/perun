@@ -149,7 +149,7 @@ def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
         "name", "path", "root", "kind", "description", "tags", "model",
         "agent", "agent_models", "favorite", "enabled", "hidden", "color",
         "manifest", "manifest_path", "manifest_loaded_at",
-        "git_remote", "git_branch", "git_provider",
+        "git_remote", "git_branch", "git_provider", "ide",
     }
     sets = {k: v for k, v in fields.items() if k in allowed}
     if "agent_models" in sets:
@@ -160,6 +160,13 @@ def update_project(slug: str, **fields: Any) -> dict[str, Any] | None:
         elif not isinstance(value, str):
             sets["agent_models"] = json.dumps({} if value is None else value,
                                                ensure_ascii=False)
+    if "ide" in sets:
+        value = sets["ide"]
+        if isinstance(value, dict):
+            sets["ide"] = json.dumps(value, ensure_ascii=False,
+                                     separators=(',', ':'))
+        elif not isinstance(value, str):
+            sets["ide"] = "{}"
     if not sets:
         return get_project(slug)
     sets["updated_at"] = now_iso()
@@ -300,6 +307,18 @@ def project_dict(conn: sqlite3.Connection, row: sqlite3.Row,
         d["agent_models"] = raw_agent_models
     else:
         d["agent_models"] = {}
+    # VS Code integration settings (a bad/missing value degrades to {}).
+    raw_ide = d.pop("ide", "{}")
+    if isinstance(raw_ide, str):
+        try:
+            parsed_ide = json.loads(raw_ide)
+            d["ide"] = parsed_ide if isinstance(parsed_ide, dict) else {}
+        except Exception:
+            d["ide"] = {}
+    elif isinstance(raw_ide, dict):
+        d["ide"] = raw_ide
+    else:
+        d["ide"] = {}
     # The control plane is the self-registered Perun repo; the dashboard uses
     # this flag to badge it and to protect it from deletion.
     d["is_control"] = config.is_control_path(d.get("path"))
@@ -1016,6 +1035,21 @@ def find_session_by_opencode(project_id: int, oc_id: str) -> dict[str, Any] | No
         return dict(row) if row else None
 
 
+def project_for_opencode_session(oc_id: str) -> dict[str, Any] | None:
+    """The project that owns an OpenCode session id (newest match wins)."""
+    value = str(oc_id or "").strip()
+    if not value:
+        return None
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            """SELECT p.* FROM sessions s JOIN projects p ON p.id=s.project_id
+               WHERE s.opencode_session_id=? ORDER BY s.updated_at DESC LIMIT 1""",
+            (value,),
+        )
+        return project_dict(conn, row) if row else None
+
+
 def update_session(pk: int, **fields: Any) -> None:
     allowed = {"opencode_session_id", "title", "status", "message_count", "last_error"}
     sets = {k: v for k, v in fields.items() if k in allowed}
@@ -1239,7 +1273,8 @@ def update_run(run_uid: str, **fields: Any) -> None:
     allowed = {"session_pk", "opencode_session_id", "status", "exit_code",
                "started_at", "ended_at", "output", "error",
                "admitted_at", "reply_sent_at", "lease_epoch", "pid",
-               "coroutine_outcome", "coroutine_accounted_at"}
+               "coroutine_outcome", "coroutine_accounted_at",
+               "terminal_id", "terminal_owner"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return

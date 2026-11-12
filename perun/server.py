@@ -34,15 +34,15 @@ from typing import Any, AsyncIterator, Iterator
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import iterate_in_threadpool
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from . import (__version__, action_proposals, checks, config, context, control,
                coroutines, db, discovery, git, manifest, memory, projects,
                providers, registry, scaffold, shared_projects,
-               shared_project_sync)
+               shared_project_sync, vscode_bridge, vscode_workspace)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -270,12 +270,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         PERUNCHAT_BRIDGE.start()
         if recovered_proposals:
             _post_recovered_digests(recovered_proposals)
+    # VS Code companion: subscribe to the same OpenCode event stream the
+    # attention watcher uses, so agent edits reach a linked editor live.
+    try:
+        vscode_bridge.BRIDGE.start()
+    except Exception:  # pragma: no cover - an editor integration must not stop serve
+        logging.getLogger("perun.server").exception("could not start the vscode bridge")
     try:
         yield
     finally:
         reconcile_stop.set()
         if reembed_stop is not None:
             reembed_stop.set()
+        try:
+            vscode_bridge.BRIDGE.stop()
+        except Exception:  # pragma: no cover - best effort
+            pass
         try:
             COROUTINES.stop()
         except Exception:  # pragma: no cover - best effort
@@ -2604,6 +2614,17 @@ def api_cancel_run(run_uid: str) -> dict[str, Any]:
     from . import process_tracker
 
     orch_cancelled = ORCH.cancel(run_uid)
+    # A TUI hosted by the VS Code companion is closed through the extension; the
+    # pid is also registered, so the external fallback still works if the
+    # companion just disconnected.
+    vscode_closed = vscode_bridge.BRIDGE.close_terminal(run_uid)
+    if vscode_closed:
+        run = registry.get_run(run_uid) or {}
+        if run.get("status") in ("queued", "running"):
+            registry.update_run(run_uid, status="cancelled",
+                                ended_at=registry.now_iso())
+        process_tracker.TRACKER.finalize(run_uid)
+        return _ok(cancelled=True, via="vscode")
     # Always offer the run to the tracker, even when it has no in-memory entry:
     # after a restart the entry is gone but `runs.pid` + the PERUN_RUN_UID marker
     # still let Stop close the terminal Perun opened. `terminate()` is a no-op
@@ -2629,7 +2650,195 @@ def api_focus_run_terminal(run_uid: str) -> dict[str, Any]:
 
     if not registry.get_run(run_uid):
         raise HTTPException(status_code=404, detail="no such run")
+    if vscode_bridge.BRIDGE.focus_terminal(run_uid):
+        return _ok(focused=True, via="vscode")
     return _ok(**terminal_focus.focus_run_terminal(run_uid))
+
+
+# --------------------------------------------------------------------------- #
+# VS Code integration
+# --------------------------------------------------------------------------- #
+def _vscode_project_file(project: dict[str, Any], value: str) -> Path:
+    root = Path(str(project.get("path") or "")).resolve()
+    target = Path(value)
+    if not target.is_absolute():
+        target = root / target
+    resolved = target.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="file is outside the project")
+    return resolved
+
+
+@app.get("/api/vscode/status")
+def api_vscode_status() -> dict[str, Any]:
+    projects = registry.list_projects(include_hidden=True)
+    linked = sum(1 for p in projects if (p.get("ide") or {}).get("vscode_linked"))
+    return _ok(**vscode_workspace.status(
+        linked_projects=linked,
+        clients=vscode_bridge.BRIDGE.client_count(),
+    ))
+
+
+@app.post("/api/projects/{slug}/vscode/link")
+def api_vscode_link(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    mode = str(payload.get("launch_mode") or "vscode-terminal").strip()
+    if mode not in ("vscode-terminal", "external-terminal"):
+        raise HTTPException(status_code=400, detail="launch_mode is invalid")
+    workspace_in_project = bool(payload.get("workspace_in_project"))
+    try:
+        workspace = vscode_workspace.generate(
+            project, workspace_in_project=workspace_in_project)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"could not write the workspace: {exc}")
+    ide = dict(project.get("ide") or {})
+    ide.update({
+        "vscode_linked": True,
+        "workspace_path": workspace,
+        "workspace_in_project": workspace_in_project,
+        "auto_follow_edits": bool(payload.get("auto_follow_edits", True)),
+        "launch_mode": mode,
+        "schema_version": 1,
+    })
+    updated = registry.update_project(slug, ide=ide)
+    registry.log_activity(project["id"], "vscode_linked",
+                          f"Linked to VS Code ({mode})", {"workspace": workspace})
+    return _ok(project=updated, workspace=workspace)
+
+
+@app.post("/api/projects/{slug}/vscode/unlink")
+def api_vscode_unlink(slug: str) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    ide = dict(project.get("ide") or {})
+    old_workspace = str(ide.get("workspace_path") or "")
+    ide["vscode_linked"] = False
+    ide["workspace_path"] = ""
+    updated = registry.update_project(slug, ide=ide)
+    removed = vscode_workspace.remove_workspace(old_workspace) if old_workspace else False
+    registry.log_activity(project["id"], "vscode_unlinked",
+                          "Unlinked from VS Code", {"removed_workspace": removed})
+    return _ok(project=updated, removed_workspace=removed)
+
+
+@app.post("/api/projects/{slug}/vscode/open")
+def api_vscode_open(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    ide = dict(project.get("ide") or {})
+    workspace = str(ide.get("workspace_path") or "")
+    if not workspace or not Path(workspace).is_file():
+        workspace = vscode_workspace.generate(project)
+        ide["workspace_path"] = workspace
+        ide.setdefault("vscode_linked", True)
+        registry.update_project(slug, ide=ide)
+    file_value = str(payload.get("file") or "").strip()
+    if file_value:
+        try:
+            line = int(payload.get("line") or 1)
+        except (TypeError, ValueError):
+            line = 1
+        target = _vscode_project_file(project, file_value)
+        result = vscode_workspace.reveal(str(target), line)
+    else:
+        result = vscode_workspace.open_workspace(workspace)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "could not open VS Code")
+    return _ok(workspace=workspace)
+
+
+@app.post("/api/vscode/ticket")
+def api_vscode_ticket(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    workspace = str(payload.get("workspace_path") or "").strip()
+    project = None
+    if workspace:
+        project = registry.get_project_by_path(workspace)
+    if not project:
+        ref = str(payload.get("project") or "").strip()
+        project = registry.get_project(ref) if ref else None
+    if not project:
+        raise HTTPException(status_code=404, detail="no registered project matches this workspace")
+    bound_workspace = str(project.get("path") or "")
+    ticket = vscode_bridge.BRIDGE.issue_ticket(int(project["id"]), bound_workspace)
+    return _ok(
+        **ticket,
+        project={"slug": project.get("slug"), "name": project.get("name")},
+        protocol=vscode_bridge.PROTOCOL_VERSION,
+        ws_path="/api/vscode/ws",
+    )
+
+
+@app.get("/api/projects/{slug}/vscode/context")
+def api_vscode_context(slug: str) -> dict[str, Any]:
+    project = registry.get_project(slug)
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    return _ok(context=vscode_bridge.BRIDGE.context_for(int(project["id"])))
+
+
+@app.post("/api/runs/{run_uid}/vscode/open")
+def api_vscode_open_run(run_uid: str) -> dict[str, Any]:
+    run = registry.get_run(run_uid)
+    if not run:
+        raise HTTPException(status_code=404, detail="no such run")
+    project = registry.get_project(int(run.get("project_id") or 0))
+    if not project:
+        raise HTTPException(status_code=404, detail="no such project")
+    if not vscode_bridge.BRIDGE.request_terminal(run, project):
+        raise HTTPException(
+            status_code=409,
+            detail="no VS Code companion is connected for this project",
+        )
+    return _ok(sent=True, run_uid=run_uid)
+
+
+@app.websocket("/api/vscode/ws")
+async def api_vscode_ws(websocket: WebSocket) -> None:
+    ticket = websocket.query_params.get("ticket", "")
+    info = vscode_bridge.BRIDGE.redeem_ticket(ticket)
+    if not info:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    conn_id = uuid.uuid4().hex
+    loop = asyncio.get_running_loop()
+    outbox: asyncio.Queue = asyncio.Queue()
+
+    def _queue(payload: dict[str, Any]) -> None:
+        try:
+            outbox.put_nowait(payload)
+        except Exception:  # pragma: no cover - queue is unbounded
+            pass
+
+    vscode_bridge.BRIDGE.register(conn_id, websocket, loop, outbox, info)
+
+    async def _sender() -> None:
+        while True:
+            payload = await outbox.get()
+            await websocket.send_json(payload)
+
+    sender_task = asyncio.create_task(_sender())
+    try:
+        while True:
+            message = await websocket.receive_json()
+            await run_in_threadpool(vscode_bridge.BRIDGE.handle_message, conn_id, message)
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # pragma: no cover - a malformed frame closes one connection
+        logging.getLogger("perun.server").debug("vscode websocket closed", exc_info=True)
+    finally:
+        sender_task.cancel()
+        vscode_bridge.BRIDGE.unregister(conn_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # --------------------------------------------------------------------------- #

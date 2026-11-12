@@ -1463,6 +1463,7 @@ function projectCard(p) {
          ${running}
          <div class="pc-meta">
             <span class="badge ${badge}">${esc(badgeText)}</span>
+             ${(p.ide || {}).vscode_linked ? '<span class="badge green">VS Code</span>' : ''}
              ${p.work_paused ? '<span class="badge amber">paused</span>' : ''}
             <span>◧ ${p.session_count || 0} sessions</span>
             <span>◉ ${p.memory_count || 0} facts</span>
@@ -1473,6 +1474,7 @@ function projectCard(p) {
             ${runMenuBtn}
             ${focusBtn}
             <button class="btn sm" data-open>Open</button>
+            ${(p.ide || {}).vscode_linked ? '<button class="btn sm ghost" data-vscode title="Open in VS Code">VS Code</button>' : ''}
             <button class="btn sm ghost" data-index>Index docs</button>
             ${delBtn}
          </div>`);
@@ -1483,6 +1485,11 @@ function projectCard(p) {
         if (focus) { e.stopPropagation(); focusProjectTerminal(focus.dataset.runUid); return; }
         if (e.target.closest('[data-del]')) { e.stopPropagation(); deleteProject(p); return; }
         if (e.target.closest('[data-index]')) { indexProject(p); return; }
+        if (e.target.closest('[data-vscode]')) {
+            e.stopPropagation();
+            openProjectVsCode(p);
+            return;
+        }
         if (e.target.closest('[data-tui-menu]')) {
             e.stopPropagation();
             openTuiMenu(p);
@@ -1590,6 +1597,10 @@ async function openTuiMenu(p) {
         add('Choose an existing session…', `${sessions.length} session(s)`, 'ghost',
             () => chooseProjectSession(p, sessions));
     }
+    add('Run in VS Code terminal', 'TUI inside VS Code — direct selection hand-off', 'ghost',
+        () => openProjectTui(p, { launchMode: 'vscode-terminal' }));
+    add('Run in external terminal', 'Windows Terminal — VS Code still follows edits', 'ghost',
+        () => openProjectTui(p, { launchMode: 'external-terminal' }));
     modal(`Run · ${p.name || p.slug}`, body, [
         { label: 'Cancel', class: 'ghost', onClick: closeModal },
     ]);
@@ -1621,6 +1632,18 @@ async function openProjectTui(p, opts = {}) {
         });
         const runUid = res.run && res.run.run_uid;
         if (!runUid) { throw new Error('Perun did not return a run id'); }
+        const ide = p.ide || {};
+        const mode = String(opts.launchMode || ide.launch_mode || 'external-terminal');
+        if (mode === 'vscode-terminal') {
+            try {
+                await api(`/api/runs/${runUid}/vscode/open`, { method: 'POST' });
+                toast(sessionId ? 'Resumed in VS Code' : 'Started in VS Code', 'ok');
+                await refreshPresence();
+                return;
+            } catch (err) {
+                toast('VS Code companion not connected — opening an external terminal', 'err');
+            }
+        }
         const opened = await launchInTerminal({
             project: p.slug, cwd: p.path, model: p.model, agent: p.agent,
             tui: true, runUid, sessionId,
@@ -1636,6 +1659,16 @@ async function openProjectTui(p, opts = {}) {
             }
             await refreshPresence();
             return;
+        }
+        if (ide.vscode_linked) {
+            // Linked projects open (or focus) their VS Code workspace alongside
+            // the external TUI. Edit-follow and selection are handled by the
+            // companion; a missing extension degrades to plain VS Code.
+            try {
+                await api(`/api/projects/${encodeURIComponent(p.slug)}/vscode/open`, {
+                    method: 'POST', body: {},
+                });
+            } catch (_) { /* VS Code is optional */ }
         }
         toast(sessionId ? 'Resumed session' : 'Started a new session', 'ok');
         await refreshPresence();
@@ -1667,6 +1700,18 @@ async function focusProjectTerminal(runUid) {
             toast('Several terminals match - click Focus again for the next one');
         }
     } catch (e) { toast(e.message, 'err'); }
+}
+
+async function openProjectVsCode(p) {
+    if (!p || !p.slug) return;
+    try {
+        await api(`/api/projects/${encodeURIComponent(p.slug)}/vscode/open`, {
+            method: 'POST', body: {},
+        });
+        toast('Opening VS Code…', 'ok');
+    } catch (e) {
+        toast(e.message, 'err');
+    }
 }
 
 async function cancelProjectRun(runUid) {
@@ -1914,6 +1959,7 @@ function projectWizard() {
         model: '', agent: '',
         bootstrap: true, git_init: false, git_remote: '', git_branch: 'main',
         index_docs: false,
+        vscode_link: true,
         shared: false, participants: [], external_deps: [],
     };
     const STEPS = ['Method', 'Location', 'Details', 'Review'];
@@ -1983,6 +2029,7 @@ function projectWizard() {
             ${wiz.method === 'new' ? `<label class="opt"><input type="checkbox" data-field="bootstrap" ${wiz.bootstrap ? 'checked' : ''}> Bootstrap starter files (README, AGENTS.md, opencode.json)</label>` : ''}
             ${wiz.method !== 'clone' ? `<label class="opt"><input type="checkbox" data-field="git_init" ${wiz.git_init ? 'checked' : ''}> Initialise a Git repository</label>` : ''}
             <label class="opt"><input type="checkbox" data-field="index_docs" ${wiz.index_docs ? 'checked' : ''}> Index documentation now</label>
+            <label class="opt"><input type="checkbox" data-field="vscode_link" ${wiz.vscode_link ? 'checked' : ''}> Link with Visual Studio Code (generate a workspace)</label>
         </div>
         ${wiz.method !== 'clone' ? `
         <div class="form-row">
@@ -2009,6 +2056,7 @@ function projectWizard() {
             ['Git', wiz.method === 'clone' ? 'cloned from remote'
                 : (wiz.git_init ? `init on ${wiz.git_branch || 'main'}` : (wiz.git_remote ? 'remote configured' : 'none'))],
             ['Index docs', wiz.index_docs ? 'yes' : 'no'],
+            ['VS Code', wiz.vscode_link ? 'linked (VS Code terminal)' : 'not linked'],
             ['Shared project', wiz.shared ? `yes (${wiz.participants.length} participant(s))` : 'no'],
         ].filter(Boolean);
         return `<p class="secondary">Review and create.</p>
@@ -2139,6 +2187,14 @@ async function submitWizard(wiz) {
         const res = await api('/api/projects', { method: 'POST', body: payload });
         closeModal();
         toast(res.created ? 'Project created' : 'Project registered', 'ok');
+        if (wiz.vscode_link) {
+            try {
+                await api(`/api/projects/${encodeURIComponent(res.project.slug)}/vscode/link`, {
+                    method: 'POST',
+                    body: { launch_mode: 'vscode-terminal', auto_follow_edits: true },
+                });
+            } catch (e) { toast('Project created — VS Code link failed: ' + e.message, 'err'); }
+        }
         await loadProjects();
         goto('#/project/' + res.project.slug);
     } catch (e) { toast(e.message, 'err'); }
@@ -3204,7 +3260,67 @@ function projectConfigForm(p) {
             toast('Deleted', 'ok'); await loadProjects(); goto('#/projects');
         }, 'Delete');
     });
-    return card;
+
+    const ide = p.ide || {};
+    const linked = !!ide.vscode_linked;
+    const launchMode = ide.launch_mode === 'external-terminal'
+        ? 'external-terminal' : 'vscode-terminal';
+    const ideCard = el('div', { class: 'card' },
+        `<div class="card-head"><h4>VS Code</h4>
+            <span class="badge ${linked ? 'green' : 'muted'}">${linked ? 'linked' : 'not linked'}</span></div>
+         <p class="secondary">Link this project to a VS Code workspace. Linked projects open VS Code next to the
+            TUI, follow agent edits, and can host the TUI inside VS Code's terminal.</p>
+         <label class="opt"><input type="checkbox" id="pc-vscode-linked" ${linked ? 'checked' : ''}> Link with Visual Studio Code</label>
+         <div class="form-row">
+            <label class="field"><span class="lab">Launch TUI in</span>
+                <select id="pc-vscode-mode">
+                    <option value="vscode-terminal" ${launchMode === 'vscode-terminal' ? 'selected' : ''}>VS Code terminal (seamless selection)</option>
+                    <option value="external-terminal" ${launchMode === 'external-terminal' ? 'selected' : ''}>External terminal (TUI survives VS Code)</option>
+                </select></label>
+            <label class="opt"><input type="checkbox" id="pc-vscode-follow" ${ide.auto_follow_edits === false ? '' : 'checked'}> Follow agent edits</label>
+         </div>
+         <label class="field"><span class="lab">Workspace file</span>
+            <input type="text" id="pc-vscode-workspace" readonly value="${esc(ide.workspace_path || '(generated on save)')}"></label>
+         <label class="opt"><input type="checkbox" id="pc-vscode-inproject" ${ide.workspace_in_project ? 'checked' : ''}> Keep the workspace file inside the project (adds it to .git/info/exclude)</label>
+         <div class="form-actions">
+            <button class="btn primary" id="pc-vscode-save">Save VS Code settings</button>
+            <button class="btn ghost" id="pc-vscode-open">Open in VS Code</button>
+            <button class="btn ghost" id="pc-vscode-regenerate">Regenerate workspace</button>
+         </div>`);
+    const idePayload = () => ({
+        launch_mode: ideCard.querySelector('#pc-vscode-mode').value,
+        auto_follow_edits: ideCard.querySelector('#pc-vscode-follow').checked,
+        workspace_in_project: ideCard.querySelector('#pc-vscode-inproject').checked,
+    });
+    ideCard.querySelector('#pc-vscode-save').addEventListener('click', async () => {
+        try {
+            if (!ideCard.querySelector('#pc-vscode-linked').checked) {
+                await api(`/api/projects/${encodeURIComponent(p.slug)}/vscode/unlink`, { method: 'POST' });
+                toast('VS Code unlinked', 'ok');
+            } else {
+                await api(`/api/projects/${encodeURIComponent(p.slug)}/vscode/link`, {
+                    method: 'POST', body: idePayload(),
+                });
+                toast('VS Code settings saved', 'ok');
+            }
+            await loadProjects();
+            viewProject(p.slug);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    ideCard.querySelector('#pc-vscode-regenerate').addEventListener('click', async () => {
+        try {
+            await api(`/api/projects/${encodeURIComponent(p.slug)}/vscode/link`, {
+                method: 'POST', body: idePayload(),
+            });
+            toast('Workspace regenerated', 'ok');
+            await loadProjects();
+            viewProject(p.slug);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    ideCard.querySelector('#pc-vscode-open').addEventListener('click', () => openProjectVsCode(p));
+    const wrap = el('div');
+    wrap.append(card, ideCard);
+    return wrap;
 }
 
 /* ========================================================= TASKS ====== */

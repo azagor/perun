@@ -55,6 +55,11 @@ them all — no matter which folder you happened to open.
   action buttons; private-chat runs stream a live draft of the reply, a burst of
   room messages becomes one digest card with a one-tap mute, and `/pending`
   always lists what is waiting.
+* **VS Code integration.** Link a project to a generated workspace, open it
+  beside the external TUI or host the TUI inside VS Code, follow agent edits with
+  reveal + highlight, and send a code selection to the active session as
+  `@file#lines`. Works without the companion too, via `code --goto` and the
+  clipboard.
 * **Ask the machine without spending a run.** A deterministic router answers
   status / pending / projects / runs / health / usage / diff / resume from the
   registry, sends everything else to the right project, and records coverage so

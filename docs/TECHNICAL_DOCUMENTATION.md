@@ -1905,6 +1905,98 @@ relay is posted as Perun with an `operator (via Telegram)` prefix).
 
 ---
 
+## 9.1 VS Code integration
+
+Perun can link a project to a VS Code workspace and keep the editor in step with
+an OpenCode agent. It uses the **existing FastAPI server** as the local IPC hub;
+there is no second daemon.
+
+### Modes
+
+| Mode | TUI host | Selection hand-off |
+|---|---|---|
+| `vscode-terminal` | VS Code integrated terminal, opened by the companion | the companion inserts `@file#lines` into the TUI input when the session is idle |
+| `external-terminal` | Windows Terminal / a normal terminal (existing behaviour) | Perun copies `@file#lines` to the clipboard and focuses the TUI; the operator pastes once |
+
+`projects.ide.launch_mode` is the default; the dashboard's Run caret can override
+it for one run. A Mode B request with no connected companion falls back to Mode A.
+Linking is independent of the mode: both show the badge, open VS Code and follow
+edits. Switching modes applies to the next run.
+
+### Data model
+
+* `projects.ide` (JSON): `vscode_linked`, `workspace_path`,
+  `workspace_in_project`, `auto_follow_edits`, `launch_mode`, `schema_version`.
+  A bad value degrades to `{}` in `registry.project_dict()`.
+* `runs.terminal_id` / `runs.terminal_owner` — a TUI hosted by the companion
+  reports its terminal id and shell pid (`ProcessTracker.register_pid()`).
+* Generated workspaces live under `PERUN_HOME/workspaces/<slug>.code-workspace`
+  by default, so no repository gains a tracked editor file. The opt-in in-project
+  file is added to `.git/info/exclude`.
+
+### API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/vscode/status` | CLI detection, extension heartbeat/version, linked count, connected clients |
+| POST | `/api/projects/{slug}/vscode/link` | Generate the workspace and persist `projects.ide` |
+| POST | `/api/projects/{slug}/vscode/unlink` | Clear the link; delete only a Perun-managed workspace |
+| POST | `/api/projects/{slug}/vscode/open` | Fixed-argv `code --reuse-window` (or `--goto file:line`) |
+| POST | `/api/vscode/ticket` | `X-Perun-Token` → single-use 30 s ticket bound to project + workspace |
+| WS | `/api/vscode/ws?ticket=…` | Companion messages |
+| POST | `/api/runs/{uid}/vscode/open` | Send `terminal.open` to one companion window |
+| POST | `/api/runs/{uid}/cancel` | Tries `terminal.close` before the OS terminal fallback |
+| POST | `/api/runs/{uid}/terminal/focus` | Tries `terminal.focus` first |
+
+### WebSocket protocol
+
+Client → server: `hello` / `workspace.register`, `selection.shared`,
+`terminal.opened`, `terminal.closed`, `ping`.
+Server → client: `hello.ok` (project, linked, active run, recent edits,
+terminals), `edit.reveal`, `selection.ok` (`insert` or `copy`), `terminal.open`,
+`terminal.focus`, `terminal.close`, `toast`, `error`.
+
+The ticket is bound to one canonical workspace path; a `hello` for a different
+path is refused. A connection cannot register a project it was not ticketed for.
+
+### Flows
+
+**Link + launch.** The wizard/Config calls `link`, which writes the workspace and
+stores `ide`. `POST /api/runs/tui` creates the run; Mode B sends `terminal.open`
+to one companion window, which opens a terminal, runs
+`opencode [--session <id>]` with `PERUN_RUN_UID` and reports
+`terminal.processId`; Perun binds the pid and terminal id. Mode A launches the
+terminal as before and then calls `vscode/open` to open or focus the workspace.
+
+**Edit follow.** `vscode_bridge._on_event()` subscribes to the global OpenCode
+event hub, filters with `vscode_events.is_edit_event()`, maps the session id to
+its project (or the event location), extracts a path/range from write/edit/patch
+tool input, validates the path against the project root, debounces 300 ms per
+file, and broadcasts `edit.reveal`. Without a companion, a linked project falls
+back to `code --reuse-window --goto`. Recent edits are replayed on `hello.ok`.
+
+**Selection.** The companion sends `selection.shared`; Perun validates the path,
+caps the text at 32 KB and answers `selection.ok`. `insert` is chosen only in
+Mode B with a registered terminal and no pending permission/form; otherwise the
+answer is `copy`, and the companion writes `@file#lines` plus the snippet to the
+clipboard.
+
+### Security and degradation
+
+* Loopback only; ticket in the URL, never a long-lived token; single use and 30 s.
+* Fixed message types; the extension cannot ask Perun to run a command. `code`
+  launch uses a fixed argv (a Windows `.cmd` is wrapped in `cmd /c`).
+* Workspace and selection paths are canonicalised and restricted to the project
+  root; `.git` and escaping paths are refused.
+* The extension ignores workspace-level `perun.*` settings, enforces loopback,
+  disables itself in untrusted and remote/WSL windows, and requires an explicit
+  command for every selection (no automatic exfiltration).
+* Missing VS Code or extension: linking still works, edit-follow falls back to
+  `code --goto`, and the dashboard reports the missing piece. No service crash.
+* Closing a companion terminal marks the run done; Stop sends
+  `terminal.close` and marks it cancelled. A disconnected companion falls back to
+  the existing pid/marker tracking.
+
 ## 10. PerunChat federation
 
 Perun has native support for **PerunChat**, the federated agent-to-agent chat

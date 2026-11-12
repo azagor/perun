@@ -176,12 +176,12 @@ heartbeat + epoch). `runs` carries `admitted_at`, `created_at` and
 Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
 **cross-project dependency graph**.
 * Helpers: `now_iso()`, `slugify()`, `project_dict()` (parses the stored
-  manifest snapshot, adds `has_manifest` and `is_control` — set from
-  `config.is_control_path()`).
+  manifest snapshot, `agent_models` and the `ide` VS Code link settings; adds
+  `has_manifest` and `is_control` — set from `config.is_control_path()`).
 * Projects: `add_project()` (loads `perun.md` after insert so **every**
   registration path — CLI `perun add`, wizard — gets manifest data, not just
   discovery; stores `agent_models` as a JSON map), `update_project()`
-  (accepts `agent_models`), `set_work_paused()` (durable autonomous-work pause:
+  (accepts `agent_models` and `ide`), `set_work_paused()` (durable autonomous-work pause:
   `work_paused`, `work_paused_at`, `work_paused_by`), `touch_project()`,
   `get_project()`, `get_project_by_path()`, `list_projects()` (never includes the
   private companion repo, even with `include_hidden=true`; it is owner-only
@@ -195,10 +195,12 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `analyze_impact()` (transitive affected-project list ordered by depth),
   `get_deploy_plan()` (ordered deploy checklist with auto-deploy filtering).
 * Sessions: `create_session()`, `get_session()`, `find_session_by_opencode()`,
-  `update_session()`, `list_sessions()`, `session_origins()` (session id -> whether
-  its first linked run was a TUI/standalone run; absent means no run evidence),
-  `delete_session()`.
-* Runs: `create_run()`, `update_run()`, `get_run()`, `list_runs()`,
+  `project_for_opencode_session()` (newest owning project for the VS Code edit
+  stream), `update_session()`, `list_sessions()`, `session_origins()` (session id ->
+  whether its first linked run was a TUI/standalone run; absent means no run
+  evidence), `delete_session()`.
+* Runs: `create_run()`, `update_run()` (including `terminal_id` /
+  `terminal_owner` for a VS Code-hosted TUI), `get_run()`, `list_runs()`,
   `list_active_runs()` (queued/running runs joined with their project — the data
   behind the dashboard storm layer).
 * Tasks: `create_task()`, `update_task()`, `get_task()`, `list_tasks()`,
@@ -965,6 +967,9 @@ Shared Telegram ⇄ Perun bridge.
   `_pid_alive()`. One poller machine-wide (`getUpdates` allows a single consumer);
   a second start is refused rather than fighting with HTTP 409s. On POSIX the pid
   file is created with `O_CREAT|O_EXCL` so two bridges cannot both acquire.
+* `register_pid()` registers a TUI owned by another process (the VS Code
+  companion reports `terminal.processId`), persisting `runs.pid` so Stop keeps
+  working after a restart.
 * `PerunTelegramBridge`: `api()`, `api_base()`, `is_running()`,
   `update_token()` (swap a bot token in place — used by
   `__main__.reload_in_process_bridge()`), `send()` (supports optional
@@ -1056,6 +1061,49 @@ the rich HTML subset.
   block is closed and reopened with its language on the next chunk.
 * `time_marker()` / `relative_time()`: live `<tg-time format="r">` plus a
   "3m ago" fallback for clients that do not render date entities.
+
+### `perun/vscode_bridge.py`
+The Perun side of the VS Code integration (no second daemon).
+* `VSCodeBridge`: `issue_ticket()` / `redeem_ticket()` (single-use, 30 s,
+  bound to project + workspace), `register()` / `unregister()` for WebSocket
+  clients, `send_to_project()` / `broadcast()`.
+* `handle_message()` handles `hello`, `selection.shared`, `terminal.opened` and
+  `terminal.closed`. `_selection()` validates the path against the project and
+  answers `selection.ok` with `action=insert` (Mode B terminal, idle session) or
+  `action=copy` (external TUI, dirty selection, or a pending permission/form).
+* `request_terminal()` / `focus_terminal()` / `close_terminal()` send fixed
+  `terminal.*` messages to one companion window; the extension reports the
+  shell pid, which is bound to the run through `ProcessTracker.register_pid()`.
+* `_on_event()` subscribes to the global `opencode_api.EventHub`, maps
+  `sessionID` → project (`registry.project_for_opencode_session()` or location),
+  extracts an edit with `vscode_events.extract_edit()`, debounces per file and
+  broadcasts `edit.reveal`. Without a companion it falls back to
+  `vscode_workspace.reveal()` (`code --reuse-window --goto`).
+* `start()` / `stop()` manage the one global event subscription.
+* `BRIDGE` is the process-wide singleton imported by `server.py`.
+
+### `perun/vscode_events.py`
+Pure event parsing for the editor (no `vscode` import).
+* `is_edit_event()` — cheap pre-filter so text/reasoning events never hit the DB.
+* `extract_edit()` — write/edit/patch tools → `{path, start_line, end_line,
+  kind, tool}`. Paths are project-relative POSIX and `.git`/outside paths are
+  refused; a missing new text falls back to the old text position.
+* `validate_selection()`, `selection_ref()` — 1-based `@file#start-end` refs,
+  path validation and a 32 KB cap.
+* `session_id()` / `location()` read both OpenCode event shapes defensively.
+
+### `perun/vscode_workspace.py`
+VS Code detection and workspace generation.
+* `detect()` — `code` / `code.cmd` and the real VS Code executable on PATH and
+  known install dirs, with a 60 s cache; `_code_argv()` wraps a Windows `.cmd` in
+  `cmd /c` and keeps every
+  argument separate (no shell string).
+* `workspace_path()`, `generate()` — writes
+  `PERUN_HOME/workspaces/<slug>.code-workspace` (or an in-project file with a
+  `.git/info/exclude` entry); `is_managed_workspace()` / `remove_workspace()`
+  never delete a user-authored file.
+* `open_workspace()`, `reveal()` — fixed-argv launch, `--reuse-window` and
+  `--goto`; `status()` / `read_heartbeat()` power the dashboard card.
 
 ### `perun/perunchat_bridge.py`
 Autonomous PerunChat chat participant for the Orchestrator.
@@ -1448,6 +1496,12 @@ FastAPI app + SSE + static dashboard.
   (`GET /api/proposals/{id}`); mirrors the per-project list's
   approval-token/snapshot redaction and returns the owning project's slug/name.
   A hidden project's proposal is 404 unless `config.is_owner_workspace()`.
+* VS Code integration: `api_vscode_status()`, `api_vscode_link()`,
+  `api_vscode_unlink()`, `api_vscode_open()`, `api_vscode_ticket()` (single-use
+  ticket bound to a workspace), `api_vscode_ws()` (WebSocket at
+  `/api/vscode/ws`, ticket in the query, fixed message schema),
+  `api_vscode_context()`, `api_vscode_open_run()` (Mode B terminal request). Stop
+  and Focus try `vscode_bridge.BRIDGE` before the OS terminal fallbacks.
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
   structured `/api/models`), PerunChat (`/api/perunchat/status`, `/api/perunchat/key`
   kept for legacy loopback callers, and loopback-only `POST /api/perunchat/ws-ticket`
@@ -1790,6 +1844,24 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 
 ---
 
+## VS Code companion `extensions/vscode/`
+
+* `package.json` — `perun.perun-overseer`; activates on `onStartupFinished`,
+  contributes **Perun: Send Selection to OpenCode** (`Ctrl+Alt+P`), the editor
+  context menu entry, `perun.openDashboard` and `perun.reconnect`; all `perun.*`
+  settings are application-scoped so a repository cannot override the endpoint.
+* `src/extension.js` — status bar, token discovery (`PERUN_HOME/api-token`),
+  ticket → WebSocket with exponential reconnect, `hello`, `edit.reveal`
+  (preview + `revealRange` + fading decoration), `selection.shared` (insert
+  `@file#lines` into the project's terminal or copy it), and
+  `terminal.open`/`focus`/`close` with `terminal.processId` reported back as
+  `terminal.opened`.
+* `src/protocol.js` — pure helpers (loopback-only endpoint normalisation,
+  `ws` URL, relative path, selection ref, backoff, shell quoting), covered by
+  `tests/protocol.test.js`.
+* `esbuild.js` / `.vscodeignore` / `README.md` — bundled `dist/extension.js`,
+  `ws` inlined, packaged with `vsce` into `installer/vscode/perun-overseer.vsix`.
+
 ## Root files
 
 * `installer/` — installer source.
@@ -1957,6 +2029,17 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   statuses, and degradation when the service is absent.
 * `test_usage.py` - token/cost capture: the service snapshot, the registry store,
   provider attribution, and the `/api/usage` totals.
+* `test_vscode_events.py` - edit extraction (write/edit/delete/patch, path
+  escapes, `.git`), edit-event pre-filter, selection validation and refs.
+* `test_vscode_workspace.py` - managed workspace generation, in-project file +
+  `.git/info/exclude`, safe removal, heartbeat-based status, missing workspace.
+* `test_vscode_bridge.py` - single-use tickets, hello/workspace binding,
+  selection copy/insert decisions, terminal binding, one-window terminal open,
+  edit broadcast to the project.
+* `test_server_vscode.py` - link/unlink/status, ticket 404/200, WebSocket hello,
+  Mode B conflict and launch-mode validation.
+* `test_js_vscode.py` - dashboard static assertions for the card, Config IDE
+  panel, run-mode flow, wizard link and the extension manifest.
 * `test_telegram_format.py` - the rich-text layer: inline tags, escaping, code
   blocks, blockquotes, live time markers, plain-text stripping, fence-aware
   chunking, and the HTML → plain → degraded → no-markup send fallback.

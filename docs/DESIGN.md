@@ -181,6 +181,15 @@ styles (green safe, blue neutral, red destructive). In private chats a run
 streams a `sendMessageDraft` preview whose Stop button cancels it. Plain
 messages run on a per-chat pool: one run per chat, different chats in parallel.
 
+### VS Code
+A linked project gets a generated `.code-workspace` (outside the repo by default)
+and a badge/action on its card. The same run can host the TUI in VS Code's
+integrated terminal or keep it in an external terminal; both follow agent edits
+through OpenCode's event stream and validate every path against the project root.
+Selection is inserted as `@file#lines` in the VS Code terminal, or copied for the
+external one. The companion is optional: `code --goto` and clipboard fallback
+work without it, and VS Code is never installed silently.
+
 ### Manage models and MCP servers
 `#/providers` lists the provider catalog and the credentials OpenCode already
 has; adding or connecting one writes `opencode.json[c]` (Perun never stores the

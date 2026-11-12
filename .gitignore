@@ -31,3 +31,10 @@ config.local.json
 installer/Output/
 installer/*.exe
 installer/certs/
+
+# VS Code companion build output (built by the release workflow)
+extensions/vscode/node_modules/
+extensions/vscode/dist/
+installer/vscode/*.vsix
+# The extension ships a public README even though the repo root README is internal.
+!extensions/vscode/README.md

@@ -16,6 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build the VS Code companion
+        working-directory: extensions/vscode
+        run: |
+          npm ci
+          npm run package
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
 

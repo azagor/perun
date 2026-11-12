@@ -1,0 +1,12 @@
+.vscode/**
+node_modules/**
+src/**
+tests/**
+esbuild.js
+package-lock.json
+.gitignore
+*.vsix
+!dist/**
+!README.md
+!package.json
+!LICENSE
