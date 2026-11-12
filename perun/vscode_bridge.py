@@ -20,10 +20,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import subprocess
 import threading
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
@@ -47,6 +50,7 @@ class VSCodeBridge:
         self._context: Dict[int, Dict[str, Any]] = {}
         self._terminals: Dict[str, Dict[str, Any]] = {}
         self._debounce: Dict[tuple[int, str], float] = {}
+        self._last_edit: Dict[int, float] = {}
         self._hub: Optional[opencode_api.EventHub] = None
         self._hub_token: Optional[str] = None
         self._started = False
@@ -107,36 +111,37 @@ class VSCodeBridge:
             return None
         return info
 
-    def issue_embed_ticket(self, *, ttl: float = TICKET_TTL_SECONDS) -> Dict[str, Any]:
-        """A one-shot ticket that lets the VS Code webview frame the dashboard.
+    def issue_embed_ticket(self, *, project_id: int = 0, window_id: str = "",
+                           ttl: float = 120.0) -> Dict[str, Any]:
+        """A short-lived ticket that lets the VS Code webview frame the dashboard.
 
         The dashboard sends ``X-Frame-Options: DENY`` for every normal page. The
-        embed ticket is the only way to relax framing, and it is single-use and
-        short-lived; the iframe's own API calls are same-origin and still use the
-        loopback token.
+        embed ticket is the only way to relax framing; it is reusable until it
+        expires (Simple Browser may reload/prefetch) and is issued only with the
+        loopback API token. ``project_id``/``window_id`` are recorded for
+        diagnostics; framing itself is not project-specific.
         """
         now = time.time()
         with self._lock:
-            for key, expires in list(self._embed_tickets.items()):
-                if expires <= now:
+            for key, value in list(self._embed_tickets.items()):
+                if float(value.get("expires") or 0) <= now:
                     self._embed_tickets.pop(key, None)
             ticket = uuid.uuid4().hex
-            self._embed_tickets[ticket] = now + max(5.0, float(ttl))
+            self._embed_tickets[ticket] = {
+                "expires": now + max(5.0, float(ttl)),
+                "project_id": int(project_id or 0),
+                "window_id": str(window_id or ""),
+            }
         return {"ticket": ticket, "expires_in": int(max(5.0, float(ttl)))}
 
     def redeem_embed_ticket(self, ticket: str) -> bool:
-        """Whether *ticket* is a live embed permission (reusable until it expires).
-
-        The webview may request the dashboard more than once (a reload or a
-        prefetch); a strictly single-use ticket produced an empty panel. The
-        ticket is still short-lived and only issued with the loopback API token.
-        """
+        """Whether *ticket* is a live embed permission (reusable until it expires)."""
         value = str(ticket or "").strip()
         if not value:
             return False
         with self._lock:
-            expires = float(self._embed_tickets.get(value) or 0.0)
-            if expires <= time.time():
+            entry = self._embed_tickets.get(value)
+            if not entry or float(entry.get("expires") or 0) <= time.time():
                 self._embed_tickets.pop(value, None)
                 return False
             return True
@@ -159,7 +164,12 @@ class VSCodeBridge:
 
     def unregister(self, conn_id: str) -> None:
         with self._lock:
-            self._clients.pop(conn_id, None)
+            client = self._clients.pop(conn_id, None)
+            window_id = str((client or {}).get("window_id") or "")
+            if window_id:
+                for run_uid, terminal in list(self._terminals.items()):
+                    if str(terminal.get("window_id") or "") == window_id:
+                        self._terminals.pop(run_uid, None)
 
     def client_count(self, project_id: Optional[int] = None) -> int:
         with self._lock:
@@ -283,7 +293,10 @@ class VSCodeBridge:
             return
         with self._lock:
             self._context[int(project["id"])] = selection
-            terminal = self._terminal_for_project(int(project["id"]))
+            run_uid = str(message.get("run_uid") or "")
+            terminal = self._terminals.get(run_uid) if run_uid else None
+            if not terminal or int(terminal.get("project_id") or 0) != int(project["id"]):
+                terminal = self._terminal_for_project(int(project["id"]))
         mode = str((project.get("ide") or {}).get("launch_mode") or "external-terminal")
         action = "insert" if mode == "vscode-terminal" and terminal else "copy"
         if action == "insert" and self._session_blocked(project):
@@ -302,6 +315,7 @@ class VSCodeBridge:
         self._send(client, {
             "type": "selection.ok",
             "request_id": str(message.get("request_id") or ""),
+            "run_uid": str(message.get("run_uid") or ""),
             "action": action,
             "ref": selection["ref"],
             "text": selection["text"] if (selection["dirty"] or action == "copy") else "",
@@ -367,6 +381,11 @@ class VSCodeBridge:
         if not terminal or int(terminal.get("project_id") or 0) != int(client.get("project_id") or 0):
             return
         run = registry.get_run(run_uid)
+        if run:
+            self.reveal_changes_since(
+                registry.get_project(int(run.get("project_id") or 0)),
+                str(run.get("started_at") or run.get("created_at") or ""),
+            )
         if run and run.get("status") in ("queued", "running"):
             registry.update_run(run_uid, status="done", ended_at=registry.now_iso())
         try:
@@ -457,8 +476,13 @@ class VSCodeBridge:
                 if now - self._debounce.get(key, 0.0) < DEBOUNCE_SECONDS:
                     return
                 self._debounce[key] = now
+                if len(self._debounce) > 512:
+                    cutoff = now - 60.0
+                    self._debounce = {k: v for k, v in self._debounce.items()
+                                      if v >= cutoff}
                 recent = self._recent.setdefault(project_id, deque(maxlen=RECENT_EDITS))
                 recent.append(edit)
+                self._last_edit[project_id] = now
             if not self.client_count(project_id):
                 if ide.get("vscode_linked"):
                     # No companion installed/connected: the fixed `code --goto`
@@ -469,6 +493,73 @@ class VSCodeBridge:
             self.broadcast(project_id, {"type": "edit.reveal", **edit})
         except Exception:  # pragma: no cover - one bad event must not kill the hub
             LOG.debug("could not process a vscode edit event", exc_info=True)
+
+    def reveal_changes_since(self, project: Optional[Dict[str, Any]],
+                             since_iso: str) -> int:
+        """Fallback reveal when no live tool event carried a path.
+
+        Uses the working-tree status and the file mtime to find files changed
+        since the run started. Live events win: if any edit was broadcast after
+        the run began, this does nothing.
+        """
+        if not project:
+            return 0
+        ide = project.get("ide") or {}
+        if ide.get("auto_follow_edits") is False:
+            return 0
+        project_id = int(project.get("id") or 0)
+        root = Path(str(project.get("path") or ""))
+        if not root.is_dir():
+            return 0
+        try:
+            started = datetime.fromisoformat(str(since_iso).replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            since_ts = started.timestamp()
+        except (TypeError, ValueError):
+            return 0
+        if self._last_edit.get(project_id, 0.0) >= since_ts:
+            return 0
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return 0
+        if proc.returncode != 0:
+            return 0
+        reveals = 0
+        for line in (proc.stdout or "").splitlines():
+            if len(line) < 4:
+                continue
+            raw = line[3:].strip()
+            if " -> " in raw:
+                raw = raw.split(" -> ", 1)[1]
+            raw = raw.strip().strip('"')
+            try:
+                target = (root / raw).resolve()
+                rel = target.relative_to(root.resolve()).as_posix()
+            except (OSError, ValueError):
+                continue
+            if rel.startswith(".git/") or not target.is_file():
+                continue
+            try:
+                if target.stat().st_mtime < since_ts - 120:
+                    continue
+            except OSError:
+                continue
+            edit = {"path": rel, "start_line": 1, "end_line": 1,
+                    "kind": "changed", "tool": "fallback"}
+            if self.client_count(project_id):
+                self.broadcast(project_id, {"type": "edit.reveal", **edit})
+            else:
+                vscode_workspace.reveal(str(target), 1)
+            reveals += 1
+            if reveals >= 3:
+                break
+        return reveals
 
     def _active_tui_run(self, project_id: int) -> Optional[Dict[str, Any]]:
         try:

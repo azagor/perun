@@ -1981,7 +1981,9 @@ token-issued `embed-ticket` is the only path that removes it and sets
 `frame-ancestors *` (the ticket is the gate; it is reusable until it expires so
 a Simple Browser reload/prefetch cannot produce an empty tab). The page is
 served from `127.0.0.1`, so its API calls stay same-origin and keep the injected
-token. A separate **Perun TUI** status item opens the terminal.
+token. A separate **Perun TUI** status item opens the terminal. The embed
+ticket records the project/window for diagnostics, lives for 120 s, and is
+reusable within that window so a Simple Browser reload cannot blank the tab.
 
 **Terminal placement.** Mode B creates the terminal beside the editor
 (`viewColumn: Beside`) rather than in a possibly narrow bottom panel, waits
@@ -2003,6 +2005,10 @@ its project (or the event location), extracts a path/range from write/edit/patch
 tool input, validates the path against the project root, debounces 300 ms per
 file, and broadcasts `edit.reveal`. Without a companion, a linked project falls
 back to `code --reuse-window --goto`. Recent edits are replayed on `hello.ok`.
+If a run produced **no live edit event**, `reveal_changes_since()` reveals up to
+three files from `git status` whose mtime is newer than the run start; it runs at
+terminal close and on the dashboard Finish action, and does nothing when a live
+edit was already broadcast.
 
 **Selection.** The companion sends `selection.shared`; Perun validates the path,
 caps the text at 32 KB and answers `selection.ok`. `insert` is chosen only in

@@ -84,8 +84,12 @@ function log(message) {
   if (output) output.appendLine(line);
   try {
     const dir = path.join(perunHome(), 'vscode');
+    const file = path.join(dir, 'extension.log');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'extension.log'), line + '\n', 'utf8');
+    let big = false;
+    try { big = fs.statSync(file).size > 1_000_000; } catch (_) { big = false; }
+    if (big) fs.writeFileSync(file, line + '\n', 'utf8');
+    else fs.appendFileSync(file, line + '\n', 'utf8');
   } catch (_) { /* diagnostics must never break the extension */ }
 }
 
@@ -99,11 +103,42 @@ function send(message) {
   }
 }
 
+async function revealPerunTab() {
+  try {
+    const groups = vscode.window.tabGroups.all || [];
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const tabs = groups[groupIndex].tabs || [];
+      const tabIndex = tabs.findIndex((tab) => {
+        const input = tab.input;
+        const viewType = input && String(input.viewType || '').toLowerCase();
+        if (viewType && viewType.includes('simplebrowser')) return true;
+        return String(tab.label || '').toLowerCase().includes('perun')
+          && (!viewType || viewType.includes('webview'));
+      });
+      if (tabIndex < 0) continue;
+      await vscode.commands.executeCommand('workbench.action.focusFirstEditorGroup');
+      for (let i = 0; i < groupIndex; i += 1) {
+        await vscode.commands.executeCommand('workbench.action.focusNextGroup');
+      }
+      await vscode.commands.executeCommand(`workbench.action.openEditorAtIndex${tabIndex + 1}`);
+      return true;
+    }
+  } catch (_) { /* best effort; open a fresh tab below */ }
+  return false;
+}
+
 function openDashboard() {
   (async () => {
     try {
+      if (await revealPerunTab()) {
+        log('dashboard: focused existing tab');
+        return;
+      }
       log('dashboard: requesting embed ticket');
-      const data = await apiPost('/api/vscode/embed-ticket', {});
+      const data = await apiPost('/api/vscode/embed-ticket', {
+        project: projectSlug,
+        window_id: windowId,
+      });
       const url = `${endpoint()}/?embed=${encodeURIComponent(String(data.ticket || ''))}`;
       // Simple Browser navigates the dashboard as a normal editor tab (no
       // wrapper/iframe page and no extra click). A webview reload can reuse the
@@ -443,10 +478,11 @@ function sendSelection() {
     vscode.env.clipboard.writeText(ref);
     vscode.window.showInformationMessage(`Perun: copied ${ref} — paste it into OpenCode.`);
   }, 5000);
-  pendingSelections.set(requestId, { ref, timer, rel, start, end });
+  pendingSelections.set(requestId, { ref, timer, rel, start, end, run_uid: activeRun ? activeRun.run_uid : '' });
   const sent = send({
     type: 'selection.shared',
     request_id: requestId,
+    run_uid: activeRun ? String(activeRun.run_uid || '') : '',
     path: rel,
     start_line: start,
     end_line: end,
@@ -473,9 +509,10 @@ function finishSelection(message) {
   clearTimeout(pending.timer);
   const ref = String(message.ref || pending.ref);
   if (message.action === 'insert') {
-    const entries = Array.from(terminals.values());
-    const entry = entries.reverse().find((item) => item.project === projectSlug)
-      || entries[0];
+    const runUid = String(message.run_uid || pending.run_uid || '');
+    const entry = (runUid && terminals.get(runUid))
+      || Array.from(terminals.values()).reverse().find((item) => item.project === projectSlug)
+      || Array.from(terminals.values())[terminals.size - 1];
     if (entry && entry.terminal) {
       entry.terminal.sendText(ref, false);
       entry.terminal.show();

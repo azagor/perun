@@ -2752,6 +2752,9 @@ def api_vscode_unlink(slug: str) -> dict[str, Any]:
     ide["workspace_path"] = ""
     updated = registry.update_project(slug, ide=ide)
     removed = vscode_workspace.remove_workspace(old_workspace) if old_workspace else False
+    if ide.get("workspace_in_project"):
+        vscode_workspace.remove_git_exclude(str(project.get("path") or ""),
+                                            "perun.code-workspace")
     registry.log_activity(project["id"], "vscode_unlinked",
                           "Unlinked from VS Code", {"removed_workspace": removed})
     return _ok(project=updated, removed_workspace=removed)
@@ -2789,9 +2792,13 @@ def api_vscode_open(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str,
 
 
 @app.post("/api/vscode/embed-ticket")
-def api_vscode_embed_ticket() -> dict[str, Any]:
+def api_vscode_embed_ticket(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """One-shot ticket allowing the companion webview to frame the dashboard."""
-    return _ok(**vscode_bridge.BRIDGE.issue_embed_ticket())
+    project = registry.get_project(str(payload.get("project") or "")) if payload.get("project") else None
+    return _ok(**vscode_bridge.BRIDGE.issue_embed_ticket(
+        project_id=int((project or {}).get("id") or 0),
+        window_id=str(payload.get("window_id") or ""),
+    ))
 
 
 @app.post("/api/vscode/ticket")
@@ -3334,6 +3341,13 @@ def api_finish_tui_run(run_uid: str) -> dict[str, Any]:
         pass
     # Also stop tracking the external process; caller should use /kill to close the window.
     process_tracker.TRACKER.finalize(run_uid)
+    try:
+        vscode_bridge.BRIDGE.reveal_changes_since(
+            registry.get_project(int(run.get("project_id") or 0)),
+            str(run.get("started_at") or run.get("created_at") or ""),
+        )
+    except Exception:  # pragma: no cover - reveal is best effort
+        pass
     return _ok(finished=True)
 
 

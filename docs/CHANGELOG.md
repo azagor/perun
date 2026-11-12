@@ -22,9 +22,14 @@ All notable changes are recorded here. Single source of truth for release notes.
   command (extension 0.1.4).
 * The companion adds two status-bar items: **Perun** opens the dashboard directly
   in VS Code's **Simple Browser** tab (short-lived embed ticket; no wrapper page
-  or extra click), and **Perun TUI** opens the tracked OpenCode terminal. The TUI
-  opens beside the editor (wide), waits 150 ms for the pty size, and resumes the
-  latest session. Extension 0.1.4.
+  or extra click) and re-focuses an existing Perun tab when it can; **Perun TUI**
+  opens the tracked OpenCode terminal. The TUI opens beside the editor (wide),
+  waits 150 ms for the pty size, and resumes the latest session. Extension 0.1.4.
+* Run-completion fallback: if a TUI run produced no live file event (e.g. a tool
+  schema change), changed files from `git status` are revealed once at close or
+  Finish. Stale terminal bindings are dropped on disconnect, the per-file
+  debounce cache is pruned, the in-project `.git/info/exclude` entry is removed
+  on unlink, and the extension log is capped at 1 MB.
 
 ## v0.14.1
 

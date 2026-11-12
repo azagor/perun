@@ -51,6 +51,21 @@ def test_remove_only_deletes_a_managed_file(tmp_path, monkeypatch):
     assert user_file.exists()
 
 
+def test_an_in_project_workspace_is_excluded_and_cleaned_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    project = _project(tmp_path)
+    git_info = Path(project["path"]) / ".git" / "info"
+    git_info.mkdir(parents=True)
+    (git_info / "exclude").write_text("# git excludes\n", encoding="utf-8")
+
+    workspace = Path(vscode_workspace.generate(project, workspace_in_project=True))
+    assert "perun.code-workspace" in (git_info / "exclude").read_text(encoding="utf-8")
+
+    vscode_workspace.remove_git_exclude(project["path"], "perun.code-workspace")
+    assert "perun.code-workspace" not in (git_info / "exclude").read_text(encoding="utf-8")
+    assert workspace.is_file()
+
+
 def test_detect_and_status_read_a_heartbeat(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     heartbeat = vscode_workspace.heartbeat_path()

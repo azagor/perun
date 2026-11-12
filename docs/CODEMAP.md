@@ -1079,6 +1079,9 @@ The Perun side of the VS Code integration (no second daemon).
   extracts an edit with `vscode_events.extract_edit()`, debounces per file and
   broadcasts `edit.reveal`. Without a companion it falls back to
   `vscode_workspace.reveal()` (`code --reuse-window --goto`).
+* `reveal_changes_since()` is the run-completion fallback: when no live edit was
+  broadcast, it reveals up to three dirty files from `git status` newer than the
+  run start (terminal close / Finish).
 * `start()` / `stop()` manage the one global event subscription.
 * `BRIDGE` is the process-wide singleton imported by `server.py`.
 

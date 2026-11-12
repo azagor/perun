@@ -174,6 +174,22 @@ def _ensure_git_exclude(root: Path, entry: str) -> None:
         pass
 
 
+def remove_git_exclude(root: str, entry: str) -> None:
+    """Drop the managed in-project workspace from ``.git/info/exclude``."""
+    git_dir = Path(str(root or "")) / ".git"
+    exclude = git_dir / "info" / "exclude"
+    try:
+        if not exclude.is_file():
+            return
+        lines = exclude.read_text(encoding="utf-8").splitlines()
+        kept = [line for line in lines if line.strip() != entry]
+        if len(kept) == len(lines):
+            return
+        exclude.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def is_managed_workspace(path: str) -> bool:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -282,6 +298,7 @@ __all__ = [
     "workspace_path",
     "generate",
     "remove_workspace",
+    "remove_git_exclude",
     "open_folder",
     "open_workspace",
     "reveal",

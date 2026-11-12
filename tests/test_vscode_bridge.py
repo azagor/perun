@@ -199,3 +199,50 @@ def test_an_edit_event_is_broadcast_to_the_project(bridge, project):
     assert reveal["path"] == "app.py"
     assert reveal["start_line"] == 2
     assert session["opencode_session_id"] == "ses_v2"
+
+
+def test_unregister_drops_the_window_terminals(bridge, project):
+    run = registry.create_run("run_unregister", project["id"], "TUI", standalone=True)
+    outbox = Outbox()
+    _hello(bridge, project, outbox)
+    bridge.handle_message("c1", {
+        "type": "terminal.opened",
+        "run_uid": "run_unregister",
+        "terminal_id": "term-drop",
+        "pid": os.getpid(),
+    })
+    assert "run_unregister" in bridge._terminals
+
+    bridge.unregister("c1")
+
+    assert "run_unregister" not in bridge._terminals
+    assert bridge.focus_terminal(run["run_uid"]) is False
+
+
+def test_run_completion_fallback_reveals_changed_files(bridge, project, monkeypatch):
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    target = Path(project["path"]) / "new-file.py"
+    target.write_text("print('x')\n", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stdout = "?? new-file.py\n"
+
+    monkeypatch.setattr("perun.vscode_bridge.subprocess.run",
+                        lambda *args, **kwargs: Result())
+    calls = []
+    monkeypatch.setattr("perun.vscode_bridge.vscode_workspace.reveal",
+                        lambda path, line=1, **kwargs: calls.append((path, line)))
+
+    since = datetime.now(timezone.utc).isoformat()
+    assert bridge.reveal_changes_since(project, since) == 1
+    assert calls and calls[0][0].endswith("new-file.py")
+
+
+def test_an_expired_embed_ticket_is_refused(bridge):
+    issued = bridge.issue_embed_ticket(ttl=5)
+    with bridge._lock:
+        bridge._embed_tickets[issued["ticket"]]["expires"] = time.time() - 1
+    assert bridge.redeem_embed_ticket(issued["ticket"]) is False
