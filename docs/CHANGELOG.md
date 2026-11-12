@@ -12,6 +12,9 @@ All notable changes are recorded here. Single source of truth for release notes.
 * `vscode/open` no longer generates a workspace file as a side effect of opening
   a folder. It opens the project folder by default; `workspace_file: true`
   explicitly creates/opens the `.code-workspace`.
+* New **Perun: Open TUI (tracked)** command in the companion (Command Palette):
+  it creates a TUI run through Perun and opens/focuses the same tracked OpenCode
+  terminal in the current VS Code window.
 
 ## v0.14.1
 

@@ -51,4 +51,8 @@ def test_the_companion_package_is_a_valid_extension_manifest():
     assert "perun.sendSelection" in {
         command["command"] for command in package["contributes"]["commands"]
     }
+    assert "perun.openTui" in {
+        command["command"] for command in package["contributes"]["commands"]
+    }
+    assert "startTui" in (root / "src" / "extension.js").read_text(encoding="utf-8")
     assert (root / "src" / "extension.js").is_file()

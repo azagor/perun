@@ -7,6 +7,9 @@ Connects a VS Code workspace to the local **Perun** service.
 - **Perun: Send Selection to OpenCode** (`Ctrl+Alt+P`) sends the selection to
   Perun; in a VS Code-hosted TUI it is inserted as `@file#lines`, otherwise it
   is copied to the clipboard.
+- **Perun: Open TUI (tracked)** from the Command Palette creates a TUI run
+  through Perun and opens the same tracked OpenCode terminal in this window;
+  it focuses an existing Perun terminal when one is already open.
 
 The extension only talks to a loopback Perun endpoint and reads the local API
 token from `PERUN_HOME/api-token` (or `~/.perun/api-token`). Workspace-level

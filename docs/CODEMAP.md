@@ -1850,13 +1850,16 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 ## VS Code companion `extensions/vscode/`
 
 * `package.json` — `perun.perun-overseer`; activates on `onStartupFinished`,
-  contributes **Perun: Send Selection to OpenCode** (`Ctrl+Alt+P`), the editor
+  contributes **Perun: Open TUI (tracked)** (`perun.openTui`),
+  **Perun: Send Selection to OpenCode** (`Ctrl+Alt+P`), the editor
   context menu entry, `perun.openDashboard` and `perun.reconnect`; all `perun.*`
   settings are application-scoped so a repository cannot override the endpoint.
 * `src/extension.js` — status bar, token discovery (`PERUN_HOME/api-token`),
   ticket → WebSocket with exponential reconnect, `hello`, `edit.reveal`
   (preview + `revealRange` + fading decoration), `selection.shared` (insert
-  `@file#lines` into the project's terminal or copy it), and
+  `@file#lines` into the project's terminal or copy it),
+  `startTui()` (creates a run through `/api/runs/tui` and asks Perun for the
+  terminal, or focuses an existing one), and
   `terminal.open`/`focus`/`close` with `terminal.processId` reported back as
   `terminal.opened`.
 * `src/protocol.js` — pure helpers (loopback-only endpoint normalisation,

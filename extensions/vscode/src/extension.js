@@ -16,7 +16,7 @@ const {
   shellArg,
 } = require('./protocol');
 
-const EXTENSION_VERSION = '0.1.1';
+const EXTENSION_VERSION = '0.1.2';
 const PROTOCOL_VERSION = 1;
 
 /** @type {vscode.StatusBarItem | undefined} */
@@ -34,6 +34,8 @@ const terminals = new Map();
 /** terminalId -> run_uid */
 const terminalIds = new Map();
 let projectSlug = '';
+let activeRun = null;
+let startingTui = false;
 
 function userSetting(key, fallback) {
   // Never trust a workspace-level `perun.*` setting: a cloned repository could
@@ -196,6 +198,7 @@ function handleMessage(message, folder) {
   switch (message.type) {
     case 'hello.ok':
       projectSlug = String((message.project || {}).slug || '');
+      activeRun = message.active_run || null;
       setStatus(`Perun: ${message.linked ? 'linked' : 'connected'}`,
         `${message.project ? message.project.name : 'Perun'} — ${message.linked ? 'VS Code integration linked' : 'open the dashboard to link this project'}`);
       if (Array.isArray(message.recent_edits) && message.recent_edits.length) {
@@ -245,6 +248,7 @@ function findTerminal(message) {
 function openTerminal(message) {
   const folder = workspaceFolder();
   const cwd = String(message.cwd || (folder ? folder.uri.fsPath : ''));
+  activeRun = { run_uid: String(message.run_uid || '') };
   const terminal = vscode.window.createTerminal({
     name: `Perun: ${message.project_slug || 'opencode'}`,
     cwd,
@@ -385,6 +389,55 @@ function finishSelection(message) {
     `Perun: copied ${ref} — paste it into OpenCode${text ? ' (includes the selection)' : ''}.`);
 }
 
+async function apiPost(pathname, body) {
+  const token = apiToken();
+  if (!token) throw new Error(`Perun API token not found in ${perunHome()}`);
+  const response = await fetch(`${endpoint()}${pathname}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Perun-Token': token,
+    },
+    body: JSON.stringify(body || {}),
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
+  if (!response.ok) {
+    throw new Error(data.detail || `${pathname} failed (${response.status})`);
+  }
+  return data;
+}
+
+async function startTui() {
+  if (!projectSlug) {
+    vscode.window.showInformationMessage(
+      'Perun: open a registered Perun project folder first (the status bar says "not registered" otherwise).');
+    return;
+  }
+  if (startingTui) return;
+  const existing = activeRun && terminals.get(String(activeRun.run_uid || ''));
+  if (existing && existing.terminal) {
+    existing.terminal.show();
+    return;
+  }
+  startingTui = true;
+  try {
+    const created = await apiPost('/api/runs/tui', {
+      project: projectSlug,
+      prompt: 'Started from VS Code',
+    });
+    const runUid = created && created.run && created.run.run_uid;
+    if (!runUid) throw new Error('Perun did not return a run id');
+    await apiPost(`/api/runs/${encodeURIComponent(runUid)}/vscode/open`, {});
+    vscode.window.showInformationMessage('Perun: starting the OpenCode TUI in this window…');
+  } catch (err) {
+    vscode.window.showErrorMessage(`Perun: could not start the TUI — ${err.message || err}`);
+  } finally {
+    startingTui = false;
+  }
+}
+
 function activate(context) {
   output = vscode.window.createOutputChannel('Perun');
   context.subscriptions.push(output);
@@ -395,6 +448,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand('perun.openDashboard', openDashboard),
     vscode.commands.registerCommand('perun.sendSelection', sendSelection),
+    vscode.commands.registerCommand('perun.openTui', startTui),
     vscode.commands.registerCommand('perun.reconnect', () => {
       reconnectAttempt = 0;
       connect();
@@ -405,6 +459,7 @@ function activate(context) {
       if (entry.terminal === terminal) {
         terminals.delete(runUid);
         terminalIds.delete(entry.terminalId);
+        if (activeRun && String(activeRun.run_uid || '') === runUid) activeRun = null;
         send({ type: 'terminal.closed', run_uid: runUid, terminal_id: entry.terminalId });
       }
     }
