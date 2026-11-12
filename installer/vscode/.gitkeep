@@ -1,0 +1,2 @@
+# The VSIX is built by `npm run package` in extensions/vscode and is gitignored.
+# This keeps the output directory present in a fresh clone.

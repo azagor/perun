@@ -67,6 +67,7 @@ jobs:
           files: |
             installer/Output/PerunSetup.exe
             installer/Output/PerunSetup.exe.sha256
+            installer/vscode/perun-overseer.vsix
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Release packaging: the companion actually ships
+
+* `npm run package` creates `installer/vscode/` before asking `vsce` to write
+  the VSIX. The directory is gitignored and therefore absent in a fresh clone,
+  so the release workflow died with `ENOENT` at the packaging step: **v0.14.2
+  published no GitHub release at all**, and v0.14.1 shipped only the macOS
+  `.pkg` (no `PerunSetup.exe`).
+* Every GitHub release now attaches `perun-overseer.vsix` next to the
+  installers, so source, command-line and Linux installations can install the
+  companion without building it.
+* `installer/build.ps1` builds the companion (when npm is available) before
+  compiling the setup executable, and says so loudly instead of silently
+  shipping an installer without it.
 
 ## v0.14.2
 

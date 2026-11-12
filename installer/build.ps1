@@ -24,6 +24,33 @@ if (-not (Test-Path -LiteralPath $iss)) {
     exit 1
 }
 
+# Build the VS Code companion so a locally built installer matches the CI one.
+# The VSIX is gitignored, so a fresh clone has to produce it here.
+$vsix = Join-Path $PSScriptRoot 'vscode\perun-overseer.vsix'
+if (-not (Test-Path -LiteralPath $vsix)) {
+    $ext = Join-Path (Split-Path -Parent $PSScriptRoot) 'extensions\vscode'
+    if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue) -and
+        -not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "WARNING: npm was not found, so the VS Code companion cannot be built." -ForegroundColor Yellow
+        Write-Host "         The installer will ship without it. Download perun-overseer.vsix" -ForegroundColor Yellow
+        Write-Host "         from the GitHub release, or install Node and rebuild." -ForegroundColor Yellow
+    } else {
+        Write-Host "Building the VS Code companion ..."
+        Push-Location $ext
+        try {
+            & npm ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
+            & npm run package
+            if ($LASTEXITCODE -ne 0) { throw "npm run package failed with exit code $LASTEXITCODE" }
+        } finally {
+            Pop-Location
+        }
+        if (-not (Test-Path -LiteralPath $vsix)) {
+            throw "VSIX was not produced at $vsix"
+        }
+    }
+}
+
 Write-Host "Building Perun installer with $($iscc.FullName) ..."
 & $iscc.FullName $iss
 $rc = $LASTEXITCODE

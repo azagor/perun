@@ -18,5 +18,21 @@ The extension only talks to a loopback Perun endpoint and reads the local API
 token from `PERUN_HOME/api-token` (or `~/.perun/api-token`). Workspace-level
 `perun.*` settings are deliberately ignored.
 
-Build: `npm ci && npm run package` (requires Node and `@vscode/vsce`).
-Install: `code --install-extension perun-overseer.vsix --force`.
+## Install
+
+The Perun installers do this for you when VS Code and its `code` CLI are
+present: the Windows wizard offers **Install the Perun companion for Visual
+Studio Code** (checked by default) and the macOS `.pkg` postinstall installs it
+for the console user.
+
+To install it by hand, download `perun-overseer.vsix` from the latest Perun
+GitHub release (every release attaches it) and run:
+
+```bash
+code --install-extension perun-overseer.vsix --force
+```
+
+Build from a checkout: `npm ci && npm run package` (requires Node and
+`@vscode/vsce`); the VSIX is written to
+`../../installer/vscode/perun-overseer.vsix`.
+

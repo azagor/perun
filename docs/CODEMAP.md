@@ -1884,6 +1884,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `tests/protocol.test.js`.
 * `esbuild.js` / `.vscodeignore` / `README.md` — bundled `dist/extension.js`,
   `ws` inlined, packaged with `vsce` into `installer/vscode/perun-overseer.vsix`.
+  `npm run package` creates that (gitignored) directory first, so a fresh clone
+  builds; the release workflow attaches the VSIX to every GitHub release, and
+  both GUI installers can install it per user.
 
 ## Root files
 
@@ -1893,7 +1896,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
     Ollama) and Perun machine setup; invoked by the wizard.
   * `uninstall.ps1` — reverses the global OpenCode integration and removes the
     `PerunBridge` task during uninstall.
-  * `build.ps1` — compiles `installer\Output\PerunSetup.exe`.
+  * `build.ps1` — compiles `installer\Output\PerunSetup.exe`. Builds
+    `installer\vscode\perun-overseer.vsix` first when npm is available (and
+    warns when it is not), so a local build matches the CI installer.
   * `sign.ps1` — signs `PerunSetup.exe` with `signtool`. Supports an external
     PFX via parameters or the `PERUN_SIGN_PFX` / `PERUN_SIGN_PFX_BASE64` /
     `PERUN_SIGN_PASSWORD` environment variables; when none is provided it

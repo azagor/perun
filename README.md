@@ -296,6 +296,31 @@ The optional `PerunBridge` task is registered with `IgnoreNew`, an unlimited
 execution limit, and restart-on-failure, so the Telegram poller stays singular;
 it is only *started* once a Telegram token is configured in `~/.perun/config.json`.
 
+### VS Code companion (optional)
+
+The **Perun Overseer** extension (`perun.perun-overseer`) links a workspace to the
+local service: a tracked TUI terminal, edit follow, selection hand-off, and a
+session picker that mirrors the dashboard.
+
+* The **Windows installer** installs it as the original user when the `code` CLI
+  is on `PATH` (untick **Editor integration → Install the Perun companion for
+  Visual Studio Code** to skip it). The **macOS `.pkg`** installs it for the
+  console user automatically when VS Code is present. Neither installer installs
+  VS Code itself.
+* Every GitHub release attaches `perun-overseer.vsix`, so source, command-line
+  and Linux installs can add it without building anything:
+
+  ```bash
+  code --install-extension perun-overseer.vsix --force
+  ```
+
+* From a checkout: `cd extensions/vscode && npm ci && npm run package` writes
+  `installer/vscode/perun-overseer.vsix`; `.\installer\build.ps1` also builds it
+  before compiling the setup executable.
+
+The extension is not on the VS Code Marketplace; it only talks to the loopback
+Perun endpoint and reads the API token from `PERUN_HOME/api-token`.
+
 ### Code signing for releases
 
 The Windows installer can be signed with a trusted certificate. The GitHub
