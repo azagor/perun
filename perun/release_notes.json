@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-12T11:35:27+00:00",
+  "generated": "2026-11-12T12:12:23+00:00",
   "releases": [
+    {
+      "version": "0.14.1",
+      "date": "2026-11-12",
+      "body": "### VS Code: open the folder, not an untrusted workspace file\n\n* `POST /api/projects/{slug}/vscode/open` now opens the project **folder** by\n  default. A generated `.code-workspace` is a new VS Code trust scope and opens in\n  Restricted Mode, which disables the companion; the folder inherits the user's\n  existing trust. The workspace file stays opt-in (`workspace_file: true`).\n* The companion retries while the project is not registered yet, instead of\n  staying offline until a manual reconnect (extension 0.1.1).\n* Removed the unauthenticated `GET .../vscode/context` endpoint: selection text\n  can contain secrets and must not be readable by any local GET caller."
+    },
     {
       "version": "0.14.0",
       "date": "2026-11-12",
@@ -45,11 +50,6 @@
       "version": "0.12.1",
       "date": "2026-11-06",
       "body": "### Guard fails closed for an executing proposal with no operations\n\n* A legacy/invalid `executing` row whose `operations` list is empty now makes\n  the guard target scope ambiguous instead of returning an empty scope. Writes\n  are refused rather than silently allowed anywhere in the project allowlist.\n  This can only happen for a pre-v0.12 `other` row or a corrupt row; typed\n  changesets always carry operations."
-    },
-    {
-      "version": "0.12.0",
-      "date": "2026-11-06",
-      "body": "### Breaking: proposals are typed changesets\n\n* A proposal now carries **`operations`**, one `{path, op}` entry per target\n  (`create`/`edit`/`delete`). One proposal can mix all three and is applied as a\n  single atomic changeset, so a change that adds a file and edits another no\n  longer needs a proposal chain. `action_type` is only a derived summary\n  (`mixed` when the operations differ).\n* `create()`/the REST envelope/the `perun-proposals_propose` MCP tool now require\n  `operations`; the old `action_type` + `targets` input is removed. Existing DB\n  rows are migrated once from their typed fields; `other` rows become invalid.\n* `_assert_action_targets()`, `derive_package()`, the guard, the local prompt and\n  the post-run check all use each target’s own operation. `guard_delete_file`\n  requires a `delete` operation on that exact target; write/edit are refused for\n  a delete target. A package containing a delete remains operator-only.\n* The Shared-tab proposal row renders per-operation chips (`create path`,\n  `edit path`, `delete path`) and shows `mixed` when the changeset differs.\n* Tests cover mixed create+edit, mixed create+delete, mixed local execution,\n  duplicate/invalid operations, legacy-row migration, and the existing package\n  approval/rollback paths."
     }
   ]
 }

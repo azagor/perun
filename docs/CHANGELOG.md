@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.14.1
+
+*Released 2026-11-12.*
+
 ### VS Code: open the folder, not an untrusted workspace file
 
 * `POST /api/projects/{slug}/vscode/open` now opens the project **folder** by
