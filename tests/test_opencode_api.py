@@ -75,23 +75,20 @@ def test_discovery_returns_empty_without_the_cli(monkeypatch):
     assert opencode_api.discover_base_url() == ""
 
 
-def test_usage_falls_back_to_a_smaller_page_when_the_service_caps_it():
+def test_usage_never_requests_more_than_the_service_page_cap():
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
     calls: list[int] = []
 
-    def messages(session_id, limit=1000):
+    def message_page(session_id, *, limit=200, cursor=""):
         calls.append(limit)
-        if limit > 200:
-            raise opencode_api.OpenCodeHTTPError(
-                400, "limit too large", f"/api/session/{session_id}/message")
-        return [{"tokens": {"input": 7, "output": 3},
-                 "model": {"providerID": "p", "id": "m"}}]
+        return ([{"tokens": {"input": 7, "output": 3},
+                  "model": {"providerID": "p", "id": "m"}}], {})
 
-    api.messages = messages  # type: ignore[assignment]
+    api.message_page = message_page  # type: ignore[assignment]
 
-    usage = api.usage("ses_x")
+    usage = api.usage("ses_x", limit=1000)
 
-    assert calls == [1000, 200]
+    assert calls == [200]
     assert usage["tokens_in"] == 7 and usage["tokens_out"] == 3
 
 

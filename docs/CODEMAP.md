@@ -227,10 +227,12 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   for the restart notice.
 * Bridge: `get_bridge_link()`, `set_bridge_link()`.
 * Usage: `update_session_usage(pk, usage)` (token/cost **snapshot**, overwritten
-  per session, including a per-model `usage_models` breakdown; a breakdown over
+  per session, including a per-model `usage_models` breakdown and
+  `usage_complete`/`usage_pages`/`usage_messages`; a breakdown over
   `_USAGE_MODELS_MAX_CHARS` is stored as `{}` with a log line rather than a
-  truncated, unparseable blob), `usage_totals(hours,
-  project_id=None)`, `usage_by_project(hours, limit)` and `usage_by_provider(hours)`
+  truncated, unparseable blob), `usage_totals(hours, project_id=None)` (includes
+  an `incomplete` count), `usage_by_project(hours, limit)`,
+  `usage_by_provider(hours)` and `usage_by_model(hours, limit)`
   (per model prefix, falling back to the run model for pre-0.10.30 snapshots) — the
   `/usage` reply, `GET /api/usage` and `GET /api/providers/usage`.
 * Telegram jobs: `enqueue_telegram_job()` (idempotent by `dedupe_key`),
@@ -869,8 +871,10 @@ cannot reach.
   `cancel_inbox()`, `interrupt()`, `commands(directory)` (`GET /api/command`) and
   `run_command(session_id, name, text)` (`POST /api/session/{id}/command` — the
   same entry point the TUI uses for `/update-docs`), plus `usage(session_id)`
-  (summed `tokens.input/output`, `tokens.cache.read` and `cost` over the session's
-  messages — the snapshot `/usage` stores).
+  (sums `tokens.input/output`, `tokens.cache.read` and `cost` over **every**
+  cursor page of the session; records `pages`/`messages`/`complete`),
+  `message_page()` and `iter_messages()` (the 200-message page + `cursor.next`
+  walk).
 * Auth is HTTP Basic `opencode:<password>` using the password from OpenCode's
   own service file in the user's config directory (or
   `OPENCODE_SERVICE_PASSWORD`); it is kept in memory only — never logged,
@@ -1863,8 +1867,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   ticket → WebSocket with exponential reconnect, `hello`, `edit.reveal`
   (preview + `revealRange` + fading decoration), `selection.shared` (insert
   `@file#lines` into the project's terminal or copy it),
-  `startTui()` (creates a run through `/api/runs/tui` and asks Perun for the
-  terminal, or focuses an existing one), and
+  `startTui()` (shows a QuickPick: resume latest, choose a recent session, or
+  start new — then creates the run and asks Perun for the terminal; an existing
+  terminal for the same session is focused), and
   `terminal.open`/`focus`/`close` with `terminal.processId` reported back as
   `terminal.opened`. Terminal bindings are persisted in `workspaceState`;
   `rebindTerminal()` re-registers restored terminals on activation and every

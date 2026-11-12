@@ -2323,28 +2323,38 @@ a sibling `.bak` would show up as an untracked file.
 `GET /api/session/{id}/message` carries `tokens.input/output`, `tokens.cache.read`
 and `cost` per assistant message, and each message names its own `model` — so a
 session that switches provider mid-conversation is priced per model, not per
-session. `opencode_api.usage(session_id)` sums those into totals plus a per-model
-breakdown; `Orchestrator.capture_usage(run_uid)` stores it as a **snapshot** on the
-session row (`tokens_in/out`, `cache_read`, `cost_usd`, `usage_at`,
-`usage_models`, schema v18 — stored as `{}` with a log line if the per-model
-breakdown would exceed 20 000 chars, never as a truncated blob) and is called when
-a headless run finalizes, when a TUI
-run is finished from the dashboard or swept after a restart, and every five
-minutes for open TUI runs (`refresh_open_usage`). `backfill_usage(hours)` captures
-sessions that predate the feature. `GET /api/usage?hours=&project=` and
-`GET /api/providers/usage` read it back; the latter also passes through the
-service's experimental `GET /api/experimental/usage/limits` (provider budgets:
-`spent`/`limit`/`resetsAt`) and turns `provider_budgets`
-(`provider=USD per month`) into a percentage when the provider publishes none.
-Measured spend is always labelled as Perun's measurement, never as a quota.
+session. The endpoint caps one page at 200 messages and returns
+`cursor.next`; `opencode_api.usage(session_id)` follows **every page** (hard cap
+100 pages / 20,000 messages) and deduplicates by message id. A single page used
+to be read, silently undercounting long TUI sessions; the snapshot now records
+`usage_pages`, `usage_messages` and `usage_complete` alongside the totals.
+`Orchestrator.capture_usage(run_uid)` stores it as a **snapshot** on the session
+row (`tokens_in/out`, `cache_read`, `cost_usd`, `usage_at`,
+`usage_models`, completeness fields; the per-model breakdown is stored as `{}`
+with a log line if it would exceed 20,000 chars, never as a truncated blob). It
+is called when a headless run finalizes, when a TUI run is finished from the
+dashboard or swept after a restart, and every five minutes for open TUI runs
+(`refresh_open_usage`). A dashboard "new TUI" session is created through the
+service first, so the run and the TUI share an id; older TUI runs bind to the
+single active session, or the single session created after the run started.
+`backfill_usage(hours, force=)` captures missing/partial snapshots (existing
+pre-pagination rows have `usage_complete=0` and are repaired); `POST
+/api/usage/refresh` runs the forced pass from the dashboard.
+`GET /api/usage?hours=&project=` returns totals (including an `incomplete`
+count), per-project, per-provider and per-model rows; `GET
+/api/providers/usage` also passes through the service's experimental `GET
+/api/experimental/usage/limits` (provider budgets: `spent`/`limit`/`resetsAt`)
+and turns `provider_budgets` (`provider=USD per month`) into a percentage when
+the provider publishes none. Measured spend is always labelled as Perun's
+measurement, never as a quota.
 
-The read is a bounded page (1000 messages, retried at 200 when the service rejects
-that limit), and messages with neither tokens nor cost are skipped so a user turn
-cannot create an `unknown` provider bucket. Attribution maps a model prefix to its
-provider card (`opencode-go` → `opencode`) and attributes an unmodelled message to
-the run's model. The dashboard card says **"captured in the last 24h"**, not "last
-24h": the window is when the snapshot was taken, while the amount is the session's
-cumulative cost — a distinction that matters when comparing against an invoice.
+The walk skips messages with neither tokens nor cost so a user turn cannot
+create an `unknown` provider bucket. Attribution maps a model prefix to its
+provider card (`opencode-go` → `opencode`) and attributes an unmodelled message
+to the run's model. The dashboard card says **"captured in the last 24h"**, not
+"last 24h": the window is when the snapshot was taken, while the amount is the
+session's cumulative cost — a distinction that matters when comparing against an
+invoice.
 The dashboard card and the project page's usage line refresh in place every 60 s
 while their view is open (`USAGE_REFRESH_MS` in `web/js/perun.js`); the timer stops
 when the view changes and a request in flight is never doubled. 60 s is deliberate:

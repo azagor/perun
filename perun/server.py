@@ -3297,6 +3297,20 @@ def api_start_tui_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         session_pk = int(session_pk) if session_pk else None
     except (TypeError, ValueError):
         session_pk = None
+    if not oc_sid and session_pk is None:
+        # Dashboard "new session": create the OpenCode session first so the run
+        # and the TUI share an id. Without this, usage capture had to guess the
+        # session later and refused when several were active in one project.
+        try:
+            from . import opencode_api
+
+            created = opencode_api.default_api().create_session(
+                str(project.get("path") or ""), model=model, agent=agent,
+                title=prompt[:120],
+            )
+            oc_sid = str((created or {}).get("id") or "")
+        except Exception:  # pragma: no cover - the TUI still opens
+            oc_sid = ""
     if session_pk is not None:
         # A run may only claim a session that belongs to its own project, so a
         # crafted request cannot attach usage from another project's chat.
@@ -4316,7 +4330,23 @@ def api_usage(hours: int = 24, project: str = "") -> dict[str, Any]:
         project=(project or "").strip(),
         totals=registry.usage_totals(hours=window, project_id=project_id),
         by_project=registry.usage_by_project(hours=window, limit=10),
+        by_provider=registry.usage_by_provider(hours=window),
+        by_model=registry.usage_by_model(hours=window, limit=20),
     )
+
+
+@app.post("/api/usage/refresh")
+def api_usage_refresh(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Re-read recent usage from OpenCode (repairs partial/old snapshots)."""
+    try:
+        hours = int(payload.get("hours") or 24)
+    except (TypeError, ValueError):
+        hours = 24
+    try:
+        updated = ORCH.backfill_usage(max(1, min(hours, 24 * 30)), force=True)
+    except Exception as exc:  # pragma: no cover - telemetry must not crash
+        raise HTTPException(status_code=503, detail=f"usage refresh failed: {exc}")
+    return _ok(updated=updated)
 
 
 # --------------------------------------------------------------------------- #

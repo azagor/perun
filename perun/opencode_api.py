@@ -300,56 +300,74 @@ class OpenCodeAPI:
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         return data if isinstance(data, dict) else (payload if isinstance(payload, dict) else {})
 
-    def usage(self, session_id: str, *, limit: int = 1000) -> Dict[str, Any]:
+    def usage(self, session_id: str, *, limit: int = 200,
+              max_pages: int = 100) -> Dict[str, Any]:
         """Tokens and cost the service reports for *session_id*.
 
-        Summed over the session's messages, so it is authoritative and can be
-        stored as a snapshot rather than accumulated.
+        Every message is summed by following OpenCode's cursor. The service caps
+        one page at 200 messages; reading a single page silently undercounted
+        long TUI sessions. ``complete`` is False only when the page cap was hit.
         """
-        total: Dict[str, Any] = {"tokens_in": 0, "tokens_out": 0,
-                                 "cache_read": 0, "cost": 0.0, "models": {}}
-        try:
-            messages = self.messages(session_id, limit=limit)
-        except OpenCodeHTTPError as exc:
-            # A service may cap ``limit``; a rejected request must not lose the
-            # snapshot entirely. 200 is the conservative, well-supported page.
-            if getattr(exc, "status", 0) != 400 or int(limit) <= 200:
-                raise
-            messages = self.messages(session_id, limit=200)
-        for message in messages:
-            tokens = message.get("tokens") or {}
-            if not isinstance(tokens, dict):
-                continue
-            price = float(message.get("cost") or 0)
-            if not tokens and not price:
-                # A user message carries no usage. Creating a bucket for it
-                # produced an "unknown" provider that defeated the run-model
-                # fallback in usage_by_provider().
-                continue
-            # A session may switch provider mid-conversation, so the model is
-            # recorded per message; the totals alone cannot price it correctly.
-            raw_model = message.get("model")
-            if isinstance(raw_model, dict):
-                provider = str(raw_model.get("providerID") or "")
-                model_id = str(raw_model.get("id") or raw_model.get("modelID") or "")
-                model_key = f"{provider}/{model_id}" if provider and model_id else ""
-            else:
-                model_key = str(raw_model or "")
-            bucket = total["models"].setdefault(
-                model_key or "unknown", {"tokens_in": 0, "tokens_out": 0,
-                                         "cache_read": 0, "cost": 0.0})
-            bucket["tokens_in"] += int(tokens.get("input") or 0)
-            bucket["tokens_out"] += int(tokens.get("output") or 0)
-            cache0 = tokens.get("cache") or {}
-            if isinstance(cache0, dict):
-                bucket["cache_read"] += int(cache0.get("read") or 0)
-            bucket["cost"] += price
-            total["tokens_in"] += int(tokens.get("input") or 0)
-            total["tokens_out"] += int(tokens.get("output") or 0)
-            cache = tokens.get("cache") or {}
-            if isinstance(cache, dict):
-                total["cache_read"] += int(cache.get("read") or 0)
-            total["cost"] += price
+        total: Dict[str, Any] = {
+            "tokens_in": 0, "tokens_out": 0, "cache_read": 0,
+            "cost": 0.0, "models": {}, "pages": 0, "messages": 0,
+            "complete": False,
+        }
+        seen_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        cursor = ""
+        page_size = max(1, min(int(limit or 200), 200))
+        for _page in range(max(1, int(max_pages))):
+            try:
+                rows, info = self.message_page(
+                    session_id, limit=page_size, cursor=cursor)
+            except OpenCodeHTTPError as exc:
+                if page_size > 200:
+                    page_size = 200
+                    continue
+                raise exc
+            total["pages"] = int(total.get("pages") or 0) + 1
+            for message in rows:
+                ident = str(message.get("id") or "")
+                if ident:
+                    if ident in seen_ids:
+                        continue
+                    seen_ids.add(ident)
+                tokens = message.get("tokens") or {}
+                if not isinstance(tokens, dict):
+                    continue
+                price = float(message.get("cost") or 0)
+                if not tokens and not price:
+                    continue
+                total["messages"] = int(total.get("messages") or 0) + 1
+                raw_model = message.get("model")
+                if isinstance(raw_model, dict):
+                    provider = str(raw_model.get("providerID") or "")
+                    model_id = str(raw_model.get("id") or raw_model.get("modelID") or "")
+                    model_key = f"{provider}/{model_id}" if provider and model_id else ""
+                else:
+                    model_key = str(raw_model or "")
+                bucket = total["models"].setdefault(
+                    model_key or "unknown", {"tokens_in": 0, "tokens_out": 0,
+                                             "cache_read": 0, "cost": 0.0})
+                bucket["tokens_in"] += int(tokens.get("input") or 0)
+                bucket["tokens_out"] += int(tokens.get("output") or 0)
+                cache0 = tokens.get("cache") or {}
+                if isinstance(cache0, dict):
+                    bucket["cache_read"] += int(cache0.get("read") or 0)
+                bucket["cost"] += price
+                total["tokens_in"] += int(tokens.get("input") or 0)
+                total["tokens_out"] += int(tokens.get("output") or 0)
+                cache = tokens.get("cache") or {}
+                if isinstance(cache, dict):
+                    total["cache_read"] += int(cache.get("read") or 0)
+                total["cost"] += price
+            next_cursor = str(info.get("next") or "")
+            if not next_cursor or next_cursor in seen_cursors:
+                total["complete"] = True
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
         return total
 
     def usage_limits(self) -> Optional[Dict[str, Any]]:
@@ -368,17 +386,58 @@ class OpenCodeAPI:
         return data if isinstance(data, dict) else None
 
     def messages(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Return the most recent messages of one session."""
-        payload = self._request(
-            "GET", f"/api/session/{session_id}/message?limit={int(limit)}",
-            allow_404=True,
-        )
+        """Return the most recent messages of one session (one page)."""
+        rows, _cursor = self.message_page(session_id, limit=limit)
+        return rows
+
+    def message_page(self, session_id: str, *, limit: int = 200,
+                     cursor: str = "") -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """One page of session messages plus the service's cursor.
+
+        OpenCode caps ``limit`` at 200 and returns
+        ``{data, cursor: {previous, next}}``; follow ``cursor.next`` to page
+        older messages.
+        """
+        page_size = max(1, min(int(limit or 200), 200))
+        path = f"/api/session/{session_id}/message?limit={page_size}"
+        if cursor:
+            path += "&cursor=" + urllib.parse.quote(str(cursor), safe="")
+        payload = self._request("GET", path, allow_404=True)
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         if isinstance(data, dict):
             rows = data.get("messages") or data.get("items") or []
         else:
             rows = data or []
-        return [r for r in rows if isinstance(r, dict)]
+        rows = [r for r in rows if isinstance(r, dict)]
+        cursor_info = (payload or {}).get("cursor") if isinstance(payload, dict) else None
+        return rows, cursor_info if isinstance(cursor_info, dict) else {}
+
+    def iter_messages(self, session_id: str, *, page_size: int = 200,
+                      max_pages: int = 100) -> Any:
+        """Yield every message of a session, following the cursor.
+
+        Messages are deduplicated by id so a page overlap cannot double-count
+        usage. A repeated/absent ``next`` cursor ends the walk; ``max_pages``
+        is a hard safety cap (20,000 messages at the default page size).
+        """
+        seen_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        cursor = ""
+        for _page in range(max(1, int(max_pages))):
+            rows, info = self.message_page(
+                session_id, limit=page_size, cursor=cursor)
+            for row in rows:
+                ident = str(row.get("id") or "")
+                if ident:
+                    if ident in seen_ids:
+                        continue
+                    seen_ids.add(ident)
+                yield row
+            next_cursor = str(info.get("next") or "")
+            if not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
 
     def iter_events(self, types: Optional[List[str]] = None,
                     stop: Optional[threading.Event] = None) -> Any:

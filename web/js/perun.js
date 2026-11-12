@@ -937,7 +937,12 @@ function renderWorkingNow(container) {
     // hidden control plane on an installed copy) is not advertised here.
     const runs = CardControls.visibleRuns(state.activeRuns, state.projects);
     if (!runs.length) return;
-    container.appendChild(sectionTitle('Working now'));
+    const refreshBtn = el('button', { class: 'btn sm ghost', type: 'button' }, '⟳ Refresh');
+    refreshBtn.addEventListener('click', async () => {
+        refreshBtn.disabled = true;
+        try { await refreshPresence(); } finally { refreshBtn.disabled = false; }
+    });
+    container.appendChild(sectionTitle('Working now', refreshBtn));
     const box = el('div', { class: 'card' });
     const list = el('div', { class: 'list' });
     for (const r of runs) {
@@ -1298,9 +1303,21 @@ async function viewDashboard() {
 
     // Usage — tokens and cost in the last 24 h, machine-wide and per project
     const usageCard = el('div', { class: 'card', id: 'dash-usage' },
-        `<div class="card-head"><h4>Usage · captured in the last 24h</h4><span class="meta" id="dash-usage-head">loading…</span></div>
+        `<div class="card-head"><h4>Usage · captured in the last 24h</h4>
+            <span class="meta" id="dash-usage-head">loading…</span>
+            <button class="btn sm ghost" id="dash-usage-refresh" title="Re-read usage from OpenCode">⟳</button></div>
          <div id="dash-usage-body"><div class="meta">reading…</div></div>`);
     v.appendChild(usageCard);
+    usageCard.querySelector('#dash-usage-refresh')?.addEventListener('click', async () => {
+        const btn = usageCard.querySelector('#dash-usage-refresh');
+        if (btn) btn.disabled = true;
+        try {
+            const r = await api('/api/usage/refresh', { method: 'POST', body: { hours: 24 } });
+            toast(`Usage refreshed — ${r.updated || 0} session(s)`, 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+        finally { if (btn) btn.disabled = false; }
+        renderDashboardUsage();
+    });
     let usageBusy = false;
     const renderDashboardUsage = async () => {
         if (usageBusy || !document.getElementById('dash-usage')) return;
@@ -1310,14 +1327,21 @@ async function viewDashboard() {
             const t = r.totals || {};
             const cost = Number(t.cost_usd || 0);
             const tok = Number(t.tokens_in || 0) + Number(t.tokens_out || 0);
+            const partial = Number(t.incomplete || 0);
             $('#dash-usage-head').innerHTML =
-                `<b>$${cost.toFixed(4)}</b> · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`;
+                `<b>$${cost.toFixed(4)}</b> · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`
+                + (partial ? ` · <span class="badge amber" title="Some snapshots did not reach the end of the session">${partial} partial</span>` : '');
             const rows = (r.by_project || []).map((p) =>
                 `<div class="list-row"><span class="intent"><div class="msg truncate">${esc(p.slug)}</div>
                  <div class="meta">${Number(p.tokens || 0).toLocaleString()} tok</div></span>
                  <span class="mono">$${Number(p.cost || 0).toFixed(4)}</span></div>`).join('');
-            $('#dash-usage-body').innerHTML = rows
-                || '<div class="meta">No usage captured yet — it is recorded when a run finishes (TUI runs when you finish or close them).</div>';
+            const modelRows = (r.by_model || []).slice(0, 5).map((m) =>
+                `<div class="list-row"><span class="intent"><div class="msg truncate">${esc(m.model)}</div>
+                 <div class="meta">${Number(m.tokens || 0).toLocaleString()} tok</div></span>
+                 <span class="mono">$${Number(m.cost || 0).toFixed(4)}</span></div>`).join('');
+            $('#dash-usage-body').innerHTML = (rows
+                || '<div class="meta">No usage captured yet — it is recorded when a run finishes (TUI runs when you finish or close them).</div>')
+                + (modelRows ? `<div class="meta" style="margin-top:8px">By model</div>${modelRows}` : '');
         } catch (e) {
             // The view may have changed while the request was in flight.
             const body = $('#dash-usage-body');
@@ -1632,6 +1656,9 @@ async function openProjectTui(p, opts = {}) {
         });
         const runUid = res.run && res.run.run_uid;
         if (!runUid) { throw new Error('Perun did not return a run id'); }
+        // A "new session" run now carries the OpenCode session id Perun created,
+        // so the TUI opens it and usage is attributable from the first message.
+        const openedSession = sessionId || String((res.run && res.run.opencode_session_id) || '');
         const ide = p.ide || {};
         const mode = String(opts.launchMode || ide.launch_mode || 'external-terminal');
         if (mode === 'vscode-terminal') {
@@ -1646,7 +1673,7 @@ async function openProjectTui(p, opts = {}) {
         }
         const opened = await launchInTerminal({
             project: p.slug, cwd: p.path, model: p.model, agent: p.agent,
-            tui: true, runUid, sessionId,
+            tui: true, runUid, sessionId: openedSession,
         });
         if (!opened || !opened.ok) {
             // The run row was created before the launch. A definitive failure
@@ -2314,8 +2341,10 @@ async function viewProject(slug, tab) {
             const r = await api(`/api/usage?hours=24&project=${encodeURIComponent(slug)}`);
             const t = r.totals || {};
             const tok = Number(t.tokens_in || 0) + Number(t.tokens_out || 0);
+            const partial = Number(t.incomplete || 0);
             usageBox.innerHTML = `Usage · captured in the last 24h — <b>$${Number(t.cost_usd || 0).toFixed(4)}</b>`
-                + ` · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`;
+                + ` · ${tok.toLocaleString()} tok · ${Number(t.sessions || 0)} session(s)`
+                + (partial ? ` · <span class="badge amber">${partial} partial</span>` : '');
         } catch (e) { usageBox.textContent = 'usage unavailable'; }
         finally { usageBusy = false; }
     };
@@ -8951,6 +8980,12 @@ async function boot() {
     checkForUpdate();
     setInterval(refreshHealth, 15000);
     setInterval(refreshPresence, 4000);
+    // A background tab throttles timers; refresh the moment the operator
+    // returns instead of waiting for the next tick.
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshPresence();
+    });
+    window.addEventListener('focus', () => refreshPresence());
     setInterval(refreshDashboardStats, 10000);
     setInterval(checkForUpdate, 600000);  // 10 min
     window.addEventListener('hashchange', router);

@@ -4,6 +4,31 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Dashboard presence refresh
+
+* **Working now** keeps its 4 s poll, gains a **Refresh** button, and refreshes
+  immediately when the dashboard tab becomes visible or the window regains
+  focus. A closed TUI disappears on the next poll instead of waiting for a page
+  reload; if it lingers, the server still considers the run active and the
+  reconcile sweep will finalize it.
+
+### Accurate usage across every message and provider
+
+* `opencode_api.usage()` now follows OpenCode's `cursor.next` across **all**
+  session pages (the API caps one page at 200 messages). A single 200-message
+  page had silently undercounted long TUI sessions: one real session stored
+  **$0.59** while its full history was **$123.50** (including $108.51 of
+  `ollama-cloud/kimi-k3.1-pro`).
+* Snapshots record `usage_complete`, `usage_pages` and `usage_messages`; the
+  `/api/usage` totals expose an `incomplete` count and a per-model breakdown.
+* Starting a new TUI from the dashboard creates the OpenCode session first and
+  passes its id to the TUI, so the run is attributable from the first message.
+  Older TUI runs bind to the single active session or the single session created
+  after the run started.
+* `POST /api/usage/refresh` re-reads recent sessions (repairing pre-pagination
+  snapshots), and the dashboard Usage card has a refresh button plus a
+  **partial** badge.
+
 ### VS Code: macOS companion install and explicit workspace files
 
 * The macOS `.pkg` postinstall installs `perun-overseer.vsix` for the console
@@ -20,11 +45,15 @@ All notable changes are recorded here. Single source of truth for release notes.
   VS Code reload. The server rejects a protocol mismatch, and the Config panel
   shows the companion version/connected windows plus the real VSIX install
   command (extension 0.1.4).
+* **Perun: Open TUI (tracked)** / the **Perun TUI** status item shows the same
+  session choice as the dashboard Run caret: resume latest, pick a recent
+  session, or start new; a terminal already open for that session is focused.
 * The companion adds two status-bar items: **Perun** opens the dashboard directly
   in VS Code's **Simple Browser** tab (short-lived embed ticket; no wrapper page
   or extra click) and re-focuses an existing Perun tab when it can; **Perun TUI**
-  opens the tracked OpenCode terminal. The TUI opens beside the editor (wide),
-  waits 150 ms for the pty size, and resumes the latest session. Extension 0.1.4.
+  opens a session picker (resume latest / choose a recent session / new) and then
+  the tracked OpenCode terminal. The TUI opens beside the editor (wide), waits
+  150 ms for the pty size, and resumes the chosen session. Extension 0.1.4.
 * Run-completion fallback: if a TUI run produced no live file event (e.g. a tool
   schema change), changed files from `git status` are revealed once at close or
   Finish. Stale terminal bindings are dropped on disconnect, the per-file

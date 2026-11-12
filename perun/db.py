@@ -768,6 +768,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("cost_usd", "REAL DEFAULT 0"),
         ("usage_at", "TEXT DEFAULT ''"),
         ("usage_models", "TEXT DEFAULT '{}'"),
+        # Usage snapshots are pages of an OpenCode session; `complete` records
+        # that the cursor walk reached the end (long sessions use >1 page).
+        ("usage_complete", "INTEGER DEFAULT 0"),
+        ("usage_pages", "INTEGER DEFAULT 0"),
+        ("usage_messages", "INTEGER DEFAULT 0"),
     ],
     # ``embedded_hash`` records which content the stored vector was computed
     # from, so a chunk whose content changed while Ollama was down can be
@@ -971,7 +976,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 
 def init_db() -> None:

@@ -1488,6 +1488,30 @@ class Orchestrator:
             if directory and os.path.normcase(directory) == os.path.normcase(path):
                 candidates.append(str(sid))
         if len(candidates) != 1:
+            # Multiple terminals in one project: pick the single session created
+            # at/after this run's start instead of refusing all attribution.
+            try:
+                started = datetime.fromisoformat(
+                    str(run.get("started_at") or run.get("created_at") or "")
+                    .replace("Z", "+00:00"))
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                started_ms = int(started.timestamp() * 1000)
+            except (TypeError, ValueError):
+                started_ms = 0
+            if started_ms:
+                fresh: list[str] = []
+                for sid in candidates:
+                    try:
+                        info = api.session(str(sid)) or {}
+                        created = int(((info.get("time") or {}) if isinstance(info, dict) else {}).get("created") or 0)
+                    except Exception:
+                        created = 0
+                    if created >= started_ms:
+                        fresh.append(str(sid))
+                if len(fresh) == 1:
+                    candidates = fresh
+        if len(candidates) != 1:
             # None, or several terminals in one project: guessing would put one
             # session's cost on another run.
             return ""
@@ -1497,8 +1521,14 @@ class Orchestrator:
             return ""
         return candidates[0]
 
-    def backfill_usage(self, hours: int = 24, *, limit: int = 50) -> int:
-        """Capture usage for recently finished runs that never got a snapshot."""
+    def backfill_usage(self, hours: int = 24, *, limit: int = 50,
+                       force: bool = False) -> int:
+        """Capture usage for recent runs whose snapshot is missing/partial.
+
+        ``force`` re-reads complete snapshots too (the dashboard's explicit
+        Refresh action). Existing pre-pagination snapshots have
+        ``usage_complete=0`` and are repaired on the next pass.
+        """
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
         updated = 0
         seen: set = set()
@@ -1508,11 +1538,17 @@ class Orchestrator:
             if (run.get("started_at") or "") < cutoff:
                 continue
             session_pk = run.get("session_pk")
-            if not session_pk or session_pk in seen:
+            oc_sid = str(run.get("opencode_session_id") or "").strip()
+            if not session_pk and not oc_sid:
                 continue
-            seen.add(session_pk)
-            session = registry.get_session(session_pk) or {}
-            if session.get("usage_at"):
+            key = session_pk or oc_sid
+            if key in seen:
+                continue
+            seen.add(key)
+            session = registry.get_session(session_pk) if session_pk else \
+                registry.find_session_by_opencode(int(run.get("project_id") or 0), oc_sid)
+            session = session or {}
+            if not force and session.get("usage_complete"):
                 continue
             if self.capture_usage(run["run_uid"]):
                 updated += 1
@@ -1542,7 +1578,7 @@ class Orchestrator:
         except Exception:
             LOG.debug("usage capture failed for %s", run_uid, exc_info=True)
             return False
-        if not any(usage.values()):
+        if not (usage.get("tokens_in") or usage.get("tokens_out") or usage.get("cost")):
             return False
         try:
             if session_pk:

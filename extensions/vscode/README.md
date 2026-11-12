@@ -7,11 +7,10 @@ Connects a VS Code workspace to the local **Perun** service.
 - **Perun: Send Selection to OpenCode** (`Ctrl+Alt+P`) sends the selection to
   Perun; in a VS Code-hosted TUI it is inserted as `@file#lines`, otherwise it
   is copied to the clipboard.
-- **Perun: Open TUI (tracked)** from the Command Palette creates a TUI run
-  through Perun and opens the same tracked OpenCode terminal beside the editor
-  (it resumes the latest session and focuses an existing terminal). The
-  **Perun TUI** status-bar item does the same in one click; VS Code's
-  **Terminal → New Terminal** is a normal shell, not the Perun terminal.
+- **Perun: Open TUI (tracked)** from the Command Palette (or the **Perun TUI**
+  status-bar item) opens a session picker: resume the latest chat, choose any
+  recent session, or start a new one. The chosen session opens in the tracked
+  OpenCode terminal beside the editor.
 - **Perun Dashboard** opens the dashboard directly in VS Code's **Simple
   Browser** tab; there is no wrapper page or second click.
 

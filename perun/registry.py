@@ -1082,7 +1082,8 @@ def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
     with db.db() as conn:
         conn.execute(
             "UPDATE sessions SET tokens_in=?, tokens_out=?, cache_read=?, "
-            "cost_usd=?, usage_at=?, usage_models=? WHERE id=?",
+            "cost_usd=?, usage_at=?, usage_models=?, usage_complete=?, "
+            "usage_pages=?, usage_messages=? WHERE id=?",
             (
                 int(usage.get("tokens_in") or 0),
                 int(usage.get("tokens_out") or 0),
@@ -1090,6 +1091,9 @@ def update_session_usage(pk: int, usage: dict[str, Any]) -> None:
                 float(usage.get("cost") or 0.0),
                 now_iso(),
                 models,
+                1 if usage.get("complete") else 0,
+                int(usage.get("pages") or 0),
+                int(usage.get("messages") or 0),
                 int(pk),
             ),
         )
@@ -1114,7 +1118,9 @@ def usage_totals(hours: int = 24, *, project_id: int | None = None) -> dict[str,
                       COALESCE(SUM(tokens_in), 0) AS tokens_in,
                       COALESCE(SUM(tokens_out), 0) AS tokens_out,
                       COALESCE(SUM(cache_read), 0) AS cache_read,
-                      COALESCE(SUM(cost_usd), 0) AS cost_usd
+                      COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                      COALESCE(SUM(CASE WHEN usage_complete=0 THEN 1 ELSE 0 END), 0)
+                        AS incomplete
                FROM sessions WHERE {where}""",
             tuple(params),
         )
@@ -1197,6 +1203,61 @@ def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
             bucket["tokens"] += int(row.get("tokens_in") or 0) + int(row.get("tokens_out") or 0)
             bucket["cost"] += float(row.get("cost_usd") or 0.0)
     return sorted(totals.values(), key=lambda item: item["cost"], reverse=True)
+
+
+def usage_by_model(hours: int = 24 * 30, limit: int = 20) -> list[dict[str, Any]]:
+    """Measured spend per ``provider/model`` for the window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            """SELECT s.id, s.usage_models, s.tokens_in, s.tokens_out, s.cost_usd,
+                      r.model AS run_model
+               FROM sessions s
+               LEFT JOIN runs r ON r.session_pk = s.id
+               WHERE s.usage_at >= ? AND s.usage_at <> ''
+               ORDER BY s.id, r.id DESC""",
+            (cutoff,),
+        )
+    totals: dict[str, dict[str, Any]] = {}
+    seen: set = set()
+    for row in rows:
+        row = dict(row)
+        session_id = int(row["id"])
+        if session_id in seen:
+            continue
+        seen.add(session_id)
+        try:
+            models = json.loads(row.get("usage_models") or "{}") or {}
+        except ValueError:
+            models = {}
+        entries = models if isinstance(models, dict) and models else {}
+        if entries:
+            for model_key, usage in entries.items():
+                if model_key == "unknown":
+                    model_key = str(row.get("run_model") or "unknown")
+                provider = model_key.split("/", 1)[0] if "/" in model_key else "unknown"
+                bucket = totals.setdefault(model_key, {
+                    "model": model_key,
+                    "provider": _PROVIDER_ALIASES.get(provider, provider),
+                    "tokens": 0, "cost": 0.0,
+                })
+                bucket["tokens"] += int((usage or {}).get("tokens_in") or 0) + \
+                    int((usage or {}).get("tokens_out") or 0)
+                bucket["cost"] += float((usage or {}).get("cost") or 0.0)
+        else:
+            run_model = str(row.get("run_model") or "unknown")
+            provider = run_model.split("/", 1)[0] if "/" in run_model else "unknown"
+            bucket = totals.setdefault(run_model, {
+                "model": run_model,
+                "provider": _PROVIDER_ALIASES.get(provider, provider),
+                "tokens": 0, "cost": 0.0,
+            })
+            bucket["tokens"] += int(row.get("tokens_in") or 0) + \
+                int(row.get("tokens_out") or 0)
+            bucket["cost"] += float(row.get("cost_usd") or 0.0)
+    ordered = sorted(totals.values(), key=lambda item: item["cost"], reverse=True)
+    return ordered[:max(1, min(int(limit), 100))]
 
 
 def list_sessions(project_id: int, limit: int = 100) -> list[dict[str, Any]]:

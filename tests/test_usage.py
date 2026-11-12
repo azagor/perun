@@ -7,22 +7,53 @@ from perun import opencode_api, registry
 
 def test_usage_sums_the_session_messages():
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
-    api.messages = lambda session_id, limit=50: [  # type: ignore[assignment]
-        {"tokens": {"input": 100, "output": 20, "cache": {"read": 900}}, "cost": 0.001},
-        {"tokens": {"input": 50, "output": 5, "cache": {"read": 400}}, "cost": 0.0005},
-        {"tokens": {}},          # a user message: no usage
-        {"content": "no tokens"},
-    ]
-
+    api.message_page = lambda session_id, *, limit=200, cursor="": (  # type: ignore[assignment]
+        [
+            {"id": "m1", "tokens": {"input": 100, "output": 20, "cache": {"read": 900}}, "cost": 0.001},
+            {"id": "m2", "tokens": {"input": 50, "output": 5, "cache": {"read": 400}}, "cost": 0.0005},
+            {"id": "m3", "tokens": {}},          # a user message: no usage
+            {"id": "m4", "content": "no tokens"},
+        ], {})
     usage = api.usage("ses_x")
 
     assert {k: usage[k] for k in ("tokens_in", "tokens_out", "cache_read", "cost")} == {
         "tokens_in": 150, "tokens_out": 25, "cache_read": 1300, "cost": 0.0015}
+    assert usage["complete"] is True
+
+
+def test_usage_follows_every_cursor_page():
+    api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
+    pages = {
+        "": ([
+            {"id": "a", "tokens": {"input": 10, "output": 1}, "cost": 1.0,
+             "model": {"providerID": "ollama-cloud", "id": "kimi-k3.1-pro"}},
+        ], {"next": "c2"}),
+        "c2": ([
+            {"id": "b", "tokens": {"input": 20, "output": 2}, "cost": 2.0,
+             "model": {"providerID": "ollama-cloud", "id": "kimi-k3.1-pro"}},
+            {"id": "b", "tokens": {"input": 20, "output": 2}, "cost": 2.0,
+             "model": {"providerID": "ollama-cloud", "id": "kimi-k3.1-pro"}},
+        ], {"next": "c3"}),
+        "c3": ([
+            {"id": "c", "tokens": {"input": 30, "output": 3}, "cost": 3.0,
+             "model": {"providerID": "opencode", "id": "deepseek"}},
+        ], {}),
+    }
+    api.message_page = lambda session_id, *, limit=200, cursor="": pages[cursor]  # type: ignore[assignment]
+
+    usage = api.usage("ses_long")
+
+    assert usage["pages"] == 3
+    assert usage["messages"] == 3          # duplicate page entry deduped
+    assert usage["cost"] == 6.0
+    assert usage["complete"] is True
+    assert usage["models"]["ollama-cloud/kimi-k3.1-pro"]["cost"] == 3.0
+    assert usage["models"]["opencode/deepseek"]["cost"] == 3.0
 
 
 def test_a_service_without_usage_still_returns_zeroes():
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
-    api.messages = lambda session_id, limit=50: []  # type: ignore[assignment]
+    api.message_page = lambda session_id, *, limit=200, cursor="": ([], {})  # type: ignore[assignment]
     usage = api.usage("ses_x")
     assert usage["tokens_in"] == 0 and usage["cost"] == 0.0 and usage["models"] == {}
 
@@ -48,6 +79,24 @@ def test_totals_and_project_breakdown_ignore_sessions_without_usage():
 
     assert registry.usage_totals(hours=24)["sessions"] == 0
     assert registry.usage_by_project(hours=24) == []
+
+
+def test_a_snapshot_records_whether_it_reached_the_last_page():
+    project = registry.add_project("usage-complete", r"C:\usage-complete")
+    session = registry.create_session(project["id"], "ses_complete")
+
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 5, "tokens_out": 2, "cache_read": 0, "cost": 0.5,
+        "models": {"ollama-cloud/kimi": {"tokens_in": 5, "tokens_out": 2, "cost": 0.5}},
+        "complete": True, "pages": 4, "messages": 40,
+    })
+
+    row = registry.get_session(session["id"])
+    assert row["usage_complete"] == 1
+    assert row["usage_pages"] == 4
+    assert row["usage_messages"] == 40
+    assert registry.usage_totals(hours=24)["incomplete"] == 0
+    assert registry.usage_by_model(hours=24)[0]["model"] == "ollama-cloud/kimi"
 
 def test_capture_usage_records_a_tui_run_session(monkeypatch):
     """A TUI run is linked to its project, so its usage lands in the same totals."""
@@ -116,12 +165,13 @@ def test_provider_usage_attributes_spend_to_the_run_model():
 
 def test_usage_breaks_down_by_model_when_a_session_switches_provider():
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
-    api.messages = lambda session_id, limit=50: [  # type: ignore[assignment]
-        {"model": {"providerID": "ollama-cloud", "id": "deepseek"},
-         "tokens": {"input": 100, "output": 10, "cache": {"read": 0}}, "cost": 0.01},
-        {"model": {"providerID": "opencode", "id": "kimi"},
-         "tokens": {"input": 50, "output": 5, "cache": {"read": 0}}, "cost": 0.02},
-    ]
+    api.message_page = lambda session_id, *, limit=200, cursor="": (  # type: ignore[assignment]
+        [
+            {"model": {"providerID": "ollama-cloud", "id": "deepseek"},
+             "tokens": {"input": 100, "output": 10, "cache": {"read": 0}}, "cost": 0.01},
+            {"model": {"providerID": "opencode", "id": "kimi"},
+             "tokens": {"input": 50, "output": 5, "cache": {"read": 0}}, "cost": 0.02},
+        ], {})
 
     usage = api.usage("ses_switch")
 

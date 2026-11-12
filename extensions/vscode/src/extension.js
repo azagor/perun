@@ -326,6 +326,7 @@ function openTerminal(message) {
     terminal,
     terminalId,
     project: String(message.project_slug || ''),
+    session_id: String(message.session_id || ''),
     pid: 0,
   });
   terminalIds.set(terminalId, runUid);
@@ -372,6 +373,7 @@ function saveTerminalState() {
     run_uid: runUid,
     terminal_id: entry.terminalId,
     project: entry.project || '',
+    session_id: entry.session_id || '',
     pid: entry.pid || 0,
     name: entry.terminal && entry.terminal.name,
   }));
@@ -392,6 +394,7 @@ function rebindTerminal(terminal) {
     terminal,
     terminalId,
     project: String(match.project || ''),
+    session_id: String(match.session_id || ''),
     pid: Number(match.pid) || 0,
   });
   terminalIds.set(terminalId, runUid);
@@ -568,29 +571,56 @@ async function startTui() {
     return;
   }
   if (startingTui) return;
-  const existing = activeRun && terminals.get(String(activeRun.run_uid || ''));
-  if (existing && existing.terminal) {
-    existing.terminal.show();
-    return;
-  }
   startingTui = true;
   try {
-    // Reopen the latest session rather than silently starting a blank one.
-    let sessionId = '';
-    let sessionPk = null;
+    let sessions = [];
     try {
       const data = await apiGet(`/api/projects/${encodeURIComponent(projectSlug)}/sessions`);
-      const sessions = (data.sessions || []).filter((s) => s.opencode_session_id);
-      if (sessions.length) {
-        sessionId = String(sessions[0].opencode_session_id || '');
-        sessionPk = sessions[0].id || null;
-      }
+      sessions = (data.sessions || []).filter((s) => s.opencode_session_id);
     } catch (_) { /* no sessions yet */ }
+
+    let chosen = null;
+    if (sessions.length) {
+      const latest = sessions[0];
+      const items = [{
+        label: '$(history) Resume latest',
+        description: `${latest.title || '(untitled)'} · ${relativeTime(latest.updated_at)}`,
+        session: latest,
+      }];
+      for (const session of sessions.slice(1, 20)) {
+        items.push({
+          label: `$(comment-discussion) ${session.title || '(untitled)'}`,
+          description: `${relativeTime(session.updated_at)} · ${session.opencode_session_id}`,
+          session,
+        });
+      }
+      items.push({ label: '$(add) Start a new session', description: '', session: null });
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `Open the OpenCode TUI for ${projectSlug}`,
+        matchOnDescription: true,
+      });
+      if (!picked) return;
+      chosen = picked.session;
+    }
+
+    if (chosen) {
+      const existing = Array.from(terminals.values()).find(
+        (entry) => entry.session_id === chosen.opencode_session_id);
+      if (existing && existing.terminal) {
+        existing.terminal.show();
+        return;
+      }
+    }
+    const active = activeRun && terminals.get(String(activeRun.run_uid || ''));
+    if (!chosen && active && active.terminal) {
+      active.terminal.show();
+      return;
+    }
     const created = await apiPost('/api/runs/tui', {
       project: projectSlug,
-      prompt: 'Opened from VS Code',
-      opencode_session_id: sessionId,
-      session_pk: sessionPk,
+      prompt: chosen ? `Resumed: ${chosen.title || ''}` : 'Opened from VS Code',
+      opencode_session_id: chosen ? String(chosen.opencode_session_id || '') : '',
+      session_pk: chosen ? (chosen.id || null) : null,
     });
     const runUid = created && created.run && created.run.run_uid;
     if (!runUid) throw new Error('Perun did not return a run id');
@@ -601,6 +631,16 @@ async function startTui() {
   } finally {
     startingTui = false;
   }
+}
+
+function relativeTime(iso) {
+  const stamp = Date.parse(String(iso || ''));
+  if (!Number.isFinite(stamp)) return '';
+  const seconds = Math.max(0, Math.round((Date.now() - stamp) / 1000));
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 function activate(context) {

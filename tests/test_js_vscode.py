@@ -58,6 +58,8 @@ def test_the_companion_package_is_a_valid_extension_manifest():
     }
     assert "startTui" in (root / "src" / "extension.js").read_text(encoding="utf-8")
     extension = (root / "src" / "extension.js").read_text(encoding="utf-8")
+    assert "showQuickPick" in extension
+    assert "Resume latest" in extension
     assert "TERMINAL_STATE_KEY" in extension
     assert "rebindTerminal" in extension
     assert "vscode.env.remoteName" in extension
