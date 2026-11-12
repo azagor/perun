@@ -6823,6 +6823,239 @@ async function loadAttentionOutbox(host) {
     });
 }
 
+function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return Math.round(n / 1048576) + ' MB';
+    if (n >= 1024) return Math.round(n / 1024) + ' KB';
+    return n + ' B';
+}
+
+function fmtTokens(n) {
+    n = Number(n) || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+}
+
+function localAiCard() {
+    const s = state.settings || {};
+    const card = el('div', { class: 'card', id: 'local-ai-card' },
+        `<div class="card-head"><h4>Local AI</h4><span class="badge" id="la-badge">—</span></div>
+         <p class="secondary">A small local model for bounded work only — changelog bullets and OpenCode's
+         own small tasks. It is never on a run's critical path and never sees a provider credential.</p>
+         <div class="row wrap" style="gap:18px;margin:6px 0 4px">
+             <label class="row" style="gap:6px"><input type="checkbox" id="la-enabled" ${s.local_ai_enabled ? 'checked' : ''}> enable local AI</label>
+             <label class="row" style="gap:6px"><input type="checkbox" id="la-shadow" ${s.local_ai_shadow !== false ? 'checked' : ''}> shadow (log only)</label>
+             <label class="row" style="gap:6px"><input type="checkbox" id="la-docs" ${s.local_ai_docs !== false ? 'checked' : ''}> changelog bullets</label>
+             <label class="row" style="gap:6px" title="Set OpenCode's small_model to the local model (titles and other small tasks)"><input type="checkbox" id="la-small" ${s.local_ai_small_model ? 'checked' : ''}> OpenCode small tasks</label>
+         </div>
+         <div class="form-row">
+             <label class="field"><span class="lab">Model</span>
+                 <input type="text" id="la-model" value="${esc(s.local_ai_model || '')}" placeholder="qwen2.5:1.5b"></label>
+             <label class="field"><span class="lab">Endpoint <span class="muted">(empty = Ollama /v1)</span></span>
+                 <input type="text" id="la-endpoint" value="${esc(s.local_ai_base_url || '')}" placeholder="http://127.0.0.1:11434/v1"></label>
+             <label class="field"><span class="lab">If the model is missing</span>
+                 <select id="la-policy">
+                     <option value="auto" ${(s.local_ai_download || 'auto') === 'auto' ? 'selected' : ''}>download automatically</option>
+                     <option value="manual" ${s.local_ai_download === 'manual' ? 'selected' : ''}>I'll set it up myself</option>
+                 </select></label>
+         </div>
+         <p class="meta" id="la-status">checking the local runtime…</p>
+         <div id="la-progress"></div>
+         <div id="la-commands"></div>
+         <div class="form-actions">
+             <button class="btn primary" id="la-save">Save local AI</button>
+             <button class="btn ghost" id="la-prepare">Prepare</button>
+             <button class="btn ghost" id="la-test">Test</button>
+             <button class="btn ghost" id="la-remove">Remove model</button>
+         </div>`);
+
+    const renderCommands = (host, commands) => {
+        if (!commands || !commands.length) { host.innerHTML = ''; return; }
+        host.innerHTML = '<p class="meta">Run this in a terminal, then press Prepare again:</p>' +
+            commands.map((c) => `<div class="row" style="gap:8px;align-items:center">
+                <code class="mono">${esc(c)}</code>
+                <button class="btn sm ghost" data-copy="${esc(c)}">Copy</button></div>`).join('');
+        host.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copied', 'ok'); }
+            catch (e) { toast('copy failed', 'err'); }
+        }));
+    };
+
+    const render = async () => {
+        let st = {};
+        try { st = await api('/api/local-ai'); } catch (e) { st = { error: e.message }; }
+        const badge = card.querySelector('#la-badge');
+        const line = card.querySelector('#la-status');
+        if (st.error) {
+            badge.textContent = 'unknown'; badge.className = 'badge';
+            line.textContent = 'could not read the local AI status: ' + st.error;
+            return st;
+        }
+        badge.textContent = st.enabled ? (st.installed ? 'ready' : 'model missing') : 'off';
+        badge.className = 'badge ' + (st.enabled ? (st.installed ? 'green' : 'gold') : '');
+        if (st.available) {
+            line.innerHTML = `Runtime at <span class="mono">${esc(st.endpoint || '')}</span> · model
+                <b>${esc(st.model || '')}</b> ${st.installed ? `installed (${fmtBytes(st.size_bytes)})` : '<b>not installed</b>'}
+                · free disk ${fmtBytes(st.disk_free_bytes)}`;
+        } else {
+            line.innerHTML = `<b>Local runtime not reachable</b> at <span class="mono">${esc(st.endpoint || '')}</span>
+                — start Ollama, or point the endpoint at LM Studio / vLLM.`;
+        }
+        return st;
+    };
+
+    card.querySelector('#la-save').addEventListener('click', async () => {
+        try {
+            await api('/api/settings', { method: 'PATCH', body: {
+                local_ai_enabled: card.querySelector('#la-enabled').checked,
+                local_ai_shadow: card.querySelector('#la-shadow').checked,
+                local_ai_docs: card.querySelector('#la-docs').checked,
+                local_ai_small_model: card.querySelector('#la-small').checked,
+                local_ai_model: card.querySelector('#la-model').value.trim(),
+                local_ai_base_url: card.querySelector('#la-endpoint').value.trim(),
+                local_ai_download: card.querySelector('#la-policy').value,
+            } });
+            await loadSettings();
+            toast('Local AI settings saved', 'ok');
+            await render();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    card.querySelector('#la-prepare').addEventListener('click', async () => {
+        const box = card.querySelector('#la-progress');
+        const cmds = card.querySelector('#la-commands');
+        cmds.innerHTML = '';
+        box.innerHTML = '';
+        try {
+            const res = await api('/api/local-ai/prepare', { method: 'POST', body: {} });
+            if (res.manual) {
+                renderCommands(cmds, res.commands || []);
+                toast('Manual setup — run the command below', 'ok');
+                return;
+            }
+            if (res.busy) { toast('A download is already running', 'err'); return; }
+            if (!res.ok) { renderCommands(cmds, res.commands || []); toast(res.reason || 'could not start', 'err'); return; }
+            if (res.installed) { toast('Model already installed', 'ok'); await render(); return; }
+            const job = res.job;
+            if (!job) { await render(); return; }
+            box.innerHTML = `<p class="meta">downloading ${esc(job.model)}…</p>
+                <progress max="100" value="0" style="width:100%"></progress>`;
+            const bar = box.querySelector('progress');
+            const timer = setInterval(async () => {
+                try {
+                    const r = await api(`/api/local-ai/jobs/${job.id}`);
+                    const j = r.job || {};
+                    bar.value = j.total ? Math.round(100 * j.completed / j.total) : 0;
+                    if (j.state === 'done' || j.state === 'failed' || j.state === 'cancelled') {
+                        clearInterval(timer);
+                        box.innerHTML = j.state === 'done'
+                            ? '<p class="meta">installed</p>'
+                            : `<p class="meta">${esc(j.error || j.state)}</p>`;
+                        await render();
+                        toast(j.state === 'done' ? 'Model installed' : 'Download failed',
+                            j.state === 'done' ? 'ok' : 'err');
+                    }
+                } catch (e) { clearInterval(timer); toast(e.message, 'err'); }
+            }, 1000);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    card.querySelector('#la-test').addEventListener('click', async () => {
+        try {
+            const r = await api('/api/local-ai/test', { method: 'POST', body: {} });
+            toast(r.ok ? `answered in ${r.latency_ms} ms: ${r.reply}` : 'no answer — check the endpoint and model',
+                r.ok ? 'ok' : 'err');
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    card.querySelector('#la-remove').addEventListener('click', () => {
+        const model = card.querySelector('#la-model').value.trim();
+        if (!model) { toast('Set a model first', 'err'); return; }
+        confirmDialog('Remove local model',
+            `Delete ${model} from the local runtime? This frees disk space and cannot be undone.`,
+            async () => {
+                try {
+                    const r = await api(`/api/local-ai/models/${encodeURIComponent(model)}`, { method: 'DELETE' });
+                    toast(r.ok ? 'Model removed' : (r.reason || 'could not remove'), r.ok ? 'ok' : 'err');
+                    await render();
+                } catch (e) { toast(e.message, 'err'); }
+            }, 'Remove');
+    });
+
+    render();
+    return card;
+}
+
+function contextCard() {
+    const s = state.settings || {};
+    const card = el('div', { class: 'card', id: 'context-card' },
+        `<div class="card-head"><h4>Context</h4><span class="badge" id="cx-badge">—</span></div>
+         <p class="secondary">Boundary compaction for long sessions. OpenCode already compacts on overflow;
+         the governor asks it to compact <b>earlier</b>, when a session grows past the threshold. Compaction
+         rewrites the conversation and resets the provider's prompt cache, so it runs at most once per
+         cooldown and never on an active session.</p>
+         <div class="row wrap" style="gap:18px;margin:6px 0 4px">
+             <label class="row" style="gap:6px"><input type="checkbox" id="cx-enabled" ${s.context_governor_enabled ? 'checked' : ''}> enable context governor</label>
+         </div>
+         <div class="form-row">
+             <label class="field"><span class="lab">Compact above (tokens)</span>
+                 <input type="number" id="cx-tokens" min="8000" step="1000" value="${esc(s.context_governor_tokens ?? 120000)}"></label>
+             <label class="field"><span class="lab">Cooldown (messages)</span>
+                 <input type="number" id="cx-turns" min="0" value="${esc(s.context_governor_turns ?? 20)}"></label>
+             <label class="field"><span class="lab">Search output budget (chars)</span>
+                 <input type="number" id="cx-tool" min="1000" value="${esc(s.context_tool_budget_chars ?? 20000)}"></label>
+             <label class="field"><span class="lab">Memory facts budget (chars)</span>
+                 <input type="number" id="cx-memory" min="1000" value="${esc(s.context_memory_budget_chars ?? 6000)}"></label>
+         </div>
+         <div id="cx-events"><p class="meta">loading recent compactions…</p></div>
+         <div class="form-actions"><button class="btn primary" id="cx-save">Save context</button></div>`);
+
+    const renderEvents = async () => {
+        const host = card.querySelector('#cx-events');
+        try {
+            const st = await api('/api/local-ai');
+            const gov = (st && st.governor) || {};
+            const badge = card.querySelector('#cx-badge');
+            badge.textContent = gov.enabled ? 'on' : 'off';
+            badge.className = 'badge ' + (gov.enabled ? 'green' : '');
+            const events = gov.events || [];
+            if (!events.length) {
+                host.innerHTML = '<p class="meta">No compactions recorded yet.</p>';
+                return;
+            }
+            host.innerHTML = `<table class="table"><thead><tr><th>When</th><th>Session</th><th>Context before → after</th><th>Note</th></tr></thead>
+                <tbody>${events.map((e) => `<tr>
+                    <td class="mono">${esc(String(e.created_at || '').slice(0, 16).replace('T', ' '))}</td>
+                    <td class="mono">#${esc(String(e.session_pk ?? '—'))}</td>
+                    <td class="mono">${e.tokens_before ? fmtTokens(e.tokens_before) + ' tok' : '—'} →
+                        ${e.tokens_after ? fmtTokens(e.tokens_after) + ' tok' : '…'}</td>
+                    <td>${esc(e.note || '')}</td></tr>`).join('')}</tbody></table>`;
+        } catch (e) {
+            host.innerHTML = `<p class="meta">${esc(e.message)}</p>`;
+        }
+    };
+
+    card.querySelector('#cx-save').addEventListener('click', async () => {
+        try {
+            await api('/api/settings', { method: 'PATCH', body: {
+                context_governor_enabled: card.querySelector('#cx-enabled').checked,
+                context_governor_tokens: Number(card.querySelector('#cx-tokens').value),
+                context_governor_turns: Number(card.querySelector('#cx-turns').value),
+                context_tool_budget_chars: Number(card.querySelector('#cx-tool').value),
+                context_memory_budget_chars: Number(card.querySelector('#cx-memory').value),
+            } });
+            await loadSettings();
+            toast('Context settings saved', 'ok');
+            await renderEvents();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+
+    renderEvents();
+    return card;
+}
+
 async function viewSettings() {
     $('#topbar-title').textContent = 'Settings';
     await Promise.all([loadSettings(), loadTerminals()]);
@@ -6883,6 +7116,8 @@ async function viewSettings() {
             <button class="btn ghost" id="s-indexall">▤ Index all docs</button>
          </div>`);
     v.appendChild(card);
+    v.appendChild(localAiCard());
+    v.appendChild(contextCard());
 
     const routingPanel = el('div', { class: 'card' },
         `<div class="card-head"><h4>Routing decisions</h4><span class="badge" id="routing-mode">—</span></div>

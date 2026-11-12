@@ -568,6 +568,32 @@ budgeted.
   long agent cannot balloon the database or the dashboard.
 * **No wasted embedding calls.** With Ollama unreachable, search falls back to
   keyword + recency rather than issuing calls that would fail.
+* **Cache-first prompts.** Measured across a month, **98% of input tokens are
+  prompt-cache reads** — any feature that rewrites the prompt prefix per turn
+  makes a session *more* expensive. Instruction layers are injected only on a
+  new session, and compaction is a deliberate boundary event (below).
+* **Search and memory budgets.** `perun_grep`, `perun_ast_grep`,
+  `perun_global_*`, `perun_unified_search` and memory search cap their output
+  (`context_tool_budget_chars`, `context_memory_budget_chars`) and say how much
+  was omitted; exact file reads are never truncated.
+
+### Local AI (optional)
+
+Settings → **Local AI** can use a small local model (Ollama, LM Studio, vLLM)
+for bounded work only: the changelog bullet written after an executed proposal,
+and OpenCode's own `small_model` tasks (titles). It is off by default, runs in
+shadow mode first, and is never on a run's critical path.
+
+* Enabling it offers to **prepare** the model: `auto` pulls it through Ollama
+  with live progress, disk checks and cancellation; `manual` only prints the
+  exact `ollama pull <tag>` command.
+* The client is standard-library OpenAI-compatible with an 8 s timeout, so a
+  stopped runtime degrades to the previous behaviour instead of failing.
+* Settings → **Context** adds an opt-in governor that asks OpenCode to compact a
+  session when its live context passes a threshold (cooldown in messages, never
+  an active session, self-disabling if compactions stop helping). It is off by
+  default because compaction resets the provider's prompt cache.
+
 
 ### The Context layer (bounded ambient context)
 

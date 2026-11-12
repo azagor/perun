@@ -2879,6 +2879,18 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `auto_discover_on_start` | `true` | discovery on service startup |
 | `index_docs_on_discover` | `false` | index new projects' docs on discover |
 | `terminal` | `""` | preferred terminal emulator for `Run in Terminal` / TUI launches. Empty = OS default (`pwsh`/`powershell` on Windows, `$SHELL` elsewhere). Accepts an alias (`cmd`, `pwsh`, `wt`) or a full path. The dashboard Settings page edits this value; it only affects future launches. |
+| `local_ai_enabled` | `false` | use a small local model for bounded work (changelog bullets, OpenCode small tasks) |
+| `local_ai_base_url` | `""` | OpenAI-compatible endpoint; empty derives `<ollama_host>/v1` |
+| `local_ai_model` | `qwen2.5:1.5b` | the local model tag/id |
+| `local_ai_download` | `auto` | `auto` pulls through Ollama on Prepare; `manual` only prints the command |
+| `local_ai_shadow` | `true` | produce and log local results without using them |
+| `local_ai_docs` | `true` | allow the changelog-bullet consumer |
+| `local_ai_small_model` | `false` | write `small_model: ollama/<model>` into the OpenCode config |
+| `context_governor_enabled` | `false` | opt-in boundary compaction for long sessions |
+| `context_governor_tokens` | `120000` | compact when the live context exceeds this |
+| `context_governor_turns` | `20` | minimum messages between compactions (cooldown, not a trigger) |
+| `context_tool_budget_chars` | `20000` | cap for search/grep/memory tool output (file reads are never capped) |
+| `context_memory_budget_chars` | `6000` | cap for memory facts returned to an agent |
 
 Environment overrides: `PERUN_HOME`, `PERUN_ROOTS`, `PERUN_API_TOKEN`,
 `PERUN_PASSWORD`, `TELEGRAM_BOT_TOKEN` / `TG_BOT_TOKEN`,
@@ -2904,9 +2916,39 @@ classic `cmd.exe` and PowerShell). Set `Settings.terminal` to a single value
 future launch uses the same terminal. Existing windows are not closed by this
 setting.
 
+### Local AI and the context governor
+
+The optional local model is deliberately narrow: it never sits on a run's
+critical path and never sees a provider credential.
+
+* `perun/local_llm.py` — OpenAI-compatible client (`/v1/chat/completions`) over
+  the stdlib, 8 s timeout, JSON-mode fallback, cached health probe; every call
+  returns `""` on failure.
+* `perun/model_manager.py` — Ollama only for downloads (`/api/tags`, `/api/pull`
+  NDJSON, `/api/delete`), a disk guard, one pull at a time, cancellation, and a
+  persisted `local_ai_jobs` row. `manual` policy returns the exact `ollama pull`
+  command instead of downloading.
+* Consumers: `docs_sync` (changelog bullet, shadow-first) and OpenCode's
+  `small_model` (written through the backed-up config writer; removed when the
+  toggle is off).
+* `perun/context_governor.py` — opt-in compaction at a boundary. It estimates
+  the live context from the newest assistant message (`tokens_in + cache_read`),
+  never compacts an active session, respects `context_governor_turns` as a
+  cooldown, records `context_events`, and disables itself when three compactions
+  fail to shrink the context by 10%.
+* Prompt caching is the cost model: 98% of measured input is cache reads. Never
+  rewrite a session prefix per turn; compaction is a boundary event.
+* Budgets: `perun_grep`/`perun_ast_grep`/`perun_global_*`/`perun_unified_search`
+  and memory search are capped with an explicit truncation marker; `read_file`
+  and instruction/manifest reads are never truncated.
+* API: `GET /api/local-ai`, `POST /api/local-ai/prepare`,
+  `GET /api/local-ai/jobs/{id}`, `POST /api/local-ai/jobs/{id}/cancel`,
+  `DELETE /api/local-ai/models/{name}`, `POST /api/local-ai/test`.
+
 ---
 
 ## 15. Revision history
+
 ### 2026-11-12 — v0.14.6: Ship the VS Code companion with its MIT license
 
 ### 2026-11-12 — v0.14.5: Harden companion installation and download validation

@@ -561,6 +561,17 @@ class OpenCodeAPI:
     def interrupt(self, session_id: str) -> None:
         self._request("POST", f"/api/session/{session_id}/interrupt", allow_404=True)
 
+    def compact(self, session_id: str) -> Dict[str, Any]:
+        """Ask OpenCode to compact a session at a boundary.
+
+        This is OpenCode's own compaction (the provider may be a cloud model);
+        Perun only decides *when* it happens. The response shape varies between
+        versions, so callers must treat ``{}`` as success.
+        """
+        payload = self._request("POST", f"/api/session/{session_id}/compact")
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, dict) else {}
+
 
 _DEFAULT_API: Optional[OpenCodeAPI] = None
 _DEFAULT_LOCK = threading.Lock()

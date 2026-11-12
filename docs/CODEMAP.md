@@ -382,8 +382,42 @@ Ollama transport + vector math (project-agnostic).
   `embed_texts()`, `embed_one()`, `extract_metadata()`, `ollama_ok()` (cached
   health probe behind the graceful-degradation path).
 
+### `perun/local_llm.py`
+The only path to the optional local model. OpenAI-compatible
+(`/v1/chat/completions`) over the stdlib, so Ollama, LM Studio, vLLM and LocalAI
+all work and no dependency is added.
+* `base_url()` (explicit `local_ai_base_url`, else `<ollama_host>/v1`),
+  `model_name()`.
+* `available()` — cached `GET {base}/models` probe.
+* `complete()` — 8 s timeout, `max_tokens` cap, control-character strip; returns
+  `""` on any failure. `complete_json()` retries once without
+  `response_format` when the runtime rejects JSON mode, then extracts the first
+  object.
+* `probe()` — the dashboard's `POST /api/local-ai/test`.
+
+### `perun/model_manager.py`
+Local model lifecycle (downloads are Ollama-only; inference is any
+OpenAI-compatible runtime).
+* `native_host()`, `status()` — availability, installed/size, disk free, policy,
+  last job, busy.
+* `start_pull()`, `_run_pull()` — one pull at a time, `/api/pull` NDJSON progress
+  persisted in `local_ai_jobs`, cancellation, verification against `/api/tags`.
+* `cancel_job()`, `remove()` (explicit only), `ensure()` (`auto` policy),
+  `model_installed()`.
+
+### `perun/context_governor.py`
+Opt-in boundary compaction; off by default because compaction rewrites the
+conversation and resets the provider's prompt cache.
+* `live_context_tokens()` — newest assistant message's `input + cache.read`.
+* `maybe_compact()` — skips active sessions, below-threshold sessions, and the
+  cooldown (`context_governor_turns`); records `context_events`; closes the
+  previous event with the after-values; disables the governor after three
+  compactions that fail to shrink the context by 10%.
+* `tick()` — one pass over `registry.recent_sessions()`, rate-limited to 60 s and
+  called from the existing reconcile loop.
+
 ### `perun/grep.py`
-Integrated code-search layer — ripgrep + ast-grep + pure-Python fallbacks, exposed
+Integrated code-search layer - ripgrep + ast-grep + pure-Python fallbacks, exposed
 both as MCP tools and HTTP endpoints so agents do not need separate search MCP
 servers.
 * `rg_search()`, `rg_available()`, `_parse_rg_json()` — regex content search.

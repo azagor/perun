@@ -680,6 +680,41 @@ CREATE INDEX IF NOT EXISTS idx_check_confirmations_target
 -- by an earlier build gains the uniqueness on the next startup.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_check_confirmations_unique
     ON check_confirmations(proposal_id, target, sha256);
+
+-- Local AI model downloads (Ollama pulls). One row per attempt so a dashboard
+-- reload can re-attach to progress; a cancelled or failed pull is never marked
+-- complete.
+CREATE TABLE IF NOT EXISTS local_ai_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    model        TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'queued',
+    completed    INTEGER NOT NULL DEFAULT 0,
+    total        INTEGER NOT NULL DEFAULT 0,
+    message      TEXT NOT NULL DEFAULT '',
+    error        TEXT NOT NULL DEFAULT '',
+    started_at   TEXT NOT NULL DEFAULT '',
+    ended_at     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_local_ai_jobs_model ON local_ai_jobs(model, id DESC);
+
+-- One row per boundary compaction, with the measured effect. The governor uses
+-- the newest row for the cooldown and disables itself when compactions cost
+-- more than they save.
+CREATE TABLE IF NOT EXISTS context_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_pk    INTEGER,
+    action        TEXT NOT NULL DEFAULT 'compact',
+    tokens_before INTEGER NOT NULL DEFAULT 0,
+    cost_before   REAL NOT NULL DEFAULT 0,
+    messages_before INTEGER NOT NULL DEFAULT 0,
+    tokens_after  INTEGER NOT NULL DEFAULT 0,
+    cost_after    REAL NOT NULL DEFAULT 0,
+    messages_after INTEGER NOT NULL DEFAULT 0,
+    note          TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_context_events_session
+    ON context_events(session_pk, id DESC);
 """
 
 
@@ -976,7 +1011,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # Bump whenever SCHEMA or the _ADDED_COLUMNS/_REMOVED_COLUMNS tables change, so
 # startup can tell "migrations already ran" from "fresh upgrade needed" without
 # guessing from table introspection alone.
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 
 def init_db() -> None:

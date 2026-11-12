@@ -310,6 +310,19 @@ with `python -m perun project-roots --add <name> <path>`.
   refuse when `/api/runs/active` reports a run (pass `--force` to override); a
   forced restart marks runs `interrupted` and the bridge posts a notice on its
   next start. Never `Stop-Process` a live server by hand.
+* **Prompt caching is the cost model.** 98% of measured input is prompt-cache
+  reads, so never rewrite a session prefix per turn: instruction layers are
+  injected only when a session starts (`compose_prompt(new_session=True)`), and
+  compaction is a deliberate boundary event (`perun/context_governor.py`) — never
+  on an active session, never more often than its cooldown, and never automatic
+  for every turn.
+* **Local AI is optional and bounded.** `perun/local_llm.py` is the only client;
+  every consumer keeps its previous behaviour when the model or runtime is
+  missing. Downloads are explicit (`auto` on Prepare or `manual` commands), never
+  on import, and a pulled model is verified against `/api/tags`. The local model
+  never sits on a run's critical path, never sees a provider credential, and tool
+  budgets must never truncate exact file reads (`perun_read_file`, manifests,
+  instructions).
 * **Graceful degradation.** Ollama down, `opencode` missing, no Telegram token
   — none may crash the service; each degrades to a clear message.
 * **Additive global install.** `integrations/install_global.py` must preserve

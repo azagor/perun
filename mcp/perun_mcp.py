@@ -46,6 +46,7 @@ project is resolved from the current working directory.
 
 from __future__ import annotations
 
+import functools
 import os
 
 # FastMCP prints a startup banner to stdout by default, which corrupts the
@@ -300,6 +301,41 @@ def _validate_directory_path(path_str: str) -> tuple[Path | None, str]:
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
+def _budget_chars(name: str, default: int) -> int:
+    try:
+        return max(1000, int(getattr(config.Settings.load(), name, default) or default))
+    except Exception:
+        return default
+
+
+def _truncate(text: str, limit: int, what: str = "output") -> str:
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return (text[:limit].rstrip()
+            + f"\n\n[perun] {what} truncated at {limit} chars; {omitted} more "
+              "characters omitted. Narrow the query (include/max_results/project) "
+              "or read the file for exact content.")
+
+
+def _budgeted(fn):
+    """Cap a search tool's output so one result set cannot flood the prompt."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return _truncate(fn(*args, **kwargs),
+                         _budget_chars("context_tool_budget_chars", 20000))
+    return wrapper
+
+
+def _budgeted_memory(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return _truncate(fn(*args, **kwargs),
+                         _budget_chars("context_memory_budget_chars", 6000),
+                         "memory results")
+    return wrapper
+
+
 @mcp.tool
 def perun_list_projects() -> str:
     """List every OpenCode project registered with Perun.
@@ -523,6 +559,7 @@ def perun_discover(roots: str = "", max_depth: int = 1, index: bool = False,
 
 
 @mcp.tool
+@_budgeted_memory
 def perun_memory_search(query: str, project: str | None = None, k: int = 5,
                         all_projects: bool = False) -> str:
     """Search Perun's unified memory (facts + indexed docs) across projects.
@@ -612,6 +649,7 @@ def perun_memory_supersede(fact_id: int, content: str, topic: str = "general",
 
 
 @mcp.tool
+@_budgeted_memory
 def perunchat_room_memory(query: str, room: str, k: int = 5) -> str:
     """Search the memory of one PerunChat room.
 
@@ -891,6 +929,7 @@ def perun_list_instruction_files(project: str | None = None) -> str:
 
 
 @mcp.tool
+@_budgeted
 def perun_grep(pattern: str, project: str | None = None,
                case_sensitive: bool = True, whole_word: bool = False,
                include: str = "", max_results: int = 50) -> str:
@@ -927,6 +966,7 @@ def perun_grep(pattern: str, project: str | None = None,
 
 
 @mcp.tool
+@_budgeted
 def perun_ast_grep(rule: str, project: str | None = None,
                    max_results: int = 50) -> str:
     """Structural code search in a project with ast-grep (or a Python fallback).
@@ -955,6 +995,7 @@ def perun_ast_grep(rule: str, project: str | None = None,
 
 
 @mcp.tool
+@_budgeted
 def perun_global_grep(pattern: str, projects: list[str] | None = None,
                       case_sensitive: bool = True, whole_word: bool = False,
                       include: str = "", max_results: int = 20) -> str:
@@ -997,6 +1038,7 @@ def perun_global_grep(pattern: str, projects: list[str] | None = None,
 
 
 @mcp.tool
+@_budgeted
 def perun_global_ast_grep(rule: str, projects: list[str] | None = None,
                           max_results: int = 20) -> str:
     """Structural code search across *all* registered projects (or a subset).
@@ -1031,6 +1073,7 @@ def perun_global_ast_grep(rule: str, projects: list[str] | None = None,
 
 
 @mcp.tool
+@_budgeted
 def perun_unified_search(
     query: str = "",
     pattern: str = "",

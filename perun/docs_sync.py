@@ -103,13 +103,51 @@ def changelog_path(project: Dict[str, Any]) -> Path:
     return root / DEFAULT_CHANGELOG
 
 
+def _local_intent(intent: str, proposal: Dict[str, Any]) -> str:
+    """Let the local model word the changelog line; keep the heuristic on failure.
+
+    Only the *description* is generated — the proposal id and the target names
+    stay in the line so ``append_changelog`` remains idempotent per proposal.
+    """
+    fallback = intent or "change"
+    try:
+        from . import config as _config, local_llm
+
+        settings = _config.Settings.load()
+        if not (settings.local_ai_enabled and settings.local_ai_docs):
+            return fallback
+        if not local_llm.available(settings=settings):
+            return fallback
+        targets = ", ".join(Path(str(t)).name
+                            for t in (proposal.get("targets") or [])[:5])
+        prompt = (
+            "Write one changelog line describing this executed change. "
+            "Reply with the description only: one sentence, no bullet, no quotes, "
+            "no file paths, at most 15 words.\n\n"
+            f"Intent: {intent or '(none)'}\nTargets: {targets or '(none)'}\n"
+        )
+        reply = local_llm.complete(prompt, max_tokens=64, timeout=8.0,
+                                   settings=settings)
+        text = " ".join((reply or "").strip().strip("-*`\"' ").split())
+        if not text:
+            return fallback
+        if len(text) > 120:
+            text = text[:117] + "…"
+        if settings.local_ai_shadow:
+            LOG.info("local-ai shadow changelog line: %s", text)
+            return fallback
+        return text
+    except Exception:  # pragma: no cover - a local model must never block docs
+        return fallback
+
+
 def _entry(proposal: Dict[str, Any]) -> str:
     intent = " ".join(str(proposal.get("intent") or "").split())
     if len(intent) > 120:
         intent = intent[:117] + "…"
     targets = [str(t) for t in (proposal.get("targets") or [])[:5]]
     shown = ", ".join(f"`{Path(t).name}`" for t in targets)
-    line = f"- {intent or 'change'}"
+    line = f"- {_local_intent(intent, proposal)}"
     if shown:
         line += f" ({shown})"
     return line + f" — proposal `{proposal.get('id')}`"

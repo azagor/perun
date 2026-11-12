@@ -360,6 +360,39 @@ class Settings:
     external_execution_max_entries: int = 500
     external_execution_chunk_bytes: int = 360 * 1024
 
+    # --- Local AI ---------------------------------------------------------- #
+    # A small local model (Ollama / LM Studio / vLLM, OpenAI-compatible) used
+    # only for bounded work: changelog bullets, card summaries, OpenCode's own
+    # small tasks. It is never on the critical path of a run. See
+    # docs/TECHNICAL_DOCUMENTATION.md ("Local AI").
+    local_ai_enabled: bool = False
+    # Empty means "derive from ollama_host" (``<ollama_host>/v1``).
+    local_ai_base_url: str = ""
+    local_ai_model: str = "qwen2.5:1.5b"
+    # "auto" pulls the model through Ollama when it is missing; "manual" only
+    # prints the command. A pull always needs the user to press Prepare.
+    local_ai_download: str = "auto"
+    # Produce the result and log it without using it.
+    local_ai_shadow: bool = True
+    local_ai_docs: bool = True
+    # Ask OpenCode to use the local model for its own small tasks
+    # (``small_model`` in opencode.json).
+    local_ai_small_model: bool = False
+
+    # --- Context governor -------------------------------------------------- #
+    # Compact a session with OpenCode's own API when its live context grows
+    # past this many tokens, but never more often than ``turns`` turns. Off by
+    # default: compaction rewrites the conversation, which invalidates the
+    # provider's prompt cache.
+    context_governor_enabled: bool = False
+    context_governor_tokens: int = 120000
+    context_governor_turns: int = 20
+    # Upper bound for search/grep output returned to an agent. Exact file reads
+    # are never truncated.
+    context_tool_budget_chars: int = 20000
+    # Upper bound for retrieved memory facts injected into a prompt.
+    context_memory_budget_chars: int = 6000
+
     @classmethod
     def load(cls) -> "Settings":
         data: dict[str, Any] = {}

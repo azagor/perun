@@ -369,6 +369,44 @@ def remove_provider(provider_id: str, *, reload: bool = True) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Local small model
+# --------------------------------------------------------------------------- #
+def small_model() -> str:
+    """The ``small_model`` currently configured in OpenCode (``""`` if unset)."""
+    try:
+        data, _, _ = load_config()
+    except Exception:
+        return ""
+    value = data.get("small_model")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def set_small_model(model_id: str, *, reload: bool = True) -> dict[str, Any]:
+    """Set or clear OpenCode's ``small_model`` (``provider/model``).
+
+    Used for the "local model for OpenCode's small tasks" toggle. The config is
+    backed up before writing, and ``had_comments`` is returned so the dashboard
+    can warn that JSONC comments are lost on rewrite (the same contract as
+    provider edits).
+    """
+    model_id = (model_id or "").strip()
+    data, path, had_comments = load_config()
+    if model_id:
+        data["small_model"] = model_id
+    else:
+        data.pop("small_model", None)
+    save_config(data, path)
+    reload_status = reload_opencode() if reload else {"ok": None}
+    return {
+        "ok": True,
+        "model": model_id,
+        "path": str(path),
+        "had_comments": had_comments,
+        "reloaded": reload_status.get("ok"),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # OpenCode reload
 # --------------------------------------------------------------------------- #
 def reload_opencode(timeout: float = 10.0) -> dict[str, Any]:

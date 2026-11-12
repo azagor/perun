@@ -4,11 +4,38 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Local AI: a small local model for bounded work
+
+* New **Settings → Local AI** card: enable a local model (Ollama, LM Studio,
+  vLLM — any OpenAI-compatible endpoint), choose the download policy (`auto`
+  pulls through Ollama, `manual` prints the exact command), watch a pull with
+  progress, and test the endpoint. Off by default; every consumer falls back to
+  the previous behaviour when the model or runtime is unavailable.
+* `perun/local_llm.py` is the only client: stdlib transport, an 8 s timeout,
+  JSON-mode fallback for runtimes that reject `response_format`, a cached health
+  probe, and it never raises. `perun/model_manager.py` drives Ollama
+  (`/api/tags`, `/api/pull`, `/api/delete`) with a disk guard, one pull at a
+  time, cancellation, and persisted job progress.
+* Consumers: the changelog bullet after an executed proposal (shadow mode logs
+  the locally generated line instead of using it) and OpenCode's own
+  `small_model` for titles/small tasks (written through the backed-up config
+  writer, removed when the toggle is turned off).
+* New **Settings → Context** card: opt-in boundary compaction through OpenCode's
+  `POST /session/{id}/compact`. It triggers on the live context size, respects a
+  cooldown in messages, never touches an active session, records before/after
+  rows, and disables itself when three compactions fail to shrink the context.
+* Search and memory tools cap their output (`context_tool_budget_chars`,
+  `context_memory_budget_chars`) with an explicit truncation marker; exact file
+  reads are never truncated.
+* Schema v27 adds `local_ai_jobs` and `context_events`.
 
 ## v0.14.6
 
 *Released 2026-11-12.*
+
+* The VS Code companion package now ships its MIT license
+  (`extensions/vscode/LICENSE`), so `vsce` no longer warns and the installed
+  extension carries the license text.
 
 ## v0.14.5
 

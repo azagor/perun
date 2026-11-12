@@ -1282,6 +1282,18 @@ def list_sessions(project_id: int, limit: int = 100) -> list[dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+def recent_sessions(limit: int = 20) -> list[dict[str, Any]]:
+    """Sessions with a usage snapshot, newest spend first (governor input)."""
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT * FROM sessions WHERE usage_at <> '' "
+            "ORDER BY usage_at DESC LIMIT ?",
+            (max(1, int(limit)),),
+        )
+        return [dict(r) for r in rows]
+
+
 def session_origins(project_id: int) -> dict[int, bool]:
     """Map session id -> whether its **first** run was a TUI (standalone).
 
@@ -2562,3 +2574,125 @@ def activity_exists(kind: str, message: str) -> bool:
             (str(kind), str(message)),
         )
     return bool(row)
+
+
+# --------------------------------------------------------------------------- #
+# Local AI jobs
+# --------------------------------------------------------------------------- #
+def create_local_ai_job(model: str, state: str = "queued") -> dict[str, Any]:
+    ts = now_iso()
+    with db.db() as conn:
+        cur = conn.execute(
+            """INSERT INTO local_ai_jobs(model,state,started_at) VALUES (?,?,?)""",
+            (str(model), str(state), ts),
+        )
+        row = db.one(conn, "SELECT * FROM local_ai_jobs WHERE id=?", (cur.lastrowid,))
+        return dict(row) if row else {}
+
+
+def update_local_ai_job(job_id: int, **fields: Any) -> None:
+    if not fields:
+        return
+    allowed = {"state", "completed", "total", "message", "error", "ended_at"}
+    sets, params = [], []
+    for key, value in fields.items():
+        if key in allowed:
+            sets.append(f"{key}=?")
+            params.append(value)
+    if not sets:
+        return
+    params.append(int(job_id))
+    with db.db() as conn:
+        conn.execute(f"UPDATE local_ai_jobs SET {', '.join(sets)} WHERE id=?", tuple(params))
+
+
+def get_local_ai_job(job_id: int) -> dict[str, Any] | None:
+    with db.db() as conn:
+        row = db.one(conn, "SELECT * FROM local_ai_jobs WHERE id=?", (int(job_id),))
+        return dict(row) if row else None
+
+
+def latest_local_ai_job(model: str = "") -> dict[str, Any] | None:
+    with db.db() as conn:
+        if model:
+            row = db.one(
+                conn,
+                "SELECT * FROM local_ai_jobs WHERE model=? ORDER BY id DESC LIMIT 1",
+                (str(model),),
+            )
+        else:
+            row = db.one(conn, "SELECT * FROM local_ai_jobs ORDER BY id DESC LIMIT 1")
+        return dict(row) if row else None
+
+
+def prune_local_ai_jobs(keep: int = 50) -> None:
+    """Keep the newest *keep* rows so the table cannot grow without bound."""
+    with db.db() as conn:
+        conn.execute(
+            "DELETE FROM local_ai_jobs WHERE id NOT IN "
+            "(SELECT id FROM local_ai_jobs ORDER BY id DESC LIMIT ?)",
+            (max(1, int(keep)),),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Context governor events
+# --------------------------------------------------------------------------- #
+def record_context_event(session_pk: int | None, action: str, *,
+                         tokens_before: int = 0, cost_before: float = 0.0,
+                         messages_before: int = 0, note: str = "") -> dict[str, Any]:
+    ts = now_iso()
+    with db.db() as conn:
+        cur = conn.execute(
+            """INSERT INTO context_events
+               (session_pk,action,tokens_before,cost_before,messages_before,created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (int(session_pk) if session_pk else None, str(action),
+             int(tokens_before), float(cost_before), int(messages_before), ts),
+        )
+        row = db.one(conn, "SELECT * FROM context_events WHERE id=?", (cur.lastrowid,))
+        return dict(row) if row else {}
+
+
+def update_context_event(event_id: int, *, tokens_after: int = 0,
+                         cost_after: float = 0.0, messages_after: int = 0,
+                         note: str = "") -> None:
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE context_events SET tokens_after=?, cost_after=?, "
+            "messages_after=?, note=CASE WHEN ?='' THEN note ELSE ? END "
+            "WHERE id=?",
+            (int(tokens_after), float(cost_after), int(messages_after),
+             str(note), str(note), int(event_id)),
+        )
+
+
+def last_context_event(session_pk: int) -> dict[str, Any] | None:
+    with db.db() as conn:
+        row = db.one(
+            conn,
+            "SELECT * FROM context_events WHERE session_pk=? ORDER BY id DESC LIMIT 1",
+            (int(session_pk),),
+        )
+        return dict(row) if row else None
+
+
+def list_context_events(limit: int = 20) -> list[dict[str, Any]]:
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT * FROM context_events ORDER BY id DESC LIMIT ?",
+            (max(1, int(limit)),),
+        )
+        return [dict(r) for r in rows]
+
+
+def context_events_since(epoch_iso: str) -> list[dict[str, Any]]:
+    with db.db() as conn:
+        rows = db.rows(
+            conn,
+            "SELECT * FROM context_events WHERE created_at >= ? ORDER BY id DESC",
+            (str(epoch_iso),),
+        )
+        return [dict(r) for r in rows]
+

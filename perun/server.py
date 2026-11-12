@@ -40,9 +40,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from . import (__version__, action_proposals, checks, config, context, control,
-               coroutines, db, discovery, git, manifest, memory, projects,
-               providers, registry, scaffold, shared_projects,
-               shared_project_sync, vscode_bridge, vscode_workspace)
+               context_governor, coroutines, db, discovery, git, local_llm,
+               manifest, memory, model_manager, projects, providers, registry,
+               scaffold, shared_projects, shared_project_sync, vscode_bridge,
+               vscode_workspace)
 from . import orchestrator
 from .perunchat_bridge import attach as _attach_perunchat_bridge
 from .perunchat_bridge import get_bridge as _get_perunchat_bridge
@@ -202,6 +203,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception:  # pragma: no cover - keep the loop alive
                 logging.getLogger("perun.server").debug(
                     "run reconcile failed", exc_info=True)
+            # Boundary compaction for long sessions (opt-in, rate-limited).
+            try:
+                context_governor.tick(SETTINGS)
+            except Exception:  # pragma: no cover - never break reconcile
+                logging.getLogger("perun.server").debug(
+                    "context governor tick failed", exc_info=True)
 
     threading.Thread(target=_reconcile_loop, daemon=True,
                      name="perun-run-reconcile").start()
@@ -3563,6 +3570,63 @@ def api_activity(project: str | None = None, limit: int = 100) -> dict[str, Any]
 
 
 # --------------------------------------------------------------------------- #
+# Local AI
+# --------------------------------------------------------------------------- #
+@app.get("/api/local-ai")
+def api_local_ai() -> dict[str, Any]:
+    """Local model status, the download policy and the governor's decisions."""
+    return _ok(
+        **model_manager.status(SETTINGS),
+        governor={
+            "enabled": SETTINGS.context_governor_enabled,
+            "tokens": SETTINGS.context_governor_tokens,
+            "turns": SETTINGS.context_governor_turns,
+            "events": registry.list_context_events(10),
+        },
+        budgets={
+            "tool": SETTINGS.context_tool_budget_chars,
+            "memory": SETTINGS.context_memory_budget_chars,
+        },
+    )
+
+
+@app.post("/api/local-ai/prepare")
+def api_local_ai_prepare(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Download the configured model, or return the manual command."""
+    model = str(payload.get("model") or SETTINGS.local_ai_model or "").strip()
+    policy = (SETTINGS.local_ai_download or "auto").strip().lower()
+    if policy == "manual":
+        return _ok(manual=True, prepared=False,
+                   commands=[f"ollama pull {model}"] if model else [])
+    return _ok(**model_manager.start_pull(model, SETTINGS))
+
+
+@app.get("/api/local-ai/jobs/{job_id}")
+def api_local_ai_job(job_id: int) -> dict[str, Any]:
+    job = registry.get_local_ai_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="no such download job")
+    return _ok(job=job)
+
+
+@app.post("/api/local-ai/jobs/{job_id}/cancel")
+def api_local_ai_cancel(job_id: int) -> dict[str, Any]:
+    return _ok(**model_manager.cancel_job(job_id))
+
+
+@app.delete("/api/local-ai/models/{name:path}")
+def api_local_ai_remove(name: str) -> dict[str, Any]:
+    """Delete a model from the local runtime. Explicit user action only."""
+    return _ok(**model_manager.remove(name, SETTINGS))
+
+
+@app.post("/api/local-ai/test")
+def api_local_ai_test() -> dict[str, Any]:
+    """One tiny completion, so the operator can prove the model answers."""
+    return _ok(**local_llm.probe(SETTINGS))
+
+
+# --------------------------------------------------------------------------- #
 # Settings
 # --------------------------------------------------------------------------- #
 @app.get("/api/settings")
@@ -4098,6 +4162,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "coroutine_event_retention_days", "coroutine_run_history_limit",
         "coroutine_default_max_runs_per_day",
         "coroutine_default_cycle_max_seconds",
+        "context_governor_tokens", "context_governor_turns",
+        "context_tool_budget_chars", "context_memory_budget_chars",
     }
     bool_fields = {
         "auto_discover_on_start", "index_docs_on_discover", "perunchat_auto_reply",
@@ -4107,6 +4173,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "attention_plain_text_confirm", "attention_ingest_events",
         "docs_update_after_execution",
         "session_runner_enabled",
+        "local_ai_enabled", "local_ai_shadow", "local_ai_docs",
+        "local_ai_small_model", "context_governor_enabled",
     }
     list_fields = {
         "roots", "telegram_allowed_chats", "perunchat_auto_join",
@@ -4119,6 +4187,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "perunchat_chat_model", "perunchat_chat_agent", "perun_owner_name",
         "perun_hitl_secret", "attention_quiet_hours", "attention_default_delivery",
         "provider_budgets", "coroutine_default_timezone",
+        "local_ai_base_url", "local_ai_model", "local_ai_download",
     }
     if key in int_fields:
         try:
@@ -4148,6 +4217,13 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 60")
         if key == "embed_dim" and v < 1:
             raise HTTPException(status_code=400, detail=f"{key} must be positive")
+        if key == "context_governor_tokens" and v < 8000:
+            raise HTTPException(status_code=400,
+                                detail="context_governor_tokens must be at least 8000")
+        if key in ("context_governor_turns",) and v < 0:
+            raise HTTPException(status_code=400, detail=f"{key} must be 0 or more")
+        if key in ("context_tool_budget_chars", "context_memory_budget_chars") and v < 1000:
+            raise HTTPException(status_code=400, detail=f"{key} must be at least 1000")
         return v
     if key in bool_fields:
         if isinstance(value, str):
@@ -4165,6 +4241,23 @@ def _coerce_setting(key: str, value: Any) -> Any:
             raise HTTPException(status_code=400,
                                 detail="attention_default_delivery must be queue or steer")
         return mode
+    if key == "local_ai_download":
+        mode = str(value or "").strip().lower()
+        if mode not in ("auto", "manual"):
+            raise HTTPException(status_code=400,
+                                detail="local_ai_download must be auto or manual")
+        return mode
+    if key == "local_ai_base_url":
+        url = str(value or "").strip().rstrip("/")
+        if url and not re.match(r"^https?://", url):
+            raise HTTPException(status_code=400,
+                                detail="local_ai_base_url must start with http:// or https://")
+        return url
+    if key == "local_ai_model":
+        model = str(value or "").strip()
+        if len(model) > 120:
+            raise HTTPException(status_code=400, detail="local_ai_model is too long")
+        return model
     if key in str_fields:
         return str(value).strip() if value is not None else ""
     # Unknown field — fall back to the raw value; the caller filters by allowed keys.
@@ -4243,6 +4336,19 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     # immediately instead of requiring a server restart.
     ORCH.settings = SETTINGS
     ORCH.set_max_concurrent(SETTINGS.max_concurrent_runs)
+    # The local-model toggle edits OpenCode's own config, so apply it here rather
+    # than in a second request that the dashboard could lose.
+    if "local_ai_small_model" in staged or "local_ai_model" in staged:
+        try:
+            from . import opencode_config
+
+            if SETTINGS.local_ai_small_model and not SETTINGS.local_ai_base_url:
+                opencode_config.set_small_model(f"ollama/{SETTINGS.local_ai_model}")
+            elif not SETTINGS.local_ai_small_model:
+                opencode_config.set_small_model("")
+        except Exception:  # pragma: no cover - a config edit must not fail the PATCH
+            logging.getLogger("perun.server").debug(
+                "could not apply OpenCode small_model", exc_info=True)
     # Restart the autonomous PerunChat bridge so key/endpoint/auto_reply changes
     # take effect without a full restart.
     if PERUNCHAT_BRIDGE is not None:
