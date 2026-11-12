@@ -1150,7 +1150,8 @@ def usage_by_project(hours: int = 24, limit: int = 5) -> list[dict[str, Any]]:
 _PROVIDER_ALIASES = {"opencode-go": "opencode"}
 
 
-def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
+def usage_by_provider(hours: int = 24 * 30,
+                      project_id: int | None = None) -> list[dict[str, Any]]:
     """Measured spend per provider (``model`` is ``provider/model``).
 
     Attribution prefers the per-model breakdown captured with the snapshot, so a
@@ -1160,16 +1161,21 @@ def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
     the service (``usage_limits``) when it has them; these numbers are ours.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    where = "s.usage_at >= ? AND s.usage_at <> ''"
+    params: list[Any] = [cutoff]
+    if project_id:
+        where += " AND s.project_id = ?"
+        params.append(int(project_id))
     with db.db() as conn:
         rows = db.rows(
             conn,
-            """SELECT s.id, s.usage_models, s.tokens_in, s.tokens_out, s.cost_usd,
+            f"""SELECT s.id, s.usage_models, s.tokens_in, s.tokens_out, s.cost_usd,
                       r.model AS run_model
                FROM sessions s
                LEFT JOIN runs r ON r.session_pk = s.id
-               WHERE s.usage_at >= ? AND s.usage_at <> ''
+               WHERE {where}
                ORDER BY s.id, r.id DESC""",
-            (cutoff,),
+            tuple(params),
         )
     totals: dict[str, dict[str, Any]] = {}
     seen: set = set()
@@ -1205,19 +1211,25 @@ def usage_by_provider(hours: int = 24 * 30) -> list[dict[str, Any]]:
     return sorted(totals.values(), key=lambda item: item["cost"], reverse=True)
 
 
-def usage_by_model(hours: int = 24 * 30, limit: int = 20) -> list[dict[str, Any]]:
+def usage_by_model(hours: int = 24 * 30, limit: int = 20,
+                   project_id: int | None = None) -> list[dict[str, Any]]:
     """Measured spend per ``provider/model`` for the window."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).isoformat()
+    where = "s.usage_at >= ? AND s.usage_at <> ''"
+    params: list[Any] = [cutoff]
+    if project_id:
+        where += " AND s.project_id = ?"
+        params.append(int(project_id))
     with db.db() as conn:
         rows = db.rows(
             conn,
-            """SELECT s.id, s.usage_models, s.tokens_in, s.tokens_out, s.cost_usd,
+            f"""SELECT s.id, s.usage_models, s.tokens_in, s.tokens_out, s.cost_usd,
                       r.model AS run_model
                FROM sessions s
                LEFT JOIN runs r ON r.session_pk = s.id
-               WHERE s.usage_at >= ? AND s.usage_at <> ''
+               WHERE {where}
                ORDER BY s.id, r.id DESC""",
-            (cutoff,),
+            tuple(params),
         )
     totals: dict[str, dict[str, Any]] = {}
     seen: set = set()

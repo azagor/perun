@@ -18,16 +18,18 @@ All notable changes are recorded here. Single source of truth for release notes.
   session pages (the API caps one page at 200 messages). A single 200-message
   page had silently undercounted long TUI sessions: one real session stored
   **$0.59** while its full history was **$123.50** (including $108.51 of
-  `ollama-cloud/kimi-k3.1-pro`).
+  `ollama-cloud/kimi-k3.1-pro`). An expired cursor restarts the walk once from
+  the newest page; message ids keep the retry idempotent.
 * Snapshots record `usage_complete`, `usage_pages` and `usage_messages`; the
-  `/api/usage` totals expose an `incomplete` count and a per-model breakdown.
+  `/api/usage` totals expose an `incomplete` count and project-scoped
+  per-provider/per-model breakdowns.
 * Starting a new TUI from the dashboard creates the OpenCode session first and
   passes its id to the TUI, so the run is attributable from the first message.
   Older TUI runs bind to the single active session or the single session created
   after the run started.
-* `POST /api/usage/refresh` re-reads recent sessions (repairing pre-pagination
-  snapshots), and the dashboard Usage card has a refresh button plus a
-  **partial** badge.
+* `POST /api/usage/refresh` is single-flight, re-reads recent sessions
+  (repairing pre-pagination snapshots), and the dashboard Usage card has a
+  refresh button plus a **partial** badge.
 
 ### VS Code: macOS companion install and explicit workspace files
 

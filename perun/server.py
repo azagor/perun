@@ -4330,23 +4330,32 @@ def api_usage(hours: int = 24, project: str = "") -> dict[str, Any]:
         project=(project or "").strip(),
         totals=registry.usage_totals(hours=window, project_id=project_id),
         by_project=registry.usage_by_project(hours=window, limit=10),
-        by_provider=registry.usage_by_provider(hours=window),
-        by_model=registry.usage_by_model(hours=window, limit=20),
+        by_provider=registry.usage_by_provider(hours=window, project_id=project_id),
+        by_model=registry.usage_by_model(hours=window, limit=20,
+                                         project_id=project_id),
     )
+
+
+_USAGE_REFRESH_LOCK = threading.Lock()
 
 
 @app.post("/api/usage/refresh")
 def api_usage_refresh(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """Re-read recent usage from OpenCode (repairs partial/old snapshots)."""
+    if not _USAGE_REFRESH_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="a usage refresh is already running")
     try:
-        hours = int(payload.get("hours") or 24)
-    except (TypeError, ValueError):
-        hours = 24
-    try:
-        updated = ORCH.backfill_usage(max(1, min(hours, 24 * 30)), force=True)
-    except Exception as exc:  # pragma: no cover - telemetry must not crash
-        raise HTTPException(status_code=503, detail=f"usage refresh failed: {exc}")
-    return _ok(updated=updated)
+        try:
+            hours = int(payload.get("hours") or 24)
+        except (TypeError, ValueError):
+            hours = 24
+        try:
+            updated = ORCH.backfill_usage(max(1, min(hours, 24 * 30)), force=True)
+        except Exception as exc:  # pragma: no cover - telemetry must not crash
+            raise HTTPException(status_code=503, detail=f"usage refresh failed: {exc}")
+        return _ok(updated=updated)
+    finally:
+        _USAGE_REFRESH_LOCK.release()
 
 
 # --------------------------------------------------------------------------- #

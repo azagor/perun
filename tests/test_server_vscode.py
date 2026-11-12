@@ -106,6 +106,32 @@ def test_the_embed_ticket_allows_a_framed_dashboard_until_it_expires(client):
     assert unknown.headers["x-frame-options"] == "DENY"
 
 
+def test_starting_a_new_tui_creates_its_opencode_session(client, project, monkeypatch):
+    from perun import opencode_api
+
+    class FakeAPI:
+        def create_session(self, directory, *, model="", agent="", title=""):
+            return {"id": "ses_created_for_tui"}
+
+    monkeypatch.setattr(opencode_api, "default_api", lambda: FakeAPI())
+    r = client.post("/api/runs/tui", json={"project": project["slug"],
+                                           "prompt": "new TUI"})
+    assert r.status_code == 200, r.text
+    assert r.json()["run"]["opencode_session_id"] == "ses_created_for_tui"
+
+
+def test_usage_refresh_is_single_flight(client, monkeypatch):
+    from perun import server
+
+    assert server._USAGE_REFRESH_LOCK.acquire(blocking=False)
+    try:
+        r = client.post("/api/usage/refresh", json={"hours": 24})
+        assert r.status_code == 409
+        assert "already running" in r.json()["detail"]
+    finally:
+        server._USAGE_REFRESH_LOCK.release()
+
+
 def test_the_link_endpoint_rejects_an_unknown_launch_mode(client, project):
     r = client.post(f"/api/projects/{project['slug']}/vscode/link",
                     json={"launch_mode": "emacs"})

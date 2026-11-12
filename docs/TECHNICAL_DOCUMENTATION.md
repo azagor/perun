@@ -2327,7 +2327,9 @@ session. The endpoint caps one page at 200 messages and returns
 `cursor.next`; `opencode_api.usage(session_id)` follows **every page** (hard cap
 100 pages / 20,000 messages) and deduplicates by message id. A single page used
 to be read, silently undercounting long TUI sessions; the snapshot now records
-`usage_pages`, `usage_messages` and `usage_complete` alongside the totals.
+`usage_pages`, `usage_messages` and `usage_complete` alongside the totals. If a
+cursor expires mid-walk, the walk restarts once from the newest page; message ids
+keep the retry idempotent.
 `Orchestrator.capture_usage(run_uid)` stores it as a **snapshot** on the session
 row (`tokens_in/out`, `cache_read`, `cost_usd`, `usage_at`,
 `usage_models`, completeness fields; the per-model breakdown is stored as `{}`
@@ -2338,10 +2340,12 @@ dashboard or swept after a restart, and every five minutes for open TUI runs
 service first, so the run and the TUI share an id; older TUI runs bind to the
 single active session, or the single session created after the run started.
 `backfill_usage(hours, force=)` captures missing/partial snapshots (existing
-pre-pagination rows have `usage_complete=0` and are repaired); `POST
-/api/usage/refresh` runs the forced pass from the dashboard.
-`GET /api/usage?hours=&project=` returns totals (including an `incomplete`
-count), per-project, per-provider and per-model rows; `GET
+pre-pagination rows have `usage_complete=0` and are repaired); a run that started
+before the window but ended inside it uses `ended_at`, so a long TUI closed
+recently is still repaired. `POST /api/usage/refresh` is single-flight and runs
+the forced pass from the dashboard. `GET /api/usage?hours=&project=` returns
+totals (including an `incomplete` count), per-project, and project-scoped
+per-provider/per-model rows; `GET
 /api/providers/usage` also passes through the service's experimental `GET
 /api/experimental/usage/limits` (provider budgets: `spent`/`limit`/`resetsAt`)
 and turns `provider_budgets` (`provider=USD per month`) into a percentage when

@@ -317,13 +317,19 @@ class OpenCodeAPI:
         seen_cursors: set[str] = set()
         cursor = ""
         page_size = max(1, min(int(limit or 200), 200))
+        restarted = False
         for _page in range(max(1, int(max_pages))):
             try:
                 rows, info = self.message_page(
                     session_id, limit=page_size, cursor=cursor)
             except OpenCodeHTTPError as exc:
-                if page_size > 200:
-                    page_size = 200
+                # A cursor can expire while a long session is walked. Restart
+                # once from the newest page; ids are deduped, so re-reading is
+                # safe and no message is lost.
+                if cursor and not restarted:
+                    restarted = True
+                    cursor = ""
+                    seen_cursors.clear()
                     continue
                 raise exc
             total["pages"] = int(total.get("pages") or 0) + 1

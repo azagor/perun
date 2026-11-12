@@ -232,7 +232,8 @@ Registry CRUD (projects, sessions, runs, tasks, activity, bridge links) and the
   `_USAGE_MODELS_MAX_CHARS` is stored as `{}` with a log line rather than a
   truncated, unparseable blob), `usage_totals(hours, project_id=None)` (includes
   an `incomplete` count), `usage_by_project(hours, limit)`,
-  `usage_by_provider(hours)` and `usage_by_model(hours, limit)`
+  `usage_by_provider(hours, project_id=None)` and
+  `usage_by_model(hours, limit, project_id=None)`
   (per model prefix, falling back to the run model for pre-0.10.30 snapshots) — the
   `/usage` reply, `GET /api/usage` and `GET /api/providers/usage`.
 * Telegram jobs: `enqueue_telegram_job()` (idempotent by `dedupe_key`),

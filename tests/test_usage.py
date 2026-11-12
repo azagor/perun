@@ -21,6 +21,28 @@ def test_usage_sums_the_session_messages():
     assert usage["complete"] is True
 
 
+def test_usage_restarts_once_when_a_cursor_expires():
+    api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
+    state = {"c2": 0}
+
+    def message_page(session_id, *, limit=200, cursor=""):
+        if cursor == "c2":
+            state["c2"] += 1
+            if state["c2"] == 1:
+                raise opencode_api.OpenCodeHTTPError(400, "cursor expired", "/message")
+            return ([{"id": "b", "tokens": {"input": 2, "output": 0}, "cost": 2.0}], {})
+        return ([{"id": "a", "tokens": {"input": 1, "output": 0}, "cost": 1.0}],
+                {"next": "c2"})
+
+    api.message_page = message_page  # type: ignore[assignment]
+
+    usage = api.usage("ses_cursor")
+
+    assert usage["complete"] is True
+    assert usage["messages"] == 2
+    assert usage["cost"] == 3.0
+
+
 def test_usage_follows_every_cursor_page():
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
     pages = {
@@ -79,6 +101,50 @@ def test_totals_and_project_breakdown_ignore_sessions_without_usage():
 
     assert registry.usage_totals(hours=24)["sessions"] == 0
     assert registry.usage_by_project(hours=24) == []
+
+
+def test_backfill_uses_ended_at_for_a_long_run():
+    from perun import orchestrator
+    from perun import registry as reg
+
+    project = reg.add_project("usage-long", r"C:\usage-long")
+    s1 = reg.create_session(project["id"], "ses_long_recent")
+    s2 = reg.create_session(project["id"], "ses_long_old")
+    reg.create_run("run_recent", project["id"], "long TUI", session_pk=s1["id"])
+    reg.update_run("run_recent", started_at="2020-01-01T00:00:00+00:00",
+                   ended_at=reg.now_iso())
+    reg.create_run("run_old", project["id"], "old TUI", session_pk=s2["id"])
+    reg.update_run("run_old", started_at="2020-01-01T00:00:00+00:00",
+                   ended_at="2020-01-02T00:00:00+00:00")
+
+    orch = orchestrator.Orchestrator.__new__(orchestrator.Orchestrator)
+    calls = []
+    orch.capture_usage = lambda uid: calls.append(uid) or True  # type: ignore[assignment]
+
+    assert orch.backfill_usage(hours=24, force=True) == 1
+    assert calls == ["run_recent"]
+
+
+def test_usage_by_model_can_be_scoped_to_one_project():
+    from perun import registry as reg
+
+    a = reg.add_project("usage-a", r"C:\usage-a")
+    b = reg.add_project("usage-b", r"C:\usage-b")
+    sa = reg.create_session(a["id"], "ses_a")
+    sb = reg.create_session(b["id"], "ses_b")
+    reg.update_session_usage(sa["id"], {
+        "tokens_in": 1, "tokens_out": 0, "cost": 1.0,
+        "models": {"ollama-cloud/kimi": {"tokens_in": 1, "tokens_out": 0, "cost": 1.0}},
+        "complete": True,
+    })
+    reg.update_session_usage(sb["id"], {
+        "tokens_in": 1, "tokens_out": 0, "cost": 2.0,
+        "models": {"opencode/deepseek": {"tokens_in": 1, "tokens_out": 0, "cost": 2.0}},
+        "complete": True,
+    })
+
+    rows = reg.usage_by_model(hours=24, project_id=a["id"])
+    assert [row["model"] for row in rows] == ["ollama-cloud/kimi"]
 
 
 def test_a_snapshot_records_whether_it_reached_the_last_page():
