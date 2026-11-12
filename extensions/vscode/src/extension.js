@@ -580,6 +580,7 @@ async function startTui() {
     } catch (_) { /* no sessions yet */ }
 
     let chosen = null;
+    const hadSessions = sessions.length > 0;
     if (sessions.length) {
       const latest = sessions[0];
       const items = [{
@@ -612,7 +613,7 @@ async function startTui() {
       }
     }
     const active = activeRun && terminals.get(String(activeRun.run_uid || ''));
-    if (!chosen && active && active.terminal) {
+    if (!hadSessions && active && active.terminal) {
       active.terminal.show();
       return;
     }
