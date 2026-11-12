@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.14.5
+
+*Released 2026-11-12.*
+
 * **Windows: paths with cmd metacharacters.** `_code_command()` quoted an
   argument only when it contained a space, so a VSIX under a path like
   `C:\R&D\…` was split at the `&` and `code` reported
