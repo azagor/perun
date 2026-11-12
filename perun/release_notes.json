@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-12T21:15:40+00:00",
+  "generated": "2026-11-12T21:27:06+00:00",
   "releases": [
+    {
+      "version": "0.14.6",
+      "date": "2026-11-12",
+      "body": ""
+    },
     {
       "version": "0.14.5",
       "date": "2026-11-12",
@@ -45,11 +50,6 @@
       "version": "0.13.1",
       "date": "2026-11-08",
       "body": "### The draft Stop button now reaches the bridge\n\n* `stopped_message_generation` updates were dropped by `_enqueue_update()`\n  because they carry no `message`/`callback_query` payload, so the live-draft\n  Stop button did nothing. They now enqueue under the draft chat id and cancel\n  the matching run (regression test covers the queue path).\n* Drafts address the private chat with an integer id, and session/handoff cards\n  keep their ❓ / 🤝 badges instead of falling back to 🔔."
-    },
-    {
-      "version": "0.13.0",
-      "date": "2026-11-08",
-      "body": "### Telegram UX: coloured buttons, emoji grammar and live run drafts\n\n* New `perun/telegram_format.py`: one visual grammar for every message — an emoji\n  badge plus a bold title, underline/strikethrough/spoiler, `>` blockquotes,\n  live `<tg-time>` timestamps, plain-text stripping, and a fence-aware chunker\n  that never splits a code block.\n* Inline buttons now use Telegram's `style` (green = safe/affirmative, blue =\n  neutral, red = destructive) and a clearer permission layout. An older Bot API\n  server degrades to uncoloured buttons instead of losing them.\n* A rejected HTML message is retried as plain text **with the keyboard kept**;\n  the markup is dropped only when the markup itself is invalid.\n* The bridge publishes its command menu with `setMyCommands`, and `/status`,\n  `/health`, `/now`, `/help` and `/pending` follow the shared badge grammar.\n* Digest cards prefix each item with its kind badge and add a one-tap\n  **Mute project** button; `/pending` shows the same badges and timestamps.\n* Private chats stream a live `sendMessageDraft` preview (tool + partial output)\n  while a run generates; the draft's Stop button cancels that exact run. Groups\n  keep the typing indicator."
     }
   ]
 }
