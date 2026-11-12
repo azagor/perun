@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.14.6 (see §15). Ship the VS Code companion with its MIT license
+**Latest release:** v0.15.0 (see §15). Bounded local AI and an opt-in context governor
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2948,6 +2948,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-13 — v0.15.0: Bounded local AI and an opt-in context governor
+
 
 ### 2026-11-12 — v0.14.6: Ship the VS Code companion with its MIT license
 

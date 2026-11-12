@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-12T23:42:16+00:00",
+  "generated": "2026-11-12T23:53:02+00:00",
   "releases": [
+    {
+      "version": "0.15.0",
+      "date": "2026-11-13",
+      "body": "### Local AI: a small local model for bounded work\n\n* New **Settings → Local AI** card: enable a local model (Ollama, LM Studio,\n  vLLM — any OpenAI-compatible endpoint), choose the download policy (`auto`\n  pulls through Ollama, `manual` prints the exact command), watch a pull with\n  progress, and test the endpoint. Off by default; every consumer falls back to\n  the previous behaviour when the model or runtime is unavailable.\n* `perun/local_llm.py` is the only client: stdlib transport, an 8 s timeout,\n  JSON-mode fallback for runtimes that reject `response_format`, a cached health\n  probe, and it never raises. `perun/model_manager.py` drives Ollama\n  (`/api/tags`, `/api/pull`, `/api/delete`) with a disk guard, one pull at a\n  time, cancellation, and persisted job progress.\n* Consumers: the changelog bullet after an executed proposal (shadow mode logs\n  the locally generated line instead of using it) and OpenCode's own\n  `small_model` for titles/small tasks (written through the backed-up config\n  writer, removed when the toggle is turned off).\n* New **Settings → Context** card: opt-in boundary compaction through OpenCode's\n  `POST /session/{id}/compact`. It triggers on the live context size, respects a\n  cooldown in messages, never touches an active session, records before/after\n  rows, and disables itself when three compactions fail to shrink the context.\n* Search and memory tools cap their output (`context_tool_budget_chars`,\n  `context_memory_budget_chars`) with an explicit truncation marker; exact file\n  reads are never truncated.\n* Schema v27 adds `local_ai_jobs` and `context_events`."
+    },
     {
       "version": "0.14.6",
       "date": "2026-11-12",
@@ -45,11 +50,6 @@
       "version": "0.13.2",
       "date": "2026-11-08",
       "body": "### Harden the Telegram delivery fallbacks\n\n* Only a definite Telegram `400` now triggers the plain-text/degraded-keyboard\n  fallback; a timeout or unreachable host no longer causes blind extra sends\n  that could duplicate a message the operator already received.\n* `api()` returns a non-429 `4xx` immediately instead of retrying it four times,\n  so a bad entity falls back to plain text at once rather than after ~14 s.\n* `editMessageText`'s \"message is not modified\" response counts as success, so\n  tapping an unchanged card can no longer post a duplicate card.\n* The draft Stop handler re-checks that the chat is authorised before cancelling."
-    },
-    {
-      "version": "0.13.1",
-      "date": "2026-11-08",
-      "body": "### The draft Stop button now reaches the bridge\n\n* `stopped_message_generation` updates were dropped by `_enqueue_update()`\n  because they carry no `message`/`callback_query` payload, so the live-draft\n  Stop button did nothing. They now enqueue under the draft chat id and cancel\n  the matching run (regression test covers the queue path).\n* Drafts address the private chat with an integer id, and session/handoff cards\n  keep their ❓ / 🤝 badges instead of falling back to 🔔."
     }
   ]
 }

@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.0
+
+*Released 2026-11-13.*
+
 ### Local AI: a small local model for bounded work
 
 * New **Settings → Local AI** card: enable a local model (Ollama, LM Studio,
