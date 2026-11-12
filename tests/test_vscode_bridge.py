@@ -80,6 +80,35 @@ def test_a_connection_cannot_register_a_different_workspace(bridge, project, tmp
     assert "workspace" in outbox.items[-1]["message"]
 
 
+def test_a_protocol_mismatch_is_refused(bridge, project):
+    outbox = Outbox()
+    issued = bridge.issue_ticket(project["id"], project["path"])
+    ticket = bridge.redeem_ticket(issued["ticket"])
+    bridge.register("c1", None, Loop(), outbox, ticket)
+
+    bridge.handle_message("c1", {
+        "type": "hello",
+        "workspace_path": project["path"],
+        "window_id": "w1",
+        "protocol": 999,
+        "extension_version": "0.0.1",
+    })
+
+    assert outbox.items[-1]["type"] == "error"
+    assert "protocol" in outbox.items[-1]["message"]
+
+
+def test_an_unknown_message_is_answered_with_an_error(bridge, project):
+    outbox = Outbox()
+    _hello(bridge, project, outbox)
+    outbox.items.clear()
+
+    bridge.handle_message("c1", {"type": "run.shell", "command": "whoami"})
+
+    assert outbox.items[-1]["type"] == "error"
+    assert "unknown" in outbox.items[-1]["message"]
+
+
 def test_selection_is_validated_and_copied_without_a_terminal(bridge, project, monkeypatch):
     class Api:
         def pending_permissions(self, location):

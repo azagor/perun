@@ -16,12 +16,15 @@ const {
   shellArg,
 } = require('./protocol');
 
-const EXTENSION_VERSION = '0.1.2';
+const EXTENSION_VERSION = '0.1.4';
 const PROTOCOL_VERSION = 1;
+const TERMINAL_STATE_KEY = 'perun.terminals';
 
 /** @type {vscode.StatusBarItem | undefined} */
 let statusItem;
+let tuiItem;
 let output;
+let extensionContext;
 /** @type {WebSocket | undefined} */
 let socket;
 let disposed = false;
@@ -36,6 +39,7 @@ const terminalIds = new Map();
 let projectSlug = '';
 let activeRun = null;
 let startingTui = false;
+let dashboardPanel;
 
 function userSetting(key, fallback) {
   // Never trust a workspace-level `perun.*` setting: a cloned repository could
@@ -97,9 +101,39 @@ function send(message) {
 }
 
 function openDashboard() {
-  const folder = workspaceFolder();
-  const suffix = projectSlug ? `#/project/${encodeURIComponent(projectSlug)}` : '#/projects';
-  vscode.env.openExternal(vscode.Uri.parse(`${endpoint()}/${suffix}`));
+  if (dashboardPanel) {
+    dashboardPanel.reveal();
+    log('dashboard: revealed existing panel');
+    return;
+  }
+  (async () => {
+    try {
+      log('dashboard: requesting embed ticket');
+      const data = await apiPost('/api/vscode/embed-ticket', {});
+      const url = `${endpoint()}/?embed=${encodeURIComponent(String(data.ticket || ''))}`;
+      dashboardPanel = vscode.window.createWebviewPanel(
+        'perun.dashboard',
+        'Perun Dashboard',
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      dashboardPanel.webview.html = `<!DOCTYPE html>
+<html><head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${endpoint()}; style-src 'unsafe-inline';">
+<style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e;color:#ccc;font:12px sans-serif}
+header{height:24px;line-height:24px;padding:0 8px;background:#252526;border-bottom:1px solid #333}
+a{color:#4daafc;text-decoration:none}iframe{border:0;width:100%;height:calc(100% - 24px)}</style>
+</head><body><header><a href="${endpoint()}/" target="_blank">Perun Dashboard — open in browser</a></header><iframe src="${url}" allow="clipboard-read; clipboard-write"></iframe></body></html>`;
+      dashboardPanel.onDidDispose(() => { dashboardPanel = undefined; });
+      log('dashboard: panel opened');
+    } catch (_) {
+      // No token or the embed ticket failed: fall back to the normal browser.
+      log('dashboard: embed failed; opening the browser');
+      const folder = workspaceFolder();
+      const suffix = projectSlug ? `#/project/${encodeURIComponent(projectSlug)}` : '#/projects';
+      vscode.env.openExternal(vscode.Uri.parse(`${endpoint()}/${suffix}`));
+    }
+  })();
 }
 
 function scheduleReconnect() {
@@ -201,6 +235,16 @@ function handleMessage(message, folder) {
       activeRun = message.active_run || null;
       setStatus(`Perun: ${message.linked ? 'linked' : 'connected'}`,
         `${message.project ? message.project.name : 'Perun'} — ${message.linked ? 'VS Code integration linked' : 'open the dashboard to link this project'}`);
+      // Re-register open terminals after a Perun restart: the server's
+      // in-memory mapping is gone, but the VS Code terminals are still alive.
+      for (const [runUid, entry] of terminals.entries()) {
+        send({
+          type: 'terminal.opened',
+          run_uid: runUid,
+          terminal_id: entry.terminalId,
+          pid: Number(entry.pid) || 0,
+        });
+      }
       if (Array.isArray(message.recent_edits) && message.recent_edits.length) {
         revealEdit(message.recent_edits[message.recent_edits.length - 1], folder);
       }
@@ -248,39 +292,112 @@ function findTerminal(message) {
 function openTerminal(message) {
   const folder = workspaceFolder();
   const cwd = String(message.cwd || (folder ? folder.uri.fsPath : ''));
-  activeRun = { run_uid: String(message.run_uid || '') };
+  const runUid = String(message.run_uid || '');
+  activeRun = { run_uid: runUid };
   const terminal = vscode.window.createTerminal({
-    name: `Perun: ${message.project_slug || 'opencode'}`,
+    name: terminalName(message.project_slug, runUid),
     cwd,
+    location: { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
     env: {
-      PERUN_RUN_UID: String(message.run_uid || ''),
+      PERUN_RUN_UID: runUid,
       PERUN_VSCODE_TERMINAL: '1',
     },
   });
   const terminalId = crypto.randomUUID();
-  terminals.set(String(message.run_uid || ''), {
+  terminals.set(runUid, {
     terminal,
     terminalId,
     project: String(message.project_slug || ''),
+    pid: 0,
   });
-  terminalIds.set(terminalId, String(message.run_uid || ''));
+  terminalIds.set(terminalId, runUid);
+  saveTerminalState();
   terminal.show();
+  log(`terminal: opened ${terminal.name} (${cwd})`);
   const command = message.session_id
     ? `opencode --session ${shellArg(message.session_id)}`
     : 'opencode';
-  terminal.sendText(command, true);
+  // Give VS Code a moment to size the pty; a TUI that reads 1 column at start
+  // renders vertically and does not always reflow.
+  setTimeout(() => {
+    try { terminal.sendText(command, true); } catch (_) { /* terminal closed */ }
+  }, 150);
   const registration = {
     type: 'terminal.opened',
-    run_uid: String(message.run_uid || ''),
+    run_uid: runUid,
     terminal_id: terminalId,
     pid: 0,
   };
   if (terminal.processId && typeof terminal.processId.then === 'function') {
     terminal.processId.then((pid) => {
+      const entry = terminals.get(runUid);
+      if (entry) {
+        entry.pid = Number(pid) || 0;
+        saveTerminalState();
+      }
       if (pid) send({ ...registration, pid: Number(pid) || 0 });
     }, () => { /* processId is optional */ });
   } else {
     send(registration);
+  }
+}
+
+function terminalName(slug, runUid) {
+  const name = String(slug || 'opencode');
+  const suffix = String(runUid || '').slice(0, 6);
+  return suffix ? `Perun: ${name} · ${suffix}` : `Perun: ${name}`;
+}
+
+function saveTerminalState() {
+  if (!extensionContext) return;
+  const rows = Array.from(terminals.entries()).map(([runUid, entry]) => ({
+    run_uid: runUid,
+    terminal_id: entry.terminalId,
+    project: entry.project || '',
+    pid: entry.pid || 0,
+    name: entry.terminal && entry.terminal.name,
+  }));
+  extensionContext.workspaceState.update(TERMINAL_STATE_KEY, rows);
+}
+
+function rebindTerminal(terminal) {
+  if (!extensionContext || !terminal) return;
+  for (const [runUid, entry] of terminals) {
+    if (entry.terminal === terminal) return;  // already tracked
+  }
+  const rows = extensionContext.workspaceState.get(TERMINAL_STATE_KEY, []) || [];
+  const match = rows.find((row) => row.name === terminal.name && !terminals.has(row.run_uid));
+  if (!match) return;
+  const runUid = String(match.run_uid || '');
+  const terminalId = String(match.terminal_id || crypto.randomUUID());
+  terminals.set(runUid, {
+    terminal,
+    terminalId,
+    project: String(match.project || ''),
+    pid: Number(match.pid) || 0,
+  });
+  terminalIds.set(terminalId, runUid);
+  activeRun = { run_uid: runUid };
+  send({
+    type: 'terminal.opened',
+    run_uid: runUid,
+    terminal_id: terminalId,
+    pid: Number(match.pid) || 0,
+  });
+  if (terminal.processId && typeof terminal.processId.then === 'function') {
+    terminal.processId.then((pid) => {
+      const entry = terminals.get(runUid);
+      if (entry) {
+        entry.pid = Number(pid) || 0;
+        saveTerminalState();
+      }
+    }, () => { /* processId is optional */ });
+  }
+}
+
+function rebindExistingTerminals() {
+  for (const terminal of vscode.window.terminals) {
+    if (String(terminal.name || '').startsWith('Perun:')) rebindTerminal(terminal);
   }
 }
 
@@ -379,12 +496,14 @@ function finishSelection(message) {
     if (entry && entry.terminal) {
       entry.terminal.sendText(ref, false);
       entry.terminal.show();
+      log(`selection: inserted ${ref}`);
       vscode.window.showInformationMessage(`Perun: attached ${ref} to the OpenCode terminal.`);
       return;
     }
   }
   const text = String(message.text || '');
   vscode.env.clipboard.writeText(text ? `${ref}\n\n${text}` : ref);
+  log(`selection: copied ${ref}${text ? ' with snippet' : ''}`);
   vscode.window.showInformationMessage(
     `Perun: copied ${ref} — paste it into OpenCode${text ? ' (includes the selection)' : ''}.`);
 }
@@ -409,6 +528,19 @@ async function apiPost(pathname, body) {
   return data;
 }
 
+async function apiGet(pathname) {
+  const token = apiToken();
+  if (!token) throw new Error(`Perun API token not found in ${perunHome()}`);
+  const response = await fetch(`${endpoint()}${pathname}`, {
+    headers: { 'X-Perun-Token': token },
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
+  if (!response.ok) throw new Error(data.detail || `${pathname} failed (${response.status})`);
+  return data;
+}
+
 async function startTui() {
   if (!projectSlug) {
     vscode.window.showInformationMessage(
@@ -423,28 +555,48 @@ async function startTui() {
   }
   startingTui = true;
   try {
+    // Reopen the latest session rather than silently starting a blank one.
+    let sessionId = '';
+    let sessionPk = null;
+    try {
+      const data = await apiGet(`/api/projects/${encodeURIComponent(projectSlug)}/sessions`);
+      const sessions = (data.sessions || []).filter((s) => s.opencode_session_id);
+      if (sessions.length) {
+        sessionId = String(sessions[0].opencode_session_id || '');
+        sessionPk = sessions[0].id || null;
+      }
+    } catch (_) { /* no sessions yet */ }
     const created = await apiPost('/api/runs/tui', {
       project: projectSlug,
-      prompt: 'Started from VS Code',
+      prompt: 'Opened from VS Code',
+      opencode_session_id: sessionId,
+      session_pk: sessionPk,
     });
     const runUid = created && created.run && created.run.run_uid;
     if (!runUid) throw new Error('Perun did not return a run id');
     await apiPost(`/api/runs/${encodeURIComponent(runUid)}/vscode/open`, {});
-    vscode.window.showInformationMessage('Perun: starting the OpenCode TUI in this window…');
+    vscode.window.showInformationMessage('Perun: opening the OpenCode TUI in this window…');
   } catch (err) {
-    vscode.window.showErrorMessage(`Perun: could not start the TUI — ${err.message || err}`);
+    vscode.window.showErrorMessage(`Perun: could not open the TUI — ${err.message || err}`);
   } finally {
     startingTui = false;
   }
 }
 
 function activate(context) {
+  extensionContext = context;
   output = vscode.window.createOutputChannel('Perun');
   context.subscriptions.push(output);
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 40);
   statusItem.command = 'perun.openDashboard';
   setStatus('Perun: starting…');
   context.subscriptions.push(statusItem);
+  tuiItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 39);
+  tuiItem.text = '$(terminal) Perun TUI';
+  tuiItem.tooltip = 'Open the tracked OpenCode TUI in this window';
+  tuiItem.command = 'perun.openTui';
+  tuiItem.show();
+  context.subscriptions.push(tuiItem);
   context.subscriptions.push(
     vscode.commands.registerCommand('perun.openDashboard', openDashboard),
     vscode.commands.registerCommand('perun.sendSelection', sendSelection),
@@ -460,15 +612,20 @@ function activate(context) {
         terminals.delete(runUid);
         terminalIds.delete(entry.terminalId);
         if (activeRun && String(activeRun.run_uid || '') === runUid) activeRun = null;
+        saveTerminalState();
         send({ type: 'terminal.closed', run_uid: runUid, terminal_id: entry.terminalId });
       }
     }
+  }));
+  context.subscriptions.push(vscode.window.onDidOpenTerminal((terminal) => {
+    if (String(terminal.name || '').startsWith('Perun:')) rebindTerminal(terminal);
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => connect()));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration('perun.endpoint')) connect();
   }));
   context.subscriptions.push({ dispose: () => { disposed = true; clearTimeout(reconnectTimer); if (socket) socket.close(); } });
+  rebindExistingTerminals();
   connect();
 }
 

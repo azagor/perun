@@ -1964,6 +1964,30 @@ terminals), `edit.reveal`, `selection.ok` (`insert` or `copy`), `terminal.open`,
 
 The ticket is bound to one canonical workspace path; a `hello` for a different
 path is refused. A connection cannot register a project it was not ticketed for.
+The `hello` must also carry the exact `PROTOCOL_VERSION`; a mismatch returns an
+`error` telling the user to update Perun or the extension, rather than failing
+mysteriously later.
+
+The companion persists `run_uid → terminal_id/pid` in `workspaceState` and
+re-reports every open `Perun:` terminal on activation and on each `hello.ok`.
+That rebinds the server's in-memory terminal map after a Perun restart or a
+VS Code window reload, so `terminal.focus`/`terminal.close` (and therefore
+Focus/Stop) still work; the pid remains the fallback.
+
+**Dashboard in VS Code.** The status-bar **Perun** item opens one reusable
+`perun.dashboard` webview panel with an iframe pointing at the loopback
+dashboard. Normal dashboard responses carry `X-Frame-Options: DENY`; a
+short-lived, token-issued `embed-ticket` is the only path that removes it and
+sets `frame-ancestors *` (the ticket is the gate; it is reusable until it
+expires so a webview reload/prefetch cannot produce an empty panel). The iframe
+is served from `127.0.0.1`, so its API calls stay same-origin and keep the
+injected token. The panel is revealed, not recreated, on subsequent clicks.
+A separate **Perun TUI** status item opens the terminal.
+
+**Terminal placement.** Mode B creates the terminal beside the editor
+(`viewColumn: Beside`) rather than in a possibly narrow bottom panel, waits
+150 ms for the pty size to settle, then types `opencode`; this avoids a TUI
+that reads a one-column width and renders vertically.
 
 ### Flows
 

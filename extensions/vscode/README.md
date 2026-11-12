@@ -8,8 +8,12 @@ Connects a VS Code workspace to the local **Perun** service.
   Perun; in a VS Code-hosted TUI it is inserted as `@file#lines`, otherwise it
   is copied to the clipboard.
 - **Perun: Open TUI (tracked)** from the Command Palette creates a TUI run
-  through Perun and opens the same tracked OpenCode terminal in this window;
-  it focuses an existing Perun terminal when one is already open.
+  through Perun and opens the same tracked OpenCode terminal beside the editor
+  (it resumes the latest session and focuses an existing terminal). The
+  **Perun TUI** status-bar item does the same in one click; VS Code's
+  **Terminal → New Terminal** is a normal shell, not the Perun terminal.
+- **Perun Dashboard** opens or reveals one reusable VS Code webview panel; it
+  does not spawn a new browser tab on every click.
 
 The extension only talks to a loopback Perun endpoint and reads the local API
 token from `PERUN_HOME/api-token` (or `~/.perun/api-token`). Workspace-level

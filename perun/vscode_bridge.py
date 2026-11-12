@@ -41,6 +41,7 @@ class VSCodeBridge:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._tickets: Dict[str, Dict[str, Any]] = {}
+        self._embed_tickets: Dict[str, float] = {}
         self._clients: Dict[str, Dict[str, Any]] = {}
         self._recent: Dict[int, Deque[Dict[str, Any]]] = {}
         self._context: Dict[int, Dict[str, Any]] = {}
@@ -105,6 +106,40 @@ class VSCodeBridge:
         if float(info.get("expires") or 0) <= time.time():
             return None
         return info
+
+    def issue_embed_ticket(self, *, ttl: float = TICKET_TTL_SECONDS) -> Dict[str, Any]:
+        """A one-shot ticket that lets the VS Code webview frame the dashboard.
+
+        The dashboard sends ``X-Frame-Options: DENY`` for every normal page. The
+        embed ticket is the only way to relax framing, and it is single-use and
+        short-lived; the iframe's own API calls are same-origin and still use the
+        loopback token.
+        """
+        now = time.time()
+        with self._lock:
+            for key, expires in list(self._embed_tickets.items()):
+                if expires <= now:
+                    self._embed_tickets.pop(key, None)
+            ticket = uuid.uuid4().hex
+            self._embed_tickets[ticket] = now + max(5.0, float(ttl))
+        return {"ticket": ticket, "expires_in": int(max(5.0, float(ttl)))}
+
+    def redeem_embed_ticket(self, ticket: str) -> bool:
+        """Whether *ticket* is a live embed permission (reusable until it expires).
+
+        The webview may request the dashboard more than once (a reload or a
+        prefetch); a strictly single-use ticket produced an empty panel. The
+        ticket is still short-lived and only issued with the loopback API token.
+        """
+        value = str(ticket or "").strip()
+        if not value:
+            return False
+        with self._lock:
+            expires = float(self._embed_tickets.get(value) or 0.0)
+            if expires <= time.time():
+                self._embed_tickets.pop(value, None)
+                return False
+            return True
 
     # ---- connections ----------------------------------------------------- #
     def register(self, conn_id: str, websocket: Any, loop: Any, outbox: Any,
@@ -185,6 +220,17 @@ class VSCodeBridge:
             self._send(client, {"type": "error", "message": "unknown message type"})
 
     def _hello(self, client: Dict[str, Any], message: Dict[str, Any]) -> None:
+        try:
+            protocol = int(message.get("protocol") or 0)
+        except (TypeError, ValueError):
+            protocol = 0
+        if protocol != PROTOCOL_VERSION:
+            self._send(client, {
+                "type": "error",
+                "message": (f"protocol mismatch: companion speaks {protocol or 'unknown'}, "
+                            f"Perun expects {PROTOCOL_VERSION}; update Perun or the extension"),
+            })
+            return
         workspace = str(message.get("workspace_path") or client.get("workspace") or "")
         try:
             expected = Path(str(client.get("workspace") or "")).resolve()

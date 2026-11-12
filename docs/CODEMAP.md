@@ -1499,7 +1499,9 @@ FastAPI app + SSE + static dashboard.
   (`GET /api/proposals/{id}`); mirrors the per-project list's
   approval-token/snapshot redaction and returns the owning project's slug/name.
   A hidden project's proposal is 404 unless `config.is_owner_workspace()`.
-* VS Code integration: `api_vscode_status()`, `api_vscode_link()`,
+* VS Code integration: `api_vscode_status()` (includes the real VSIX path and
+  install command when present), `api_vscode_link()`, `api_vscode_embed_ticket()`
+  (one-shot framing ticket for the companion webview),
   `api_vscode_unlink()`, `api_vscode_open()`, `api_vscode_ticket()` (single-use
   ticket bound to a workspace), `api_vscode_ws()` (WebSocket at
   `/api/vscode/ws`, ticket in the query, fixed message schema),
@@ -1861,7 +1863,13 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `startTui()` (creates a run through `/api/runs/tui` and asks Perun for the
   terminal, or focuses an existing one), and
   `terminal.open`/`focus`/`close` with `terminal.processId` reported back as
-  `terminal.opened`.
+  `terminal.opened`. Terminal bindings are persisted in `workspaceState`;
+  `rebindTerminal()` re-registers restored terminals on activation and every
+  `hello.ok`, so Focus/Stop survive a VS Code reload or a Perun restart. The
+  server refuses a `hello` whose protocol is not `PROTOCOL_VERSION`. The
+  status-bar items: **Perun** opens/reveals one reusable `perun.dashboard`
+  webview panel (a short-lived embed ticket relaxes framing); **Perun TUI**
+  opens the tracked OpenCode terminal. The TUI opens beside the editor.
 * `src/protocol.js` — pure helpers (loopback-only endpoint normalisation,
   `ws` URL, relative path, selection ref, backoff, shell quoting), covered by
   `tests/protocol.test.js`.

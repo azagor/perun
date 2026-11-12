@@ -579,6 +579,10 @@ def _perunchat_connect_origin() -> str:
 
 @app.middleware("http")
 async def _origin_guard(request: Request, call_next):
+    embed_ok = False
+    if request.method == "GET" and request.url.path == "/":
+        embed_ok = vscode_bridge.BRIDGE.redeem_embed_ticket(
+            request.query_params.get("embed", ""))
     if request.url.path.startswith("/api/"):
         host_header = request.headers.get("host", "")
         if not _host_allowed(host_header):
@@ -614,6 +618,22 @@ async def _origin_guard(request: Request, call_next):
         "img-src 'self' data:; "
         "font-src 'self';"
     )
+    if embed_ok:
+        # A one-shot, token-issued ticket from the VS Code companion. The iframe
+        # itself is served from loopback, so its API calls stay same-origin.
+        if "x-frame-options" in response.headers:
+            del response.headers["x-frame-options"]
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            f"connect-src 'self' {pc_origin}; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            # The ticket is the gate; a webview origin is not always a stable
+            # scheme source across VS Code versions.
+            "frame-ancestors *;"
+        )
     return response
 
 
@@ -2675,10 +2695,21 @@ def _vscode_project_file(project: dict[str, Any], value: str) -> Path:
 def api_vscode_status() -> dict[str, Any]:
     projects = registry.list_projects(include_hidden=True)
     linked = sum(1 for p in projects if (p.get("ide") or {}).get("vscode_linked"))
-    return _ok(**vscode_workspace.status(
+    status = vscode_workspace.status(
         linked_projects=linked,
         clients=vscode_bridge.BRIDGE.client_count(),
-    ))
+    )
+    candidates = [
+        Path(config.REPO_ROOT) / "vscode" / "perun-overseer.vsix",
+        Path(config.REPO_ROOT) / "installer" / "vscode" / "perun-overseer.vsix",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            status["vsix_path"] = str(candidate)
+            status["install_command"] = (
+                f'code --install-extension "{candidate}" --force')
+            break
+    return _ok(**status)
 
 
 @app.post("/api/projects/{slug}/vscode/link")
@@ -2755,6 +2786,12 @@ def api_vscode_open(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str,
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "could not open VS Code")
     return _ok(workspace=workspace)
+
+
+@app.post("/api/vscode/embed-ticket")
+def api_vscode_embed_ticket() -> dict[str, Any]:
+    """One-shot ticket allowing the companion webview to frame the dashboard."""
+    return _ok(**vscode_bridge.BRIDGE.issue_embed_ticket())
 
 
 @app.post("/api/vscode/ticket")

@@ -1714,6 +1714,38 @@ async function openProjectVsCode(p) {
     }
 }
 
+async function refreshVSCodeStatus() {
+    const node = document.getElementById('pc-vscode-status');
+    if (!node) return;
+    try {
+        const s = await api('/api/vscode/status');
+        const parts = [];
+        if (!s.detected) {
+            parts.push('VS Code not detected');
+        } else {
+            parts.push(`VS Code ${s.code_version || ''}`.trim());
+            parts.push(s.extension_installed
+                ? `companion ${s.extension_version || 'installed'}`
+                : 'companion not installed');
+        }
+        if (s.connected_clients) parts.push(`${s.connected_clients} window(s) connected`);
+        node.innerHTML = esc(parts.join(' · '));
+        if (s.detected && !s.extension_installed && s.install_command) {
+            const btn = el('button', { class: 'btn sm ghost', type: 'button', style: 'margin-left:8px' },
+                'Copy install command');
+            btn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(s.install_command);
+                    toast('Install command copied', 'ok');
+                } catch (_) { toast(s.install_command, 'ok'); }
+            });
+            node.appendChild(btn);
+        }
+    } catch (_) {
+        node.textContent = 'companion status unavailable';
+    }
+}
+
 async function cancelProjectRun(runUid) {
     if (!runUid) return;
     // Find the card that owns this run so we update the right one when multiple
@@ -3270,6 +3302,7 @@ function projectConfigForm(p) {
             <span class="badge ${linked ? 'green' : 'muted'}">${linked ? 'linked' : 'not linked'}</span></div>
          <p class="secondary">Link this project to a VS Code workspace. Linked projects open VS Code next to the
             TUI, follow agent edits, and can host the TUI inside VS Code's terminal.</p>
+         <div id="pc-vscode-status" class="meta">checking companion…</div>
          <label class="opt"><input type="checkbox" id="pc-vscode-linked" ${linked ? 'checked' : ''}> Link with Visual Studio Code</label>
          <div class="form-row">
             <label class="field"><span class="lab">Launch TUI in</span>
@@ -3318,6 +3351,7 @@ function projectConfigForm(p) {
         } catch (e) { toast(e.message, 'err'); }
     });
     ideCard.querySelector('#pc-vscode-open').addEventListener('click', () => openProjectVsCode(p));
+    setTimeout(refreshVSCodeStatus, 0);
     const wrap = el('div');
     wrap.append(card, ideCard);
     return wrap;

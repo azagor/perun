@@ -24,6 +24,8 @@ def test_the_project_config_has_an_ide_card():
     assert "pc-vscode-linked" in text
     assert "pc-vscode-mode" in text
     assert "pc-vscode-follow" in text
+    assert "pc-vscode-status" in text
+    assert "refreshVSCodeStatus" in text
     assert "/vscode/link" in text
     assert "/vscode/unlink" in text
 
@@ -55,4 +57,12 @@ def test_the_companion_package_is_a_valid_extension_manifest():
         command["command"] for command in package["contributes"]["commands"]
     }
     assert "startTui" in (root / "src" / "extension.js").read_text(encoding="utf-8")
+    extension = (root / "src" / "extension.js").read_text(encoding="utf-8")
+    assert "TERMINAL_STATE_KEY" in extension
+    assert "rebindTerminal" in extension
+    assert "vscode.env.remoteName" in extension
+    assert "vscode.workspace.isTrusted" in extension
+    assert "perun.dashboard" in extension
+    assert "embed-ticket" in extension
+    assert "ViewColumn.Beside" in extension
     assert (root / "src" / "extension.js").is_file()

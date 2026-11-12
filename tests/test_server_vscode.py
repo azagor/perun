@@ -87,6 +87,25 @@ def test_opening_a_run_without_a_companion_is_a_clear_conflict(client, project):
     assert "companion" in r.json()["detail"]
 
 
+def test_the_embed_ticket_allows_a_framed_dashboard_until_it_expires(client):
+    ticket = client.post("/api/vscode/embed-ticket").json()["ticket"]
+
+    page = client.get(f"/?embed={ticket}")
+    assert page.status_code == 200
+    assert "x-frame-options" not in page.headers
+    assert "frame-ancestors *" in page.headers.get("content-security-policy", "")
+
+    # A webview reload/prefetch must still load while the ticket is alive.
+    replay = client.get(f"/?embed={ticket}")
+    assert "x-frame-options" not in replay.headers
+
+    normal = client.get("/")
+    assert normal.headers["x-frame-options"] == "DENY"
+
+    unknown = client.get("/?embed=not-a-ticket")
+    assert unknown.headers["x-frame-options"] == "DENY"
+
+
 def test_the_link_endpoint_rejects_an_unknown_launch_mode(client, project):
     r = client.post(f"/api/projects/{project['slug']}/vscode/link",
                     json={"launch_mode": "emacs"})
