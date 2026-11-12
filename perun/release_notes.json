@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-12T16:53:30+00:00",
+  "generated": "2026-11-12T17:26:46+00:00",
   "releases": [
+    {
+      "version": "0.14.3",
+      "date": "2026-11-12",
+      "body": "### Release packaging: the companion actually ships\n\n* `npm run package` creates `installer/vscode/` before asking `vsce` to write\n  the VSIX. The directory is gitignored and therefore absent in a fresh clone,\n  so the release workflow died with `ENOENT` at the packaging step: **v0.14.2\n  published no GitHub release at all**, and v0.14.1 shipped only the macOS\n  `.pkg` (no `PerunSetup.exe`).\n* Every GitHub release now attaches `perun-overseer.vsix` next to the\n  installers, so source, command-line and Linux installations can install the\n  companion without building it.\n* `python -m perun install` (and `--machine`) installs the companion for the\n  current user when VS Code is present — from a local VSIX or the release asset —\n  and reports a clear \"skipped\" line when VS Code, the network, or a per-user\n  install is unavailable. `--skip-vscode` opts out.\n* `installer/build.ps1` builds the companion (when npm is available) before\n  compiling the setup executable, and says so loudly instead of silently\n  shipping an installer without it."
+    },
     {
       "version": "0.14.2",
       "date": "2026-11-12",
@@ -45,11 +50,6 @@
       "version": "0.12.3",
       "date": "2026-11-06",
       "body": "### Non-blocking changeset hardening\n\n* Legacy HITL token migration is now **strict**: a pre-v0.12 token is refreshed\n  only when its legacy `action_type`+`targets` signature verifies. A tampered\n  signature fails both payloads and is refused.\n* `targets` and `action_type` are derived from `operations` when a proposal is\n  read, so the UI/summary cannot disagree with the guard/package changeset even\n  if the legacy columns are edited directly.\n* Pending/approved legacy `other` rows are marked `failed` during migration with\n  an explicit “re-propose with create/edit/delete operations” reason.\n* Local-run completion now compares **content hashes** per target: an identical\n  write is a real no-op (`NO TARGET CHANGES`), and a content change with a\n  restored mtime is still detected.\n* `derive_package()` refuses more than 100 operations defensively.\n* Added a source-level UI test for the per-operation proposal chips."
-    },
-    {
-      "version": "0.12.2",
-      "date": "2026-11-06",
-      "body": "### Existing approved proposals survive the changeset migration\n\n* A HITL approval token issued before v0.12 was bound to `action_type` +\n  `targets`. The changeset payload now binds `operations`, so an old token would\n  have failed on claim/run and stranded a human approval. `claim_execution()` and\n  `_prepare_execution()` now refresh the token from the **stored approval**\n  (status, approver, seven-day window) when the signature no longer matches, and\n  bind the fresh token to the current changeset. A legacy-token test covers the\n  claim path."
     }
   ]
 }
