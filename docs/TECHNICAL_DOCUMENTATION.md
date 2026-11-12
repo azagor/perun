@@ -1923,6 +1923,12 @@ it for one run. A Mode B request with no connected companion falls back to Mode 
 Linking is independent of the mode: both show the badge, open VS Code and follow
 edits. Switching modes applies to the next run.
 
+**Folder first.** `vscode/open` opens the project *folder* by default, not the
+generated `.code-workspace`. A workspace file is a new VS Code trust scope and
+opens in Restricted Mode until the user trusts it, which would disable the
+companion. The folder inherits the user's existing trust decision; the workspace
+file remains an opt-in (`workspace_file: true`).
+
 ### Data model
 
 * `projects.ide` (JSON): `vscode_linked`, `workspace_path`,

@@ -113,7 +113,11 @@ class ProcessTracker:
             pid = int(run.get("pid") or 0)
             return registry.pid_alive(pid) if pid else False
         proc = entry.get("proc")
-        if proc and proc.poll() is None:
+        if proc is None:
+            # VS Code-reported terminal: there is no Popen handle, only the pid.
+            pid = int(entry.get("pid") or 0)
+            return registry.pid_alive(pid) if pid else False
+        if proc.poll() is None:
             return True
         # Popen handle died; try to find a spawned child (e.g. Windows Terminal).
         child = self._resolve_child_pid(entry)

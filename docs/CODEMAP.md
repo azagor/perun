@@ -1102,8 +1102,11 @@ VS Code detection and workspace generation.
   `PERUN_HOME/workspaces/<slug>.code-workspace` (or an in-project file with a
   `.git/info/exclude` entry); `is_managed_workspace()` / `remove_workspace()`
   never delete a user-authored file.
-* `open_workspace()`, `reveal()` — fixed-argv launch, `--reuse-window` and
-  `--goto`; `status()` / `read_heartbeat()` power the dashboard card.
+* `open_folder()`, `open_workspace()`, `reveal()` — fixed-argv launch. The
+  project folder is the default target (it inherits VS Code's trust decision); a
+  generated `.code-workspace` is opt-in because it is a new trust scope and would
+  open in Restricted Mode. `--reuse-window` and `--goto` are used throughout;
+  `status()` / `read_heartbeat()` power the dashboard card.
 
 ### `perun/perunchat_bridge.py`
 Autonomous PerunChat chat participant for the Orchestrator.
@@ -1500,7 +1503,7 @@ FastAPI app + SSE + static dashboard.
   `api_vscode_unlink()`, `api_vscode_open()`, `api_vscode_ticket()` (single-use
   ticket bound to a workspace), `api_vscode_ws()` (WebSocket at
   `/api/vscode/ws`, ticket in the query, fixed message schema),
-  `api_vscode_context()`, `api_vscode_open_run()` (Mode B terminal request). Stop
+  `api_vscode_open_run()` (Mode B terminal request). Stop
   and Focus try `vscode_bridge.BRIDGE` before the OS terminal fallbacks.
 * Endpoint groups: health (`/api/health` — includes the `control` slug — and the
   structured `/api/models`), PerunChat (`/api/perunchat/status`, `/api/perunchat/key`

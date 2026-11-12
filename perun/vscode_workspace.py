@@ -215,6 +215,21 @@ def _launch(args: list[str], *, cwd: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": True}
 
 
+def open_folder(folder: str, *, reuse_window: bool = True) -> Dict[str, Any]:
+    """Open the project folder directly.
+
+    A folder inherits the user's existing workspace-trust decision; a freshly
+    generated ``.code-workspace`` file is a new trust scope and would open in
+    Restricted Mode, disabling the companion. The folder is therefore the default
+    launch target; the workspace file remains available for users who want one.
+    """
+    target = Path(str(folder or ""))
+    if not target.is_dir():
+        return {"ok": False, "error": "project folder not found"}
+    args = ["--reuse-window"] if reuse_window else []
+    return _launch([*args, str(target)])
+
+
 def open_workspace(workspace: str, *, reuse_window: bool = True) -> Dict[str, Any]:
     target = str(workspace or "")
     if not target or not Path(target).is_file():
@@ -267,6 +282,7 @@ __all__ = [
     "workspace_path",
     "generate",
     "remove_workspace",
+    "open_folder",
     "open_workspace",
     "reveal",
     "status",

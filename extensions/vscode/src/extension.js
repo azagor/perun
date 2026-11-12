@@ -16,11 +16,12 @@ const {
   shellArg,
 } = require('./protocol');
 
-const EXTENSION_VERSION = '0.1.0';
+const EXTENSION_VERSION = '0.1.1';
 const PROTOCOL_VERSION = 1;
 
 /** @type {vscode.StatusBarItem | undefined} */
 let statusItem;
+let output;
 /** @type {WebSocket | undefined} */
 let socket;
 let disposed = false;
@@ -70,6 +71,17 @@ function setStatus(text, tooltip) {
   statusItem.text = `$(plug) ${text}`;
   statusItem.tooltip = tooltip || 'Perun Overseer';
   statusItem.show();
+  log(`${text}${tooltip ? ' — ' + tooltip : ''}`);
+}
+
+function log(message) {
+  const line = `[${new Date().toISOString()}] ${message}`;
+  if (output) output.appendLine(line);
+  try {
+    const dir = path.join(perunHome(), 'vscode');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'extension.log'), line + '\n', 'utf8');
+  } catch (_) { /* diagnostics must never break the extension */ }
 }
 
 function send(message) {
@@ -97,6 +109,7 @@ function scheduleReconnect() {
 
 async function requestTicket(folder) {
   const token = apiToken();
+  log(`ticket request for ${folder.uri.fsPath}; token=${token ? 'present' : 'missing'}; endpoint=${endpoint()}`);
   if (!token) {
     setStatus('Perun: no token', 'Open the Perun dashboard once to create the local API token.');
     return null;
@@ -109,6 +122,7 @@ async function requestTicket(folder) {
     },
     body: JSON.stringify({ workspace_path: folder.uri.fsPath }),
   });
+  log(`ticket response ${response.status}`);
   if (response.status === 404) {
     setStatus('Perun: not registered', 'This folder is not a registered Perun project. Link it from the dashboard.');
     return null;
@@ -139,7 +153,10 @@ async function connect() {
   setStatus('Perun: connecting…');
   try {
     const ticket = await requestTicket(folder);
-    if (!ticket || !ticket.ticket) return;
+    if (!ticket || !ticket.ticket) {
+      scheduleReconnect();
+      return;
+    }
     if (socket) {
       try { socket.close(); } catch (_) { /* ignore */ }
     }
@@ -147,6 +164,7 @@ async function connect() {
     socket = ws;
     ws.on('open', () => {
       reconnectAttempt = 0;
+      log('websocket open');
       send({
         type: 'hello',
         workspace_path: folder.uri.fsPath,
@@ -368,6 +386,8 @@ function finishSelection(message) {
 }
 
 function activate(context) {
+  output = vscode.window.createOutputChannel('Perun');
+  context.subscriptions.push(output);
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 40);
   statusItem.command = 'perun.openDashboard';
   setStatus('Perun: starting…');

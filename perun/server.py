@@ -2746,8 +2746,12 @@ def api_vscode_open(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str,
             line = 1
         target = _vscode_project_file(project, file_value)
         result = vscode_workspace.reveal(str(target), line)
-    else:
+    elif payload.get("workspace_file"):
+        # Opening a generated .code-workspace is a new VS Code trust scope; it is
+        # opt-in. The folder is the default because it inherits existing trust.
         result = vscode_workspace.open_workspace(workspace)
+    else:
+        result = vscode_workspace.open_folder(str(project.get("path") or ""))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "could not open VS Code")
     return _ok(workspace=workspace)
@@ -2772,14 +2776,6 @@ def api_vscode_ticket(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         protocol=vscode_bridge.PROTOCOL_VERSION,
         ws_path="/api/vscode/ws",
     )
-
-
-@app.get("/api/projects/{slug}/vscode/context")
-def api_vscode_context(slug: str) -> dict[str, Any]:
-    project = registry.get_project(slug)
-    if not project:
-        raise HTTPException(status_code=404, detail="no such project")
-    return _ok(context=vscode_bridge.BRIDGE.context_for(int(project["id"])))
 
 
 @app.post("/api/runs/{run_uid}/vscode/open")

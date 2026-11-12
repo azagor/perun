@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -119,13 +120,13 @@ def test_terminal_opened_binds_the_run_and_pid(bridge, project):
         "type": "terminal.opened",
         "run_uid": "run_vscode_1",
         "terminal_id": "term-1",
-        "pid": 12345,
+        "pid": os.getpid(),
     })
 
     row = registry.get_run("run_vscode_1")
     assert row["terminal_id"] == "term-1"
     assert row["terminal_owner"] == "vscode"
-    assert row["pid"] == 12345
+    assert row["pid"] == os.getpid()
     assert run["run_uid"] == "run_vscode_1"
 
 

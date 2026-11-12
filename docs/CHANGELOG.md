@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code: open the folder, not an untrusted workspace file
+
+* `POST /api/projects/{slug}/vscode/open` now opens the project **folder** by
+  default. A generated `.code-workspace` is a new VS Code trust scope and opens in
+  Restricted Mode, which disables the companion; the folder inherits the user's
+  existing trust. The workspace file stays opt-in (`workspace_file: true`).
+* The companion retries while the project is not registered yet, instead of
+  staying offline until a manual reconnect (extension 0.1.1).
+* Removed the unauthenticated `GET .../vscode/context` endpoint: selection text
+  can contain secrets and must not be readable by any local GET caller.
 
 ## v0.14.0
 
