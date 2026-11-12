@@ -40,7 +40,7 @@ Name: "opencode"; Description: "OpenCode CLI"; Types: full
 Name: "ollama"; Description: "Ollama (for semantic memory)"; Types: full
 
 [Files]
-Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "\.git,\.gitignore,perun.md,AGENTS.md,README.md,docs,.perun,*.pyc,__pycache__,.pytest_cache,node_modules,installer\Output,installer\*.exe,installer\*.iss,installer\certs,extensions\vscode\node_modules,extensions\vscode\dist,extensions\vscode\tests"
+Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "\.git,\.gitignore,perun.md,AGENTS.md,README.md,docs,.perun,*.pyc,__pycache__,.pytest_cache,node_modules,installer\Output,installer\*.exe,installer\*.iss,installer\certs,installer\vscode\*.vsix,extensions\vscode\node_modules,extensions\vscode\dist,extensions\vscode\tests"
 Source: "install-prereqs.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "..\web\assets\perun.ico"; DestDir: "{app}\web\assets"; Flags: ignoreversion

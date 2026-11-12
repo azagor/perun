@@ -1709,11 +1709,17 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
   task's own process).
 * Orchestration: `machine_install()` (removes any existing task by default),
   `uninstall_machine()`.
-* VS Code companion: `VSIX_NAME`, `VSIX_RELEASE_URL`, `code_cli()`,
-  `vsix_path()`, `fetch_vsix()` (latest release asset, 5 MB cap, ZIP check),
-  `is_elevated()` and `install_vscode_extension()` — per-user install, skipped
-  when VS Code is absent, when the process is elevated, or when there is no
-  VSIX and the download fails (`--skip-vscode` disables it).
+* VS Code companion: `VSIX_NAME`, `VSIX_ID` (`perun.perun-overseer`),
+  `VSIX_RELEASE_URL`, `_vsix_manifest()` (reads and validates the packaged
+  extension manifest), `_code_command()` (the `.cmd`-safe command line),
+  `code_cli()`, `vsix_path()`, `vsix_version()`,
+  `installed_extension_version()`, `fetch_vsix()` (latest release asset, 5 MB
+  cap, identity check), `is_elevated()` and `install_vscode_extension()` —
+  per-user install, no-op when that version is installed (unless `--force`),
+  skipped when VS Code is absent, when the process is elevated, or when there is
+  no VSIX and the download fails (`--skip-vscode` / `--no-vscode-download`
+  disable it). A `.cmd` shim on Windows runs through the command interpreter
+  with an explicit extra quote layer, so paths with spaces survive.
 * `_creationflags()` — `CREATE_NO_WINDOW` on Windows for `which_version`,
   `pip_install`, and `schtasks` calls so install/repair never flashes a console.
 

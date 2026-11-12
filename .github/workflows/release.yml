@@ -67,7 +67,6 @@ jobs:
           files: |
             installer/Output/PerunSetup.exe
             installer/Output/PerunSetup.exe.sha256
-            installer/vscode/perun-overseer.vsix
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,5 +114,49 @@ jobs:
           files: |
             installer/macos/Output/PerunSetup.pkg
             installer/macos/Output/PerunSetup.pkg.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-companion:
+    # The VSIX is published independently of the installers: a broken Windows
+    # or macOS build must not make the companion undownloadable (v0.14.2).
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build the VS Code companion
+        working-directory: extensions/vscode
+        run: |
+          npm ci
+          npm run package
+
+      - name: Verify the VSIX
+        run: |
+          python3 -c "
+          import json, zipfile
+          path = 'installer/vscode/perun-overseer.vsix'
+          with zipfile.ZipFile(path) as archive:
+              manifest = json.loads(archive.read('extension/package.json'))
+          assert manifest['publisher'] == 'perun' and manifest['name'] == 'perun-overseer', manifest
+          print(f\"{manifest['publisher']}.{manifest['name']} {manifest['version']}\")
+          "
+
+      - name: Upload companion artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perun-overseer-vsix
+          path: installer/vscode/perun-overseer.vsix
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/vscode/perun-overseer.vsix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

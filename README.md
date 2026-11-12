@@ -310,9 +310,12 @@ session picker that mirrors the dashboard.
 * `python -m perun install` (and `--machine`, used by `setup.ps1` and
   `bootstrap.ps1`) installs the companion too, as your own user: it uses a local
   `installer/vscode/perun-overseer.vsix`, or downloads the one attached to the
-  latest release. Pass `--skip-vscode` to skip it. It is skipped automatically
-  when VS Code is not installed, and when the install runs elevated (VS Code
-  extensions are per-user and UAC may switch to another account).
+  latest release (validated as the real `perun.perun-overseer` archive). It is a
+  no-op when that version is already installed, skipped automatically when VS
+  Code is not installed, and skipped when the install runs elevated (VS Code
+  extensions are per-user and UAC may switch to another account). Pass
+  `--skip-vscode` to skip it, or `--no-vscode-download` to allow only a local
+  VSIX. `--force` reinstalls it.
 * Every GitHub release attaches `perun-overseer.vsix`, so source, command-line
   and Linux installs can add it without building anything:
 

@@ -28,6 +28,8 @@ root, which locates Python and then delegates here::
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import platform
 import re
@@ -37,6 +39,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 
@@ -478,9 +481,50 @@ def restart_bridge_task() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 VSIX_NAME = "perun-overseer.vsix"
 
+#: Identity of the companion extension, used to validate a download and to read
+#: the installed version.
+VSIX_PUBLISHER = "perun"
+VSIX_EXTENSION = "perun-overseer"
+VSIX_ID = f"{VSIX_PUBLISHER}.{VSIX_EXTENSION}"
+
 #: Where the release workflow publishes the companion.
 VSIX_RELEASE_URL = (
     "https://github.com/azagor/perun/releases/latest/download/" + VSIX_NAME)
+
+
+def _vsix_manifest(data: bytes) -> dict[str, Any]:
+    """Return the VSIX's ``extension/package.json``, or ``{}`` when it is not ours.
+
+    A file that merely starts with ``PK`` is not proof: a proxy error page or the
+    wrong release asset would parse as a zip but must still be refused.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            manifest = json.loads(archive.read("extension/package.json"))
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+        return {}
+    if not isinstance(manifest, dict):
+        return {}
+    if (str(manifest.get("publisher")) != VSIX_PUBLISHER
+            or str(manifest.get("name")) != VSIX_EXTENSION):
+        return {}
+    return manifest
+
+
+def _code_command(code: str, args: list[str]) -> str | list[str]:
+    """Build a ``code`` invocation, quoting a Windows ``.cmd`` shim correctly.
+
+    ``cmd.exe /c`` re-parses its argument and strips the outer quote pair, so a
+    shim under ``...\\Microsoft VS Code\\...`` loses half of its path unless the
+    whole line is wrapped in one more pair of quotes. Passing a list would make
+    ``subprocess`` escape the inner quotes instead, so the line is a string.
+    """
+    if is_windows() and str(code).lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        inner = " ".join(
+            [f'"{code}"', *[f'"{arg}"' if " " in arg else arg for arg in args]])
+        return f'{comspec} /c "{inner}"'
+    return [code, *args]
 
 
 def code_cli() -> str | None:
@@ -505,6 +549,31 @@ def vsix_path() -> Path | None:
     return None
 
 
+def vsix_version(vsix: Path) -> str:
+    """Version declared by a VSIX file, or ``""`` when it cannot be read."""
+    try:
+        return str(_vsix_manifest(vsix.read_bytes()).get("version") or "")
+    except OSError:
+        return ""
+
+
+def installed_extension_version(code: str, timeout: int = 30) -> str:
+    """The companion version VS Code reports, or ``""`` when it is absent."""
+    cmd = _code_command(code, ["--list-extensions", "--show-versions"])
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                             creationflags=_creationflags())
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if res.returncode != 0:
+        return ""
+    for line in _decode_console(res.stdout or b"").splitlines():
+        line = line.strip()
+        if line.lower().startswith(VSIX_ID + "@"):
+            return line.split("@", 1)[1].strip()
+    return ""
+
+
 def fetch_vsix(timeout: int = 60) -> tuple[Path | None, str]:
     """Download the companion from the latest GitHub release into the checkout.
 
@@ -524,6 +593,8 @@ def fetch_vsix(timeout: int = 60) -> tuple[Path | None, str]:
             return None, "download is larger than 5 MB"
         if not data.startswith(b"PK"):
             return None, "download is not a VSIX archive"
+        if not _vsix_manifest(data):
+            return None, "download is not the Perun companion"
         tmp.write_bytes(data)
         os.replace(tmp, target)
         return target, ""
@@ -550,6 +621,7 @@ def is_elevated() -> bool:
 
 def install_vscode_extension(*, download: bool = False,
                              allow_elevated: bool = False,
+                             force: bool = False,
                              timeout: int = 180) -> dict[str, Any]:
     """Install the VS Code companion for the current user. Never raises.
 
@@ -558,10 +630,13 @@ def install_vscode_extension(*, download: bool = False,
     is skipped unless ``allow_elevated`` is set. A missing VSIX is downloaded
     from the latest GitHub release when ``download`` is true, so a source or
     command-line install gets the same companion the GUI installers ship.
+    Re-running with the same version is a no-op unless ``force`` is set.
     """
     if is_elevated() and not allow_elevated:
+        hint = vsix_path() or (config.REPO_ROOT / "installer" / "vscode" / VSIX_NAME)
         return {"ok": False, "skipped": True,
-                "reason": "run as your own user (VS Code extensions are per-user)"}
+                "reason": "run as your own user (VS Code extensions are per-user); "
+                          f'then: code --install-extension "{hint}" --force'}
     code = code_cli()
     if not code:
         return {"ok": False, "skipped": True, "reason": "VS Code ('code') not found"}
@@ -575,12 +650,16 @@ def install_vscode_extension(*, download: bool = False,
         return {"ok": False, "skipped": True,
                 "reason": "no VSIX in this checkout (build it with 'npm run package')"}
 
-    cmd = [code, "--install-extension", str(vsix), "--force"]
-    if is_windows() and str(code).lower().endswith((".cmd", ".bat")):
-        # .cmd shims need the command interpreter; CreateProcess cannot run them.
-        cmd = ["cmd.exe", "/c", *cmd]
+    wanted = vsix_version(vsix)
+    if not force and wanted:
+        current = installed_extension_version(code)
+        if current == wanted:
+            return {"ok": True, "skipped": True, "version": wanted,
+                    "reason": f"{VSIX_ID} {wanted} is already installed"}
+
+    cmdline = _code_command(code, ["--install-extension", str(vsix), "--force"])
     try:
-        res = subprocess.run(cmd, capture_output=True, timeout=timeout,
+        res = subprocess.run(cmdline, capture_output=True, timeout=timeout,
                              creationflags=_creationflags())
     except (OSError, subprocess.SubprocessError) as exc:
         return {"ok": False, "reason": str(exc), "vsix": str(vsix)}
@@ -588,7 +667,8 @@ def install_vscode_extension(*, download: bool = False,
         detail = _decode_console(res.stderr or res.stdout or b"").strip()
         return {"ok": False, "vsix": str(vsix),
                 "reason": _first_line(detail) or f"code exited {res.returncode}"}
-    return {"ok": True, "vsix": str(vsix), "command": " ".join(cmd)}
+    command = cmdline if isinstance(cmdline, str) else " ".join(cmdline)
+    return {"ok": True, "vsix": str(vsix), "version": wanted, "command": command}
 
 
 # --------------------------------------------------------------------------- #
@@ -617,6 +697,7 @@ def machine_install(
     task: bool = False,
     skip_index: bool = False,
     skip_vscode: bool = False,
+    vscode_download: bool = True,
     force: bool = False,
 ) -> int:
     """Full machine setup. Returns a process exit code.
@@ -664,9 +745,11 @@ def machine_install(
 
     if not skip_vscode:
         print("-" * 68)
-        vscode = install_vscode_extension(download=True)
-        if vscode.get("ok"):
+        vscode = install_vscode_extension(download=vscode_download, force=force)
+        if vscode.get("ok") and not vscode.get("skipped"):
             print("[perun] vscode  companion installed")
+        elif vscode.get("ok"):
+            print(f"[perun] vscode  {vscode.get('reason')}")
         else:
             print(f"[perun] vscode  skipped ({vscode.get('reason') or 'unknown reason'})")
 

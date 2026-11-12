@@ -294,6 +294,13 @@ with `python -m perun project-roots --add <name> <path>`.
   run arbitrary commands. Mode B's terminal id/pid must stay bound to the run so
   Stop/Focus survive a restart. A missing VS Code or extension degrades to the
   `code --goto` reveal and clipboard selection, never to a broken service.
+  **The companion is installed per user, never machine-wide and never by
+  installing VS Code itself.** `installer.install_vscode_extension()` is the
+  only path that installs it: it skips an elevated process (UAC can resolve to
+  another account), skips without a VSIX or a network, validates a downloaded
+  VSIX as the real `perun.perun-overseer` archive, and is a no-op when that
+  version is already installed. `--skip-vscode` opts out; keep the installer's
+  `runasoriginaluser` step and the macOS console-user step in place.
 * **Detection is event-driven, polling is the net.** The watcher subscribes to the
   shared `EventHub` as a global subscriber and polls once per debounced burst; the
   `attention_poll_seconds` timer only reconciles. Keep both paths — events make a

@@ -4,7 +4,31 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Windows: the companion install survives paths with spaces
+
+* `install_vscode_extension()` passed `["cmd.exe", "/c", …]` to
+  `subprocess.run`, which `cmd.exe` re-parses and de-quotes. With both the
+  `code.cmd` shim (`…\Microsoft VS Code\…`) and the VSIX under a path with a
+  space (a user name or install directory), it stripped the quotes and failed
+  with `'…\Microsoft' is not recognized as an internal or external command`.
+  The line is now wrapped in the extra quote pair `cmd.exe /c` expects, and a
+  regression test pins it.
+
+### Companion distribution hardening
+
+* The VSIX is published by its own `publish-companion` workflow job, so a
+  failing Windows or macOS installer build can no longer leave the release
+  without a downloadable companion (that is how v0.14.2 shipped nothing).
+* A downloaded VSIX must contain `extension/package.json` for
+  `perun`/`perun-overseer`; a proxy page or a foreign archive is refused and
+  never written to disk.
+* `perun install` is a no-op when `code --list-extensions --show-versions`
+  already reports the VSIX version (`--force` reinstalls), and
+  `--no-vscode-download` restricts it to a local VSIX for offline installs.
+* The Windows installer no longer copies the VSIX twice (`installer\vscode` is
+  excluded from the recursive copy; the file is still installed to
+  `{app}\vscode`), and `AGENTS.md` records that the companion is per-user and
+  never installs VS Code.
 
 ## v0.14.3
 

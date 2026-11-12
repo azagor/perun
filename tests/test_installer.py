@@ -426,7 +426,7 @@ def test_machine_install_installs_the_vscode_companion(monkeypatch, capsys):
 
     rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True)
     assert rc == 0
-    assert calls == [{"download": True}]
+    assert calls == [{"download": True, "force": False}]
     assert "companion installed" in capsys.readouterr().out
 
 
@@ -480,7 +480,74 @@ def test_vscode_install_runs_the_code_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(installer.subprocess, "run", fake_run)
     res = installer.install_vscode_extension()
     assert res["ok"] is True
-    assert seen and seen[0][:3] == ["code", "--install-extension", str(vsix)]
+    install = [c for c in seen if isinstance(c, list) and "--install-extension" in c]
+    assert install and install[0][:3] == ["code", "--install-extension", str(vsix)]
+
+
+def test_vscode_install_quotes_a_cmd_shim_for_spaced_paths(monkeypatch, tmp_path):
+    """cmd.exe strips one quote layer from /c, so a spaced VSIX must survive."""
+    vsix = tmp_path / "perun space" / "perun-overseer.vsix"
+    vsix.parent.mkdir()
+    vsix.write_bytes(b"PK\x03\x04")
+    code = r"C:\Users\Jan Kowalski\AppData\Local\Programs\Microsoft VS Code\bin\code.CMD"
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "is_windows", lambda: True)
+    monkeypatch.setattr(installer, "code_cli", lambda: code)
+    monkeypatch.setattr(installer, "vsix_path", lambda: vsix)
+    seen: list[object] = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    res = installer.install_vscode_extension()
+    assert res["ok"] is True
+    install = seen[-1]
+    assert isinstance(install, str)          # a string, not a quoted list
+    assert '/c ""' in install                # the extra outer quote layer
+    assert f'"{vsix}"' in install            # the spaced VSIX stays quoted
+    assert install.endswith('--force"')
+
+
+def test_vscode_install_is_a_no_op_for_the_installed_version(monkeypatch, tmp_path):
+    import json
+    import zipfile
+
+    vsix = tmp_path / "perun-overseer.vsix"
+    with zipfile.ZipFile(vsix, "w") as archive:
+        archive.writestr("extension/package.json", json.dumps(
+            {"publisher": "perun", "name": "perun-overseer", "version": "0.1.4"}))
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "code_cli", lambda: "code")
+    monkeypatch.setattr(installer, "vsix_path", lambda: vsix)
+    monkeypatch.setattr(installer, "installed_extension_version", lambda code, timeout=30: "0.1.4")
+    ran: list[object] = []
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda cmd, **kw: ran.append(cmd) or subprocess.CompletedProcess(cmd, 0, b"", b""))
+
+    res = installer.install_vscode_extension()
+    assert res["ok"] is True and res["skipped"] is True
+    assert "already installed" in res["reason"]
+    assert ran == []                      # never reinstall the same version
+
+    forced = installer.install_vscode_extension(force=True)
+    assert forced["ok"] is True and not forced.get("skipped")
+    assert ran, "force must reinstall"
+
+
+def test_vscode_install_skips_the_version_check_when_unknown(monkeypatch, tmp_path):
+    vsix = tmp_path / "perun-overseer.vsix"
+    vsix.write_bytes(b"PK\x03\x04")      # not a zip -> no version
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "code_cli", lambda: "code")
+    monkeypatch.setattr(installer, "vsix_path", lambda: vsix)
+    monkeypatch.setattr(installer, "installed_extension_version", lambda *a, **k: "0.1.4")
+    seen: list[object] = []
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda cmd, **kw: seen.append(cmd) or subprocess.CompletedProcess(cmd, 0, b"", b""))
+    assert installer.install_vscode_extension()["ok"] is True
+    assert seen
 
 
 def test_vscode_install_downloads_a_missing_vsix(monkeypatch, tmp_path):
@@ -503,6 +570,77 @@ def test_vscode_install_reports_a_failed_download(monkeypatch):
     res = installer.install_vscode_extension(download=True)
     assert res["skipped"] is True
     assert "offline" in res["reason"]
+
+
+def test_fetch_vsix_accepts_the_real_companion(monkeypatch, tmp_path):
+    import io
+    import json
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("extension/package.json", json.dumps(
+            {"publisher": "perun", "name": "perun-overseer", "version": "0.1.4"}))
+    payload = buffer.getvalue()
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, size=-1):
+            return payload
+
+    monkeypatch.setattr(installer.config, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(installer.urllib.request, "urlopen",
+                        lambda *a, **k: Response())
+    path, reason = installer.fetch_vsix()
+    assert path == tmp_path / "installer" / "vscode" / "perun-overseer.vsix"
+    assert reason == ""
+    assert path.is_file()
+    assert installer.vsix_version(path) == "0.1.4"
+    assert not (tmp_path / "installer" / "vscode" / "perun-overseer.download").exists()
+
+
+def test_fetch_vsix_rejects_a_foreign_archive(monkeypatch, tmp_path):
+    import io
+    import json
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("extension/package.json", json.dumps(
+            {"publisher": "evil", "name": "perun-overseer"}))
+    payload = buffer.getvalue()
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, size=-1):
+            return payload
+
+    monkeypatch.setattr(installer.config, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(installer.urllib.request, "urlopen",
+                        lambda *a, **k: Response())
+    path, reason = installer.fetch_vsix()
+    assert path is None
+    assert "Perun companion" in reason
+
+
+def test_a_vsix_manifest_must_be_an_object():
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("extension/package.json", "[1, 2]")
+    assert installer._vsix_manifest(buffer.getvalue()) == {}
 
 
 def test_fetch_vsix_rejects_a_non_archive(monkeypatch, tmp_path):
@@ -538,6 +676,7 @@ def test_installers_ship_the_vscode_companion():
     postinstall = (config.REPO_ROOT / "installer" / "macos" / "scripts" / "postinstall"
                    ).read_text(encoding="utf-8")
     assert "perun-overseer.vsix" in postinstall
+    assert "--skip-vscode" in postinstall       # no double install on macOS
 
     package = (config.REPO_ROOT / "extensions" / "vscode" / "package.json"
                ).read_text(encoding="utf-8")
@@ -546,6 +685,7 @@ def test_installers_ship_the_vscode_companion():
     workflow = (config.REPO_ROOT / ".github" / "workflows" / "release.yml"
                 ).read_text(encoding="utf-8")
     assert "installer/vscode/perun-overseer.vsix" in workflow
+    assert "publish-companion" in workflow      # published even if a build fails
 
 
 def test_uninstall_machine_reports(monkeypatch, capsys):
@@ -562,7 +702,7 @@ def test_cli_install_accepts_machine_flags():
 
     args = build_parser().parse_args(
         ["install", "--machine", "--skip-deps", "--skip-global", "--skip-task", "--task",
-         "--no-index", "--skip-vscode"])
+         "--no-index", "--skip-vscode", "--no-vscode-download"])
     assert args.machine is True
     assert args.skip_deps is True
     assert args.skip_global is True
@@ -570,7 +710,36 @@ def test_cli_install_accepts_machine_flags():
     assert args.task is True
     assert args.no_index is True
     assert args.skip_vscode is True
+    assert args.no_vscode_download is True
     assert args.func.__name__ == "cmd_install"
+
+
+def test_global_install_also_installs_the_companion(monkeypatch, capsys):
+    from perun.__main__ import build_parser
+    from perun.integrations import install_global
+
+    monkeypatch.setattr(install_global, "install", lambda force=False, index=True: 0)
+    calls: list[dict] = []
+    monkeypatch.setattr(installer, "install_vscode_extension",
+                        lambda **kw: (calls.append(kw), {"ok": True})[1])
+    args = build_parser().parse_args(["install"])
+    assert args.func(args) == 0
+    assert calls == [{"download": True, "force": False}]
+    assert "companion installed" in capsys.readouterr().out
+
+
+def test_global_install_honors_no_vscode_download(monkeypatch, capsys):
+    from perun.__main__ import build_parser
+    from perun.integrations import install_global
+
+    monkeypatch.setattr(install_global, "install", lambda force=False, index=True: 0)
+    calls: list[dict] = []
+    monkeypatch.setattr(installer, "install_vscode_extension",
+                        lambda **kw: (calls.append(kw), {"ok": True})[1])
+    args = build_parser().parse_args(["install", "--no-vscode-download",
+                                      "--skip-vscode"])
+    assert args.func(args) == 0
+    assert calls == []
 
 
 def test_status_includes_bridge_task(monkeypatch, capsys):

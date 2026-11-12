@@ -2637,7 +2637,10 @@ and from `bootstrap.ps1`:
    `code --install-extension … --force`. It uses a local
    `vscode/perun-overseer.vsix` or `installer/vscode/perun-overseer.vsix`, and
    downloads the asset attached to the latest GitHub release when neither exists
-   (`fetch_vsix()`, 5 MB cap, must be a ZIP). Everything degrades to a printed
+   (`fetch_vsix()`: 5 MB cap, and the ZIP's `extension/package.json` must say
+   `perun`/`perun-overseer`). `--no-vscode-download` forbids the download. The
+   step is a no-op when `code --list-extensions --show-versions` already reports
+   that version (unless `--force`), and otherwise degrades to a printed
    "skipped" line: no VS Code (`code_cli()`, including the macOS app-bundle
    path), no network, or an elevated process (extensions are per-user, and UAC
    may resolve to a different account). `--skip-vscode` turns it off.
