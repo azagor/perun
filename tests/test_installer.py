@@ -507,7 +507,24 @@ def test_vscode_install_quotes_a_cmd_shim_for_spaced_paths(monkeypatch, tmp_path
     assert isinstance(install, str)          # a string, not a quoted list
     assert '/c ""' in install                # the extra outer quote layer
     assert f'"{vsix}"' in install            # the spaced VSIX stays quoted
-    assert install.endswith('--force"')
+    assert install.endswith('--force""')
+
+
+def test_code_command_quotes_every_argument(monkeypatch):
+    """A bare path with cmd metacharacters must not be split at the '&'."""
+    monkeypatch.setattr(installer, "is_windows", lambda: True)
+    line = installer._code_command(
+        r"C:\Microsoft VS Code\bin\code.CMD",
+        ["--install-extension", r"C:\R&D\perun-overseer.vsix", "--force"])
+    assert isinstance(line, str)
+    assert '"C:\\R&D\\perun-overseer.vsix"' in line
+    assert '"--install-extension"' in line and '"--force"' in line
+
+
+def test_code_command_keeps_a_plain_argv_off_windows(monkeypatch):
+    monkeypatch.setattr(installer, "is_windows", lambda: False)
+    assert installer._code_command("/usr/bin/code", ["--version"]) == \
+        ["/usr/bin/code", "--version"]
 
 
 def test_vscode_install_is_a_no_op_for_the_installed_version(monkeypatch, tmp_path):
@@ -633,6 +650,21 @@ def test_fetch_vsix_rejects_a_foreign_archive(monkeypatch, tmp_path):
     assert "Perun companion" in reason
 
 
+def test_installed_extension_version_parses_code_output(monkeypatch):
+    out = b"ms-python.python@2024.1.0\nperun.perun-overseer@0.1.4\n"
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, out, b""))
+    assert installer.installed_extension_version("code") == "0.1.4"
+
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, b"none@1\n", b""))
+    assert installer.installed_extension_version("code") == ""
+
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, b"", b"boom"))
+    assert installer.installed_extension_version("code") == ""
+
+
 def test_a_vsix_manifest_must_be_an_object():
     import io
     import zipfile
@@ -640,6 +672,18 @@ def test_a_vsix_manifest_must_be_an_object():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("extension/package.json", "[1, 2]")
+    assert installer._vsix_manifest(buffer.getvalue()) == {}
+
+
+def test_a_vsix_manifest_rejects_an_oversized_entry():
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("extension/package.json",
+                         b" " * (2 * 1024 * 1024) + b'{"publisher":"perun",'
+                         b'"name":"perun-overseer","version":"0.1.4"}')
     assert installer._vsix_manifest(buffer.getvalue()) == {}
 
 
@@ -726,6 +770,19 @@ def test_global_install_also_installs_the_companion(monkeypatch, capsys):
     assert args.func(args) == 0
     assert calls == [{"download": True, "force": False}]
     assert "companion installed" in capsys.readouterr().out
+
+
+def test_global_install_does_not_touch_vscode_when_it_failed(monkeypatch, capsys):
+    from perun.__main__ import build_parser
+    from perun.integrations import install_global
+
+    monkeypatch.setattr(install_global, "install", lambda force=False, index=True: 1)
+    calls: list[dict] = []
+    monkeypatch.setattr(installer, "install_vscode_extension",
+                        lambda **kw: (calls.append(kw), {"ok": True})[1])
+    args = build_parser().parse_args(["install"])
+    assert args.func(args) == 1
+    assert calls == []
 
 
 def test_global_install_honors_no_vscode_download(monkeypatch, capsys):

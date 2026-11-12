@@ -1114,7 +1114,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             force=args.force,
         )
     rc = install_global.install(force=args.force, index=not args.no_index)
-    if not args.skip_vscode:
+    if rc == 0 and not args.skip_vscode:
         vscode = installer.install_vscode_extension(
             download=not args.no_vscode_download, force=args.force)
         if vscode.get("ok") and not vscode.get("skipped"):
@@ -2332,8 +2332,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="do not install the Perun companion into VS Code "
                         "(it is skipped automatically when VS Code is absent)")
     p.add_argument("--no-vscode-download", action="store_true",
-                   help="with --vscode: install a local VSIX only, never download "
-                        "one from the GitHub release")
+                   help="install a local VSIX only, never download one from "
+                        "the GitHub release")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")

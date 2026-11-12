@@ -4,7 +4,18 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+* **Windows: paths with cmd metacharacters.** `_code_command()` quoted an
+  argument only when it contained a space, so a VSIX under a path like
+  `C:\R&D\…` was split at the `&` and `code` reported
+  `Extension 'c:\…\perun' not found`. Every argument is now quoted; verified
+  live with a `perun&co` directory.
+* **Download validation is total.** The packaged manifest must be ≤ 1 MB
+  (`ZipInfo.file_size`, so a zip bomb never expands into memory), and any decode
+  failure — encryption, unsupported compression, truncation — is treated as
+  "not the companion" instead of raising out of `perun install`.
+* The `publish-companion` job runs the extension unit tests before it publishes,
+  `perun install` no longer touches VS Code when the global install failed, and
+  `--no-vscode-download` no longer claims a `--vscode` flag that does not exist.
 
 ## v0.14.4
 

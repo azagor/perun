@@ -492,16 +492,21 @@ VSIX_RELEASE_URL = (
     "https://github.com/azagor/perun/releases/latest/download/" + VSIX_NAME)
 
 
-def _vsix_manifest(data: bytes) -> dict[str, Any]:
+def _vsix_manifest(data: bytes, limit: int = 1024 * 1024) -> dict[str, Any]:
     """Return the VSIX's ``extension/package.json``, or ``{}`` when it is not ours.
 
     A file that merely starts with ``PK`` is not proof: a proxy error page or the
-    wrong release asset would parse as a zip but must still be refused.
+    wrong release asset would parse as a zip but must still be refused. Any
+    decode failure (bad zip, encryption, unsupported compression, truncation)
+    means "not a usable companion archive", so nothing may escape from here.
     """
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            manifest = json.loads(archive.read("extension/package.json"))
-    except (KeyError, OSError, ValueError, zipfile.BadZipFile):
+            info = archive.getinfo("extension/package.json")
+            if info.file_size > limit:
+                return {}
+            manifest = json.loads(archive.read(info))
+    except Exception:
         return {}
     if not isinstance(manifest, dict):
         return {}
@@ -521,8 +526,9 @@ def _code_command(code: str, args: list[str]) -> str | list[str]:
     """
     if is_windows() and str(code).lower().endswith((".cmd", ".bat")):
         comspec = os.environ.get("COMSPEC") or "cmd.exe"
-        inner = " ".join(
-            [f'"{code}"', *[f'"{arg}"' if " " in arg else arg for arg in args]])
+        # Quote every argument: a bare path containing cmd metacharacters
+        # ("C:\R&D\x.vsix") would otherwise be split at the "&".
+        inner = " ".join([f'"{code}"', *[f'"{arg}"' for arg in args]])
         return f'{comspec} /c "{inner}"'
     return [code, *args]
 
