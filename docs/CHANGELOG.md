@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.14.2
+
+*Released 2026-11-12.*
+
 ### Dashboard presence refresh
 
 * **Working now** keeps its 4 s poll, gains a **Refresh** button, and refreshes

@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.14.1 (see §15). VS Code: trusted folder launch and live companion terminals
+**Latest release:** v0.14.2 (see §15). Accurate usage across all session pages, VS Code session picker
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2895,6 +2895,8 @@ setting.
 ---
 
 ## 15. Revision history
+### 2026-11-12 — v0.14.2: Accurate usage across all session pages, VS Code session picker
+
 ### 2026-11-12 — v0.14.1: VS Code: trusted folder launch and live companion terminals
 
 ### 2026-11-12 — v0.14.0: VS Code deep integration: linked workspaces, edit follow and TUI host
