@@ -1536,7 +1536,12 @@ class Orchestrator:
             if updated >= limit:
                 break
             if (run.get("started_at") or "") < cutoff:
-                continue
+                # A long-running TUI may have started before the window but
+                # ended inside it; use the finish time when available. Active
+                # runs are refreshed separately by refresh_open_usage().
+                ended = str(run.get("ended_at") or "")
+                if not ended or ended < cutoff:
+                    continue
             session_pk = run.get("session_pk")
             oc_sid = str(run.get("opencode_session_id") or "").strip()
             if not session_pk and not oc_sid:

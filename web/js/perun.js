@@ -1312,7 +1312,7 @@ async function viewDashboard() {
         const btn = usageCard.querySelector('#dash-usage-refresh');
         if (btn) btn.disabled = true;
         try {
-            const r = await api('/api/usage/refresh', { method: 'POST', body: { hours: 24 } });
+            const r = await api('/api/usage/refresh', { method: 'POST', body: { hours: 24 * 7 } });
             toast(`Usage refreshed — ${r.updated || 0} session(s)`, 'ok');
         } catch (e) { toast(e.message, 'err'); }
         finally { if (btn) btn.disabled = false; }
