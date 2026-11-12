@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-12T17:26:46+00:00",
+  "generated": "2026-11-12T19:29:54+00:00",
   "releases": [
+    {
+      "version": "0.14.4",
+      "date": "2026-11-12",
+      "body": "### Windows: the companion install survives paths with spaces\n\n* `install_vscode_extension()` passed `[\"cmd.exe\", \"/c\", …]` to\n  `subprocess.run`, which `cmd.exe` re-parses and de-quotes. With both the\n  `code.cmd` shim (`…\\Microsoft VS Code\\…`) and the VSIX under a path with a\n  space (a user name or install directory), it stripped the quotes and failed\n  with `'…\\Microsoft' is not recognized as an internal or external command`.\n  The line is now wrapped in the extra quote pair `cmd.exe /c` expects, and a\n  regression test pins it.\n\n### Companion distribution hardening\n\n* The VSIX is published by its own `publish-companion` workflow job, so a\n  failing Windows or macOS installer build can no longer leave the release\n  without a downloadable companion (that is how v0.14.2 shipped nothing).\n* A downloaded VSIX must contain `extension/package.json` for\n  `perun`/`perun-overseer`; a proxy page or a foreign archive is refused and\n  never written to disk.\n* `perun install` is a no-op when `code --list-extensions --show-versions`\n  already reports the VSIX version (`--force` reinstalls), and\n  `--no-vscode-download` restricts it to a local VSIX for offline installs.\n* The Windows installer no longer copies the VSIX twice (`installer\\vscode` is\n  excluded from the recursive copy; the file is still installed to\n  `{app}\\vscode`), and `AGENTS.md` records that the companion is per-user and\n  never installs VS Code."
+    },
     {
       "version": "0.14.3",
       "date": "2026-11-12",
@@ -45,11 +50,6 @@
       "version": "0.12.4",
       "date": "2026-11-07",
       "body": "### Proposal peek shows the changeset operations\n\n* Clicking a `prop_…` chip in PerunChat still opens the proposal peek; the peek\n  now lists each `create`/`edit`/`delete` operation with its path (instead of\n  only the derived target list). Legacy rows without operations keep the\n  Targets fallback."
-    },
-    {
-      "version": "0.12.3",
-      "date": "2026-11-06",
-      "body": "### Non-blocking changeset hardening\n\n* Legacy HITL token migration is now **strict**: a pre-v0.12 token is refreshed\n  only when its legacy `action_type`+`targets` signature verifies. A tampered\n  signature fails both payloads and is refused.\n* `targets` and `action_type` are derived from `operations` when a proposal is\n  read, so the UI/summary cannot disagree with the guard/package changeset even\n  if the legacy columns are edited directly.\n* Pending/approved legacy `other` rows are marked `failed` during migration with\n  an explicit “re-propose with create/edit/delete operations” reason.\n* Local-run completion now compares **content hashes** per target: an identical\n  write is a real no-op (`NO TARGET CHANGES`), and a content change with a\n  restored mtime is still detected.\n* `derive_package()` refuses more than 100 operations defensively.\n* Added a source-level UI test for the per-operation proposal chips."
     }
   ]
 }

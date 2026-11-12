@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.14.4
+
+*Released 2026-11-12.*
+
 ### Windows: the companion install survives paths with spaces
 
 * `install_vscode_extension()` passed `["cmd.exe", "/c", …]` to
