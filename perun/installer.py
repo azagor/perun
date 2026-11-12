@@ -474,6 +474,124 @@ def restart_bridge_task() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# VS Code companion
+# --------------------------------------------------------------------------- #
+VSIX_NAME = "perun-overseer.vsix"
+
+#: Where the release workflow publishes the companion.
+VSIX_RELEASE_URL = (
+    "https://github.com/azagor/perun/releases/latest/download/" + VSIX_NAME)
+
+
+def code_cli() -> str | None:
+    """Path to VS Code's ``code`` CLI, or ``None`` when VS Code is not installed."""
+    found = shutil.which("code")
+    if found:
+        return found
+    if platform.system() == "Darwin":
+        bundle = Path(
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
+        if bundle.is_file():
+            return str(bundle)
+    return None
+
+
+def vsix_path() -> Path | None:
+    """The built companion VSIX inside this checkout, if present."""
+    for candidate in (config.REPO_ROOT / "vscode" / VSIX_NAME,
+                      config.REPO_ROOT / "installer" / "vscode" / VSIX_NAME):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def fetch_vsix(timeout: int = 60) -> tuple[Path | None, str]:
+    """Download the companion from the latest GitHub release into the checkout.
+
+    Returns ``(path, reason)``; ``path`` is ``None`` when the download failed,
+    in which case ``reason`` says why. Never raises, and never leaves a partial
+    file behind.
+    """
+    target = config.REPO_ROOT / "installer" / "vscode" / VSIX_NAME
+    tmp = target.with_suffix(".download")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(
+            VSIX_RELEASE_URL, headers={"User-Agent": "perun-install"})
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            data = res.read(5 * 1024 * 1024 + 1)
+        if len(data) > 5 * 1024 * 1024:
+            return None, "download is larger than 5 MB"
+        if not data.startswith(b"PK"):
+            return None, "download is not a VSIX archive"
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+        return target, ""
+    except (OSError, urllib.error.URLError, ValueError) as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None, str(exc)
+
+
+def is_elevated() -> bool:
+    """``True`` when this process runs with administrator/root rights."""
+    if is_windows():
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+        except Exception:
+            return False
+    geteuid = getattr(os, "geteuid", None)
+    return bool(geteuid and geteuid() == 0)
+
+
+def install_vscode_extension(*, download: bool = False,
+                             allow_elevated: bool = False,
+                             timeout: int = 180) -> dict[str, Any]:
+    """Install the VS Code companion for the current user. Never raises.
+
+    ``code --install-extension`` writes into the *current* user's extension
+    directory, so an elevated install (where UAC may switch to another account)
+    is skipped unless ``allow_elevated`` is set. A missing VSIX is downloaded
+    from the latest GitHub release when ``download`` is true, so a source or
+    command-line install gets the same companion the GUI installers ship.
+    """
+    if is_elevated() and not allow_elevated:
+        return {"ok": False, "skipped": True,
+                "reason": "run as your own user (VS Code extensions are per-user)"}
+    code = code_cli()
+    if not code:
+        return {"ok": False, "skipped": True, "reason": "VS Code ('code') not found"}
+    vsix = vsix_path()
+    if vsix is None and download:
+        vsix, reason = fetch_vsix()
+        if vsix is None:
+            return {"ok": False, "skipped": True,
+                    "reason": f"no local VSIX and the download failed ({reason})"}
+    if vsix is None:
+        return {"ok": False, "skipped": True,
+                "reason": "no VSIX in this checkout (build it with 'npm run package')"}
+
+    cmd = [code, "--install-extension", str(vsix), "--force"]
+    if is_windows() and str(code).lower().endswith((".cmd", ".bat")):
+        # .cmd shims need the command interpreter; CreateProcess cannot run them.
+        cmd = ["cmd.exe", "/c", *cmd]
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                             creationflags=_creationflags())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "reason": str(exc), "vsix": str(vsix)}
+    if res.returncode != 0:
+        detail = _decode_console(res.stderr or res.stdout or b"").strip()
+        return {"ok": False, "vsix": str(vsix),
+                "reason": _first_line(detail) or f"code exited {res.returncode}"}
+    return {"ok": True, "vsix": str(vsix), "command": " ".join(cmd)}
+
+
+# --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
 def _print_checks(checks: list[dict[str, Any]]) -> bool:
@@ -498,6 +616,7 @@ def machine_install(
     skip_task: bool = False,
     task: bool = False,
     skip_index: bool = False,
+    skip_vscode: bool = False,
     force: bool = False,
 ) -> int:
     """Full machine setup. Returns a process exit code.
@@ -542,6 +661,14 @@ def machine_install(
         from .integrations import install_global
 
         install_global.install(force=force, index=not skip_index)
+
+    if not skip_vscode:
+        print("-" * 68)
+        vscode = install_vscode_extension(download=True)
+        if vscode.get("ok"):
+            print("[perun] vscode  companion installed")
+        else:
+            print(f"[perun] vscode  skipped ({vscode.get('reason') or 'unknown reason'})")
 
     if task:
         print("-" * 68)

@@ -16,6 +16,7 @@ PYTHON="${PERUN_PYTHON:-}"
 SKIP_DEPS=0
 SKIP_GLOBAL=0
 NO_INDEX=0
+SKIP_VSCODE=0
 
 log() { echo "[perun] $*"; }
 err() { echo "[perun] ERROR: $*" >&2; }
@@ -32,6 +33,7 @@ Options:
   --skip-deps         Skip pip install -r requirements.txt
   --skip-global       Skip the global OpenCode integration
   --no-index          Skip indexing project docs
+  --skip-vscode       Do not install the Perun VS Code companion
   -h, --help          Show this help
 EOF
 }
@@ -45,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --skip-deps) SKIP_DEPS=1; shift ;;
         --skip-global) SKIP_GLOBAL=1; shift ;;
         --no-index) NO_INDEX=1; shift ;;
+        --skip-vscode) SKIP_VSCODE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) err "unknown option: $1"; usage; exit 1 ;;
     esac
@@ -123,11 +126,10 @@ fi
 # --------------------------------------------------------------------------- #
 if [[ "$SKIP_GLOBAL" -eq 0 ]]; then
     log "installing global OpenCode integration ..."
-    if [[ "$NO_INDEX" -eq 1 ]]; then
-        "$PY" -m perun install --no-index
-    else
-        "$PY" -m perun install
-    fi
+    INSTALL_ARGS=()
+    if [[ "$NO_INDEX" -eq 1 ]]; then INSTALL_ARGS+=("--no-index"); fi
+    if [[ "$SKIP_VSCODE" -eq 1 ]]; then INSTALL_ARGS+=("--skip-vscode"); fi
+    "$PY" -m perun install ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
 fi
 
 log "Perun is ready at $REPO_ROOT"

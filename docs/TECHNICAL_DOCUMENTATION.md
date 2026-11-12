@@ -2632,7 +2632,16 @@ and from `bootstrap.ps1`:
    dependency exists, because nothing imports `yaml`/`fastapi`/`httpx` at module
    load.
 3. **Global install** — delegates to `install_global.install()` above.
-4. **`PerunBridge` task (opt-in)** — `register_bridge_task()` when `--task` is
+4. **VS Code companion** — `install_vscode_extension()` installs
+   `perun-overseer.vsix` for the *current* user with
+   `code --install-extension … --force`. It uses a local
+   `vscode/perun-overseer.vsix` or `installer/vscode/perun-overseer.vsix`, and
+   downloads the asset attached to the latest GitHub release when neither exists
+   (`fetch_vsix()`, 5 MB cap, must be a ZIP). Everything degrades to a printed
+   "skipped" line: no VS Code (`code_cli()`, including the macOS app-bundle
+   path), no network, or an elevated process (extensions are per-user, and UAC
+   may resolve to a different account). `--skip-vscode` turns it off.
+5. **`PerunBridge` task (opt-in)** — `register_bridge_task()` when `--task` is
    passed; otherwise `remove_bridge_task()` cleans up any previously registered
    task. The bridge is started by the dashboard by default.
 

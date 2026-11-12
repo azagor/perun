@@ -1109,9 +1109,17 @@ def cmd_install(args: argparse.Namespace) -> int:
             skip_task=args.skip_task,
             task=args.task,
             skip_index=args.no_index,
+            skip_vscode=args.skip_vscode,
             force=args.force,
         )
-    return install_global.install(force=args.force, index=not args.no_index)
+    rc = install_global.install(force=args.force, index=not args.no_index)
+    if not args.skip_vscode:
+        vscode = installer.install_vscode_extension(download=True)
+        if vscode.get("ok"):
+            print("[perun] vscode  companion installed")
+        else:
+            print(f"[perun] vscode  skipped ({vscode.get('reason') or 'unknown reason'})")
+    return rc
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
@@ -2316,6 +2324,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="with --machine: do not register the PerunBridge task (default; kept for compatibility)")
     p.add_argument("--task", action="store_true",
                    help="with --machine: register the PerunBridge logon task (auto-start at logon)")
+    p.add_argument("--skip-vscode", action="store_true",
+                   help="do not install the Perun companion into VS Code "
+                        "(it is skipped automatically when VS Code is absent)")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")

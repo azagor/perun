@@ -343,7 +343,7 @@ def test_machine_install_all_skips_is_clean(monkeypatch, capsys):
     monkeypatch.setattr(installer, "register_bridge_task",
                         lambda start=False: (registered.append(start), {"ok": True})[1])
 
-    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True, skip_vscode=True)
     assert rc == 0
     assert registered == []  # --skip-task must not register anything
     out = capsys.readouterr().out
@@ -353,7 +353,7 @@ def test_machine_install_all_skips_is_clean(monkeypatch, capsys):
 def test_machine_install_aborts_on_required_failure(monkeypatch, capsys):
     monkeypatch.setattr(installer, "check_prerequisites",
                         lambda: [{"name": "python", "ok": False, "required": True, "detail": "3.6"}])
-    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True, skip_vscode=True)
     assert rc == 1
     assert "aborting" in capsys.readouterr().out
 
@@ -368,7 +368,7 @@ def test_machine_install_removes_task_by_default(monkeypatch, capsys):
     monkeypatch.setattr(installer, "register_bridge_task",
                         lambda start=False: (registered.append(start), {"ok": True})[1])
 
-    rc = installer.machine_install(skip_deps=True, skip_global=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_vscode=True)
     assert rc == 0
     assert registered == []  # default does not register the task
     assert len(removed) == 1  # default removes any existing task
@@ -385,7 +385,7 @@ def test_machine_install_task_opt_in_registers_and_starts_with_token(monkeypatch
         {"ok": True, "python": "py.exe", "workdir": "C:\\perun", "started": start},
     )[1])
 
-    rc = installer.machine_install(skip_deps=True, skip_global=True, task=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, task=True, skip_vscode=True)
     assert rc == 0
     assert seen == [True]  # token configured -> start the bridge now
     assert "bridge  started" in capsys.readouterr().out
@@ -401,7 +401,7 @@ def test_machine_install_task_opt_in_registers_without_token(monkeypatch, capsys
         {"ok": True, "python": "py.exe", "workdir": "C:\\perun", "started": False},
     )[1])
 
-    rc = installer.machine_install(skip_deps=True, skip_global=True, task=True)
+    rc = installer.machine_install(skip_deps=True, skip_global=True, task=True, skip_vscode=True)
     assert rc == 0
     assert seen == [False]  # no token -> do not start a poller
     assert "next logon" in capsys.readouterr().out
@@ -411,9 +411,141 @@ def test_machine_install_skips_deps_but_reports_failure(monkeypatch, capsys):
     monkeypatch.setattr(installer, "check_prerequisites", _ok_check)
     monkeypatch.setattr(installer, "pip_install",
                         lambda *a, **k: {"ok": False, "output_tail": "boom", "summary": "", "command": []})
-    rc = installer.machine_install(skip_global=True, skip_task=True)
+    rc = installer.machine_install(skip_global=True, skip_task=True, skip_vscode=True)
     assert rc == 1
     assert "--skip-deps" in capsys.readouterr().out
+
+
+def test_machine_install_installs_the_vscode_companion(monkeypatch, capsys):
+    monkeypatch.setattr(installer, "check_prerequisites", _ok_check)
+    monkeypatch.setattr(installer, "remove_bridge_task",
+                        lambda: {"ok": True, "skipped": True, "reason": "not registered"})
+    calls: list[dict] = []
+    monkeypatch.setattr(installer, "install_vscode_extension", lambda **kw: (
+        calls.append(kw), {"ok": True, "vsix": "x"})[1])
+
+    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True)
+    assert rc == 0
+    assert calls == [{"download": True}]
+    assert "companion installed" in capsys.readouterr().out
+
+
+def test_machine_install_can_skip_the_vscode_companion(monkeypatch, capsys):
+    monkeypatch.setattr(installer, "check_prerequisites", _ok_check)
+    monkeypatch.setattr(installer, "remove_bridge_task",
+                        lambda: {"ok": True, "skipped": True, "reason": "not registered"})
+    calls: list[dict] = []
+    monkeypatch.setattr(installer, "install_vscode_extension", lambda **kw: (
+        calls.append(kw), {"ok": True})[1])
+
+    rc = installer.machine_install(skip_deps=True, skip_global=True, skip_task=True,
+                                   skip_vscode=True)
+    assert rc == 0
+    assert calls == []
+
+
+# --------------------------------------------------------------------------- #
+# VS Code companion
+# --------------------------------------------------------------------------- #
+def test_vscode_install_skips_without_code(monkeypatch):
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "code_cli", lambda: None)
+    res = installer.install_vscode_extension()
+    assert res["ok"] is False
+    assert res["skipped"] is True
+    assert "code" in res["reason"]
+
+
+def test_vscode_install_skips_when_elevated(monkeypatch):
+    monkeypatch.setattr(installer, "is_elevated", lambda: True)
+    monkeypatch.setattr(installer, "code_cli", lambda: "code")
+    monkeypatch.setattr(installer, "vsix_path", lambda: None)
+    res = installer.install_vscode_extension(allow_elevated=False)
+    assert res["skipped"] is True
+    assert "per-user" in res["reason"]
+
+
+def test_vscode_install_runs_the_code_cli(monkeypatch, tmp_path):
+    vsix = tmp_path / "perun-overseer.vsix"
+    vsix.write_bytes(b"PK\x03\x04")
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "code_cli", lambda: "code")
+    monkeypatch.setattr(installer, "vsix_path", lambda: vsix)
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        seen.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    res = installer.install_vscode_extension()
+    assert res["ok"] is True
+    assert seen and seen[0][:3] == ["code", "--install-extension", str(vsix)]
+
+
+def test_vscode_install_downloads_a_missing_vsix(monkeypatch, tmp_path):
+    vsix = tmp_path / "perun-overseer.vsix"
+    vsix.write_bytes(b"PK\x03\x04")
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "code_cli", lambda: "code")
+    monkeypatch.setattr(installer, "vsix_path", lambda: None)
+    monkeypatch.setattr(installer, "fetch_vsix", lambda timeout=60: (vsix, ""))
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, b"", b""))
+    assert installer.install_vscode_extension(download=True)["ok"] is True
+
+
+def test_vscode_install_reports_a_failed_download(monkeypatch):
+    monkeypatch.setattr(installer, "is_elevated", lambda: False)
+    monkeypatch.setattr(installer, "code_cli", lambda: "code")
+    monkeypatch.setattr(installer, "vsix_path", lambda: None)
+    monkeypatch.setattr(installer, "fetch_vsix", lambda timeout=60: (None, "offline"))
+    res = installer.install_vscode_extension(download=True)
+    assert res["skipped"] is True
+    assert "offline" in res["reason"]
+
+
+def test_fetch_vsix_rejects_a_non_archive(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer.config, "REPO_ROOT", tmp_path)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, size=-1):
+            return b"<html>not a vsix</html>"
+
+    monkeypatch.setattr(installer.urllib.request, "urlopen",
+                        lambda *a, **k: Response())
+    path, reason = installer.fetch_vsix()
+    assert path is None
+    assert "VSIX" in reason
+    assert not (tmp_path / "installer" / "vscode" / "perun-overseer.vsix").exists()
+
+
+def test_installers_ship_the_vscode_companion():
+    """Regression: the VSIX build/install path must stay wired end to end."""
+    iss = (config.REPO_ROOT / "installer" / "PerunSetup.iss").read_text(encoding="utf-8")
+    assert "perun-overseer.vsix" in iss
+    assert "runasoriginaluser" in iss          # installed into the user's profile
+
+    build = (config.REPO_ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
+    assert "perun-overseer.vsix" in build
+
+    postinstall = (config.REPO_ROOT / "installer" / "macos" / "scripts" / "postinstall"
+                   ).read_text(encoding="utf-8")
+    assert "perun-overseer.vsix" in postinstall
+
+    package = (config.REPO_ROOT / "extensions" / "vscode" / "package.json"
+               ).read_text(encoding="utf-8")
+    assert "mkdirSync" in package              # the output dir is gitignored
+
+    workflow = (config.REPO_ROOT / ".github" / "workflows" / "release.yml"
+                ).read_text(encoding="utf-8")
+    assert "installer/vscode/perun-overseer.vsix" in workflow
 
 
 def test_uninstall_machine_reports(monkeypatch, capsys):
@@ -429,13 +561,15 @@ def test_cli_install_accepts_machine_flags():
     from perun.__main__ import build_parser
 
     args = build_parser().parse_args(
-        ["install", "--machine", "--skip-deps", "--skip-global", "--skip-task", "--task", "--no-index"])
+        ["install", "--machine", "--skip-deps", "--skip-global", "--skip-task", "--task",
+         "--no-index", "--skip-vscode"])
     assert args.machine is True
     assert args.skip_deps is True
     assert args.skip_global is True
     assert args.skip_task is True
     assert args.task is True
     assert args.no_index is True
+    assert args.skip_vscode is True
     assert args.func.__name__ == "cmd_install"
 
 

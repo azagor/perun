@@ -285,8 +285,8 @@ python -m perun serve
 ```
 
 `install --machine` is **idempotent** — re-run it any time to repair. Narrow the
-scope with `--skip-deps`, `--skip-global`, `--skip-task`, or `--no-index`; pass
-`--task` to register the optional `PerunBridge` logon task.
+scope with `--skip-deps`, `--skip-global`, `--skip-task`, `--skip-vscode`, or
+`--no-index`; pass `--task` to register the optional `PerunBridge` logon task.
 `python -m perun install --machine --uninstall` reverses it (and removes the
 `PerunBridge` task if present).
 
@@ -307,6 +307,12 @@ session picker that mirrors the dashboard.
   Visual Studio Code** to skip it). The **macOS `.pkg`** installs it for the
   console user automatically when VS Code is present. Neither installer installs
   VS Code itself.
+* `python -m perun install` (and `--machine`, used by `setup.ps1` and
+  `bootstrap.ps1`) installs the companion too, as your own user: it uses a local
+  `installer/vscode/perun-overseer.vsix`, or downloads the one attached to the
+  latest release. Pass `--skip-vscode` to skip it. It is skipped automatically
+  when VS Code is not installed, and when the install runs elevated (VS Code
+  extensions are per-user and UAC may switch to another account).
 * Every GitHub release attaches `perun-overseer.vsix`, so source, command-line
   and Linux installs can add it without building anything:
 
@@ -319,7 +325,8 @@ session picker that mirrors the dashboard.
   before compiling the setup executable.
 
 The extension is not on the VS Code Marketplace; it only talks to the loopback
-Perun endpoint and reads the API token from `PERUN_HOME/api-token`.
+Perun endpoint and reads the API token from `PERUN_HOME/api-token`. Removing
+Perun leaves it in place: `code --uninstall-extension perun.perun-overseer`.
 
 ### Code signing for releases
 

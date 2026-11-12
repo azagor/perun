@@ -14,6 +14,10 @@ All notable changes are recorded here. Single source of truth for release notes.
 * Every GitHub release now attaches `perun-overseer.vsix` next to the
   installers, so source, command-line and Linux installations can install the
   companion without building it.
+* `python -m perun install` (and `--machine`) installs the companion for the
+  current user when VS Code is present — from a local VSIX or the release asset —
+  and reports a clear "skipped" line when VS Code, the network, or a per-user
+  install is unavailable. `--skip-vscode` opts out.
 * `installer/build.ps1` builds the companion (when npm is available) before
   compiling the setup executable, and says so loudly instead of silently
   shipping an installer without it.

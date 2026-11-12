@@ -57,6 +57,9 @@
 .PARAMETER NoShortcut
     Do not create the desktop shortcut.
 
+.PARAMETER SkipVSCode
+    Do not install the Perun companion into VS Code.
+
 .EXAMPLE
     # Web install (no repo needed)
     powershell -c "iwr -useb https://raw.githubusercontent.com/azagor/perun/master/setup.ps1 | iex"
@@ -81,7 +84,8 @@ param(
     [switch]$SkipTask,
     [switch]$Task,
     [switch]$NoIndex,
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [switch]$SkipVSCode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -203,6 +207,7 @@ if ($SkipTask)   { $args += '-SkipTask' }
 if ($Task)       { $args += '-Task' }
 if ($NoIndex)    { $args += '-NoIndex' }
 if ($NoShortcut) { $args += '-NoShortcut' }
+if ($SkipVSCode) { $args += '-SkipVSCode' }
 
 Write-PerunStep "running machine installer ..."
 & powershell.exe -ExecutionPolicy Bypass @args

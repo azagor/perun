@@ -39,6 +39,9 @@
 .PARAMETER NoShortcut
     Do not create the desktop shortcut.
 
+.PARAMETER SkipVSCode
+    Do not install the Perun companion into VS Code.
+
 .EXAMPLE
     .\bootstrap.ps1
 
@@ -53,7 +56,8 @@ param(
     [switch]$SkipTask,
     [switch]$Task,
     [switch]$NoIndex,
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [switch]$SkipVSCode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,6 +124,7 @@ if ($SkipGlobal) { $installArgs += '--skip-global' }
 if ($SkipTask)   { $installArgs += '--skip-task' }
 if ($Task)       { $installArgs += '--task' }
 if ($NoIndex)    { $installArgs += '--no-index' }
+if ($SkipVSCode) { $installArgs += '--skip-vscode' }
 
 & $pyExe @installArgs
 $rc = $LASTEXITCODE

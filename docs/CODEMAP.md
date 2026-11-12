@@ -1709,6 +1709,11 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
   task's own process).
 * Orchestration: `machine_install()` (removes any existing task by default),
   `uninstall_machine()`.
+* VS Code companion: `VSIX_NAME`, `VSIX_RELEASE_URL`, `code_cli()`,
+  `vsix_path()`, `fetch_vsix()` (latest release asset, 5 MB cap, ZIP check),
+  `is_elevated()` and `install_vscode_extension()` — per-user install, skipped
+  when VS Code is absent, when the process is elevated, or when there is no
+  VSIX and the download fails (`--skip-vscode` disables it).
 * `_creationflags()` — `CREATE_NO_WINDOW` on Windows for `which_version`,
   `pip_install`, and `schtasks` calls so install/repair never flashes a console.
 

@@ -74,7 +74,7 @@ run_as_user() {
 
 if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" && -n "$CONSOLE_UID" ]]; then
     log "installing OpenCode integration for user $CONSOLE_USER ..."
-    if run_as_user "$CONSOLE_USER" "export PATH=\"$VENV_DIR/bin:\$PATH\"; \"$VENV_DIR/bin/python\" -m perun install --no-index"; then
+    if run_as_user "$CONSOLE_USER" "export PATH=\"$VENV_DIR/bin:\$PATH\"; \"$VENV_DIR/bin/python\" -m perun install --no-index --skip-vscode"; then
         log "OpenCode integration installed for $CONSOLE_USER"
     else
         log "WARN: OpenCode integration failed for $CONSOLE_USER"
