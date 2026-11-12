@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-08T08:33:35+00:00",
+  "generated": "2026-11-12T11:35:27+00:00",
   "releases": [
+    {
+      "version": "0.14.0",
+      "date": "2026-11-12",
+      "body": "### VS Code deep integration\n\n* Link any project to a generated `.code-workspace` from the wizard, project card\n  or Config panel. Linked projects show a badge and an **Open in VS Code** action.\n* Two launch modes: host the TUI in VS Code's integrated terminal (seamless\n  `@file#lines` selection insertion) or keep the external terminal while VS Code\n  follows edits. A per-run override is available from the Run caret.\n* Live edit following: the global OpenCode event stream is mapped to a project,\n  validated against the project root, debounced and sent to the companion for\n  reveal + highlight. Without the companion, linked projects fall back to\n  `code --reuse-window --goto`.\n* Companion extension (`perun.perun-overseer`): status bar, ticket-authenticated\n  loopback WebSocket, selection command (`Ctrl+Alt+P`), terminal open/focus/close,\n  and `terminal.processId` binding so Stop/Focus keep working.\n* Security: single-use workspace-bound tickets, no long-lived token in a URL,\n  fixed message schema, loopback-only endpoints, ignored workspace-level\n  `perun.*` settings, path validation, and no silent VS Code install.\n* VSIX is built in the release workflow and installed per-user by the Windows\n  installer; the dashboard reports a missing/outdated companion.\n\n### Documentation refresh\n\n* `README.md` and `docs/DESIGN.md` now describe the Telegram card grammar,\n  coloured buttons, live run drafts and per-chat message scheduling;\n  `AGENTS_OPTIMIZATION.md` and the Shared Projects PRD name v0.13.3."
+    },
     {
       "version": "0.13.3",
       "date": "2026-11-08",
@@ -45,11 +50,6 @@
       "version": "0.12.0",
       "date": "2026-11-06",
       "body": "### Breaking: proposals are typed changesets\n\n* A proposal now carries **`operations`**, one `{path, op}` entry per target\n  (`create`/`edit`/`delete`). One proposal can mix all three and is applied as a\n  single atomic changeset, so a change that adds a file and edits another no\n  longer needs a proposal chain. `action_type` is only a derived summary\n  (`mixed` when the operations differ).\n* `create()`/the REST envelope/the `perun-proposals_propose` MCP tool now require\n  `operations`; the old `action_type` + `targets` input is removed. Existing DB\n  rows are migrated once from their typed fields; `other` rows become invalid.\n* `_assert_action_targets()`, `derive_package()`, the guard, the local prompt and\n  the post-run check all use each target’s own operation. `guard_delete_file`\n  requires a `delete` operation on that exact target; write/edit are refused for\n  a delete target. A package containing a delete remains operator-only.\n* The Shared-tab proposal row renders per-operation chips (`create path`,\n  `edit path`, `delete path`) and shows `mixed` when the changeset differs.\n* Tests cover mixed create+edit, mixed create+delete, mixed local execution,\n  duplicate/invalid operations, legacy-row migration, and the existing package\n  approval/rollback paths."
-    },
-    {
-      "version": "0.11.10",
-      "date": "2026-11-05",
-      "body": "### One operator inbox\n\n* Settings no longer mounts a second full copy of the \"Needs you\" inbox. The\n  dedicated `#/attention` page is the canonical inbox; Settings now has a short\n  card that links to it. This removes the duplicated panel/count and the extra\n  30-second poller that ran while the Settings view was open."
     }
   ]
 }

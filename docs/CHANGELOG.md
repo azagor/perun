@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.14.0
+
+*Released 2026-11-12.*
+
 ### VS Code deep integration
 
 * Link any project to a generated `.code-workspace` from the wizard, project card
