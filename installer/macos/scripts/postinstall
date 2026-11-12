@@ -85,6 +85,17 @@ else
     log "       Run 'perun install' manually after first login."
 fi
 
+# VS Code companion (optional; never installs VS Code itself).
+VSIX="$PERUN_DIR/installer/vscode/perun-overseer.vsix"
+if [[ -f "$VSIX" && -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+    log "installing the Perun VS Code companion for $CONSOLE_USER ..."
+    if run_as_user "$CONSOLE_USER" "if command -v code >/dev/null 2>&1; then code --install-extension '$VSIX' --force; else /Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension '$VSIX' --force; fi"; then
+        log "VS Code companion installed"
+    else
+        log "WARN: VS Code companion not installed (VS Code missing or code CLI unavailable)"
+    fi
+fi
+
 if [[ -f "$LAUNCHAGENT_SRC" ]]; then
     log "installing LaunchAgent ..."
 

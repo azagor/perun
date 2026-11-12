@@ -2733,24 +2733,24 @@ def api_vscode_open(slug: str, payload: dict[str, Any] = Body(...)) -> dict[str,
         raise HTTPException(status_code=404, detail="no such project")
     ide = dict(project.get("ide") or {})
     workspace = str(ide.get("workspace_path") or "")
-    if not workspace or not Path(workspace).is_file():
-        workspace = vscode_workspace.generate(project)
-        ide["workspace_path"] = workspace
-        ide.setdefault("vscode_linked", True)
-        registry.update_project(slug, ide=ide)
-    file_value = str(payload.get("file") or "").strip()
-    if file_value:
+    if payload.get("workspace_file"):
+        # Opening a generated .code-workspace is a new VS Code trust scope; it is
+        # opt-in. Generate/update the file only for this explicit path.
+        if not workspace or not Path(workspace).is_file():
+            workspace = vscode_workspace.generate(project)
+            ide["workspace_path"] = workspace
+            ide.setdefault("vscode_linked", True)
+            registry.update_project(slug, ide=ide)
+        result = vscode_workspace.open_workspace(workspace)
+    elif str(payload.get("file") or "").strip():
         try:
             line = int(payload.get("line") or 1)
         except (TypeError, ValueError):
             line = 1
-        target = _vscode_project_file(project, file_value)
+        target = _vscode_project_file(project, str(payload.get("file")))
         result = vscode_workspace.reveal(str(target), line)
-    elif payload.get("workspace_file"):
-        # Opening a generated .code-workspace is a new VS Code trust scope; it is
-        # opt-in. The folder is the default because it inherits existing trust.
-        result = vscode_workspace.open_workspace(workspace)
     else:
+        # The folder inherits the user's existing VS Code trust decision.
         result = vscode_workspace.open_folder(str(project.get("path") or ""))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "could not open VS Code")

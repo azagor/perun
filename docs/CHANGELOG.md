@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code: macOS companion install and explicit workspace files
+
+* The macOS `.pkg` postinstall installs `perun-overseer.vsix` for the console
+  user when VS Code and its `code` CLI are present (still never installs VS Code
+  itself).
+* `vscode/open` no longer generates a workspace file as a side effect of opening
+  a folder. It opens the project folder by default; `workspace_file: true`
+  explicitly creates/opens the `.code-workspace`.
 
 ## v0.14.1
 
