@@ -12,8 +12,8 @@ Connects a VS Code workspace to the local **Perun** service.
   (it resumes the latest session and focuses an existing terminal). The
   **Perun TUI** status-bar item does the same in one click; VS Code's
   **Terminal → New Terminal** is a normal shell, not the Perun terminal.
-- **Perun Dashboard** opens or reveals one reusable VS Code webview panel; it
-  does not spawn a new browser tab on every click.
+- **Perun Dashboard** opens the dashboard directly in VS Code's **Simple
+  Browser** tab; there is no wrapper page or second click.
 
 The extension only talks to a loopback Perun endpoint and reads the local API
 token from `PERUN_HOME/api-token` (or `~/.perun/api-token`). Workspace-level

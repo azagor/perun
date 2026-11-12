@@ -20,11 +20,11 @@ All notable changes are recorded here. Single source of truth for release notes.
   VS Code reload. The server rejects a protocol mismatch, and the Config panel
   shows the companion version/connected windows plus the real VSIX install
   command (extension 0.1.4).
-* The companion adds two status-bar items: **Perun** opens/reveals one reusable
-  `perun.dashboard` webview panel (short-lived embed ticket; no new browser tab),
-  and **Perun TUI** opens the tracked OpenCode terminal. The TUI opens beside the
-  editor (wide), waits 150 ms for the pty size, and resumes the latest session.
-  Extension 0.1.4.
+* The companion adds two status-bar items: **Perun** opens the dashboard directly
+  in VS Code's **Simple Browser** tab (short-lived embed ticket; no wrapper page
+  or extra click), and **Perun TUI** opens the tracked OpenCode terminal. The TUI
+  opens beside the editor (wide), waits 150 ms for the pty size, and resumes the
+  latest session. Extension 0.1.4.
 
 ## v0.14.1
 

@@ -39,7 +39,6 @@ const terminalIds = new Map();
 let projectSlug = '';
 let activeRun = null;
 let startingTui = false;
-let dashboardPanel;
 
 function userSetting(key, fallback) {
   // Never trust a workspace-level `perun.*` setting: a cloned repository could
@@ -101,34 +100,18 @@ function send(message) {
 }
 
 function openDashboard() {
-  if (dashboardPanel) {
-    dashboardPanel.reveal();
-    log('dashboard: revealed existing panel');
-    return;
-  }
   (async () => {
     try {
       log('dashboard: requesting embed ticket');
       const data = await apiPost('/api/vscode/embed-ticket', {});
       const url = `${endpoint()}/?embed=${encodeURIComponent(String(data.ticket || ''))}`;
-      dashboardPanel = vscode.window.createWebviewPanel(
-        'perun.dashboard',
-        'Perun Dashboard',
-        vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      dashboardPanel.webview.html = `<!DOCTYPE html>
-<html><head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${endpoint()}; style-src 'unsafe-inline';">
-<style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e;color:#ccc;font:12px sans-serif}
-header{height:24px;line-height:24px;padding:0 8px;background:#252526;border-bottom:1px solid #333}
-a{color:#4daafc;text-decoration:none}iframe{border:0;width:100%;height:calc(100% - 24px)}</style>
-</head><body><header><a href="${endpoint()}/" target="_blank">Perun Dashboard — open in browser</a></header><iframe src="${url}" allow="clipboard-read; clipboard-write"></iframe></body></html>`;
-      dashboardPanel.onDidDispose(() => { dashboardPanel = undefined; });
-      log('dashboard: panel opened');
+      // Simple Browser navigates the dashboard as a normal editor tab (no
+      // wrapper/iframe page and no extra click). A webview reload can reuse the
+      // embed ticket for its short TTL.
+      await vscode.commands.executeCommand('simpleBrowser.show', url);
+      log('dashboard: opened in Simple Browser');
     } catch (_) {
-      // No token or the embed ticket failed: fall back to the normal browser.
-      log('dashboard: embed failed; opening the browser');
+      log('dashboard: Simple Browser failed; opening the browser');
       const folder = workspaceFolder();
       const suffix = projectSlug ? `#/project/${encodeURIComponent(projectSlug)}` : '#/projects';
       vscode.env.openExternal(vscode.Uri.parse(`${endpoint()}/${suffix}`));

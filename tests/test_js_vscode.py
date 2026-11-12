@@ -62,7 +62,8 @@ def test_the_companion_package_is_a_valid_extension_manifest():
     assert "rebindTerminal" in extension
     assert "vscode.env.remoteName" in extension
     assert "vscode.workspace.isTrusted" in extension
-    assert "perun.dashboard" in extension
+    assert "perun.dashboard" not in extension
+    assert "simpleBrowser.show" in extension
     assert "embed-ticket" in extension
     assert "ViewColumn.Beside" in extension
     assert (root / "src" / "extension.js").is_file()
