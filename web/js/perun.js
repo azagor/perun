@@ -3331,7 +3331,7 @@ function projectConfigForm(p) {
         ? 'external-terminal' : 'vscode-terminal';
     const ideCard = el('div', { class: 'card' },
         `<div class="card-head"><h4>VS Code</h4>
-            <span class="badge ${linked ? 'green' : 'muted'}">${linked ? 'linked' : 'not linked'}</span></div>
+            <span class="badge ${linked ? 'green' : 'muted'}" id="pc-vscode-badge">${linked ? 'linked' : 'not linked'}</span></div>
          <p class="secondary">Link this project to a VS Code workspace. Linked projects open VS Code next to the
             TUI, follow agent edits, and can host the TUI inside VS Code's terminal.</p>
          <div id="pc-vscode-status" class="meta">checking companion…</div>
@@ -3383,7 +3383,7 @@ function projectConfigForm(p) {
         } catch (e) { toast(e.message, 'err'); }
     });
     ideCard.querySelector('#pc-vscode-open').addEventListener('click', () => openProjectVsCode(p));
-    const ideBadge = ideCard.querySelector('.card-head .badge');
+    const ideBadge = ideCard.querySelector('#pc-vscode-badge');
     ideCard.querySelector('#pc-vscode-linked').addEventListener('change', (event) => {
         const want = !!event.target.checked;
         if (want === linked) {

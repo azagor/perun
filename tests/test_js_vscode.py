@@ -65,6 +65,9 @@ def test_the_companion_package_is_a_valid_extension_manifest():
     assert "perun.openTui" in {
         command["command"] for command in package["contributes"]["commands"]
     }
+    assert "perun.resumeTui" in {
+        command["command"] for command in package["contributes"]["commands"]
+    }
     assert "startTui" in (root / "src" / "extension.js").read_text(encoding="utf-8")
     extension = (root / "src" / "extension.js").read_text(encoding="utf-8")
     assert "showQuickPick" in extension
