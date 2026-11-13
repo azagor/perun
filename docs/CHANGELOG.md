@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code companion 0.1.6: fast resume vs session picker
+
+* The **Perun TUI** status-bar item now fast-resumes the newest TUI chat — the
+  dashboard's **Run** — instead of opening a picker.
+* **Perun: Choose TUI session…** (`perun.openTui`) is the picker: resume latest,
+  any of the last 50 sessions (headless ones labelled, never auto-selected), or
+  start a new session. `perun.openTui` keeps its id, so existing keybindings
+  still work.
+* Companion 0.1.6, suite 10/10.
 
 ## v0.15.5
 

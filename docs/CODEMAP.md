@@ -1936,8 +1936,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   `hello.ok`, so Focus/Stop survive a VS Code reload or a Perun restart. The
   server refuses a `hello` whose protocol is not `PROTOCOL_VERSION`. The
   status-bar items: **Perun** opens the dashboard in VS Code's Simple Browser
-  (a short-lived embed ticket relaxes framing); **Perun TUI** opens the tracked
-  OpenCode terminal. The TUI opens beside the editor.
+  (a short-lived embed ticket relaxes framing); **Perun TUI** fast-resumes the
+  newest TUI chat (`perun.resumeTui`, the dashboard's Run), while the Command
+  Palette's **Perun: Choose TUI session…** (`perun.openTui`) opens the picker.
+  The TUI opens beside the editor.
 * `src/protocol.js` — pure helpers (loopback-only endpoint normalisation,
   `ws` URL, relative path, selection ref, backoff, shell quoting), covered by
   `tests/protocol.test.js`.

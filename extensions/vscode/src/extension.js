@@ -20,7 +20,7 @@ const {
   originLabel,
 } = require('./session_pick');
 
-const EXTENSION_VERSION = '0.1.5';
+const EXTENSION_VERSION = '0.1.6';
 const PROTOCOL_VERSION = 1;
 const TERMINAL_STATE_KEY = 'perun.terminals';
 
@@ -568,7 +568,7 @@ async function apiGet(pathname) {
   return data;
 }
 
-async function startTui() {
+async function startTui(choose = true) {
   if (!projectSlug) {
     vscode.window.showInformationMessage(
       'Perun: open a registered Perun project folder first (the status bar says "not registered" otherwise).');
@@ -585,9 +585,10 @@ async function startTui() {
 
     let chosen = null;
     const hadSessions = sessions.length > 0;
-    if (sessions.length) {
-      // Mirror the dashboard's Run: "latest" means the newest *TUI chat*; a
-      // headless job session stays selectable but is never auto-selected.
+    if (choose && sessions.length) {
+      // Mirror the dashboard's caret: "Resume latest" means the newest *TUI
+      // chat*; a headless job session stays selectable but is never
+      // auto-selected.
       const latest = latestResumeCandidate(sessions);
       const items = [];
       if (latest) {
@@ -620,6 +621,10 @@ async function startTui() {
       });
       if (!picked) return;
       chosen = picked.session;
+    } else if (!choose) {
+      // Fast path, mirroring the dashboard's Run button: newest TUI chat, or a
+      // fresh session when the only sessions were created by headless jobs.
+      chosen = latestResumeCandidate(sessions);
     }
 
     if (chosen) {
@@ -631,7 +636,7 @@ async function startTui() {
       }
     }
     const active = activeRun && terminals.get(String(activeRun.run_uid || ''));
-    if (!hadSessions && active && active.terminal) {
+    if (!chosen && !hadSessions && active && active.terminal) {
       active.terminal.show();
       return;
     }
@@ -681,13 +686,14 @@ function activate(context) {
   context.subscriptions.push(statusItem);
   tuiItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 39);
   tuiItem.text = '$(terminal) Perun TUI';
-  tuiItem.tooltip = 'Open the tracked OpenCode TUI in this window';
-  tuiItem.command = 'perun.openTui';
+  tuiItem.tooltip = 'Resume the latest TUI chat (Command Palette: "Perun: Choose TUI session…")';
+  tuiItem.command = 'perun.resumeTui';
   tuiItem.show();
   context.subscriptions.push(tuiItem);
   context.subscriptions.push(
     vscode.commands.registerCommand('perun.openDashboard', openDashboard),
     vscode.commands.registerCommand('perun.sendSelection', sendSelection),
+    vscode.commands.registerCommand('perun.resumeTui', () => startTui(false)),
     vscode.commands.registerCommand('perun.openTui', startTui),
     vscode.commands.registerCommand('perun.reconnect', () => {
       reconnectAttempt = 0;

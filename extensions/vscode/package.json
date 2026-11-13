@@ -2,7 +2,7 @@
   "name": "perun-overseer",
   "displayName": "Perun Overseer",
   "description": "Perun workspace link, live agent edit following and OpenCode selection hand-off",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "perun",
   "license": "MIT",
   "repository": {
@@ -40,8 +40,12 @@
         "title": "Perun: Send Selection to OpenCode"
       },
       {
+        "command": "perun.resumeTui",
+        "title": "Perun: Resume latest TUI chat"
+      },
+      {
         "command": "perun.openTui",
-        "title": "Perun: Open TUI (tracked)"
+        "title": "Perun: Choose TUI session\u00e2\u20ac\u00a6"
       },
       {
         "command": "perun.reconnect",
