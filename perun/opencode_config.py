@@ -391,6 +391,13 @@ def set_small_model(model_id: str, *, reload: bool = True) -> dict[str, Any]:
     """
     model_id = (model_id or "").strip()
     data, path, had_comments = load_config()
+    current_raw = data.get("small_model")
+    current = current_raw.strip() if isinstance(current_raw, str) else ""
+    if current == model_id:
+        # Re-saving the same value must not rewrite the user's config or create
+        # another backup: every Settings save includes these fields.
+        return {"ok": True, "model": model_id, "changed": False,
+                "path": str(path), "had_comments": had_comments, "reloaded": None}
     if model_id:
         data["small_model"] = model_id
     else:
@@ -400,6 +407,7 @@ def set_small_model(model_id: str, *, reload: bool = True) -> dict[str, Any]:
     return {
         "ok": True,
         "model": model_id,
+        "changed": True,
         "path": str(path),
         "had_comments": had_comments,
         "reloaded": reload_status.get("ok"),

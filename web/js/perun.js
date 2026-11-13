@@ -6903,6 +6903,11 @@ function localAiCard() {
             line.innerHTML = `<b>Local runtime not reachable</b> at <span class="mono">${esc(st.endpoint || '')}</span>
                 — start Ollama, or point the endpoint at LM Studio / vLLM.`;
         }
+        const endpoint = st.endpoint || '';
+        if (endpoint && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?=[:/]|$)/.test(endpoint)) {
+            line.innerHTML += `<p class="meta warn-text" style="margin:4px 0 0">
+                Remote endpoint: prompts from the local-AI consumers leave this machine.</p>`;
+        }
         return st;
     };
 
@@ -6983,6 +6988,22 @@ function localAiCard() {
                 } catch (e) { toast(e.message, 'err'); }
             }, 'Remove');
     });
+
+    // OpenCode's small_model is provider-specific. With a custom endpoint Perun
+    // cannot know the provider id, so the toggle is disabled instead of silently
+    // doing nothing.
+    const endpointInput = card.querySelector('#la-endpoint');
+    const smallToggle = card.querySelector('#la-small');
+    const syncSmall = () => {
+        const custom = endpointInput.value.trim() !== '';
+        smallToggle.disabled = custom;
+        if (custom) smallToggle.checked = false;
+        smallToggle.title = custom
+            ? "OpenCode's small_model needs the Ollama provider; clear the endpoint to use it"
+            : "Set OpenCode's small_model to the local model (titles and other small tasks)";
+    };
+    endpointInput.addEventListener('input', syncSmall);
+    syncSmall();
 
     render();
     return card;

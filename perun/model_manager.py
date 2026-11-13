@@ -36,6 +36,11 @@ _PULL_LOCK = threading.Lock()
 #: Jobs the operator asked to cancel.
 _CANCELLED: set[int] = set()
 
+#: Refuse to start a pull when the model store has less room than this. Ollama
+#: reports the real size only once the pull starts, so this is a safety net, not
+#: a size prediction.
+MIN_FREE_BYTES = 2 * 1024**3
+
 _PROGRESS_INTERVAL = 0.75
 
 
@@ -190,6 +195,10 @@ def start_pull(model: str, settings: config.Settings | None = None) -> dict[str,
         return {"ok": False, "reason": "ollama_not_running", "commands": [f"ollama pull {name}"]}
     if _installed(tags, name):
         return {"ok": True, "installed": True, "model": name, "job": None}
+    free = disk_free_bytes()
+    if free and free < MIN_FREE_BYTES:
+        return {"ok": False, "reason": "not enough disk space",
+                "disk_free_bytes": free, "required_bytes": MIN_FREE_BYTES}
     job = registry.create_local_ai_job(name, "queued")
     registry.prune_local_ai_jobs()
     thread = threading.Thread(target=_run_pull, args=(int(job["id"]), name, host),
@@ -199,9 +208,12 @@ def start_pull(model: str, settings: config.Settings | None = None) -> dict[str,
 
 
 def cancel_job(job_id: int) -> dict[str, Any]:
-    _CANCELLED.add(int(job_id))
     job = registry.get_local_ai_job(int(job_id))
-    return {"ok": True, "job": job}
+    if not job or str(job.get("state") or "") in ("done", "failed", "cancelled"):
+        # Nothing to cancel; do not leave the id in the in-memory set forever.
+        return {"ok": True, "job": job, "cancelled": False}
+    _CANCELLED.add(int(job_id))
+    return {"ok": True, "job": job, "cancelled": True}
 
 
 def remove(model: str, settings: config.Settings | None = None) -> dict[str, Any]:

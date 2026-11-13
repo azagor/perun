@@ -192,6 +192,23 @@ def test_start_pull_rejects_a_bad_model_name(monkeypatch):
     assert "invalid" in res["reason"]
 
 
+def test_start_pull_refuses_without_room_on_disk(monkeypatch):
+    monkeypatch.setattr(model_manager.urllib.request, "urlopen",
+                        lambda *a, **k: _Response(_tags({})))
+    monkeypatch.setattr(model_manager, "disk_free_bytes", lambda: 1024**3)
+    res = model_manager.start_pull("qwen2.5:1.5b", _settings())
+    assert res["ok"] is False
+    assert res["reason"] == "not enough disk space"
+    assert res["required_bytes"] == model_manager.MIN_FREE_BYTES
+
+
+def test_cancel_ignores_a_finished_job():
+    job = registry.create_local_ai_job("qwen2.5:1.5b", "done")
+    res = model_manager.cancel_job(int(job["id"]))
+    assert res["cancelled"] is False
+    assert int(job["id"]) not in model_manager._CANCELLED
+
+
 def test_remove_rejects_a_bad_model_name():
     assert model_manager.remove("../etc/passwd")["ok"] is False
 
@@ -256,13 +273,21 @@ def test_small_model_is_set_and_removed(monkeypatch, tmp_path):
 
     res = opencode_config.set_small_model("ollama/qwen2.5:1.5b")
     assert res["ok"] is True
+    assert res["changed"] is True
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data["small_model"] == "ollama/qwen2.5:1.5b"
     assert data["model"] == "opencode/big-pickle"      # unrelated keys survive
-    assert list(tmp_path.glob("opencode.json.perun-backup-*"))
+    backups = list(tmp_path.glob("opencode.json.perun-backup-*"))
+    assert len(backups) == 1
 
-    opencode_config.set_small_model("")
+    again = opencode_config.set_small_model("ollama/qwen2.5:1.5b")
+    assert again["ok"] is True and again["changed"] is False
+    assert len(list(tmp_path.glob("opencode.json.perun-backup-*"))) == 1
+
+    cleared = opencode_config.set_small_model("")
+    assert cleared["changed"] is True
     assert "small_model" not in json.loads(target.read_text(encoding="utf-8"))
+    assert len(list(tmp_path.glob("opencode.json.perun-backup-*"))) == 2
 
 
 # --------------------------------------------------------------------------- #

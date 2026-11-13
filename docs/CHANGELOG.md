@@ -4,7 +4,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+* **Settings no longer rewrites the OpenCode config on every save.**
+  `set_small_model()` returns unchanged when the value already matches, so the
+  dashboard's Save no longer creates a new `opencode.json.perun-backup-*` each
+  time. A JSONC comment loss is now logged explicitly.
+* **Downloads respect disk space.** `Prepare` refuses to start when the model
+  store has less than 2 GB free (Ollama reports the real size only once the pull
+  starts, so this is a safety net) and returns the free/required bytes.
+* Cancelling an already-finished job no longer leaves its id in the in-memory
+  cancellation set.
+* The **OpenCode small tasks** toggle is disabled with an explanation when a
+  custom endpoint is configured (OpenCode's `small_model` is provider-specific),
+  and the Local AI card warns when the endpoint is not loopback: prompts from the
+  local-AI consumers would leave the machine.
 
 ## v0.15.1
 

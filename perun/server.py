@@ -4342,10 +4342,21 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         try:
             from . import opencode_config
 
+            log = logging.getLogger("perun.server")
             if SETTINGS.local_ai_small_model and not SETTINGS.local_ai_base_url:
-                opencode_config.set_small_model(f"ollama/{SETTINGS.local_ai_model}")
+                applied = opencode_config.set_small_model(
+                    f"ollama/{SETTINGS.local_ai_model}")
+                if applied.get("had_comments"):
+                    log.warning(
+                        "the OpenCode config contained JSONC comments that the "
+                        "small_model rewrite removed; a backup was saved next to it")
             elif not SETTINGS.local_ai_small_model:
                 opencode_config.set_small_model("")
+            else:
+                log.warning(
+                    "local_ai_small_model is enabled but local_ai_base_url points "
+                    "at a custom runtime; OpenCode's small_model is provider-specific "
+                    "and was left unchanged")
         except Exception:  # pragma: no cover - a config edit must not fail the PATCH
             logging.getLogger("perun.server").debug(
                 "could not apply OpenCode small_model", exc_info=True)
