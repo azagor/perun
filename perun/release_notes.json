@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T21:55:24+00:00",
+  "generated": "2026-11-13T22:38:40+00:00",
   "releases": [
+    {
+      "version": "0.15.11",
+      "date": "2026-11-13",
+      "body": "### VS Code: a Restricted window no longer mislabels every project\n\n* An untrusted window never reaches `hello`, so its heartbeat now carries\n  `workspace_path`; the server resolves the project from it. Before, the empty\n  `project_slug` made **every** project card claim “workspace untrusted”.\n* The server heartbeat writes to a unique temp file before the atomic rename, so\n  two concurrent `hello` writes cannot collide.\n* Companion 0.1.10."
+    },
     {
       "version": "0.15.10",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.15.2",
       "date": "2026-11-13",
       "body": "* **Settings no longer rewrites the OpenCode config on every save.**\n  `set_small_model()` returns unchanged when the value already matches, so the\n  dashboard's Save no longer creates a new `opencode.json.perun-backup-*` each\n  time. A JSONC comment loss is now logged explicitly.\n* **Downloads respect disk space.** `Prepare` refuses to start when the model\n  store has less than 2 GB free (Ollama reports the real size only once the pull\n  starts, so this is a safety net) and returns the free/required bytes.\n* Cancelling an already-finished job no longer leaves its id in the in-memory\n  cancellation set.\n* The **OpenCode small tasks** toggle is disabled with an explanation when a\n  custom endpoint is configured (OpenCode's `small_model` is provider-specific),\n  and the Local AI card warns when the endpoint is not loopback: prompts from the\n  local-AI consumers would leave the machine."
-    },
-    {
-      "version": "0.15.1",
-      "date": "2026-11-13",
-      "body": "* **Local AI Test tolerates a cold model.** The probe now waits up to 60 s: the\n  first call after a download loads the model from disk (tens of seconds), and a\n  15 s timeout reported a working model as offline."
     }
   ]
 }

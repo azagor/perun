@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.11
+
+*Released 2026-11-13.*
+
 ### VS Code: a Restricted window no longer mislabels every project
 
 * An untrusted window never reaches `hello`, so its heartbeat now carries
