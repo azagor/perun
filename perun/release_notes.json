@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T22:38:40+00:00",
+  "generated": "2026-11-13T22:56:35+00:00",
   "releases": [
+    {
+      "version": "0.15.12",
+      "date": "2026-11-13",
+      "body": "### VS Code: per-project client count for Mode B\n\n* `GET /api/vscode/status?project=<slug>` returns `project_clients`; the\n  dashboard only attempts a VS Code terminal when **this** project has a\n  connected companion, so a window open for another project no longer causes a\n  failed request and a fallback notice.\n* The decision is a pure module (`web/js/vscode_launch.js`) covered by\n  `extensions/vscode/tests/vscode_launch.test.js`: untrusted or no client →\n  external terminal with the matching notice; a trusted connected window\n  overrides a stale untrusted heartbeat."
+    },
     {
       "version": "0.15.11",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.15.3",
       "date": "2026-11-13",
       "body": "* **Boundary compaction works against a live OpenCode.** A body-less\n  `POST /session/{id}/compact` is rejected with `Expected object`; the governor\n  now sends `{}`. Verified against the running service (a real compaction\n  message comes back).\n* Two fast **Prepare** clicks reserve the download slot before the worker starts,\n  so the second click gets a clean \"a download is already running\" instead of a\n  job that fails immediately.\n* The download progress poll stops when the Settings card is no longer on the\n  page, and both Settings cards share one `/api/local-ai` fetch per render.\n* Enabling **OpenCode small tasks** warns first when `opencode.json` contains\n  comments (the rewrite drops them; a backup is kept).\n* **The Local AI model is a picker** of the models the runtime reports (with\n  sizes), with a \"Custom / not installed\" field for a tag that has not been\n  pulled yet, instead of a free-text box.\n* MCP output budgets cache the Settings read for 5 s instead of reading\n  `config.json` on every tool call."
-    },
-    {
-      "version": "0.15.2",
-      "date": "2026-11-13",
-      "body": "* **Settings no longer rewrites the OpenCode config on every save.**\n  `set_small_model()` returns unchanged when the value already matches, so the\n  dashboard's Save no longer creates a new `opencode.json.perun-backup-*` each\n  time. A JSONC comment loss is now logged explicitly.\n* **Downloads respect disk space.** `Prepare` refuses to start when the model\n  store has less than 2 GB free (Ollama reports the real size only once the pull\n  starts, so this is a safety net) and returns the free/required bytes.\n* Cancelling an already-finished job no longer leaves its id in the in-memory\n  cancellation set.\n* The **OpenCode small tasks** toggle is disabled with an explanation when a\n  custom endpoint is configured (OpenCode's `small_model` is provider-specific),\n  and the Local AI card warns when the endpoint is not loopback: prompts from the\n  local-AI consumers would leave the machine."
     }
   ]
 }

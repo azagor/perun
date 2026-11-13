@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.12
+
+*Released 2026-11-13.*
+
 ### VS Code: per-project client count for Mode B
 
 * `GET /api/vscode/status?project=<slug>` returns `project_clients`; the

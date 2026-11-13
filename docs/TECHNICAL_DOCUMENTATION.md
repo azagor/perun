@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.15.11 (see §15). VS Code trust badge follows the actual project
+**Latest release:** v0.15.12 (see §15). VS Code Mode B checks the project's own companion
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2981,6 +2981,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-13 — v0.15.12: VS Code Mode B checks the project's own companion
+
 ### 2026-11-13 — v0.15.11: VS Code trust badge follows the actual project
 
 ### 2026-11-13 — v0.15.10: VS Code trust accuracy and a neutral Mode B fallback
