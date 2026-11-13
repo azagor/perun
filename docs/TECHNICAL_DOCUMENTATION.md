@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.15.7 (see §15). VS Code linking is opt-in on project creation
+**Latest release:** v0.15.8 (see §15). Guard session-rule parity across dashboard and companion
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2961,6 +2961,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-13 — v0.15.8: Guard session-rule parity across dashboard and companion
+
 ### 2026-11-13 — v0.15.7: VS Code linking is opt-in on project creation
 
 ### 2026-11-13 — v0.15.6: VS Code fast resume and session picker split

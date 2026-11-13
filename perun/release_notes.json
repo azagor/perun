@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T18:24:06+00:00",
+  "generated": "2026-11-13T18:59:29+00:00",
   "releases": [
+    {
+      "version": "0.15.8",
+      "date": "2026-11-13",
+      "body": ""
+    },
     {
       "version": "0.15.7",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.14.6",
       "date": "2026-11-12",
       "body": "* The VS Code companion package now ships its MIT license\n  (`extensions/vscode/LICENSE`), so `vsce` no longer warns and the installed\n  extension carries the license text."
-    },
-    {
-      "version": "0.14.5",
-      "date": "2026-11-12",
-      "body": "* **Windows: paths with cmd metacharacters.** `_code_command()` quoted an\n  argument only when it contained a space, so a VSIX under a path like\n  `C:\\R&D\\…` was split at the `&` and `code` reported\n  `Extension 'c:\\…\\perun' not found`. Every argument is now quoted; verified\n  live with a `perun&co` directory.\n* **Download validation is total.** The packaged manifest must be ≤ 1 MB\n  (`ZipInfo.file_size`, so a zip bomb never expands into memory), and any decode\n  failure — encryption, unsupported compression, truncation — is treated as\n  \"not the companion\" instead of raising out of `perun install`.\n* The `publish-companion` job runs the extension unit tests before it publishes,\n  `perun install` no longer touches VS Code when the global install failed, and\n  `--no-vscode-download` no longer claims a `--vscode` flag that does not exist."
     }
   ]
 }
