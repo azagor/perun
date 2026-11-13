@@ -4,7 +4,16 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code: per-project client count for Mode B
+
+* `GET /api/vscode/status?project=<slug>` returns `project_clients`; the
+  dashboard only attempts a VS Code terminal when **this** project has a
+  connected companion, so a window open for another project no longer causes a
+  failed request and a fallback notice.
+* The decision is a pure module (`web/js/vscode_launch.js`) covered by
+  `extensions/vscode/tests/vscode_launch.test.js`: untrusted or no client →
+  external terminal with the matching notice; a trusted connected window
+  overrides a stale untrusted heartbeat.
 
 ## v0.15.11
 

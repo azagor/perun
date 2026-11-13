@@ -2699,13 +2699,21 @@ def _vscode_project_file(project: dict[str, Any], value: str) -> Path:
 
 
 @app.get("/api/vscode/status")
-def api_vscode_status() -> dict[str, Any]:
+def api_vscode_status(project: str = "") -> dict[str, Any]:
     projects = registry.list_projects(include_hidden=True)
     linked = sum(1 for p in projects if (p.get("ide") or {}).get("vscode_linked"))
+    project_clients = 0
+    if project:
+        target = registry.get_project(project)
+        if target:
+            project_clients = vscode_bridge.BRIDGE.client_count(int(target["id"]))
     status = vscode_workspace.status(
         linked_projects=linked,
         clients=vscode_bridge.BRIDGE.client_count(),
     )
+    # Machine-wide clients are not enough to decide whether *this* project can
+    # host a TUI; the dashboard asks with ?project=<slug>.
+    status["project_clients"] = project_clients
     candidates = [
         Path(config.REPO_ROOT) / "vscode" / "perun-overseer.vsix",
         Path(config.REPO_ROOT) / "installer" / "vscode" / "perun-overseer.vsix",

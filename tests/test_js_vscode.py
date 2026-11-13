@@ -55,8 +55,10 @@ def test_the_ide_badge_shows_a_pending_link_edit():
 
 def test_the_run_falls_back_without_an_error_when_vscode_cannot_host_it():
     text = _js()
-    # The check happens before the request; the fallback is informational.
-    assert "/api/vscode/status" in text
+    # The decision lives in js/vscode_launch.js, loaded before perun.js.
+    assert "VSCodeLaunch.shouldAttemptVscode" in text
+    index = (config.REPO_ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    assert "js/vscode_launch.js" in index
     assert "VS Code is in Restricted Mode - opened an external terminal" in text
     assert "VS Code companion is not connected - opened an external terminal" in text
     assert "VS Code companion not connected - opening an external terminal" not in text

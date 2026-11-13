@@ -132,6 +132,14 @@ def test_usage_refresh_is_single_flight(client, monkeypatch):
         server._USAGE_REFRESH_LOCK.release()
 
 
+def test_the_status_endpoint_can_scope_clients_to_a_project(client, project):
+    r = client.get(f"/api/vscode/status?project={project['slug']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["project_clients"] == 0
+    assert "connected_clients" in body
+
+
 def test_the_link_endpoint_rejects_an_unknown_launch_mode(client, project):
     r = client.post(f"/api/projects/{project['slug']}/vscode/link",
                     json={"launch_mode": "emacs"})

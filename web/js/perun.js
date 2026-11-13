@@ -843,6 +843,16 @@ if (!window.SessionPick) {
     console.error('perun: session_pick.js did not load; session labels are degraded');
 }
 
+/* Mode B pre-check (js/vscode_launch.js). If it is missing, try the request and
+   let the existing fallback handle a failure. */
+const VSCodeLaunch = window.VSCodeLaunch || {
+    shouldAttemptVscode: () => true,
+    fallbackReason: () => '',
+};
+if (!window.VSCodeLaunch) {
+    console.error('perun: vscode_launch.js did not load; VS Code launch falls back on the request');
+}
+
 function runControlButton(spec) {
     const btn = el('button', { class: spec.cls, title: spec.title });
     btn.setAttribute(spec.attr, '');
@@ -1666,14 +1676,16 @@ async function openProjectTui(p, opts = {}) {
             // untrusted or disconnected window used to surface a red error on
             // every Run, even though the external fallback worked.
             let vscodeStatus = null;
-            try { vscodeStatus = await api('/api/vscode/status'); } catch (_) { vscodeStatus = null; }
-            const untrusted = !!vscodeStatus && vscodeStatus.extension_trusted === false
-                && (!vscodeStatus.extension_project || vscodeStatus.extension_project === p.slug);
-            if (untrusted) {
-                toast('VS Code is in Restricted Mode - opened an external terminal. '
-                    + 'Trust the workspace to host the TUI in VS Code.', '');
-            } else if (vscodeStatus && !vscodeStatus.connected_clients) {
-                toast('VS Code companion is not connected - opened an external terminal.', '');
+            try {
+                vscodeStatus = await api(
+                    `/api/vscode/status?project=${encodeURIComponent(p.slug)}`);
+            } catch (_) { vscodeStatus = null; }
+            if (!VSCodeLaunch.shouldAttemptVscode(vscodeStatus, p.slug)) {
+                const reason = VSCodeLaunch.fallbackReason(vscodeStatus, p.slug);
+                toast(reason === 'untrusted'
+                    ? 'VS Code is in Restricted Mode - opened an external terminal. '
+                        + 'Trust the workspace to host the TUI in VS Code.'
+                    : 'VS Code companion is not connected - opened an external terminal.', '');
             } else {
                 try {
                     await api(`/api/runs/${runUid}/vscode/open`, { method: 'POST' });
@@ -1759,12 +1771,15 @@ async function refreshVSCodeStatus(slug = '') {
     const node = document.getElementById('pc-vscode-status');
     if (!node) return;
     try {
-        const s = await api('/api/vscode/status');
+        const s = await api(`/api/vscode/status${slug ? `?project=${encodeURIComponent(slug)}` : ''}`);
         const parts = [];
-        // The heartbeat is machine-wide; only claim this project is untrusted
-        // when that window reported this project (or reported no project).
-        const untrusted = s.extension_trusted === false
-            && (!s.extension_project || !slug || s.extension_project === slug);
+        // A connected companion for *this* project means it is trusted even if
+        // another window wrote the last heartbeat.
+        const clients = slug
+            ? Number(s.project_clients || 0)
+            : Number(s.connected_clients || 0);
+        const mine = !s.extension_project || !slug || s.extension_project === slug;
+        const untrusted = s.extension_trusted === false && mine && clients === 0;
         if (!s.detected) {
             parts.push('VS Code not detected');
         } else {
@@ -1774,7 +1789,7 @@ async function refreshVSCodeStatus(slug = '') {
                 : 'companion not installed');
             if (untrusted) parts.push('workspace untrusted (Restricted Mode)');
         }
-        if (s.connected_clients) parts.push(`${s.connected_clients} window(s) connected`);
+        if (clients) parts.push(`${clients} window(s) connected`);
         node.innerHTML = esc(parts.join(' · '));
         if (untrusted) {
             const trustBtn = el('button', { class: 'btn sm ghost', type: 'button', style: 'margin-left:8px' },
