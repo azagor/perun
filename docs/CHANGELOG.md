@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.3
+
+*Released 2026-11-13.*
+
 * **Boundary compaction works against a live OpenCode.** A body-less
   `POST /session/{id}/compact` is rejected with `Expected object`; the governor
   now sends `{}`. Verified against the running service (a real compaction

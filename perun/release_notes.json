@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T00:35:54+00:00",
+  "generated": "2026-11-13T01:05:33+00:00",
   "releases": [
+    {
+      "version": "0.15.3",
+      "date": "2026-11-13",
+      "body": "* **Boundary compaction works against a live OpenCode.** A body-less\n  `POST /session/{id}/compact` is rejected with `Expected object`; the governor\n  now sends `{}`. Verified against the running service (a real compaction\n  message comes back).\n* Two fast **Prepare** clicks reserve the download slot before the worker starts,\n  so the second click gets a clean \"a download is already running\" instead of a\n  job that fails immediately.\n* The download progress poll stops when the Settings card is no longer on the\n  page, and both Settings cards share one `/api/local-ai` fetch per render.\n* Enabling **OpenCode small tasks** warns first when `opencode.json` contains\n  comments (the rewrite drops them; a backup is kept).\n* **The Local AI model is a picker** of the models the runtime reports (with\n  sizes), with a \"Custom / not installed\" field for a tag that has not been\n  pulled yet, instead of a free-text box.\n* MCP output budgets cache the Settings read for 5 s instead of reading\n  `config.json` on every tool call."
+    },
     {
       "version": "0.15.2",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.14.1",
       "date": "2026-11-12",
       "body": "### VS Code: open the folder, not an untrusted workspace file\n\n* `POST /api/projects/{slug}/vscode/open` now opens the project **folder** by\n  default. A generated `.code-workspace` is a new VS Code trust scope and opens in\n  Restricted Mode, which disables the companion; the folder inherits the user's\n  existing trust. The workspace file stays opt-in (`workspace_file: true`).\n* The companion retries while the project is not registered yet, instead of\n  staying offline until a manual reconnect (extension 0.1.1).\n* Removed the unauthenticated `GET .../vscode/context` endpoint: selection text\n  can contain secrets and must not be readable by any local GET caller."
-    },
-    {
-      "version": "0.14.0",
-      "date": "2026-11-12",
-      "body": "### VS Code deep integration\n\n* Link any project to a generated `.code-workspace` from the wizard, project card\n  or Config panel. Linked projects show a badge and an **Open in VS Code** action.\n* Two launch modes: host the TUI in VS Code's integrated terminal (seamless\n  `@file#lines` selection insertion) or keep the external terminal while VS Code\n  follows edits. A per-run override is available from the Run caret.\n* Live edit following: the global OpenCode event stream is mapped to a project,\n  validated against the project root, debounced and sent to the companion for\n  reveal + highlight. Without the companion, linked projects fall back to\n  `code --reuse-window --goto`.\n* Companion extension (`perun.perun-overseer`): status bar, ticket-authenticated\n  loopback WebSocket, selection command (`Ctrl+Alt+P`), terminal open/focus/close,\n  and `terminal.processId` binding so Stop/Focus keep working.\n* Security: single-use workspace-bound tickets, no long-lived token in a URL,\n  fixed message schema, loopback-only endpoints, ignored workspace-level\n  `perun.*` settings, path validation, and no silent VS Code install.\n* VSIX is built in the release workflow and installed per-user by the Windows\n  installer; the dashboard reports a missing/outdated companion.\n\n### Documentation refresh\n\n* `README.md` and `docs/DESIGN.md` now describe the Telegram card grammar,\n  coloured buttons, live run drafts and per-chat message scheduling;\n  `AGENTS_OPTIMIZATION.md` and the Shared Projects PRD name v0.13.3."
     }
   ]
 }
