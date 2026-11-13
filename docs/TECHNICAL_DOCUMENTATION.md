@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.15.9 (see §15). VS Code focus-safe edit follow and workspace trust
+**Latest release:** v0.15.10 (see §15). VS Code trust accuracy and a neutral Mode B fallback
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2981,6 +2981,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-13 — v0.15.10: VS Code trust accuracy and a neutral Mode B fallback
+
 ### 2026-11-13 — v0.15.9: VS Code focus-safe edit follow and workspace trust
 
 ### 2026-11-13 — v0.15.8: Guard session-rule parity across dashboard and companion

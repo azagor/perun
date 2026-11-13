@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.10
+
+*Released 2026-11-13.*
+
 ### VS Code: per-project trust and safer status writes
 
 * The companion heartbeat now carries `project_slug`, and `GET
