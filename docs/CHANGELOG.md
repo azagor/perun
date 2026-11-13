@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.6
+
+*Released 2026-11-13.*
+
 ### VS Code companion 0.1.6: fast resume vs session picker
 
 * The **Perun TUI** status-bar item now fast-resumes the newest TUI chat — the

@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T17:03:25+00:00",
+  "generated": "2026-11-13T17:30:14+00:00",
   "releases": [
+    {
+      "version": "0.15.6",
+      "date": "2026-11-13",
+      "body": "### VS Code companion 0.1.6: fast resume vs session picker\n\n* The **Perun TUI** status-bar item now fast-resumes the newest TUI chat — the\n  dashboard's **Run** — instead of opening a picker.\n* **Perun: Choose TUI session…** (`perun.openTui`) is the picker: resume latest,\n  any of the last 50 sessions (headless ones labelled, never auto-selected), or\n  start a new session. `perun.openTui` keeps its id, so existing keybindings\n  still work.\n* Companion 0.1.6, suite 10/10."
+    },
     {
       "version": "0.15.5",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.14.4",
       "date": "2026-11-12",
       "body": "### Windows: the companion install survives paths with spaces\n\n* `install_vscode_extension()` passed `[\"cmd.exe\", \"/c\", …]` to\n  `subprocess.run`, which `cmd.exe` re-parses and de-quotes. With both the\n  `code.cmd` shim (`…\\Microsoft VS Code\\…`) and the VSIX under a path with a\n  space (a user name or install directory), it stripped the quotes and failed\n  with `'…\\Microsoft' is not recognized as an internal or external command`.\n  The line is now wrapped in the extra quote pair `cmd.exe /c` expects, and a\n  regression test pins it.\n\n### Companion distribution hardening\n\n* The VSIX is published by its own `publish-companion` workflow job, so a\n  failing Windows or macOS installer build can no longer leave the release\n  without a downloadable companion (that is how v0.14.2 shipped nothing).\n* A downloaded VSIX must contain `extension/package.json` for\n  `perun`/`perun-overseer`; a proxy page or a foreign archive is refused and\n  never written to disk.\n* `perun install` is a no-op when `code --list-extensions --show-versions`\n  already reports the VSIX version (`--force` reinstalls), and\n  `--no-vscode-download` restricts it to a local VSIX for offline installs.\n* The Windows installer no longer copies the VSIX twice (`installer\\vscode` is\n  excluded from the recursive copy; the file is still installed to\n  `{app}\\vscode`), and `AGENTS.md` records that the companion is per-user and\n  never installs VS Code."
-    },
-    {
-      "version": "0.14.3",
-      "date": "2026-11-12",
-      "body": "### Release packaging: the companion actually ships\n\n* `npm run package` creates `installer/vscode/` before asking `vsce` to write\n  the VSIX. The directory is gitignored and therefore absent in a fresh clone,\n  so the release workflow died with `ENOENT` at the packaging step: **v0.14.2\n  published no GitHub release at all**, and v0.14.1 shipped only the macOS\n  `.pkg` (no `PerunSetup.exe`).\n* Every GitHub release now attaches `perun-overseer.vsix` next to the\n  installers, so source, command-line and Linux installations can install the\n  companion without building it.\n* `python -m perun install` (and `--machine`) installs the companion for the\n  current user when VS Code is present — from a local VSIX or the release asset —\n  and reports a clear \"skipped\" line when VS Code, the network, or a per-user\n  install is unavailable. `--skip-vscode` opts out.\n* `installer/build.ps1` builds the companion (when npm is available) before\n  compiling the setup executable, and says so loudly instead of silently\n  shipping an installer without it."
     }
   ]
 }
