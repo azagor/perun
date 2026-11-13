@@ -1931,6 +1931,16 @@ opens in Restricted Mode until the user trusts it, which would disable the
 companion. The folder inherits the user's existing trust decision; the workspace
 file remains an opt-in (`workspace_file: true`).
 
+**Workspace trust is the user's decision.** VS Code does not let an extension
+grant trust, and Perun never tries to: in Restricted Mode the companion writes
+`~/.perun/vscode/extension.json` with `trusted: false` (so the dashboard can say
+"workspace untrusted" instead of "companion not installed"), refuses to connect
+or start a TUI, and reconnects immediately on `onDidGrantWorkspaceTrust`.
+`GET /api/vscode/status` exposes `extension_trusted`; the dashboard's VS Code
+card shows a **How to trust** hint (the banner's *Yes, I trust the authors*, or
+Command Palette → *Workspaces: Manage Workspace Trust*). The companion's
+**Perun: Manage Workspace Trust** command opens the same UI.
+
 ### Data model
 
 * `projects.ide` (JSON): `vscode_linked`, `workspace_path`,
@@ -2005,12 +2015,21 @@ terminal as before and then calls `vscode/open` to open or focus the workspace.
 event hub, filters with `vscode_events.is_edit_event()`, maps the session id to
 its project (or the event location), extracts a path/range from write/edit/patch
 tool input, validates the path against the project root, debounces 300 ms per
-file, and broadcasts `edit.reveal`. Without a companion, a linked project falls
-back to `code --reuse-window --goto`. Recent edits are replayed on `hello.ok`.
-If a run produced **no live edit event**, `reveal_changes_since()` reveals up to
-three files from `git status` whose mtime is newer than the run start; it runs at
-terminal close and on the dashboard Finish action, and does nothing when a live
-edit was already broadcast.
+file, and broadcasts `edit.reveal`. **Without a connected companion the edit is
+not revealed at all**: the `code --reuse-window --goto` fallback activates the
+VS Code window and steals focus from whatever the operator is doing, so it is
+reserved for an explicit Open. Recent edits are replayed on `hello.ok`.
+If a run produced **no live edit event**, `reveal_changes_since()` broadcasts up
+to three files from `git status` whose mtime is newer than the run start to a
+connected companion (and does nothing without one); it runs at terminal close
+and on the dashboard Finish action, and does nothing when a live edit was
+already broadcast.
+
+**Focus.** The companion never opens an editor in an unfocused window: it shows
+a clickable status-bar hint (`perun.revealLastEdit`) instead. In a focused
+window it highlights the file in place when visible, and otherwise opens it
+**beside** the active editor with `preserveFocus: true`, reusing that column, so
+keystrokes keep going to the operator's file.
 
 **Selection.** The companion sends `selection.shared`; Perun validates the path,
 caps the text at 32 KB and answers `selection.ok`. `insert` is chosen only in
@@ -2028,8 +2047,9 @@ clipboard.
 * The extension ignores workspace-level `perun.*` settings, enforces loopback,
   disables itself in untrusted and remote/WSL windows, and requires an explicit
   command for every selection (no automatic exfiltration).
-* Missing VS Code or extension: linking still works, edit-follow falls back to
-  `code --goto`, and the dashboard reports the missing piece. No service crash.
+* Missing VS Code or extension: linking still works, the dashboard reports the
+  missing piece, and background edit-follow stays silent instead of raising the
+  editor window. No service crash.
 * Closing a companion terminal marks the run done; Stop sends
   `terminal.close` and marks it cancelled. A disconnected companion falls back to
   the existing pid/marker tracking.

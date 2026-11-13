@@ -20,7 +20,7 @@ const {
   originLabel,
 } = require('./session_pick');
 
-const EXTENSION_VERSION = '0.1.6';
+const EXTENSION_VERSION = '0.1.8';
 const PROTOCOL_VERSION = 1;
 const TERMINAL_STATE_KEY = 'perun.terminals';
 
@@ -43,6 +43,11 @@ const terminalIds = new Map();
 let projectSlug = '';
 let activeRun = null;
 let startingTui = false;
+/** The newest agent edit, for the "click to reveal" status item. */
+let lastEdit = null;
+/** Column used for the beside-preview, reused for later edits. */
+let followColumn = null;
+let followItem;
 
 function userSetting(key, fallback) {
   // Never trust a workspace-level `perun.*` setting: a cloned repository could
@@ -81,6 +86,24 @@ function setStatus(text, tooltip) {
   statusItem.tooltip = tooltip || 'Perun Overseer';
   statusItem.show();
   log(`${text}${tooltip ? ' — ' + tooltip : ''}`);
+}
+
+function writeHeartbeat() {
+  // Written even in Restricted Mode so the dashboard can say "untrusted"
+  // instead of "companion not installed". Trust is never granted here; this is
+  // a status report only.
+  try {
+    const dir = path.join(perunHome(), 'vscode');
+    fs.mkdirSync(dir, { recursive: true });
+    const payload = {
+      version: EXTENSION_VERSION,
+      trusted: !!vscode.workspace.isTrusted,
+      last_seen: new Date().toISOString(),
+      window_id: windowId,
+    };
+    fs.writeFileSync(path.join(dir, 'extension.json'),
+      JSON.stringify(payload, null, 2) + '\n', 'utf8');
+  } catch (_) { /* diagnostics must never break activation */ }
 }
 
 function log(message) {
@@ -205,9 +228,12 @@ async function connect() {
     return;
   }
   if (!vscode.workspace.isTrusted) {
-    setStatus('Perun: untrusted workspace', 'Trust this workspace to connect to Perun.');
+    setStatus('Perun: untrusted workspace',
+      'Trust this workspace to connect to Perun. Click to manage trust.');
+    if (statusItem) statusItem.command = 'perun.manageTrust';
     return;
   }
+  if (statusItem) statusItem.command = 'perun.openDashboard';
   setStatus('Perun: connecting…');
   try {
     const ticket = await requestTicket(folder);
@@ -428,7 +454,8 @@ function rebindExistingTerminals() {
 
 function revealEdit(message, folder) {
   if (!userSetting('perun.autoFollowEdits', true)) return;
-  if (userSetting('perun.revealMode', 'open') === 'off') return;
+  const mode = userSetting('perun.revealMode', 'open');
+  if (mode === 'off') return;
   const rel = String(message.path || '');
   if (!rel) return;
   const target = path.join(folder.uri.fsPath, rel);
@@ -437,26 +464,86 @@ function revealEdit(message, folder) {
   const end = Math.max(start, Number(message.end_line) || start);
   const range = new vscode.Range(start - 1, 0, end - 1, 0);
   const uri = vscode.Uri.file(target);
-  vscode.window.showTextDocument(uri, { preview: true, preserveFocus: true }).then((editor) => {
+
+  lastEdit = { uri, range, rel, start, kind: message.kind };
+  const visible = vscode.window.visibleTextEditors.find(
+    (editor) => editor.document.uri.toString() === uri.toString());
+
+  if (visible) {
+    if (followItem) followItem.hide();
+    visible.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    if (mode === 'open') decorate(visible, range, message);
+    return;
+  }
+
+  if (!vscode.window.state.focused || mode === 'reveal') {
+    // Unfocused window, or the conservative mode: show *where* the edit is
+    // without opening an editor, which would replace the file in use.
+    showFollowItem(rel, start);
+    return;
+  }
+
+  // Open beside the active editor and keep the focus there, so typing keeps
+  // going to the operator's file; later edits reuse that column.
+  const viewColumn = followColumn || vscode.ViewColumn.Beside;
+  vscode.window.showTextDocument(uri, {
+    preview: true,
+    preserveFocus: true,
+    viewColumn,
+  }).then((editor) => {
+    followColumn = editor.viewColumn || viewColumn;
+    if (followItem) followItem.hide();
     editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-    if (userSetting('perun.revealMode', 'open') === 'reveal') return;
-    const decoration = vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: new vscode.ThemeColor(
-        message.kind === 'deleted'
-          ? 'diffEditor.removedTextBackground'
-          : 'diffEditor.insertedTextBackground'),
-      overviewRulerColor: new vscode.ThemeColor('editorOverviewRuler.infoForeground'),
-      overviewRulerLane: vscode.OverviewRulerLane.Right,
+    if (mode === 'open') decorate(editor, range, message);
+  }, () => {
+    // The remembered column may be gone; offer the click-to-reveal hint.
+    showFollowItem(rel, start);
+  });
+}
+
+function decorate(editor, range, message) {
+  const decoration = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: new vscode.ThemeColor(
+      message.kind === 'deleted'
+        ? 'diffEditor.removedTextBackground'
+        : 'diffEditor.insertedTextBackground'),
+    overviewRulerColor: new vscode.ThemeColor('editorOverviewRuler.infoForeground'),
+    overviewRulerLane: vscode.OverviewRulerLane.Right,
+  });
+  editor.setDecorations(decoration, [range]);
+  setTimeout(() => {
+    try {
+      editor.setDecorations(decoration, []);
+      decoration.dispose();
+    } catch (_) { /* editor closed */ }
+  }, 8000);
+}
+
+function showFollowItem(rel, start) {
+  if (!followItem) return;
+  followItem.text = `$(edit) ${path.basename(rel)}:${start}`;
+  followItem.tooltip = `Perun: ${rel}:${start} changed - click to reveal`;
+  followItem.show();
+}
+
+async function revealLastEdit() {
+  const edit = lastEdit;
+  if (!edit) {
+    vscode.window.showInformationMessage('Perun: no recent agent edit.');
+    return;
+  }
+  if (followItem) followItem.hide();
+  try {
+    const editor = await vscode.window.showTextDocument(edit.uri, {
+      preview: false,
+      viewColumn: followColumn || vscode.ViewColumn.Active,
+      preserveFocus: false,
     });
-    editor.setDecorations(decoration, [range]);
-    setTimeout(() => {
-      try {
-        editor.setDecorations(decoration, []);
-        decoration.dispose();
-      } catch (_) { /* editor closed */ }
-    }, 8000);
-  }, () => { /* the editor may refuse a preview; not fatal */ });
+    editor.revealRange(edit.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    editor.selection = new vscode.Selection(edit.range.start, edit.range.start);
+    decorate(editor, edit.range, { kind: edit.kind });
+  } catch (_) { /* the file may have been deleted */ }
 }
 
 function sendSelection() {
@@ -569,6 +656,11 @@ async function apiGet(pathname) {
 }
 
 async function startTui(choose = true) {
+  if (!vscode.workspace.isTrusted) {
+    vscode.window.showInformationMessage(
+      'Perun: trust this workspace before opening a TUI (Perun: Manage Workspace Trust).');
+    return;
+  }
   if (!projectSlug) {
     vscode.window.showInformationMessage(
       'Perun: open a registered Perun project folder first (the status bar says "not registered" otherwise).');
@@ -684,22 +776,41 @@ function activate(context) {
   statusItem.command = 'perun.openDashboard';
   setStatus('Perun: starting…');
   context.subscriptions.push(statusItem);
+  writeHeartbeat();
   tuiItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 39);
   tuiItem.text = '$(terminal) Perun TUI';
   tuiItem.tooltip = 'Resume the latest TUI chat (Command Palette: "Perun: Choose TUI session…")';
   tuiItem.command = 'perun.resumeTui';
   tuiItem.show();
   context.subscriptions.push(tuiItem);
+  followItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
+  followItem.command = 'perun.revealLastEdit';
+  context.subscriptions.push(followItem);
   context.subscriptions.push(
     vscode.commands.registerCommand('perun.openDashboard', openDashboard),
     vscode.commands.registerCommand('perun.sendSelection', sendSelection),
     vscode.commands.registerCommand('perun.resumeTui', () => startTui(false)),
     vscode.commands.registerCommand('perun.openTui', startTui),
+    vscode.commands.registerCommand('perun.revealLastEdit', revealLastEdit),
     vscode.commands.registerCommand('perun.reconnect', () => {
       reconnectAttempt = 0;
       connect();
     }),
+    vscode.commands.registerCommand('perun.manageTrust', async () => {
+      try {
+        await vscode.commands.executeCommand('workbench.trust.manage');
+      } catch (_) {
+        vscode.window.showInformationMessage(
+          'Perun: run "Workspaces: Manage Workspace Trust" from the Command Palette, then trust this folder.');
+      }
+    }),
   );
+  // Trust granted without reloading the window: record it and reconnect now.
+  context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => {
+    writeHeartbeat();
+    reconnectAttempt = 0;
+    connect();
+  }));
   context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
     for (const [runUid, entry] of Array.from(terminals.entries())) {
       if (entry.terminal === terminal) {

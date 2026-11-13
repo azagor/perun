@@ -4,11 +4,46 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code: an untrusted workspace is visible and recoverable
+
+* The companion now writes `~/.perun/vscode/extension.json` with `trusted: false`
+  in Restricted Mode (and `true` once trusted), so the dashboard can report
+  **“workspace untrusted (Restricted Mode)”** instead of the misleading
+  “companion not installed”.
+* `GET /api/vscode/status` exposes `extension_trusted`; the project's VS Code
+  card shows a **How to trust** hint — the banner's *Yes, I trust the authors*, or
+  Command Palette → *Workspaces: Manage Workspace Trust*. Perun never grants
+  trust itself, and opening the dashboard does not change it.
+* New **Perun: Manage Workspace Trust** command opens VS Code's trust UI; the
+  companion reconnects immediately on `onDidGrantWorkspaceTrust` (no window
+  reload) and refuses to start a TUI while the workspace is untrusted.
+* Companion 0.1.7.
+
+### VS Code: edit-follow no longer steals focus
+
+* **No automatic `code --goto`.** A background edit is never revealed by
+  launching VS Code; that activated the window and interrupted work in another
+  project. An explicit Open still uses `code --goto`.
+* In a focused window the companion highlights a visible file in place, or opens
+  a new file **beside** the active editor with `preserveFocus: true`, reusing
+  that column, so typing keeps going to your file.
+* In an unfocused window it changes nothing: a clickable
+  `$(edit) file:line` status item shows where the edit is, and
+  **Perun: Reveal Last Agent Edit** opens it deliberately. `reveal` mode now
+  means "highlight only an already-open file"; `open` keeps the beside preview.
+* Companion 0.1.8.
 
 ## v0.15.8
 
 *Released 2026-11-13.*
+
+### Session-rule parity guard
+
+* A node test requires both `web/js/session_pick.js` and
+  `extensions/vscode/src/session_pick.js` and fails on drift, so the dashboard's
+  Run and the companion's fast resume cannot diverge.
+* The companion manifest test covers `perun.resumeTui`, and the Config badge has
+  its own id instead of a broad selector.
 
 ## v0.15.7
 

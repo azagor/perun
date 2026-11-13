@@ -2,7 +2,7 @@
   "name": "perun-overseer",
   "displayName": "Perun Overseer",
   "description": "Perun workspace link, live agent edit following and OpenCode selection hand-off",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "publisher": "perun",
   "license": "MIT",
   "repository": {
@@ -48,8 +48,16 @@
         "title": "Perun: Choose TUI session\u00e2\u20ac\u00a6"
       },
       {
+        "command": "perun.revealLastEdit",
+        "title": "Perun: Reveal Last Agent Edit"
+      },
+      {
         "command": "perun.reconnect",
         "title": "Perun: Reconnect"
+      },
+      {
+        "command": "perun.manageTrust",
+        "title": "Perun: Manage Workspace Trust"
       }
     ],
     "menus": {
@@ -82,7 +90,7 @@
           "type": "boolean",
           "default": true,
           "scope": "application",
-          "description": "Open and highlight files edited by an OpenCode agent."
+          "description": "Show where an OpenCode agent edited: highlight a visible file, or offer a click-to-reveal status hint. Never raises the window."
         },
         "perun.revealMode": {
           "type": "string",
@@ -93,7 +101,7 @@
           ],
           "default": "open",
           "scope": "application",
-          "description": "How agent edits are shown in the editor."
+          "description": "Open = show the edited file beside the active editor (focused window only) and highlight it. Reveal = only highlight a file that is already open, otherwise show a clickable status-bar hint. Off = do nothing."
         }
       }
     }

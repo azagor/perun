@@ -1,10 +1,10 @@
 {
-  "generated": "2026-11-13T18:59:29+00:00",
+  "generated": "2026-11-13T20:33:40+00:00",
   "releases": [
     {
       "version": "0.15.8",
       "date": "2026-11-13",
-      "body": ""
+      "body": "### Session-rule parity guard\n\n* A node test requires both `web/js/session_pick.js` and\n  `extensions/vscode/src/session_pick.js` and fails on drift, so the dashboard's\n  Run and the companion's fast resume cannot diverge.\n* The companion manifest test covers `perun.resumeTui`, and the Config badge has\n  its own id instead of a broad selector."
     },
     {
       "version": "0.15.7",

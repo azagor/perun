@@ -14,6 +14,39 @@ def _project(tmp_path):
     return {"slug": "demo", "name": "Demo", "path": str(root)}
 
 
+def test_status_reports_an_untrusted_companion(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    path = vscode_workspace.heartbeat_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "version": "0.1.7", "trusted": False,
+        "last_seen": "2026-11-13T00:00:00+00:00"}), encoding="utf-8")
+
+    st = vscode_workspace.status(linked_projects=1, clients=0)
+    assert st["extension_installed"] is True
+    assert st["extension_trusted"] is False
+    assert st["extension_version"] == "0.1.7"
+
+
+def test_status_reports_a_trusted_companion(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    path = vscode_workspace.heartbeat_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "version": "0.1.7", "trusted": True}), encoding="utf-8")
+
+    assert vscode_workspace.status()["extension_trusted"] is True
+
+
+def test_status_tolerates_an_old_heartbeat_without_trust(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    path = vscode_workspace.heartbeat_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": "0.1.4"}), encoding="utf-8")
+
+    assert vscode_workspace.status()["extension_trusted"] is None
+
+
 def test_generate_writes_a_managed_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     project = _project(tmp_path)

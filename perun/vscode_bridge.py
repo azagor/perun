@@ -400,6 +400,9 @@ class VSCodeBridge:
             "protocol": int(client.get("protocol") or 0),
             "last_seen": registry.now_iso(),
             "window_id": str(client.get("window_id") or ""),
+            # A client can only connect from a trusted workspace, so this also
+            # clears a stale "untrusted" report written by the extension.
+            "trusted": True,
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -484,11 +487,12 @@ class VSCodeBridge:
                 recent.append(edit)
                 self._last_edit[project_id] = now
             if not self.client_count(project_id):
-                if ide.get("vscode_linked"):
-                    # No companion installed/connected: the fixed `code --goto`
-                    # path still gives live reveal without any extension.
-                    target = Path(str(project.get("path") or "")) / edit["path"]
-                    vscode_workspace.reveal(str(target), int(edit.get("start_line") or 1))
+                # Never launch or raise VS Code for a background edit: the
+                # `code --goto` fallback activates the window and steals focus
+                # from whatever the operator is doing. Only a connected
+                # companion reveals; an explicit "Open in VS Code" still does.
+                LOG.debug("edit in %s: no VS Code companion connected; not revealing",
+                          project.get("slug"))
                 return
             self.broadcast(project_id, {"type": "edit.reveal", **edit})
         except Exception:  # pragma: no cover - one bad event must not kill the hub
@@ -552,10 +556,11 @@ class VSCodeBridge:
                 continue
             edit = {"path": rel, "start_line": 1, "end_line": 1,
                     "kind": "changed", "tool": "fallback"}
-            if self.client_count(project_id):
-                self.broadcast(project_id, {"type": "edit.reveal", **edit})
-            else:
-                vscode_workspace.reveal(str(target), 1)
+            if not self.client_count(project_id):
+                # Same rule as live edits: no companion means no window
+                # activation. The dashboard can still open the project.
+                continue
+            self.broadcast(project_id, {"type": "edit.reveal", **edit})
             reveals += 1
             if reveals >= 3:
                 break

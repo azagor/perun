@@ -53,6 +53,29 @@ def test_the_ide_badge_shows_a_pending_link_edit():
     assert "will unlink (save)" in text
 
 
+def test_the_vscode_trust_state_is_surfaced_and_recoverable():
+    js = _js()
+    assert "extension_trusted" in js
+    assert "workspace untrusted (Restricted Mode)" in js
+    assert "How to trust" in js
+    assert "Workspaces: Manage Workspace Trust" in js
+
+    root = Path(config.REPO_ROOT) / "extensions" / "vscode"
+    extension = (root / "src" / "extension.js").read_text(encoding="utf-8")
+    assert "writeHeartbeat" in extension
+    assert "onDidGrantWorkspaceTrust" in extension
+    assert "workbench.trust.manage" in extension
+    assert "trust this workspace before opening a TUI" in extension
+
+    package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    assert "perun.manageTrust" in {
+        command["command"] for command in package["contributes"]["commands"]
+    }
+    assert "perun.revealLastEdit" in {
+        command["command"] for command in package["contributes"]["commands"]
+    }
+
+
 def test_the_companion_package_is_a_valid_extension_manifest():
     root = Path(config.REPO_ROOT) / "extensions" / "vscode"
     package = json.loads((root / "package.json").read_text(encoding="utf-8"))
@@ -76,6 +99,11 @@ def test_the_companion_package_is_a_valid_extension_manifest():
     assert "rebindTerminal" in extension
     assert "vscode.env.remoteName" in extension
     assert "vscode.workspace.isTrusted" in extension
+    # Edit-follow never steals focus.
+    assert "visibleTextEditors" in extension
+    assert "vscode.window.state.focused" in extension
+    assert "showFollowItem" in extension
+    assert "preserveFocus: true" in extension
     assert "perun.dashboard" not in extension
     assert "simpleBrowser.show" in extension
     assert "embed-ticket" in extension

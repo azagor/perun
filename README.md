@@ -56,10 +56,11 @@ them all — no matter which folder you happened to open.
   room messages becomes one digest card with a one-tap mute, and `/pending`
   always lists what is waiting.
 * **VS Code integration.** Link a project to a workspace, host the TUI inside VS
-  Code or keep the external terminal, follow agent edits with reveal + highlight,
-  and send a code selection to the active session as `@file#lines`. A session
-  picker mirrors the dashboard Run caret; without the companion, `code --goto`
-  and the clipboard still work.
+  Code or keep the external terminal, and see agent edits **without losing
+  focus**: a visible file is highlighted in place, a new file opens beside the
+  active editor, and an unfocused window only gets a clickable status hint. A
+  session picker mirrors the dashboard Run caret; without the companion, an
+  explicit Open still uses `code --goto` and the clipboard still works.
 * **Ask the machine without spending a run.** A deterministic router answers
   status / pending / projects / runs / health / usage / diff / resume from the
   registry, sends everything else to the right project, and records coverage so

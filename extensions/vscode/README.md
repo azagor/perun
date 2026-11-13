@@ -3,7 +3,11 @@
 Connects a VS Code workspace to the local **Perun** service.
 
 - Status bar: linked / connected / offline.
-- Opens the files an OpenCode agent edits and highlights the changed range.
+- Opens the files an OpenCode agent edits and highlights the changed range —
+  **without stealing focus**: a visible file is highlighted in place, a new file
+  opens beside the active editor (`preserveFocus`), and an unfocused window only
+  gets a clickable `$(edit) file:line` status hint. **Perun: Reveal Last Agent
+  Edit** opens it deliberately.
 - **Perun: Send Selection to OpenCode** (`Ctrl+Alt+P`) sends the selection to
   Perun; in a VS Code-hosted TUI it is inserted as `@file#lines`, otherwise it
   is copied to the clipboard.
@@ -15,6 +19,10 @@ Connects a VS Code workspace to the local **Perun** service.
   OpenCode terminal beside the editor.
 - **Perun Dashboard** opens the dashboard directly in VS Code's **Simple
   Browser** tab; there is no wrapper page or second click.
+- **Restricted Mode is respected.** The companion reports `trusted: false`,
+  refuses to connect or start a TUI, and reconnects as soon as you trust the
+  workspace. Use **Perun: Manage Workspace Trust** (or the banner's *Yes, I
+  trust the authors*) — Perun cannot grant trust itself.
 
 The extension only talks to a loopback Perun endpoint and reads the local API
 token from `PERUN_HOME/api-token` (or `~/.perun/api-token`). Workspace-level

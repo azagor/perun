@@ -219,7 +219,8 @@ def test_unregister_drops_the_window_terminals(bridge, project):
     assert bridge.focus_terminal(run["run_uid"]) is False
 
 
-def test_run_completion_fallback_reveals_changed_files(bridge, project, monkeypatch):
+def test_run_completion_fallback_is_silent_without_a_companion(bridge, project, monkeypatch):
+    """No connected client means no window activation (focus theft)."""
     from datetime import datetime, timezone
     from pathlib import Path
 
@@ -237,8 +238,36 @@ def test_run_completion_fallback_reveals_changed_files(bridge, project, monkeypa
                         lambda path, line=1, **kwargs: calls.append((path, line)))
 
     since = datetime.now(timezone.utc).isoformat()
-    assert bridge.reveal_changes_since(project, since) == 1
-    assert calls and calls[0][0].endswith("new-file.py")
+    assert bridge.reveal_changes_since(project, since) == 0
+    assert calls == []
+
+
+def test_a_live_edit_does_not_raise_vscode_without_a_companion(bridge, project, monkeypatch):
+    from pathlib import Path
+
+    calls = []
+    monkeypatch.setattr("perun.vscode_bridge.vscode_workspace.reveal",
+                        lambda path, line=1, **kwargs: calls.append((path, line)))
+    session = registry.create_session(project["id"], opencode_session_id="ses_v3")
+    Path(project["path"], "app.py").write_text("alpha\nbeta\n", encoding="utf-8")
+    _ = session
+
+    bridge._on_event({
+        "type": "message.part.updated",
+        "data": {
+            "sessionID": "ses_v3",
+            "part": {
+                "type": "tool",
+                "tool": "edit",
+                "state": {
+                    "status": "completed",
+                    "input": {"filePath": "app.py", "oldString": "beta",
+                              "newString": "beta\ngamma"},
+                },
+            },
+        },
+    })
+    assert calls == []
 
 
 def test_an_expired_embed_ticket_is_refused(bridge):

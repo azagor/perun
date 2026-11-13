@@ -1747,6 +1747,7 @@ async function refreshVSCodeStatus() {
     try {
         const s = await api('/api/vscode/status');
         const parts = [];
+        const untrusted = s.extension_trusted === false;
         if (!s.detected) {
             parts.push('VS Code not detected');
         } else {
@@ -1754,9 +1755,16 @@ async function refreshVSCodeStatus() {
             parts.push(s.extension_installed
                 ? `companion ${s.extension_version || 'installed'}`
                 : 'companion not installed');
+            if (untrusted) parts.push('workspace untrusted (Restricted Mode)');
         }
         if (s.connected_clients) parts.push(`${s.connected_clients} window(s) connected`);
         node.innerHTML = esc(parts.join(' · '));
+        if (untrusted) {
+            const trustBtn = el('button', { class: 'btn sm ghost', type: 'button', style: 'margin-left:8px' },
+                'How to trust');
+            trustBtn.addEventListener('click', showVSCodeTrustHelp);
+            node.appendChild(trustBtn);
+        }
         if (s.detected && !s.extension_installed && s.install_command) {
             const btn = el('button', { class: 'btn sm ghost', type: 'button', style: 'margin-left:8px' },
                 'Copy install command');
@@ -1771,6 +1779,22 @@ async function refreshVSCodeStatus() {
     } catch (_) {
         node.textContent = 'companion status unavailable';
     }
+}
+
+function showVSCodeTrustHelp() {
+    const body = el('div', {},
+        `<p class="secondary">VS Code is running this folder in <b>Restricted Mode</b>.
+         Perun cannot grant trust — that is a decision only you can make in VS Code.</p>
+         <ol class="secondary" style="margin:10px 0 0 18px;line-height:1.7">
+            <li>In the VS Code window, click <b>Yes, I trust the authors</b> in the Restricted Mode banner.</li>
+            <li>If the banner is gone, run <b>Workspaces: Manage Workspace Trust</b> from the Command Palette,
+                then trust this folder.</li>
+            <li>The companion reconnects immediately — no window reload is needed.</li>
+         </ol>
+         <p class="muted" style="margin-top:10px">Opening the dashboard in VS Code does not change trust.</p>`);
+    modal('Trust the VS Code workspace', body, [
+        { label: 'Close', class: 'ghost', onClick: closeModal },
+    ]);
 }
 
 async function cancelProjectRun(runUid) {

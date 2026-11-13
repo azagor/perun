@@ -1123,11 +1123,13 @@ The Perun side of the VS Code integration (no second daemon).
 * `_on_event()` subscribes to the global `opencode_api.EventHub`, maps
   `sessionID` → project (`registry.project_for_opencode_session()` or location),
   extracts an edit with `vscode_events.extract_edit()`, debounces per file and
-  broadcasts `edit.reveal`. Without a companion it falls back to
-  `vscode_workspace.reveal()` (`code --reuse-window --goto`).
+  broadcasts `edit.reveal`. Without a connected companion it is silent — the
+  `code --reuse-window --goto` fallback would activate the window and steal
+  focus, so it is reserved for an explicit Open.
 * `reveal_changes_since()` is the run-completion fallback: when no live edit was
-  broadcast, it reveals up to three dirty files from `git status` newer than the
-  run start (terminal close / Finish).
+  broadcast, it broadcasts up to three dirty files from `git status` newer than
+  the run start to a connected companion, and does nothing without one
+  (terminal close / Finish).
 * `start()` / `stop()` manage the one global event subscription.
 * `BRIDGE` is the process-wide singleton imported by `server.py`.
 
@@ -1947,6 +1949,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   companion: `latestResumeCandidate()` never auto-selects a session whose first
   run was headless (`tui === false`), and `originLabel()` renders
   `TUI chat` / `headless run`. Covered by `tests/session_pick.test.js`.
+* Workspace trust: `writeHeartbeat()` records `trusted` in
+  `~/.perun/vscode/extension.json` even in Restricted Mode, `connect()` refuses
+  an untrusted window, `startTui()` refuses there too, and
+  `onDidGrantWorkspaceTrust` reconnects. `perun.manageTrust` opens
+  `workbench.trust.manage`; status exposes `extension_trusted`.
 * `esbuild.js` / `.vscodeignore` / `README.md` — bundled `dist/extension.js`,
   `ws` inlined, packaged with `vsce` into `installer/vscode/perun-overseer.vsix`.
   `npm run package` creates that (gitignored) directory first, so a fresh clone

@@ -292,8 +292,17 @@ with `python -m perun project-roots --add <name> <path>`.
   could redirect the endpoint). Paths from the editor are validated against the
   project root. `code` launches use a fixed argv; the extension cannot make Perun
   run arbitrary commands. Mode B's terminal id/pid must stay bound to the run so
-  Stop/Focus survive a restart. A missing VS Code or extension degrades to the
-  `code --goto` reveal and clipboard selection, never to a broken service.
+  Stop/Focus survive a restart. A missing VS Code or extension degrades to
+  clipboard selection (an explicit Open still uses `code --goto`); **background
+  edit-follow is silent without a connected companion**, because launching
+  `code --goto` activates the window and steals focus. The companion never
+  opens an editor in an unfocused window: it shows a clickable status hint
+  instead, and opens beside the active editor without moving the focus.
+  **The companion never grants workspace trust.** In Restricted Mode it writes a
+  heartbeat with `trusted: false`, refuses to connect or start a run, and
+  reconnects on `onDidGrantWorkspaceTrust`; the dashboard surfaces the state and
+  the exact remedy. Never flip trust programmatically or widen that refusal —
+  trust is the operator's decision in the VS Code UI.
   **The companion is installed per user, never machine-wide and never by
   installing VS Code itself.** `installer.install_vscode_extension()` is the
   only path that installs it: it skips an elevated process (UAC can resolve to

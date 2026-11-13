@@ -283,6 +283,9 @@ def status(*, linked_projects: int = 0, clients: int = 0) -> Dict[str, Any]:
         "extension_installed": bool(heartbeat.get("version")),
         "extension_version": str(heartbeat.get("version") or ""),
         "extension_last_seen": str(heartbeat.get("last_seen") or ""),
+        # None when an older companion wrote no trust field; the dashboard only
+        # treats an explicit False as Restricted Mode.
+        "extension_trusted": heartbeat.get("trusted"),
         "linked_projects": int(linked_projects),
         "connected_clients": int(clients),
         "install_command": (
