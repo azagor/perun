@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T17:30:14+00:00",
+  "generated": "2026-11-13T18:24:06+00:00",
   "releases": [
+    {
+      "version": "0.15.7",
+      "date": "2026-11-13",
+      "body": "### Linking a new project is opt-in again\n\n* The new-project wizard no longer pre-checks **Link with Visual Studio Code**:\n  checking it generates a `.code-workspace`, which is a new VS Code trust scope.\n  A project created without touching the box is no longer linked (an existing\n  project can still be linked from its Config tab).\n* The Config tab's VS Code badge now shows **“will link (save)” / “will unlink\n  (save)”** while the checkbox differs from the saved state, so a stale “LINKED”\n  badge can no longer contradict an unchecked box."
+    },
     {
       "version": "0.15.6",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.14.5",
       "date": "2026-11-12",
       "body": "* **Windows: paths with cmd metacharacters.** `_code_command()` quoted an\n  argument only when it contained a space, so a VSIX under a path like\n  `C:\\R&D\\…` was split at the `&` and `code` reported\n  `Extension 'c:\\…\\perun' not found`. Every argument is now quoted; verified\n  live with a `perun&co` directory.\n* **Download validation is total.** The packaged manifest must be ≤ 1 MB\n  (`ZipInfo.file_size`, so a zip bomb never expands into memory), and any decode\n  failure — encryption, unsupported compression, truncation — is treated as\n  \"not the companion\" instead of raising out of `perun install`.\n* The `publish-companion` job runs the extension unit tests before it publishes,\n  `perun install` no longer touches VS Code when the global install failed, and\n  `--no-vscode-download` no longer claims a `--vscode` flag that does not exist."
-    },
-    {
-      "version": "0.14.4",
-      "date": "2026-11-12",
-      "body": "### Windows: the companion install survives paths with spaces\n\n* `install_vscode_extension()` passed `[\"cmd.exe\", \"/c\", …]` to\n  `subprocess.run`, which `cmd.exe` re-parses and de-quotes. With both the\n  `code.cmd` shim (`…\\Microsoft VS Code\\…`) and the VSIX under a path with a\n  space (a user name or install directory), it stripped the quotes and failed\n  with `'…\\Microsoft' is not recognized as an internal or external command`.\n  The line is now wrapped in the extra quote pair `cmd.exe /c` expects, and a\n  regression test pins it.\n\n### Companion distribution hardening\n\n* The VSIX is published by its own `publish-companion` workflow job, so a\n  failing Windows or macOS installer build can no longer leave the release\n  without a downloadable companion (that is how v0.14.2 shipped nothing).\n* A downloaded VSIX must contain `extension/package.json` for\n  `perun`/`perun-overseer`; a proxy page or a foreign archive is refused and\n  never written to disk.\n* `perun install` is a no-op when `code --list-extensions --show-versions`\n  already reports the VSIX version (`--force` reinstalls), and\n  `--no-vscode-download` restricts it to a local VSIX for offline installs.\n* The Windows installer no longer copies the VSIX twice (`installer\\vscode` is\n  excluded from the recursive copy; the file is still installed to\n  `{app}\\vscode`), and `AGENTS.md` records that the companion is per-user and\n  never installs VS Code."
     }
   ]
 }

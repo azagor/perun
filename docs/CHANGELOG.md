@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.7
+
+*Released 2026-11-13.*
+
 ### Linking a new project is opt-in again
 
 * The new-project wizard no longer pre-checks **Link with Visual Studio Code**:
