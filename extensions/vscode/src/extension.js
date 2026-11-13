@@ -20,7 +20,7 @@ const {
   originLabel,
 } = require('./session_pick');
 
-const EXTENSION_VERSION = '0.1.9';
+const EXTENSION_VERSION = '0.1.10';
 const PROTOCOL_VERSION = 1;
 const TERMINAL_STATE_KEY = 'perun.terminals';
 
@@ -96,10 +96,14 @@ function writeHeartbeat() {
   try {
     const dir = path.join(perunHome(), 'vscode');
     fs.mkdirSync(dir, { recursive: true });
+    const folder = workspaceFolder();
     const payload = {
       version: EXTENSION_VERSION,
       trusted: !!vscode.workspace.isTrusted,
       project_slug: projectSlug || '',
+      // Before `hello` (and in Restricted Mode, where there is no hello), the
+      // folder path lets the server resolve the project for the trust badge.
+      workspace_path: folder ? folder.uri.fsPath : '',
       last_seen: new Date().toISOString(),
       window_id: windowId,
     };

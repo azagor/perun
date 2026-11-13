@@ -276,6 +276,20 @@ def read_heartbeat() -> Dict[str, Any]:
 def status(*, linked_projects: int = 0, clients: int = 0) -> Dict[str, Any]:
     detected = detect()
     heartbeat = read_heartbeat()
+    project_slug = str(heartbeat.get("project_slug") or "")
+    if not project_slug:
+        # An untrusted window never reaches `hello`, so resolve its project from
+        # the folder path instead; otherwise the badge would claim every project
+        # is untrusted.
+        workspace = str(heartbeat.get("workspace_path") or "")
+        if workspace:
+            try:
+                from . import registry
+
+                project = registry.get_project_by_path(workspace)
+                project_slug = str((project or {}).get("slug") or "")
+            except Exception:  # pragma: no cover - status only
+                project_slug = ""
     return {
         "detected": bool(detected),
         "code_path": (detected or {}).get("path", ""),
@@ -286,7 +300,7 @@ def status(*, linked_projects: int = 0, clients: int = 0) -> Dict[str, Any]:
         # None when an older companion wrote no trust field; the dashboard only
         # treats an explicit False as Restricted Mode.
         "extension_trusted": heartbeat.get("trusted"),
-        "extension_project": str(heartbeat.get("project_slug") or ""),
+        "extension_project": project_slug,
         "linked_projects": int(linked_projects),
         "connected_clients": int(clients),
         "install_command": (

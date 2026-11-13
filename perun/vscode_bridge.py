@@ -412,7 +412,7 @@ class VSCodeBridge:
             # clears a stale "untrusted" report written by the extension.
             "trusted": True,
         }
-        tmp = path.with_suffix(".tmp")
+        tmp = path.with_suffix(f".{os.urandom(4).hex()}.tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

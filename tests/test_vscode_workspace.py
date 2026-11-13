@@ -14,6 +14,22 @@ def _project(tmp_path):
     return {"slug": "demo", "name": "Demo", "path": str(root)}
 
 
+def test_status_resolves_the_project_from_the_workspace_path(tmp_path, monkeypatch):
+    from perun import registry
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    registry.add_project("pathproj", str(root))
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    path = vscode_workspace.heartbeat_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "version": "0.1.9", "trusted": False, "workspace_path": str(root),
+    }), encoding="utf-8")
+
+    assert vscode_workspace.status()["extension_project"] == "pathproj"
+
+
 def test_status_reports_the_reported_project(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     path = vscode_workspace.heartbeat_path()

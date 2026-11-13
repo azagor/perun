@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code: a Restricted window no longer mislabels every project
+
+* An untrusted window never reaches `hello`, so its heartbeat now carries
+  `workspace_path`; the server resolves the project from it. Before, the empty
+  `project_slug` made **every** project card claim “workspace untrusted”.
+* The server heartbeat writes to a unique temp file before the atomic rename, so
+  two concurrent `hello` writes cannot collide.
+* Companion 0.1.10.
 
 ## v0.15.10
 
