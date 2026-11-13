@@ -2921,9 +2921,10 @@ setting.
 The optional local model is deliberately narrow: it never sits on a run's
 critical path and never sees a provider credential.
 
-* `perun/local_llm.py` — OpenAI-compatible client (`/v1/chat/completions`) over
+* `perun/local_llm.py` - OpenAI-compatible client (`/v1/chat/completions`) over
   the stdlib, 8 s timeout, JSON-mode fallback, cached health probe; every call
-  returns `""` on failure.
+  returns `""` on failure. The dashboard's Test probe allows 60 s so a cold
+  model load is not reported as offline.
 * `perun/model_manager.py` — Ollama only for downloads (`/api/tags`, `/api/pull`
   NDJSON, `/api/delete`), a disk guard, one pull at a time, cancellation, and a
   persisted `local_ai_jobs` row. `manual` policy returns the exact `ollama pull`

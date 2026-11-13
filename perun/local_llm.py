@@ -166,12 +166,17 @@ def complete_json(
 
 
 def probe(settings: config.Settings | None = None) -> dict[str, Any]:
-    """Round-trip a tiny prompt; used by ``POST /api/local-ai/test``."""
+    """Round-trip a tiny prompt; used by ``POST /api/local-ai/test``.
+
+    The timeout is generous on purpose: the first call after a download loads
+    the model from disk (tens of seconds on a cold cache), and a false "offline"
+    report is worse than a slow button.
+    """
     started = time.time()
     reply = complete(
         "Reply with the single word: ready",
         max_tokens=8,
-        timeout=15.0,
+        timeout=60.0,
         settings=settings,
     )
     return {

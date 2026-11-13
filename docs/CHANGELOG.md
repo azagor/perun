@@ -4,7 +4,9 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+* **Local AI Test tolerates a cold model.** The probe now waits up to 60 s: the
+  first call after a download loads the model from disk (tens of seconds), and a
+  15 s timeout reported a working model as offline.
 
 ## v0.15.0
 
