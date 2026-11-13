@@ -6838,6 +6838,17 @@ function fmtTokens(n) {
     return String(n);
 }
 
+let localAiStatusCache = { ts: 0, data: null };
+
+async function fetchLocalAiStatus(force = false) {
+    if (!force && localAiStatusCache.data && Date.now() - localAiStatusCache.ts < 2000) {
+        return localAiStatusCache.data;
+    }
+    const data = await api('/api/local-ai');
+    localAiStatusCache = { ts: Date.now(), data };
+    return data;
+}
+
 function localAiCard() {
     const s = state.settings || {};
     const card = el('div', { class: 'card', id: 'local-ai-card' },
@@ -6852,7 +6863,9 @@ function localAiCard() {
          </div>
          <div class="form-row">
              <label class="field"><span class="lab">Model</span>
-                 <input type="text" id="la-model" value="${esc(s.local_ai_model || '')}" placeholder="qwen2.5:1.5b"></label>
+                 <select id="la-model"></select>
+                 <input type="text" id="la-model-custom" placeholder="custom model / not installed yet"
+                        style="margin-top:8px;display:none"></label>
              <label class="field"><span class="lab">Endpoint <span class="muted">(empty = Ollama /v1)</span></span>
                  <input type="text" id="la-endpoint" value="${esc(s.local_ai_base_url || '')}" placeholder="http://127.0.0.1:11434/v1"></label>
              <label class="field"><span class="lab">If the model is missing</span>
@@ -6883,9 +6896,39 @@ function localAiCard() {
         }));
     };
 
+    const modelSelectEl = card.querySelector('#la-model');
+    const modelCustom = card.querySelector('#la-model-custom');
+    const modelValue = () => (modelSelectEl.value === '__custom__'
+        ? modelCustom.value.trim()
+        : (modelSelectEl.value || ''));
+
+    const renderModelOptions = (st) => {
+        const current = ((state.settings || {}).local_ai_model || '').trim();
+        const models = (st && st.models) || [];
+        const options = ['<option value="">(choose a model)</option>'];
+        for (const m of models) {
+            const label = `${m.name}${m.size ? ' — ' + fmtBytes(m.size) : ''}`;
+            options.push(`<option value="${esc(m.name)}">${esc(label)}</option>`);
+        }
+        if (current && !models.some((m) => m.name === current)) {
+            options.push(`<option value="${esc(current)}">${esc(current)} (not installed)</option>`);
+        }
+        options.push('<option value="__custom__">Custom / not installed…</option>');
+        modelSelectEl.innerHTML = options.join('');
+        modelSelectEl.value = current || '__custom__';
+        modelCustom.value = models.some((m) => m.name === current) ? '' : (current || '');
+        modelCustom.style.display = modelSelectEl.value === '__custom__' ? '' : 'none';
+    };
+
+    modelSelectEl.addEventListener('change', () => {
+        const custom = modelSelectEl.value === '__custom__';
+        modelCustom.style.display = custom ? '' : 'none';
+        if (custom) modelCustom.focus();
+    });
+
     const render = async () => {
         let st = {};
-        try { st = await api('/api/local-ai'); } catch (e) { st = { error: e.message }; }
+        try { st = await fetchLocalAiStatus(); } catch (e) { st = { error: e.message }; }
         const badge = card.querySelector('#la-badge');
         const line = card.querySelector('#la-status');
         if (st.error) {
@@ -6908,24 +6951,39 @@ function localAiCard() {
             line.innerHTML += `<p class="meta warn-text" style="margin:4px 0 0">
                 Remote endpoint: prompts from the local-AI consumers leave this machine.</p>`;
         }
+        renderModelOptions(st);
         return st;
     };
 
-    card.querySelector('#la-save').addEventListener('click', async () => {
+    const save = async () => {
         try {
             await api('/api/settings', { method: 'PATCH', body: {
                 local_ai_enabled: card.querySelector('#la-enabled').checked,
                 local_ai_shadow: card.querySelector('#la-shadow').checked,
                 local_ai_docs: card.querySelector('#la-docs').checked,
                 local_ai_small_model: card.querySelector('#la-small').checked,
-                local_ai_model: card.querySelector('#la-model').value.trim(),
+                local_ai_model: modelValue(),
                 local_ai_base_url: card.querySelector('#la-endpoint').value.trim(),
                 local_ai_download: card.querySelector('#la-policy').value,
             } });
             await loadSettings();
+            localAiStatusCache = { ts: 0, data: null };
             toast('Local AI settings saved', 'ok');
             await render();
         } catch (e) { toast(e.message, 'err'); }
+    };
+
+    card.querySelector('#la-save').addEventListener('click', async () => {
+        const st = localAiStatusCache.data || {};
+        const wantsSmall = card.querySelector('#la-small').checked;
+        if (wantsSmall && st.opencode_had_comments) {
+            confirmDialog('Rewrite opencode.json',
+                'Your OpenCode config contains comments. Saving will rewrite the file '
+                + 'without them (a timestamped backup is kept next to it). Continue?',
+                save, 'Save anyway');
+            return;
+        }
+        await save();
     });
 
     card.querySelector('#la-prepare').addEventListener('click', async () => {
@@ -6934,7 +6992,7 @@ function localAiCard() {
         cmds.innerHTML = '';
         box.innerHTML = '';
         try {
-            const res = await api('/api/local-ai/prepare', { method: 'POST', body: {} });
+            const res = await api('/api/local-ai/prepare', { method: 'POST', body: { model: modelValue() } });
             if (res.manual) {
                 renderCommands(cmds, res.commands || []);
                 toast('Manual setup — run the command below', 'ok');
@@ -6949,12 +7007,14 @@ function localAiCard() {
                 <progress max="100" value="0" style="width:100%"></progress>`;
             const bar = box.querySelector('progress');
             const timer = setInterval(async () => {
+                if (!document.body.contains(card)) { clearInterval(timer); return; }
                 try {
                     const r = await api(`/api/local-ai/jobs/${job.id}`);
                     const j = r.job || {};
                     bar.value = j.total ? Math.round(100 * j.completed / j.total) : 0;
                     if (j.state === 'done' || j.state === 'failed' || j.state === 'cancelled') {
                         clearInterval(timer);
+                        localAiStatusCache = { ts: 0, data: null };
                         box.innerHTML = j.state === 'done'
                             ? '<p class="meta">installed</p>'
                             : `<p class="meta">${esc(j.error || j.state)}</p>`;
@@ -6976,7 +7036,7 @@ function localAiCard() {
     });
 
     card.querySelector('#la-remove').addEventListener('click', () => {
-        const model = card.querySelector('#la-model').value.trim();
+        const model = modelValue();
         if (!model) { toast('Set a model first', 'err'); return; }
         confirmDialog('Remove local model',
             `Delete ${model} from the local runtime? This frees disk space and cannot be undone.`,
@@ -7036,7 +7096,7 @@ function contextCard() {
     const renderEvents = async () => {
         const host = card.querySelector('#cx-events');
         try {
-            const st = await api('/api/local-ai');
+            const st = await fetchLocalAiStatus();
             const gov = (st && st.governor) || {};
             const badge = card.querySelector('#cx-badge');
             badge.textContent = gov.enabled ? 'on' : 'off';
@@ -7068,6 +7128,7 @@ function contextCard() {
                 context_memory_budget_chars: Number(card.querySelector('#cx-memory').value),
             } });
             await loadSettings();
+            localAiStatusCache = { ts: 0, data: null };
             toast('Context settings saved', 'ok');
             await renderEvents();
         } catch (e) { toast(e.message, 'err'); }

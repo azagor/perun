@@ -4,7 +4,22 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+* **Boundary compaction works against a live OpenCode.** A body-less
+  `POST /session/{id}/compact` is rejected with `Expected object`; the governor
+  now sends `{}`. Verified against the running service (a real compaction
+  message comes back).
+* Two fast **Prepare** clicks reserve the download slot before the worker starts,
+  so the second click gets a clean "a download is already running" instead of a
+  job that fails immediately.
+* The download progress poll stops when the Settings card is no longer on the
+  page, and both Settings cards share one `/api/local-ai` fetch per render.
+* Enabling **OpenCode small tasks** warns first when `opencode.json` contains
+  comments (the rewrite drops them; a backup is kept).
+* **The Local AI model is a picker** of the models the runtime reports (with
+  sizes), with a "Custom / not installed" field for a tag that has not been
+  pulled yet, instead of a free-text box.
+* MCP output budgets cache the Settings read for 5 s instead of reading
+  `config.json` on every tool call.
 
 ## v0.15.2
 

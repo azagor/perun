@@ -565,10 +565,12 @@ class OpenCodeAPI:
         """Ask OpenCode to compact a session at a boundary.
 
         This is OpenCode's own compaction (the provider may be a cloud model);
-        Perun only decides *when* it happens. The response shape varies between
-        versions, so callers must treat ``{}`` as success.
+        Perun only decides *when* it happens. OpenCode rejects a body-less POST
+        with ``Expected object``, so an empty object is required. The response
+        shape varies between versions, so callers must treat ``{}`` as success.
         """
-        payload = self._request("POST", f"/api/session/{session_id}/compact")
+        payload = self._request(
+            "POST", f"/api/session/{session_id}/compact", body={})
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         return data if isinstance(data, dict) else {}
 

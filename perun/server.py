@@ -3575,8 +3575,15 @@ def api_activity(project: str | None = None, limit: int = 100) -> dict[str, Any]
 @app.get("/api/local-ai")
 def api_local_ai() -> dict[str, Any]:
     """Local model status, the download policy and the governor's decisions."""
+    try:
+        from . import opencode_config
+
+        _data, _path, had_comments = opencode_config.load_config()
+    except Exception:  # pragma: no cover - a broken config is not this endpoint's job
+        had_comments = False
     return _ok(
         **model_manager.status(SETTINGS),
+        opencode_had_comments=had_comments,
         governor={
             "enabled": SETTINGS.context_governor_enabled,
             "tokens": SETTINGS.context_governor_tokens,

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from perun import config, context_governor, local_llm, model_manager, opencode_config, registry
+from perun import config, context_governor, local_llm, model_manager, opencode_api, opencode_config, registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -152,13 +152,19 @@ def _tags(models: dict[str, int]) -> bytes:
 
 def test_status_reports_installed_model_and_disk(monkeypatch):
     monkeypatch.setattr(model_manager.urllib.request, "urlopen",
-                        lambda *a, **k: _Response(_tags({"qwen2.5:1.5b": 1024**3})))
+                        lambda *a, **k: _Response(_tags({"qwen2.5:1.5b": 1024**3,
+                                                          "gemma4:latest": 9 * 1024**3,
+                                                          "kimi-k3:cloud": 0})))
     st = model_manager.status(_settings())
     assert st["available"] is True
     assert st["installed"] is True
     assert st["size_bytes"] == 1024**3
     assert st["disk_free_bytes"] > 0
     assert st["commands"] == ["ollama pull qwen2.5:1.5b"]
+    assert st["models"] == [
+        {"name": "gemma4:latest", "size": 9 * 1024**3},
+        {"name": "qwen2.5:1.5b", "size": 1024**3},
+    ]
 
 
 def test_status_when_ollama_is_down(monkeypatch):
@@ -200,6 +206,24 @@ def test_start_pull_refuses_without_room_on_disk(monkeypatch):
     assert res["ok"] is False
     assert res["reason"] == "not enough disk space"
     assert res["required_bytes"] == model_manager.MIN_FREE_BYTES
+
+
+def test_start_pull_reserves_the_slot_before_the_worker_runs(monkeypatch):
+    """Two fast Prepare clicks must create one job, not one success + one failure."""
+    monkeypatch.setattr(model_manager.urllib.request, "urlopen",
+                        lambda *a, **k: _Response(_tags({})))
+    monkeypatch.setattr(model_manager, "disk_free_bytes", lambda: 10 * 1024**3)
+    started: list[str] = []
+    monkeypatch.setattr(model_manager.threading.Thread, "start",
+                        lambda self: started.append(self.name))
+    try:
+        first = model_manager.start_pull("qwen2.5:1.5b", _settings())
+        assert first["ok"] is True
+        second = model_manager.start_pull("qwen2.5:1.5b", _settings())
+        assert second["ok"] is False and second["busy"] is True
+        assert len(started) == 1
+    finally:
+        model_manager._ACTIVE_JOB = None
 
 
 def test_cancel_ignores_a_finished_job():
@@ -345,6 +369,22 @@ def test_live_context_tokens_uses_the_newest_message():
     assert context_governor.live_context_tokens(api, "ses_x") == 1200
 
 
+def test_compact_posts_an_empty_object():
+    """A body-less POST is rejected by OpenCode with 'Expected object'."""
+    api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
+    seen: dict = {}
+
+    def fake_request(method, path, body=None, **kwargs):
+        seen.update(method=method, path=path, body=body)
+        return {"data": {"id": "msg_probe", "type": "compaction"}}
+
+    api._request = fake_request  # type: ignore[assignment]
+    assert api.compact("ses_probe")["type"] == "compaction"
+    assert seen["method"] == "POST"
+    assert seen["body"] == {}
+    assert seen["path"].endswith("/api/session/ses_probe/compact")
+
+
 def test_governor_skips_below_the_threshold():
     api = FakeAPI(tokens=500)
     s = _settings(context_governor_enabled=True, context_governor_tokens=8000)
@@ -412,6 +452,22 @@ def _mcp_module():
     return module
 
 
+def test_budget_reads_settings_once_per_cache_window(monkeypatch):
+    mod = _mcp_module()
+    calls: list[int] = []
+
+    class Budgets:
+        context_tool_budget_chars = 1234
+        context_memory_budget_chars = 567
+
+    monkeypatch.setattr(mod.config.Settings, "load",
+                        classmethod(lambda cls: calls.append(1) or Budgets()))
+    mod._BUDGET_CACHE.update(ts=0.0, values={})
+    assert mod._budget_chars("context_tool_budget_chars", 1) == 1234
+    assert mod._budget_chars("context_tool_budget_chars", 1) == 1234
+    assert len(calls) == 1
+
+
 def test_truncate_marks_omitted_output():
     mod = _mcp_module()
     text = mod._truncate("x" * 500, 100)
@@ -440,6 +496,7 @@ def test_local_ai_endpoint_reports_status_and_governor(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["model"] == "qwen2.5:1.5b"
+    assert "opencode_had_comments" in body
     assert "governor" in body and "budgets" in body
 
 

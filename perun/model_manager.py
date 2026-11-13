@@ -33,6 +33,11 @@ _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$")
 #: One pull at a time: parallel pulls saturate the link and the disk.
 _PULL_LOCK = threading.Lock()
 
+#: Reservation set by ``start_pull`` before the worker thread takes _PULL_LOCK,
+#: so two rapid Prepare clicks cannot create two jobs.
+_START_LOCK = threading.Lock()
+_ACTIVE_JOB: int | None = None
+
 #: Jobs the operator asked to cancel.
 _CANCELLED: set[int] = set()
 
@@ -93,6 +98,11 @@ def disk_free_bytes() -> int:
         return 0
 
 
+def _busy() -> bool:
+    """A job is running or reserved by ``start_pull``."""
+    return _ACTIVE_JOB is not None or _PULL_LOCK.locked()
+
+
 def status(settings: config.Settings | None = None) -> dict[str, Any]:
     """Everything the Settings card needs. Never raises."""
     s = settings or config.Settings.load()
@@ -113,8 +123,13 @@ def status(settings: config.Settings | None = None) -> dict[str, Any]:
         "shadow": s.local_ai_shadow,
         "small_model": s.local_ai_small_model,
         "commands": [f"ollama pull {model}"] if model else [],
+        "models": sorted(
+            # Ollama lists cloud tags too; they are remote and defeat the point.
+            ({"name": n, "size": s} for n, s in (tags or {}).items()
+             if not n.endswith(":cloud")),
+            key=lambda m: m["name"].lower()),
         "job": registry.latest_local_ai_job(model),
-        "busy": _PULL_LOCK.locked(),
+        "busy": _busy(),
     }
 
 
@@ -126,12 +141,14 @@ def _update_job(job_id: int, **fields: Any) -> None:
 
 
 def _run_pull(job_id: int, model: str, host: str) -> None:
-    if not _PULL_LOCK.acquire(blocking=False):
-        _update_job(job_id, state="failed", error="another download is running",
-                    ended_at=registry.now_iso())
-        return
-    _update_job(job_id, state="running", message="starting")
+    global _ACTIVE_JOB
+    acquired = _PULL_LOCK.acquire(blocking=False)
     try:
+        if not acquired:
+            _update_job(job_id, state="failed", error="another download is running",
+                        ended_at=registry.now_iso())
+            return
+        _update_job(job_id, state="running", message="starting")
         payload = json.dumps({"model": model, "stream": True}).encode("utf-8")
         req = urllib.request.Request(
             f"{host}/api/pull", data=payload,
@@ -178,16 +195,20 @@ def _run_pull(job_id: int, model: str, host: str) -> None:
         _update_job(job_id, state="failed", error=str(exc)[:500],
                     ended_at=registry.now_iso())
     finally:
-        _PULL_LOCK.release()
+        if acquired:
+            _PULL_LOCK.release()
+        with _START_LOCK:
+            _ACTIVE_JOB = None
 
 
 def start_pull(model: str, settings: config.Settings | None = None) -> dict[str, Any]:
     """Queue a pull; returns the job row immediately. Never blocks."""
+    global _ACTIVE_JOB
     s = settings or config.Settings.load()
     name = (model or s.local_ai_model or "").strip()
     if not name or not _MODEL_RE.match(name):
         return {"ok": False, "reason": "invalid model name"}
-    if _PULL_LOCK.locked():
+    if _busy():
         return {"ok": False, "busy": True, "reason": "a download is already running"}
     host = native_host(s)
     tags = _tag_map(host)
@@ -199,11 +220,22 @@ def start_pull(model: str, settings: config.Settings | None = None) -> dict[str,
     if free and free < MIN_FREE_BYTES:
         return {"ok": False, "reason": "not enough disk space",
                 "disk_free_bytes": free, "required_bytes": MIN_FREE_BYTES}
-    job = registry.create_local_ai_job(name, "queued")
+    with _START_LOCK:
+        if _busy():  # another request reserved the slot while we checked the host
+            return {"ok": False, "busy": True, "reason": "a download is already running"}
+        job = registry.create_local_ai_job(name, "queued")
+        _ACTIVE_JOB = int(job["id"])
     registry.prune_local_ai_jobs()
     thread = threading.Thread(target=_run_pull, args=(int(job["id"]), name, host),
                               name="perun-local-ai-pull", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:  # pragma: no cover - thread creation failure
+        with _START_LOCK:
+            _ACTIVE_JOB = None
+        _update_job(int(job["id"]), state="failed", error=str(exc)[:300],
+                    ended_at=registry.now_iso())
+        return {"ok": False, "reason": str(exc)}
     return {"ok": True, "model": name, "job": registry.get_local_ai_job(int(job["id"]))}
 
 

@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import functools
 import os
+import time
 
 # FastMCP prints a startup banner to stdout by default, which corrupts the
 # stdio JSON-RPC stream used by MCP clients. Suppress it before importing.
@@ -301,11 +302,32 @@ def _validate_directory_path(path_str: str) -> tuple[Path | None, str]:
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
+#: Budget cache: ``{ts, values}``. See ``_budget_chars()``.
+_BUDGET_CACHE: dict = {"ts": 0.0, "values": {}}
+
+
 def _budget_chars(name: str, default: int) -> int:
-    try:
-        return max(1000, int(getattr(config.Settings.load(), name, default) or default))
-    except Exception:
-        return default
+    """One of the two output budgets, cached for a few seconds.
+
+    MCP tools can be called in bursts; reading ``config.json`` per call is
+    needless file I/O, and a 5 s cache still applies a Settings change promptly.
+    """
+    now = time.time()
+    values: dict[str, int] = _BUDGET_CACHE["values"]
+    if now - float(_BUDGET_CACHE["ts"]) > 5.0:
+        values = {}
+        try:
+            s = config.Settings.load()
+            values = {
+                "context_tool_budget_chars": max(
+                    1000, int(getattr(s, "context_tool_budget_chars", 20000) or 20000)),
+                "context_memory_budget_chars": max(
+                    1000, int(getattr(s, "context_memory_budget_chars", 6000) or 6000)),
+            }
+        except Exception:
+            pass
+        _BUDGET_CACHE.update(ts=now, values=values)
+    return int(values.get(name, default))
 
 
 def _truncate(text: str, limit: int, what: str = "output") -> str:
