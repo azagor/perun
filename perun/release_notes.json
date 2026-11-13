@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T20:33:40+00:00",
+  "generated": "2026-11-13T20:47:36+00:00",
   "releases": [
+    {
+      "version": "0.15.9",
+      "date": "2026-11-13",
+      "body": "### VS Code: an untrusted workspace is visible and recoverable\n\n* The companion now writes `~/.perun/vscode/extension.json` with `trusted: false`\n  in Restricted Mode (and `true` once trusted), so the dashboard can report\n  **“workspace untrusted (Restricted Mode)”** instead of the misleading\n  “companion not installed”.\n* `GET /api/vscode/status` exposes `extension_trusted`; the project's VS Code\n  card shows a **How to trust** hint — the banner's *Yes, I trust the authors*, or\n  Command Palette → *Workspaces: Manage Workspace Trust*. Perun never grants\n  trust itself, and opening the dashboard does not change it.\n* New **Perun: Manage Workspace Trust** command opens VS Code's trust UI; the\n  companion reconnects immediately on `onDidGrantWorkspaceTrust` (no window\n  reload) and refuses to start a TUI while the workspace is untrusted.\n* Companion 0.1.7.\n\n### VS Code: edit-follow no longer steals focus\n\n* **No automatic `code --goto`.** A background edit is never revealed by\n  launching VS Code; that activated the window and interrupted work in another\n  project. An explicit Open still uses `code --goto`.\n* In a focused window the companion highlights a visible file in place, or opens\n  a new file **beside** the active editor with `preserveFocus: true`, reusing\n  that column, so typing keeps going to your file.\n* In an unfocused window it changes nothing: a clickable\n  `$(edit) file:line` status item shows where the edit is, and\n  **Perun: Reveal Last Agent Edit** opens it deliberately. `reveal` mode now\n  means \"highlight only an already-open file\"; `open` keeps the beside preview.\n* Companion 0.1.8."
+    },
     {
       "version": "0.15.8",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.15.0",
       "date": "2026-11-13",
       "body": "### Local AI: a small local model for bounded work\n\n* New **Settings → Local AI** card: enable a local model (Ollama, LM Studio,\n  vLLM — any OpenAI-compatible endpoint), choose the download policy (`auto`\n  pulls through Ollama, `manual` prints the exact command), watch a pull with\n  progress, and test the endpoint. Off by default; every consumer falls back to\n  the previous behaviour when the model or runtime is unavailable.\n* `perun/local_llm.py` is the only client: stdlib transport, an 8 s timeout,\n  JSON-mode fallback for runtimes that reject `response_format`, a cached health\n  probe, and it never raises. `perun/model_manager.py` drives Ollama\n  (`/api/tags`, `/api/pull`, `/api/delete`) with a disk guard, one pull at a\n  time, cancellation, and persisted job progress.\n* Consumers: the changelog bullet after an executed proposal (shadow mode logs\n  the locally generated line instead of using it) and OpenCode's own\n  `small_model` for titles/small tasks (written through the backed-up config\n  writer, removed when the toggle is turned off).\n* New **Settings → Context** card: opt-in boundary compaction through OpenCode's\n  `POST /session/{id}/compact`. It triggers on the live context size, respects a\n  cooldown in messages, never touches an active session, records before/after\n  rows, and disables itself when three compactions fail to shrink the context.\n* Search and memory tools cap their output (`context_tool_budget_chars`,\n  `context_memory_budget_chars`) with an explicit truncation marker; exact file\n  reads are never truncated.\n* Schema v27 adds `local_ai_jobs` and `context_events`."
-    },
-    {
-      "version": "0.14.6",
-      "date": "2026-11-12",
-      "body": "* The VS Code companion package now ships its MIT license\n  (`extensions/vscode/LICENSE`), so `vsce` no longer warns and the installed\n  extension carries the license text."
     }
   ]
 }
