@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.5
+
+*Released 2026-11-13.*
+
 ### VS Code companion 0.1.5: the session picker mirrors the dashboard
 
 * **“Resume latest” now means the newest TUI chat.** A session whose first run

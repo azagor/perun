@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.15.4 (see §15). Shadow-first, bounded context governor
+**Latest release:** v0.15.5 (see §15). VS Code session picker mirrors the dashboard
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -2961,6 +2961,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-13 — v0.15.5: VS Code session picker mirrors the dashboard
+
 ### 2026-11-13 — v0.15.4: Shadow-first, bounded context governor
 
 ### 2026-11-13 — v0.15.3: Local AI: model picker and audit fixes
