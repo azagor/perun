@@ -2018,7 +2018,9 @@ function projectWizard() {
         model: '', agent: '',
         bootstrap: true, git_init: false, git_remote: '', git_branch: 'main',
         index_docs: false,
-        vscode_link: true,
+        // Opt-in: a generated .code-workspace is a new VS Code trust scope, so
+        // creating a project must not link it unless the operator asks.
+        vscode_link: false,
         shared: false, participants: [], external_deps: [],
     };
     const STEPS = ['Method', 'Location', 'Details', 'Review'];
@@ -2089,6 +2091,7 @@ function projectWizard() {
             ${wiz.method !== 'clone' ? `<label class="opt"><input type="checkbox" data-field="git_init" ${wiz.git_init ? 'checked' : ''}> Initialise a Git repository</label>` : ''}
             <label class="opt"><input type="checkbox" data-field="index_docs" ${wiz.index_docs ? 'checked' : ''}> Index documentation now</label>
             <label class="opt"><input type="checkbox" data-field="vscode_link" ${wiz.vscode_link ? 'checked' : ''}> Link with Visual Studio Code (generate a workspace)</label>
+            <p class="muted" style="font-size:.75rem;margin:2px 0 0">Off by default: a generated workspace file is a new VS Code trust scope.</p>
         </div>
         ${wiz.method !== 'clone' ? `
         <div class="form-row">
@@ -3380,6 +3383,19 @@ function projectConfigForm(p) {
         } catch (e) { toast(e.message, 'err'); }
     });
     ideCard.querySelector('#pc-vscode-open').addEventListener('click', () => openProjectVsCode(p));
+    const ideBadge = ideCard.querySelector('.card-head .badge');
+    ideCard.querySelector('#pc-vscode-linked').addEventListener('change', (event) => {
+        const want = !!event.target.checked;
+        if (want === linked) {
+            ideBadge.textContent = linked ? 'linked' : 'not linked';
+            ideBadge.className = 'badge ' + (linked ? 'green' : 'muted');
+            return;
+        }
+        // The badge reflects the *saved* state; show the pending edit instead of
+        // contradicting the checkbox.
+        ideBadge.textContent = want ? 'will link (save)' : 'will unlink (save)';
+        ideBadge.className = 'badge gold';
+    });
     setTimeout(refreshVSCodeStatus, 0);
     const wrap = el('div');
     wrap.append(card, ideCard);

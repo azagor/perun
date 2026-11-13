@@ -42,6 +42,15 @@ def test_the_wizard_can_link_the_new_project():
     text = _js()
     assert "vscode_link" in text
     assert "Link with Visual Studio Code" in text
+    # Linking is opt-in: a generated .code-workspace is a new VS Code trust scope.
+    assert "vscode_link: false" in text
+    assert "new VS Code trust scope" in text
+
+
+def test_the_ide_badge_shows_a_pending_link_edit():
+    text = _js()
+    assert "will link (save)" in text
+    assert "will unlink (save)" in text
 
 
 def test_the_companion_package_is_a_valid_extension_manifest():

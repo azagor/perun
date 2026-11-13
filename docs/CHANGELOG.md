@@ -4,7 +4,15 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Linking a new project is opt-in again
+
+* The new-project wizard no longer pre-checks **Link with Visual Studio Code**:
+  checking it generates a `.code-workspace`, which is a new VS Code trust scope.
+  A project created without touching the box is no longer linked (an existing
+  project can still be linked from its Config tab).
+* The Config tab's VS Code badge now shows **“will link (save)” / “will unlink
+  (save)”** while the checkbox differs from the saved state, so a stale “LINKED”
+  badge can no longer contradict an unchecked box.
 
 ## v0.15.6
 
