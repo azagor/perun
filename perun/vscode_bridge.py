@@ -395,18 +395,28 @@ class VSCodeBridge:
 
     def _write_heartbeat(self, client: Dict[str, Any]) -> None:
         path = vscode_workspace.heartbeat_path()
+        try:
+            project = registry.get_project(int(client.get("project_id") or 0))
+            project_slug = str((project or {}).get("slug") or "")
+        except Exception:  # pragma: no cover - status only
+            project_slug = ""
         payload = {
             "version": str(client.get("extension_version") or "unknown"),
             "protocol": int(client.get("protocol") or 0),
             "last_seen": registry.now_iso(),
             "window_id": str(client.get("window_id") or ""),
+            # Lets the dashboard show a trust state for *this* project when
+            # several windows (one per project) are open.
+            "project_slug": project_slug,
             # A client can only connect from a trusted workspace, so this also
             # clears a stale "untrusted" report written by the extension.
             "trusted": True,
         }
+        tmp = path.with_suffix(".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
         except OSError:
             pass
 

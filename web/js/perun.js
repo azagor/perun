@@ -1662,13 +1662,27 @@ async function openProjectTui(p, opts = {}) {
         const ide = p.ide || {};
         const mode = String(opts.launchMode || ide.launch_mode || 'external-terminal');
         if (mode === 'vscode-terminal') {
-            try {
-                await api(`/api/runs/${runUid}/vscode/open`, { method: 'POST' });
-                toast(sessionId ? 'Resumed in VS Code' : 'Started in VS Code', 'ok');
-                await refreshPresence();
-                return;
-            } catch (err) {
-                toast('VS Code companion not connected — opening an external terminal', 'err');
+            // Check the companion before asking it to open a terminal: an
+            // untrusted or disconnected window used to surface a red error on
+            // every Run, even though the external fallback worked.
+            let vscodeStatus = null;
+            try { vscodeStatus = await api('/api/vscode/status'); } catch (_) { vscodeStatus = null; }
+            const untrusted = !!vscodeStatus && vscodeStatus.extension_trusted === false
+                && (!vscodeStatus.extension_project || vscodeStatus.extension_project === p.slug);
+            if (untrusted) {
+                toast('VS Code is in Restricted Mode - opened an external terminal. '
+                    + 'Trust the workspace to host the TUI in VS Code.', '');
+            } else if (vscodeStatus && !vscodeStatus.connected_clients) {
+                toast('VS Code companion is not connected - opened an external terminal.', '');
+            } else {
+                try {
+                    await api(`/api/runs/${runUid}/vscode/open`, { method: 'POST' });
+                    toast(sessionId ? 'Resumed in VS Code' : 'Started in VS Code', 'ok');
+                    await refreshPresence();
+                    return;
+                } catch (err) {
+                    toast('VS Code could not open the terminal - opened an external terminal.', '');
+                }
             }
         }
         const opened = await launchInTerminal({
@@ -1741,13 +1755,16 @@ async function openProjectVsCode(p) {
     }
 }
 
-async function refreshVSCodeStatus() {
+async function refreshVSCodeStatus(slug = '') {
     const node = document.getElementById('pc-vscode-status');
     if (!node) return;
     try {
         const s = await api('/api/vscode/status');
         const parts = [];
-        const untrusted = s.extension_trusted === false;
+        // The heartbeat is machine-wide; only claim this project is untrusted
+        // when that window reported this project (or reported no project).
+        const untrusted = s.extension_trusted === false
+            && (!s.extension_project || !slug || s.extension_project === slug);
         if (!s.detected) {
             parts.push('VS Code not detected');
         } else {
@@ -3420,7 +3437,7 @@ function projectConfigForm(p) {
         ideBadge.textContent = want ? 'will link (save)' : 'will unlink (save)';
         ideBadge.className = 'badge gold';
     });
-    setTimeout(refreshVSCodeStatus, 0);
+    setTimeout(() => refreshVSCodeStatus(p.slug), 0);
     const wrap = el('div');
     wrap.append(card, ideCard);
     return wrap;

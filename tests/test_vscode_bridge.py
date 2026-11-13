@@ -270,6 +270,19 @@ def test_a_live_edit_does_not_raise_vscode_without_a_companion(bridge, project, 
     assert calls == []
 
 
+def test_hello_writes_a_trusted_heartbeat_for_the_project(bridge, project):
+    import json
+
+    from perun import vscode_workspace
+
+    outbox = Outbox()
+    _hello(bridge, project, outbox)
+    data = json.loads(vscode_workspace.heartbeat_path().read_text(encoding="utf-8"))
+    assert data["trusted"] is True
+    assert data["project_slug"] == project["slug"]
+    assert data["version"]
+
+
 def test_an_expired_embed_ticket_is_refused(bridge):
     issued = bridge.issue_embed_ticket(ttl=5)
     with bridge._lock:

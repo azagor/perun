@@ -4,7 +4,21 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code: per-project trust and safer status writes
+
+* The companion heartbeat now carries `project_slug`, and `GET
+  /api/vscode/status` exposes `extension_project`. The project card only claims
+  “workspace untrusted” when the reported window belongs to that project (or
+  reported none), so one Restricted window no longer mislabels the others.
+* Heartbeat writes are atomic (temp + rename) on both sides, so a concurrent
+  read cannot see a partial file.
+* If the beside-preview column disappears (or `showTextDocument` fails
+  synchronously), the edit falls back to the clickable status hint instead of
+  throwing; the decoration type is disposed even when its editor closed.
+* Running a **Mode B** project without a usable companion now opens an external
+  terminal with a neutral notice (Restricted Mode, or no window) instead of a red
+  “companion not connected” toast on every Run.
+* Companion 0.1.9.
 
 ## v0.15.9
 

@@ -14,6 +14,19 @@ def _project(tmp_path):
     return {"slug": "demo", "name": "Demo", "path": str(root)}
 
 
+def test_status_reports_the_reported_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    path = vscode_workspace.heartbeat_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "version": "0.1.8", "trusted": False, "project_slug": "findme",
+    }), encoding="utf-8")
+
+    st = vscode_workspace.status()
+    assert st["extension_trusted"] is False
+    assert st["extension_project"] == "findme"
+
+
 def test_status_reports_an_untrusted_companion(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     path = vscode_workspace.heartbeat_path()

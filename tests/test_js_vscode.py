@@ -53,6 +53,15 @@ def test_the_ide_badge_shows_a_pending_link_edit():
     assert "will unlink (save)" in text
 
 
+def test_the_run_falls_back_without_an_error_when_vscode_cannot_host_it():
+    text = _js()
+    # The check happens before the request; the fallback is informational.
+    assert "/api/vscode/status" in text
+    assert "VS Code is in Restricted Mode - opened an external terminal" in text
+    assert "VS Code companion is not connected - opened an external terminal" in text
+    assert "VS Code companion not connected - opening an external terminal" not in text
+
+
 def test_the_vscode_trust_state_is_surfaced_and_recoverable():
     js = _js()
     assert "extension_trusted" in js
@@ -66,6 +75,9 @@ def test_the_vscode_trust_state_is_surfaced_and_recoverable():
     assert "onDidGrantWorkspaceTrust" in extension
     assert "workbench.trust.manage" in extension
     assert "trust this workspace before opening a TUI" in extension
+    assert "project_slug: projectSlug" in extension
+    assert "extension_project" in js
+    assert "refreshVSCodeStatus(p.slug)" in js
 
     package = json.loads((root / "package.json").read_text(encoding="utf-8"))
     assert "perun.manageTrust" in {

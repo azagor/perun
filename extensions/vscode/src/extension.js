@@ -20,7 +20,7 @@ const {
   originLabel,
 } = require('./session_pick');
 
-const EXTENSION_VERSION = '0.1.8';
+const EXTENSION_VERSION = '0.1.9';
 const PROTOCOL_VERSION = 1;
 const TERMINAL_STATE_KEY = 'perun.terminals';
 
@@ -91,18 +91,22 @@ function setStatus(text, tooltip) {
 function writeHeartbeat() {
   // Written even in Restricted Mode so the dashboard can say "untrusted"
   // instead of "companion not installed". Trust is never granted here; this is
-  // a status report only.
+  // a status report only. Temp + rename keeps a concurrent server write/read
+  // from seeing a partial file.
   try {
     const dir = path.join(perunHome(), 'vscode');
     fs.mkdirSync(dir, { recursive: true });
     const payload = {
       version: EXTENSION_VERSION,
       trusted: !!vscode.workspace.isTrusted,
+      project_slug: projectSlug || '',
       last_seen: new Date().toISOString(),
       window_id: windowId,
     };
-    fs.writeFileSync(path.join(dir, 'extension.json'),
-      JSON.stringify(payload, null, 2) + '\n', 'utf8');
+    const target = path.join(dir, 'extension.json');
+    const tmp = `${target}.${windowId}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, target);
   } catch (_) { /* diagnostics must never break activation */ }
 }
 
@@ -280,6 +284,7 @@ function handleMessage(message, folder) {
   switch (message.type) {
     case 'hello.ok':
       projectSlug = String((message.project || {}).slug || '');
+      writeHeartbeat();
       activeRun = message.active_run || null;
       setStatus(`Perun: ${message.linked ? 'linked' : 'connected'}`,
         `${message.project ? message.project.name : 'Perun'} — ${message.linked ? 'VS Code integration linked' : 'open the dashboard to link this project'}`);
@@ -486,19 +491,23 @@ function revealEdit(message, folder) {
   // Open beside the active editor and keep the focus there, so typing keeps
   // going to the operator's file; later edits reuse that column.
   const viewColumn = followColumn || vscode.ViewColumn.Beside;
-  vscode.window.showTextDocument(uri, {
-    preview: true,
-    preserveFocus: true,
-    viewColumn,
-  }).then((editor) => {
-    followColumn = editor.viewColumn || viewColumn;
-    if (followItem) followItem.hide();
-    editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-    if (mode === 'open') decorate(editor, range, message);
-  }, () => {
-    // The remembered column may be gone; offer the click-to-reveal hint.
+  try {
+    vscode.window.showTextDocument(uri, {
+      preview: true,
+      preserveFocus: true,
+      viewColumn,
+    }).then((editor) => {
+      followColumn = editor.viewColumn || viewColumn;
+      if (followItem) followItem.hide();
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+      if (mode === 'open') decorate(editor, range, message);
+    }, () => {
+      // The remembered column may be gone; offer the click-to-reveal hint.
+      showFollowItem(rel, start);
+    });
+  } catch (_) {
     showFollowItem(rel, start);
-  });
+  }
 }
 
 function decorate(editor, range, message) {
@@ -515,8 +524,10 @@ function decorate(editor, range, message) {
   setTimeout(() => {
     try {
       editor.setDecorations(decoration, []);
-      decoration.dispose();
     } catch (_) { /* editor closed */ }
+    try {
+      decoration.dispose();
+    } catch (_) { /* already disposed */ }
   }, 8000);
 }
 
