@@ -2,7 +2,7 @@
   "name": "perun-overseer",
   "displayName": "Perun Overseer",
   "description": "Perun workspace link, live agent edit following and OpenCode selection hand-off",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "perun",
   "license": "MIT",
   "repository": {

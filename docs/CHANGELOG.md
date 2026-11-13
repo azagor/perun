@@ -4,7 +4,17 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### VS Code companion 0.1.5: the session picker mirrors the dashboard
+
+* **“Resume latest” now means the newest TUI chat.** A session whose first run
+  was a headless job (a coroutine, a one-off run) is labelled `headless run`,
+  stays explicitly selectable, and is never auto-selected — the same rule the
+  dashboard's Run button uses.
+* Each entry shows time, status, origin (`TUI chat` / `headless run`) and the
+  OpenCode session id; the list covers the last 50 sessions, and “Start a new
+  session” is always present.
+* `src/session_pick.js` mirrors `web/js/session_pick.js` and is covered by
+  `tests/session_pick.test.js` (companion suite now 10 tests).
 
 ## v0.15.4
 

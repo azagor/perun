@@ -1941,6 +1941,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
 * `src/protocol.js` — pure helpers (loopback-only endpoint normalisation,
   `ws` URL, relative path, selection ref, backoff, shell quoting), covered by
   `tests/protocol.test.js`.
+* `src/session_pick.js` — the dashboard's session rules mirrored in the
+  companion: `latestResumeCandidate()` never auto-selects a session whose first
+  run was headless (`tui === false`), and `originLabel()` renders
+  `TUI chat` / `headless run`. Covered by `tests/session_pick.test.js`.
 * `esbuild.js` / `.vscodeignore` / `README.md` — bundled `dist/extension.js`,
   `ws` inlined, packaged with `vsce` into `installer/vscode/perun-overseer.vsix`.
   `npm run package` creates that (gitignored) directory first, so a fresh clone

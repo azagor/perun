@@ -15,8 +15,12 @@ const {
   backoffDelay,
   shellArg,
 } = require('./protocol');
+const {
+  latestResumeCandidate,
+  originLabel,
+} = require('./session_pick');
 
-const EXTENSION_VERSION = '0.1.4';
+const EXTENSION_VERSION = '0.1.5';
 const PROTOCOL_VERSION = 1;
 const TERMINAL_STATE_KEY = 'perun.terminals';
 
@@ -582,22 +586,36 @@ async function startTui() {
     let chosen = null;
     const hadSessions = sessions.length > 0;
     if (sessions.length) {
-      const latest = sessions[0];
-      const items = [{
-        label: '$(history) Resume latest',
-        description: `${latest.title || '(untitled)'} · ${relativeTime(latest.updated_at)}`,
-        session: latest,
-      }];
-      for (const session of sessions.slice(1, 20)) {
+      // Mirror the dashboard's Run: "latest" means the newest *TUI chat*; a
+      // headless job session stays selectable but is never auto-selected.
+      const latest = latestResumeCandidate(sessions);
+      const items = [];
+      if (latest) {
         items.push({
-          label: `$(comment-discussion) ${session.title || '(untitled)'}`,
-          description: `${relativeTime(session.updated_at)} · ${session.opencode_session_id}`,
-          session,
+          label: '$(history) Resume latest',
+          description: describeSession(latest),
+          session: latest,
         });
       }
       items.push({ label: '$(add) Start a new session', description: '', session: null });
+      const others = sessions.filter((session) => session !== latest);
+      if (others.length) {
+        items.push({
+          label: latest ? 'Sessions' : 'Sessions (no TUI chat yet)',
+          kind: vscode.QuickPickItemKind.Separator,
+        });
+        for (const session of others.slice(0, 50)) {
+          items.push({
+            label: `$(comment-discussion) ${session.title || '(untitled)'}`,
+            description: describeSession(session),
+            session,
+          });
+        }
+      }
       const picked = await vscode.window.showQuickPick(items, {
-        placeHolder: `Open the OpenCode TUI for ${projectSlug}`,
+        placeHolder: latest
+          ? `Open the OpenCode TUI for ${projectSlug}`
+          : `No TUI chat yet for ${projectSlug} — pick a machine session or start a new one`,
         matchOnDescription: true,
       });
       if (!picked) return;
@@ -632,6 +650,15 @@ async function startTui() {
   } finally {
     startingTui = false;
   }
+}
+
+function describeSession(session) {
+  const parts = [relativeTime(session.updated_at)];
+  if (session.status) parts.push(String(session.status));
+  const origin = originLabel(session);
+  if (origin) parts.push(origin);
+  if (session.opencode_session_id) parts.push(String(session.opencode_session_id));
+  return parts.filter(Boolean).join(' · ');
 }
 
 function relativeTime(iso) {
