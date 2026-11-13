@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-12T23:53:02+00:00",
+  "generated": "2026-11-13T00:02:42+00:00",
   "releases": [
+    {
+      "version": "0.15.1",
+      "date": "2026-11-13",
+      "body": "* **Local AI Test tolerates a cold model.** The probe now waits up to 60 s: the\n  first call after a download loads the model from disk (tens of seconds), and a\n  15 s timeout reported a working model as offline."
+    },
     {
       "version": "0.15.0",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.13.3",
       "date": "2026-11-08",
       "body": "### Telegram bridge: finish the audit follow-ups\n\n* The run path now joins the live-draft thread (up to 1 s) before sending the\n  final answer, so an in-flight draft update cannot leave a stale \"Working…\"\n  preview after the reply. Tool events obey the same 1.6 s throttle.\n* `setMyCommands` uses `retries=1` at startup, so an outage cannot delay the\n  poller by the full retry budget.\n* Plain messages from different chats now run concurrently (one run per chat),\n  so a long agent run in one chat no longer blocks messages from another. The\n  durable queue still delivers per-chat updates in order.\n* `format_html()` strips NUL bytes before inserting private placeholders, so\n  agent text containing a literal placeholder can no longer corrupt output."
-    },
-    {
-      "version": "0.13.2",
-      "date": "2026-11-08",
-      "body": "### Harden the Telegram delivery fallbacks\n\n* Only a definite Telegram `400` now triggers the plain-text/degraded-keyboard\n  fallback; a timeout or unreachable host no longer causes blind extra sends\n  that could duplicate a message the operator already received.\n* `api()` returns a non-429 `4xx` immediately instead of retrying it four times,\n  so a bad entity falls back to plain text at once rather than after ~14 s.\n* `editMessageText`'s \"message is not modified\" response counts as success, so\n  tapping an unchanged card can no longer post a duplicate card.\n* The draft Stop handler re-checks that the chat is authorised before cancelling."
     }
   ]
 }
