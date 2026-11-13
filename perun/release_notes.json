@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T00:02:42+00:00",
+  "generated": "2026-11-13T00:35:54+00:00",
   "releases": [
+    {
+      "version": "0.15.2",
+      "date": "2026-11-13",
+      "body": "* **Settings no longer rewrites the OpenCode config on every save.**\n  `set_small_model()` returns unchanged when the value already matches, so the\n  dashboard's Save no longer creates a new `opencode.json.perun-backup-*` each\n  time. A JSONC comment loss is now logged explicitly.\n* **Downloads respect disk space.** `Prepare` refuses to start when the model\n  store has less than 2 GB free (Ollama reports the real size only once the pull\n  starts, so this is a safety net) and returns the free/required bytes.\n* Cancelling an already-finished job no longer leaves its id in the in-memory\n  cancellation set.\n* The **OpenCode small tasks** toggle is disabled with an explanation when a\n  custom endpoint is configured (OpenCode's `small_model` is provider-specific),\n  and the Local AI card warns when the endpoint is not loopback: prompts from the\n  local-AI consumers would leave the machine."
+    },
     {
       "version": "0.15.1",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.14.0",
       "date": "2026-11-12",
       "body": "### VS Code deep integration\n\n* Link any project to a generated `.code-workspace` from the wizard, project card\n  or Config panel. Linked projects show a badge and an **Open in VS Code** action.\n* Two launch modes: host the TUI in VS Code's integrated terminal (seamless\n  `@file#lines` selection insertion) or keep the external terminal while VS Code\n  follows edits. A per-run override is available from the Run caret.\n* Live edit following: the global OpenCode event stream is mapped to a project,\n  validated against the project root, debounced and sent to the companion for\n  reveal + highlight. Without the companion, linked projects fall back to\n  `code --reuse-window --goto`.\n* Companion extension (`perun.perun-overseer`): status bar, ticket-authenticated\n  loopback WebSocket, selection command (`Ctrl+Alt+P`), terminal open/focus/close,\n  and `terminal.processId` binding so Stop/Focus keep working.\n* Security: single-use workspace-bound tickets, no long-lived token in a URL,\n  fixed message schema, loopback-only endpoints, ignored workspace-level\n  `perun.*` settings, path validation, and no silent VS Code install.\n* VSIX is built in the release workflow and installed per-user by the Windows\n  installer; the dashboard reports a missing/outdated companion.\n\n### Documentation refresh\n\n* `README.md` and `docs/DESIGN.md` now describe the Telegram card grammar,\n  coloured buttons, live run drafts and per-chat message scheduling;\n  `AGENTS_OPTIMIZATION.md` and the Shared Projects PRD name v0.13.3."
-    },
-    {
-      "version": "0.13.3",
-      "date": "2026-11-08",
-      "body": "### Telegram bridge: finish the audit follow-ups\n\n* The run path now joins the live-draft thread (up to 1 s) before sending the\n  final answer, so an in-flight draft update cannot leave a stale \"Working…\"\n  preview after the reply. Tool events obey the same 1.6 s throttle.\n* `setMyCommands` uses `retries=1` at startup, so an outage cannot delay the\n  poller by the full retry budget.\n* Plain messages from different chats now run concurrently (one run per chat),\n  so a long agent run in one chat no longer blocks messages from another. The\n  durable queue still delivers per-chat updates in order.\n* `format_html()` strips NUL bytes before inserting private placeholders, so\n  agent text containing a literal placeholder can no longer corrupt output."
     }
   ]
 }

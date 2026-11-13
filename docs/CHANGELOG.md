@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.15.2
+
+*Released 2026-11-13.*
+
 * **Settings no longer rewrites the OpenCode config on every save.**
   `set_small_model()` returns unchanged when the value already matches, so the
   dashboard's Save no longer creates a new `opencode.json.perun-backup-*` each
