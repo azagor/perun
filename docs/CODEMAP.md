@@ -143,7 +143,9 @@ SQLite schema + connection helpers. Tables: `projects`, `sessions`, `runs`,
 `activity`, `memory`, `doc_chunks`, `settings`, `bridge_links`, `tasks`,
 `context_docs` (the Context layer — keyed reference docs, deliberately **not**
 `doc_chunks`, so project-scoped context never leaks into cross-project doc
-search), `secret_store` (encrypted secret values), the coroutine tables
+search), `secret_store` (encrypted secret values), `local_ai_jobs` (model
+downloads: state, progress, error) and `context_events` (governor decisions with
+tokens/cost before and after), the coroutine tables
 `coroutines` (job definitions), `coroutine_events` / `coroutine_event_deliveries`
 (durable event inbox + per-job deliveries), `coroutine_room_outbox` (room result
 posting), `coroutine_heartbeat` (scheduler liveness), plus the operator-inbox
@@ -1546,6 +1548,13 @@ FastAPI app + SSE + static dashboard.
   (`GET /api/proposals/{id}`); mirrors the per-project list's
   approval-token/snapshot redaction and returns the owning project's slug/name.
   A hidden project's proposal is 404 unless `config.is_owner_workspace()`.
+* Local AI: `api_local_ai()` (`GET /api/local-ai`: runtime/model status,
+  installed models, download policy, governor settings and last pass),
+  `api_local_ai_prepare()` (`POST /api/local-ai/prepare`),
+  `api_local_ai_job()` / `api_local_ai_cancel()`, `api_local_ai_remove()` and
+  `api_local_ai_test()`. Settings changes go through `PATCH /api/settings`, which
+  also writes or removes OpenCode's `small_model` through the backed-up config
+  writer.
 * VS Code integration: `api_vscode_status()` (includes the real VSIX path and
   install command when present), `api_vscode_link()`, `api_vscode_embed_ticket()`
   (one-shot framing ticket for the companion webview),

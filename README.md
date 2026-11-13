@@ -411,11 +411,14 @@ perun/                     the Python package
   memory.py                unified facts + doc-chunk store + search
   context.py               keyed retrievable context docs (bounded AGENTS.md)
   context_map.py           losslessness map for AGENTS.md migrations
+  context_governor.py      opt-in boundary compaction for long sessions (shadow-first)
   docaudit.py              CODEMAP file/identifier/version traceability audit
   secret_store.py          encrypted named secrets (pulled on demand)
   secrets.py               secret handling helpers for config values
   handbook.py              Perun reference material as context docs
   embeddings.py            Ollama transport + vector math
+  local_llm.py             OpenAI-compatible client for the optional local model
+  model_manager.py         local model download/status through Ollama
   grep.py                  integrated code-search backends with Python fallbacks
   search.py                unified search: RRF fusion of grep + ast-grep (+ memory)
   discovery.py             find projects under configured roots

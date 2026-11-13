@@ -158,6 +158,8 @@ can all write concurrently.
 | `project_chats` | Shared Projects | Project → `grp:` room mapping, lifecycle state, `manifest_rev`, last sync |
 | `action_proposals` | Shared Projects (HITL) | Chat-originated proposals, `room_id`, status (`pending`/`approved`/`claimed`/`executing`/`rejected`/`cancelled`/`executed`/`failed`/`expired`), action hash, approver, tokens, target digests captured at approval (`approval_snapshot`), executor/claim fields (`executor_id`, `executed_by`, `claimed_at`, `claim_expires_at`, `claim_snapshot`) |
 | `pending_room_deletions` | Shared Projects | Retry queue for room teardown when gateway offline |
+| `local_ai_jobs` | Local AI | One row per model download: model, state (`queued`/`running`/`done`/`failed`/`cancelled`), `completed`/`total` bytes, message, error, timestamps |
+| `context_events` | Context governor | Boundary-compaction decisions: session, action (`compact`/`would-compact`), tokens/cost/messages before and after, note, timestamp |
 
 Column additions after the first release are applied idempotently by
 `db._ADDED_COLUMNS` (`manifest`, `manifest_path`, `manifest_loaded_at`, `git_*`,
@@ -2887,8 +2889,11 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 | `local_ai_docs` | `true` | allow the changelog-bullet consumer |
 | `local_ai_small_model` | `false` | write `small_model: ollama/<model>` into the OpenCode config |
 | `context_governor_enabled` | `false` | opt-in boundary compaction for long sessions |
-| `context_governor_tokens` | `120000` | compact when the live context exceeds this |
-| `context_governor_turns` | `20` | minimum messages between compactions (cooldown, not a trigger) |
+| `context_governor_shadow` | `true` | record `would-compact` decisions without calling OpenCode |
+| `context_governor_tokens` | `150000` | compact when the live context exceeds this |
+| `context_governor_turns` | `100` | minimum messages between compactions (cooldown, not a trigger) |
+| `context_governor_idle_minutes` | `30` | skip a session whose usage snapshot is older than this (0 = off) |
+| `context_governor_max_per_day` | `6` | hard ceiling on real compactions per calendar day (0 = unlimited) |
 | `context_tool_budget_chars` | `20000` | cap for search/grep/memory tool output (file reads are never capped) |
 | `context_memory_budget_chars` | `6000` | cap for memory facts returned to an agent |
 

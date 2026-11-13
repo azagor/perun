@@ -310,6 +310,11 @@ the dashboard runs. It never starts a second poller.
   `deploy-plan` checklist are modelled, but Perun never executes a deploy
   command itself.
 * Cloud sync of the registry or memory.
+* **Speculative decoding or an inference proxy.** A local draft model cannot be
+  verified by a cloud target (providers expose no logits), and a proxy on the
+  token path would relay credentials and become a critical dependency. Perun
+  optimises the *prompt* (retrieval budgets, cache-stable prefixes, optional
+  boundary compaction), never the token stream.
 
 Still out of scope as of v0.12.4; the data model already leaves room
 (`projects.enabled`, `runs` history, `activity` meta, `tasks`). Scheduling and
