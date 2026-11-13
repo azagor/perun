@@ -3586,8 +3586,12 @@ def api_local_ai() -> dict[str, Any]:
         opencode_had_comments=had_comments,
         governor={
             "enabled": SETTINGS.context_governor_enabled,
+            "shadow": SETTINGS.context_governor_shadow,
             "tokens": SETTINGS.context_governor_tokens,
             "turns": SETTINGS.context_governor_turns,
+            "idle_minutes": SETTINGS.context_governor_idle_minutes,
+            "max_per_day": SETTINGS.context_governor_max_per_day,
+            "last": context_governor.last_status(),
             "events": registry.list_context_events(10),
         },
         budgets={
@@ -4170,6 +4174,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "coroutine_default_max_runs_per_day",
         "coroutine_default_cycle_max_seconds",
         "context_governor_tokens", "context_governor_turns",
+        "context_governor_idle_minutes", "context_governor_max_per_day",
         "context_tool_budget_chars", "context_memory_budget_chars",
     }
     bool_fields = {
@@ -4182,6 +4187,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "session_runner_enabled",
         "local_ai_enabled", "local_ai_shadow", "local_ai_docs",
         "local_ai_small_model", "context_governor_enabled",
+        "context_governor_shadow",
     }
     list_fields = {
         "roots", "telegram_allowed_chats", "perunchat_auto_join",
@@ -4227,7 +4233,8 @@ def _coerce_setting(key: str, value: Any) -> Any:
         if key == "context_governor_tokens" and v < 8000:
             raise HTTPException(status_code=400,
                                 detail="context_governor_tokens must be at least 8000")
-        if key in ("context_governor_turns",) and v < 0:
+        if key in ("context_governor_turns", "context_governor_idle_minutes",
+                   "context_governor_max_per_day") and v < 0:
             raise HTTPException(status_code=400, detail=f"{key} must be 0 or more")
         if key in ("context_tool_budget_chars", "context_memory_budget_chars") and v < 1000:
             raise HTTPException(status_code=400, detail=f"{key} must be at least 1000")

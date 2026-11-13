@@ -590,8 +590,10 @@ shadow mode first, and is never on a run's critical path.
 * The client is standard-library OpenAI-compatible with an 8 s timeout, so a
   stopped runtime degrades to the previous behaviour instead of failing.
 * Settings → **Context** adds an opt-in governor that asks OpenCode to compact a
-  session when its live context passes a threshold (cooldown in messages, never
-  an active session, self-disabling if compactions stop helping). It is off by
+  session when its live context passes a threshold. It starts in **shadow mode**
+  (records what it would do without calling OpenCode), never touches an active
+  session, respects a message cooldown and an idle window, stops at a daily cap,
+  and disables itself if compactions stop shrinking the context. It is off by
   default because compaction resets the provider's prompt cache.
 
 

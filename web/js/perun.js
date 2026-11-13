@@ -7079,17 +7079,25 @@ function contextCard() {
          cooldown and never on an active session.</p>
          <div class="row wrap" style="gap:18px;margin:6px 0 4px">
              <label class="row" style="gap:6px"><input type="checkbox" id="cx-enabled" ${s.context_governor_enabled ? 'checked' : ''}> enable context governor</label>
+             <label class="row" style="gap:6px" title="Log what would be compacted without calling OpenCode"><input type="checkbox" id="cx-shadow" ${s.context_governor_shadow !== false ? 'checked' : ''}> shadow (log only)</label>
          </div>
          <div class="form-row">
              <label class="field"><span class="lab">Compact above (tokens)</span>
-                 <input type="number" id="cx-tokens" min="8000" step="1000" value="${esc(s.context_governor_tokens ?? 120000)}"></label>
+                 <input type="number" id="cx-tokens" min="8000" step="1000" value="${esc(s.context_governor_tokens ?? 150000)}"></label>
              <label class="field"><span class="lab">Cooldown (messages)</span>
-                 <input type="number" id="cx-turns" min="0" value="${esc(s.context_governor_turns ?? 20)}"></label>
+                 <input type="number" id="cx-turns" min="0" value="${esc(s.context_governor_turns ?? 100)}"></label>
+             <label class="field"><span class="lab">Idle window (minutes)</span>
+                 <input type="number" id="cx-idle" min="0" value="${esc(s.context_governor_idle_minutes ?? 30)}"></label>
+             <label class="field"><span class="lab">Max per day</span>
+                 <input type="number" id="cx-max" min="0" value="${esc(s.context_governor_max_per_day ?? 6)}"></label>
+         </div>
+         <div class="form-row">
              <label class="field"><span class="lab">Search output budget (chars)</span>
                  <input type="number" id="cx-tool" min="1000" value="${esc(s.context_tool_budget_chars ?? 20000)}"></label>
              <label class="field"><span class="lab">Memory facts budget (chars)</span>
                  <input type="number" id="cx-memory" min="1000" value="${esc(s.context_memory_budget_chars ?? 6000)}"></label>
          </div>
+         <p class="meta" id="cx-last">no pass yet</p>
          <div id="cx-events"><p class="meta">loading recent compactions…</p></div>
          <div class="form-actions"><button class="btn primary" id="cx-save">Save context</button></div>`);
 
@@ -7099,19 +7107,32 @@ function contextCard() {
             const st = await fetchLocalAiStatus();
             const gov = (st && st.governor) || {};
             const badge = card.querySelector('#cx-badge');
-            badge.textContent = gov.enabled ? 'on' : 'off';
-            badge.className = 'badge ' + (gov.enabled ? 'green' : '');
+            badge.textContent = gov.enabled ? (gov.shadow ? 'shadow' : 'on') : 'off';
+            badge.className = 'badge ' + (gov.enabled ? (gov.shadow ? 'gold' : 'green') : '');
+            const last = gov.last || {};
+            const lastEl = card.querySelector('#cx-last');
+            if (last.ts) {
+                const when = String(last.ts).slice(0, 16).replace('T', ' ');
+                lastEl.textContent = `${when}: checked ${last.checked || 0} · compacted ${last.compacted || 0}`
+                    + ` · would compact ${last.would || 0}${gov.shadow ? ' (shadow)' : ''}`;
+            } else {
+                lastEl.textContent = 'no pass yet';
+            }
             const events = gov.events || [];
             if (!events.length) {
                 host.innerHTML = '<p class="meta">No compactions recorded yet.</p>';
                 return;
             }
-            host.innerHTML = `<table class="table"><thead><tr><th>When</th><th>Session</th><th>Context before → after</th><th>Note</th></tr></thead>
+            host.innerHTML = `<table class="table"><thead><tr><th>When</th><th>Session</th><th>Action</th>
+                <th>Context before → after</th><th>Cost delta</th><th>Note</th></tr></thead>
                 <tbody>${events.map((e) => `<tr>
                     <td class="mono">${esc(String(e.created_at || '').slice(0, 16).replace('T', ' '))}</td>
                     <td class="mono">#${esc(String(e.session_pk ?? '—'))}</td>
+                    <td>${e.action === 'would-compact' ? 'would compact' : 'compacted'}</td>
                     <td class="mono">${e.tokens_before ? fmtTokens(e.tokens_before) + ' tok' : '—'} →
                         ${e.tokens_after ? fmtTokens(e.tokens_after) + ' tok' : '…'}</td>
+                    <td class="mono">${e.cost_after !== undefined && e.cost_after !== null && Number(e.cost_after) > 0
+                        ? '$' + (Number(e.cost_after) - Number(e.cost_before || 0)).toFixed(2) : '…'}</td>
                     <td>${esc(e.note || '')}</td></tr>`).join('')}</tbody></table>`;
         } catch (e) {
             host.innerHTML = `<p class="meta">${esc(e.message)}</p>`;
@@ -7122,8 +7143,11 @@ function contextCard() {
         try {
             await api('/api/settings', { method: 'PATCH', body: {
                 context_governor_enabled: card.querySelector('#cx-enabled').checked,
+                context_governor_shadow: card.querySelector('#cx-shadow').checked,
                 context_governor_tokens: Number(card.querySelector('#cx-tokens').value),
                 context_governor_turns: Number(card.querySelector('#cx-turns').value),
+                context_governor_idle_minutes: Number(card.querySelector('#cx-idle').value),
+                context_governor_max_per_day: Number(card.querySelector('#cx-max').value),
                 context_tool_budget_chars: Number(card.querySelector('#cx-tool').value),
                 context_memory_budget_chars: Number(card.querySelector('#cx-memory').value),
             } });

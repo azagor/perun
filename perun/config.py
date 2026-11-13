@@ -385,8 +385,14 @@ class Settings:
     # default: compaction rewrites the conversation, which invalidates the
     # provider's prompt cache.
     context_governor_enabled: bool = False
-    context_governor_tokens: int = 120000
-    context_governor_turns: int = 20
+    # Record what would happen and never call OpenCode until this is off.
+    context_governor_shadow: bool = True
+    context_governor_tokens: int = 150000
+    context_governor_turns: int = 100
+    # Do not touch a session whose usage snapshot is older than this (0 = off).
+    context_governor_idle_minutes: int = 30
+    # Hard ceiling on real compactions per calendar day (0 = unlimited).
+    context_governor_max_per_day: int = 6
     # Upper bound for search/grep output returned to an agent. Exact file reads
     # are never truncated.
     context_tool_budget_chars: int = 20000

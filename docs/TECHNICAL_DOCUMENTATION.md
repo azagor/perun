@@ -2932,11 +2932,18 @@ critical path and never sees a provider credential.
 * Consumers: `docs_sync` (changelog bullet, shadow-first) and OpenCode's
   `small_model` (written through the backed-up config writer; removed when the
   toggle is off).
-* `perun/context_governor.py` — opt-in compaction at a boundary. It estimates
-  the live context from the newest assistant message (`tokens_in + cache_read`),
-  never compacts an active session, respects `context_governor_turns` as a
-  cooldown, records `context_events`, and disables itself when three compactions
-  fail to shrink the context by 10%.
+* `perun/context_governor.py` - opt-in compaction at a boundary. It estimates
+  the live context from the newest assistant message, handling both provider
+  styles (`context_tokens()`: Anthropic-style `input + cache.read`, OpenAI-style
+  `input`), never compacts an active session, respects
+  `context_governor_turns` as a cooldown, skips sessions idle for
+  `context_governor_idle_minutes`, stops at `context_governor_max_per_day`, and
+  records every decision in `context_events`. **Shadow mode is on by default**:
+  it records `would-compact` rows and never calls OpenCode until the operator
+  turns it off. `settle()` closes the previous compaction's after-values
+  independently of the next decision (so the measurement cannot be starved),
+  and three compactions that fail to shrink the context disable the governor
+  with an activity row.
 * Prompt caching is the cost model: 98% of measured input is cache reads. Never
   rewrite a session prefix per turn; compaction is a boundary event.
 * Budgets: `perun_grep`/`perun_ast_grep`/`perun_global_*`/`perun_unified_search`

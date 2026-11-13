@@ -407,14 +407,19 @@ OpenAI-compatible runtime).
 
 ### `perun/context_governor.py`
 Opt-in boundary compaction; off by default because compaction rewrites the
-conversation and resets the provider's prompt cache.
-* `live_context_tokens()` — newest assistant message's `input + cache.read`.
-* `maybe_compact()` — skips active sessions, below-threshold sessions, and the
-  cooldown (`context_governor_turns`); records `context_events`; closes the
-  previous event with the after-values; disables the governor after three
-  compactions that fail to shrink the context by 10%.
-* `tick()` — one pass over `registry.recent_sessions()`, rate-limited to 60 s and
-  called from the existing reconcile loop.
+conversation and resets the provider's prompt cache. Shadow mode is on by
+default, so it records decisions without calling OpenCode.
+* `context_tokens()` — provider-style-aware size of one message's context.
+* `live_context_tokens()` — the newest assistant message's estimate.
+* `settle()` — closes the previous compaction's after-values when the session is
+  idle, independently of the next decision.
+* `maybe_compact()` — idle window, cooldown, daily cap, shadow (`would-compact`)
+  or a real `api.compact()` after a final active-session re-check.
+* `tick()` — one pass over `registry.recent_sessions()`, rate-limited to 60 s,
+  called from the existing reconcile loop; keeps `last_status()` for the
+  dashboard.
+* `_ineffective()` / `_disable()` — three compactions that do not shrink the
+  context by 10% disable the governor and record an activity row.
 
 ### `perun/grep.py`
 Integrated code-search layer - ripgrep + ast-grep + pure-Python fallbacks, exposed

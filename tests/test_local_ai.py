@@ -53,9 +53,9 @@ class FakeAPI:
     def message_page(self, session_id: str, *, limit: int = 50, cursor: str = ""):
         if not self.tokens:
             return [], {}
-        return ([{"id": "m1", "tokens": {"input": self.tokens - 200,
-                                         "output": 10,
-                                         "cache": {"read": 200}}}], {})
+        # Anthropic-style shape: input excludes the cached prefix.
+        return ([{"id": "m1", "tokens": {"input": 200, "output": 10,
+                                         "cache": {"read": max(0, self.tokens - 200)}}}], {})
 
     def compact(self, session_id: str) -> dict:
         self.compactions.append(session_id)
@@ -358,8 +358,9 @@ def test_docs_live_uses_the_local_line(monkeypatch):
 # Governor
 # --------------------------------------------------------------------------- #
 def _session(**overrides):
-    row = {"id": 1, "opencode_session_id": "ses_x", "usage_messages": 100,
-           "cost_usd": 1.5}
+    row = {"id": 1, "project_id": 1, "opencode_session_id": "ses_x",
+           "usage_messages": 100, "cost_usd": 1.5,
+           "usage_at": registry.now_iso()}
     row.update(overrides)
     return row
 
@@ -385,6 +386,16 @@ def test_compact_posts_an_empty_object():
     assert seen["path"].endswith("/api/session/ses_probe/compact")
 
 
+def test_context_tokens_handles_both_provider_styles():
+    # Anthropic-style: input excludes the cached prefix.
+    assert context_governor.context_tokens(
+        {"input": 100, "cache": {"read": 1000}}) == 1100
+    # OpenAI-style: input already includes the cached tokens.
+    assert context_governor.context_tokens(
+        {"input": 1000, "cache": {"read": 800}}) == 1000
+    assert context_governor.context_tokens({"input": 500}) == 500
+
+
 def test_governor_skips_below_the_threshold():
     api = FakeAPI(tokens=500)
     s = _settings(context_governor_enabled=True, context_governor_tokens=8000)
@@ -399,13 +410,26 @@ def test_governor_skips_an_active_session():
     assert api.compactions == []
 
 
+def test_governor_shadow_records_but_does_not_compact():
+    api = FakeAPI(tokens=9000)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
+                  context_governor_shadow=True, context_governor_turns=0)
+    res = context_governor.maybe_compact(api, _session(), s)
+    assert res["shadow"] is True
+    assert api.compactions == []
+    event = registry.last_context_event(1)
+    assert event["action"] == "would-compact"
+
+
 def test_governor_compacts_and_records_the_event():
     api = FakeAPI(tokens=9000)
-    s = _settings(context_governor_enabled=True, context_governor_tokens=8000)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
+                  context_governor_shadow=False, context_governor_turns=0)
     res = context_governor.maybe_compact(api, _session(), s)
     assert res["compacted"] is True
     assert api.compactions == ["ses_x"]
     event = registry.last_context_event(1)
+    assert event["action"] == "compact"
     assert event["tokens_before"] == 9000
     assert event["messages_before"] == 100
 
@@ -413,25 +437,65 @@ def test_governor_compacts_and_records_the_event():
 def test_governor_respects_the_cooldown():
     api = FakeAPI(tokens=9000)
     s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
-                  context_governor_turns=20)
+                  context_governor_shadow=False, context_governor_turns=20)
     context_governor.maybe_compact(api, _session(), s)
     res = context_governor.maybe_compact(api, _session(usage_messages=105), s)
     assert res["skipped"] == "cooldown"
     assert api.compactions == ["ses_x"]
 
 
-def test_governor_disables_itself_when_compaction_does_not_help():
+def test_governor_skips_an_idle_session():
     api = FakeAPI(tokens=9000)
     s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
-                  context_governor_turns=0)
-    for index in range(3):
-        registry.record_context_event(1, "compact", tokens_before=10000,
-                                      messages_before=index)
+                  context_governor_shadow=False, context_governor_idle_minutes=30)
+    old = "2020-01-01T00:00:00+00:00"
+    assert context_governor.maybe_compact(
+        api, _session(usage_at=old), s)["skipped"] == "idle"
+
+
+def test_governor_stops_at_the_daily_cap():
+    api = FakeAPI(tokens=9000)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
+                  context_governor_shadow=False, context_governor_turns=0,
+                  context_governor_max_per_day=1)
+    registry.record_context_event(9, "compact", tokens_before=1000)
+    assert context_governor.maybe_compact(
+        api, _session(), s)["skipped"] == "daily_cap"
+    assert api.compactions == []
+
+
+def test_settle_closes_the_previous_event():
+    api = FakeAPI(tokens=7000)
+    event = registry.record_context_event(1, "compact", tokens_before=9000)
+    res = context_governor.settle(_session(), api)
+    assert res["settled"] is True
+    row = registry.last_context_event(1)
+    assert row["id"] == event["id"]
+    assert row["tokens_after"] == 7000
+    assert row["messages_after"] == 100
+
+
+def test_governor_disables_itself_when_compaction_does_not_help(monkeypatch):
+    monkeypatch.setattr(context_governor, "_last_check", 0.0)
+    project = registry.add_project("governor-test", r"C:\governor-test")
+    session = registry.create_session(project["id"], "ses_gov")
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 10, "tokens_out": 1, "cache_read": 9000,
+        "cost": 1.0, "models": {}, "complete": True})
+    for _ in range(3):
+        registry.record_context_event(session["id"], "compact",
+                                      tokens_before=10000)
         registry.update_context_event(
-            registry.last_context_event(1)["id"], tokens_after=9800)
-    res = context_governor.maybe_compact(api, _session(), s)
-    assert res.get("disabled") is True
+            registry.last_context_event(session["id"])["id"], tokens_after=9800)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
+                  context_governor_shadow=False, context_governor_turns=0)
+    api = FakeAPI(tokens=9000)
+    res = context_governor.tick(s, api=api)
+    assert res["ok"] is True
     assert s.context_governor_enabled is False
+    assert api.compactions == []
+    assert any(row["kind"] == "context_governor"
+               for row in registry.list_activity(limit=5))
 
 
 def test_governor_tick_is_a_no_op_when_disabled(monkeypatch):

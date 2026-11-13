@@ -4,7 +4,24 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Context governor: measurable and bounded
+
+* **Shadow mode is the default** (`context_governor_shadow`): the governor logs
+  what it *would* compact, minute by minute, and never calls OpenCode until the
+  operator turns shadow off. The Settings card shows the last pass
+  ("checked 4 · would compact 1") and each event's cost delta.
+* New limits: `context_governor_idle_minutes` (30; never touch a session whose
+  usage snapshot is older), `context_governor_max_per_day` (6; hard ceiling on
+  real compactions), and higher defaults (`150k` tokens, `100`-message cooldown)
+  so a compaction has time to pay for itself.
+* `settle()` closes the previous compaction's after-values as soon as the session
+  is idle, independently of the next compact decision — so an active session can
+  no longer starve the measurement and the three-strike self-disable actually
+  fires. The disable is recorded as an activity row.
+* The live-context estimate now handles both provider styles: Anthropic-style
+  disjoint fields (`input + cache.read`) and OpenAI-style inclusive
+  (`input`, cached is a subset).
+* An active session is re-checked immediately before the compact call.
 
 ## v0.15.3
 
