@@ -1014,9 +1014,13 @@ def remove_many(paths: Optional[Iterable[str | Path]] = None, *,
     if paths:
         targets = [str(p) for p in paths]
     elif division:
+        # Only the scope the caller named: asking for a project's division must
+        # not also delete the machine-wide copies.
+        wanted_scope = "project" if project_path else "global"
         targets = [entry["path"] for entry in discover(project_path)
                    if entry["division"] == division
-                   and entry["state"] in {"adopted", "modified", "unlisted"}]
+                   and entry["state"] in {"adopted", "modified", "unlisted"}
+                   and entry["scope"] == wanted_scope]
     else:
         raise CatalogError("choose agents (paths) or a division to remove")
     if not targets:

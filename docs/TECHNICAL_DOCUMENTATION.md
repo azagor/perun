@@ -2105,7 +2105,9 @@ agent, a whole division, or forgets an edited one (the file stays). The same is
 available as `perun agent-catalog installed` / `remove <path>` /
 `remove --division <name>`. Removal keeps a backup under the `agency` label,
 refuses a file edited since install (that is `forget`, which only drops Perun's
-record), and takes effect in OpenCode on its next start.
+record), and takes effect in OpenCode on its next start. A project scope removes
+only that project's copies; the machine-wide ones are removed without
+`--project`.
 
 **Perun's own agents are untouchable.** `managed_agent.managed_ids()` (the
 `perun-*` templates plus the chat persona) is consulted by the catalogue, which

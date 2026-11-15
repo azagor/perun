@@ -415,3 +415,27 @@ def test_install_refuses_a_roster_entry_that_collides_with_a_perun_agent(tmp_pat
     assert result["count"] == 0
     assert "Perun agent" in result["skipped"][0]["reason"]
     assert not (base / "agents" / "perun-docs.md").exists()
+
+
+def test_removing_a_project_division_leaves_the_global_copies(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    project = tmp_path / "proj"
+    (project / ".opencode" / "agents").mkdir(parents=True)
+    monkeypatch.setattr(agent_catalog, "load_index", lambda force=False: _index(
+        ("code-reviewer", "engineering"), ("ui-designer", "engineering")))
+
+    global_copy = base / "agents" / "code-reviewer.md"
+    global_copy.write_text(_source("Code Reviewer"), encoding="utf-8")
+    project_copy = project / ".opencode" / "agents" / "ui-designer.md"
+    project_copy.write_text(_source("UI Designer"), encoding="utf-8")
+    agent_catalog.adopt([str(global_copy)])
+    agent_catalog.adopt([str(project_copy)], project)
+    assert {e["slug"]: e["scope"] for e in agent_catalog.discover(project)} == {
+        "code-reviewer": "global", "ui-designer": "project"}
+
+    result = agent_catalog.remove_many(division="engineering", project_path=project)
+    assert result["count"] == 1
+    assert global_copy.exists()
+    assert not project_copy.exists()

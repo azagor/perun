@@ -1104,7 +1104,7 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if action == "forget":
             return agent_catalog.forget(path)
         if action == "remove":
-            if payload.get("division") or payload.get("paths"):
+            if "paths" in payload or payload.get("division"):
                 return agent_catalog.remove_many(
                     payload.get("paths") or None,
                     division=str(payload.get("division") or ""),

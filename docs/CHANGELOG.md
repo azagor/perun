@@ -6,6 +6,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.6
+
+*Released 2026-11-15.*
+
+### Uninstall stays inside the scope you named
+
+* `remove --division <name> --project <slug>` (and the equivalent API call) now
+  removes only that project's copies. It previously matched every agent of the
+  division, including the machine-wide ones, because the scope was not part of
+  the filter.
+* `POST /api/agent-catalog/remove` with an empty `paths` list is a clear 400
+  (*"choose agents (paths) or a division"*) instead of falling through to a
+  single-file removal of the empty path.
+
 ## v0.16.5
 
 *Released 2026-11-15.*

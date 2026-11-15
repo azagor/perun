@@ -257,3 +257,9 @@ def test_the_api_refuses_to_touch_a_perun_agent(client, tmp_path):
     assert r.status_code == 400
     assert "Perun agent" in r.json()["detail"]
     assert target.exists()
+
+
+def test_remove_with_an_empty_selection_is_a_400(client):
+    r = client.post("/api/agent-catalog/remove", json={"paths": []})
+    assert r.status_code == 400
+    assert "choose agents" in r.json()["detail"]
