@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T21:10:09+00:00",
+  "generated": "2026-11-15T21:28:55+00:00",
   "releases": [
+    {
+      "version": "0.16.7",
+      "date": "2026-11-15",
+      "body": "### Faster listing, and a safer bulk uninstall\n\n* File hashes are cached by `(mtime_ns, size)`, so the Settings card no longer\n  re-reads every agent file on each render; any writer invalidates the entry it\n  touches. A same-size, same-timestamp rewrite is the only case it could miss.\n* `remove_many` runs in **one** manifest transaction: removing a 66-agent\n  division is one write instead of 66, and a failure midway keeps every earlier\n  removal.\n* `remove --division` supports `--dry-run` (list, change nothing) and needs\n  `--yes` to actually delete; the API takes `dry_run` too.\n* The Installed list gains a division filter, and an `unlisted` agent (adopted,\n  hash still matching) now offers **Remove** instead of only **Forget**."
+    },
     {
       "version": "0.16.6",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.11",
       "date": "2026-11-13",
       "body": "### VS Code: a Restricted window no longer mislabels every project\n\n* An untrusted window never reaches `hello`, so its heartbeat now carries\n  `workspace_path`; the server resolves the project from it. Before, the empty\n  `project_slug` made **every** project card claim “workspace untrusted”.\n* The server heartbeat writes to a unique temp file before the atomic rename, so\n  two concurrent `hello` writes cannot collide.\n* Companion 0.1.10."
-    },
-    {
-      "version": "0.15.10",
-      "date": "2026-11-13",
-      "body": "### VS Code: per-project trust and safer status writes\n\n* The companion heartbeat now carries `project_slug`, and `GET\n  /api/vscode/status` exposes `extension_project`. The project card only claims\n  “workspace untrusted” when the reported window belongs to that project (or\n  reported none), so one Restricted window no longer mislabels the others.\n* Heartbeat writes are atomic (temp + rename) on both sides, so a concurrent\n  read cannot see a partial file.\n* If the beside-preview column disappears (or `showTextDocument` fails\n  synchronously), the edit falls back to the clickable status hint instead of\n  throwing; the decoration type is disposed even when its editor closed.\n* Running a **Mode B** project without a usable companion now opens an external\n  terminal with a neutral notice (Restricted Mode, or no window) instead of a red\n  “companion not connected” toast on every Run.\n* Companion 0.1.9."
     }
   ]
 }
