@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T19:34:57+00:00",
+  "generated": "2026-11-15T20:07:44+00:00",
   "releases": [
+    {
+      "version": "0.16.4",
+      "date": "2026-11-15",
+      "body": "### The agent ceiling is a setting, not a magic number\n\n* `perun agent-catalog limit <n>` — or the **Agent ceiling** field on the\n  Settings card — sets the ceiling for this machine. It is stored in the roster\n  manifest, defaults to the upstream-reported 119, and is bounded to 1–1000. This\n  runtime registers **120** with nothing dropped, so an operator who re-measures\n  their build can raise it without waiting for a Perun release.\n* `slots()` uses the configured value for `limit`, `remaining` and the install\n  guard, and the CLI reports when the machine is at the ceiling.\n* `tests/test_agents.py` now isolates the global agent directory instead of\n  reading the operator's real 113-agent install, and the install path gained a\n  positive project-scope test."
+    },
     {
       "version": "0.16.3",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.8",
       "date": "2026-11-13",
       "body": "### Session-rule parity guard\n\n* A node test requires both `web/js/session_pick.js` and\n  `extensions/vscode/src/session_pick.js` and fails on drift, so the dashboard's\n  Run and the companion's fast resume cannot diverge.\n* The companion manifest test covers `perun.resumeTui`, and the Config badge has\n  its own id instead of a broad selector."
-    },
-    {
-      "version": "0.15.7",
-      "date": "2026-11-13",
-      "body": "### Linking a new project is opt-in again\n\n* The new-project wizard no longer pre-checks **Link with Visual Studio Code**:\n  checking it generates a `.code-workspace`, which is a new VS Code trust scope.\n  A project created without touching the box is no longer linked (an existing\n  project can still be linked from its Config tab).\n* The Config tab's VS Code badge now shows **“will link (save)” / “will unlink\n  (save)”** while the checkbox differs from the saved state, so a stale “LINKED”\n  badge can no longer contradict an unchecked box."
     }
   ]
 }

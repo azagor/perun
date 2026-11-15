@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.16.3 (see §15). Budget the roster against registered agents
+**Latest release:** v0.16.4 (see §15). Make the agent ceiling configurable
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3030,6 +3030,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-15 — v0.16.4: Make the agent ceiling configurable
+
 ### 2026-11-15 — v0.16.3: Budget the roster against registered agents
 
 ### 2026-11-15 — v0.16.2: Harden the roster install path
