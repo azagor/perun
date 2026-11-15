@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.16.5 (see §15). Uninstall roster agents from Settings; protect Perun's own
+**Latest release:** v0.16.6 (see §15). Scope-check roster removal
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3048,6 +3048,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-15 — v0.16.6: Scope-check roster removal
+
 ### 2026-11-15 — v0.16.5: Uninstall roster agents from Settings; protect Perun's own
 
 ### 2026-11-15 — v0.16.4: Make the agent ceiling configurable

@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T20:53:40+00:00",
+  "generated": "2026-11-15T21:10:09+00:00",
   "releases": [
+    {
+      "version": "0.16.6",
+      "date": "2026-11-15",
+      "body": "### Uninstall stays inside the scope you named\n\n* `remove --division <name> --project <slug>` (and the equivalent API call) now\n  removes only that project's copies. It previously matched every agent of the\n  division, including the machine-wide ones, because the scope was not part of\n  the filter.\n* `POST /api/agent-catalog/remove` with an empty `paths` list is a clear 400\n  (*\"choose agents (paths) or a division\"*) instead of falling through to a\n  single-file removal of the empty path."
+    },
     {
       "version": "0.16.5",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.10",
       "date": "2026-11-13",
       "body": "### VS Code: per-project trust and safer status writes\n\n* The companion heartbeat now carries `project_slug`, and `GET\n  /api/vscode/status` exposes `extension_project`. The project card only claims\n  “workspace untrusted” when the reported window belongs to that project (or\n  reported none), so one Restricted window no longer mislabels the others.\n* Heartbeat writes are atomic (temp + rename) on both sides, so a concurrent\n  read cannot see a partial file.\n* If the beside-preview column disappears (or `showTextDocument` fails\n  synchronously), the edit falls back to the clickable status hint instead of\n  throwing; the decoration type is disposed even when its editor closed.\n* Running a **Mode B** project without a usable companion now opens an external\n  terminal with a neutral notice (Restricted Mode, or no window) instead of a red\n  “companion not connected” toast on every Run.\n* Companion 0.1.9."
-    },
-    {
-      "version": "0.15.9",
-      "date": "2026-11-13",
-      "body": "### VS Code: an untrusted workspace is visible and recoverable\n\n* The companion now writes `~/.perun/vscode/extension.json` with `trusted: false`\n  in Restricted Mode (and `true` once trusted), so the dashboard can report\n  **“workspace untrusted (Restricted Mode)”** instead of the misleading\n  “companion not installed”.\n* `GET /api/vscode/status` exposes `extension_trusted`; the project's VS Code\n  card shows a **How to trust** hint — the banner's *Yes, I trust the authors*, or\n  Command Palette → *Workspaces: Manage Workspace Trust*. Perun never grants\n  trust itself, and opening the dashboard does not change it.\n* New **Perun: Manage Workspace Trust** command opens VS Code's trust UI; the\n  companion reconnects immediately on `onDidGrantWorkspaceTrust` (no window\n  reload) and refuses to start a TUI while the workspace is untrusted.\n* Companion 0.1.7.\n\n### VS Code: edit-follow no longer steals focus\n\n* **No automatic `code --goto`.** A background edit is never revealed by\n  launching VS Code; that activated the window and interrupted work in another\n  project. An explicit Open still uses `code --goto`.\n* In a focused window the companion highlights a visible file in place, or opens\n  a new file **beside** the active editor with `preserveFocus: true`, reusing\n  that column, so typing keeps going to your file.\n* In an unfocused window it changes nothing: a clickable\n  `$(edit) file:line` status item shows where the edit is, and\n  **Perun: Reveal Last Agent Edit** opens it deliberately. `reveal` mode now\n  means \"highlight only an already-open file\"; `open` keeps the beside preview.\n* Companion 0.1.8."
     }
   ]
 }
