@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T19:11:55+00:00",
+  "generated": "2026-11-15T19:34:57+00:00",
   "releases": [
+    {
+      "version": "0.16.3",
+      "date": "2026-11-15",
+      "body": "### The roster guard counts registered agents, not files\n\n* `install` adds the runtime's non-roster baseline — built-ins, Perun's own\n  agents, anything hand-written — to the file count before comparing with the\n  ~119 ceiling. Counting files alone understated the budget by exactly that\n  baseline, so the last handful of agents could still be dropped. `status`\n  reports `baseline` and `projected`, and the CLI says when the machine is at the\n  ceiling.\n* An upgrade backs up the file it replaces, and `promote` backs up before\n  rewriting it — the same rule `remove` already followed.\n* Manifest mutations (adopt/accept/forget/remove/promote/install) now hold the\n  lock across read-modify-write, so two concurrent changes cannot drop an entry.\n* A project-scoped install skips a slug that already exists globally instead of\n  writing a shadowed copy that Perun's discovery would never list.\n* `available?project=<slug>` marks project-local installs; `status?agents=false`\n  omits the per-agent list (the panels only need the counts).\n* `tools/agency_index.py` refuses to write an index when it cannot resolve\n  `main`, instead of quietly recording `main` and following the branch."
+    },
     {
       "version": "0.16.2",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.7",
       "date": "2026-11-13",
       "body": "### Linking a new project is opt-in again\n\n* The new-project wizard no longer pre-checks **Link with Visual Studio Code**:\n  checking it generates a `.code-workspace`, which is a new VS Code trust scope.\n  A project created without touching the box is no longer linked (an existing\n  project can still be linked from its Config tab).\n* The Config tab's VS Code badge now shows **“will link (save)” / “will unlink\n  (save)”** while the checkbox differs from the saved state, so a stale “LINKED”\n  badge can no longer contradict an unchecked box."
-    },
-    {
-      "version": "0.15.6",
-      "date": "2026-11-13",
-      "body": "### VS Code companion 0.1.6: fast resume vs session picker\n\n* The **Perun TUI** status-bar item now fast-resumes the newest TUI chat — the\n  dashboard's **Run** — instead of opening a picker.\n* **Perun: Choose TUI session…** (`perun.openTui`) is the picker: resume latest,\n  any of the last 50 sessions (headless ones labelled, never auto-selected), or\n  start a new session. `perun.openTui` keeps its id, so existing keybindings\n  still work.\n* Companion 0.1.6, suite 10/10."
     }
   ]
 }

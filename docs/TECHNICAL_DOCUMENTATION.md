@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.16.2 (see §15). Harden the roster install path
+**Latest release:** v0.16.3 (see §15). Budget the roster against registered agents
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3027,6 +3027,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-15 — v0.16.3: Budget the roster against registered agents
+
 ### 2026-11-15 — v0.16.2: Harden the roster install path
 
 ### 2026-11-15 — v0.16.1: Install agent rosters from Settings, pinned to the index commit
