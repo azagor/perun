@@ -62,12 +62,13 @@ built-ins (`build`, `plan`, `general`, `explore`), the global ones in
 `~/.config/opencode/agents/`, and the project-local ones in
 `.opencode/agents/`.
 
-Perun does not install third-party agents. A roster such as Agency Agents is
-installed by its own script or desktop app; Perun adopts what landed on disk,
-records a hash, measures the runtime's real registration budget
-(`perun agent-catalog status`) and protects edited copies before a re-install.
-See `perun agent-catalog --help` and the "Agent roster" panel in a project's
-config, and `docs/TECHNICAL_DOCUMENTATION.md` §9.2.
+A third-party roster such as Agency Agents can be installed from Settings →
+**Agent roster** (or `perun agent-catalog install engineering`): Perun downloads
+one snapshot pinned to the commit in `perun/data/agency_index.json`, converts it,
+and records a hash per file. It never overwrites an agent you edited, and refuses
+to exceed the ~119-agent registration ceiling. Upstream's own installer still
+works — `perun agent-catalog adopt` takes over its output. See
+`perun agent-catalog --help` and `docs/TECHNICAL_DOCUMENTATION.md` §9.2.
 
 ## Streaming and cancellation
 

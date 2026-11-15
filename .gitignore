@@ -38,3 +38,5 @@ extensions/vscode/dist/
 installer/vscode/*.vsix
 # The extension ships a public README even though the repo root README is internal.
 !extensions/vscode/README.md
+build/
+dist/

@@ -25,10 +25,14 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+import tarfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -37,6 +41,7 @@ from . import backups, config
 LOG = logging.getLogger("perun.agent_catalog")
 
 SOURCE_URL = "https://github.com/msitarzewski/agency-agents"
+TARBALL_URL = "https://codeload.github.com/msitarzewski/agency-agents/tar.gz/{ref}"
 INDEX_PATH = Path(__file__).resolve().parent / "data" / "agency_index.json"
 # Upstream reports that OpenCode's runtime registers only ~119 agents and
 # silently drops the rest (anomalyco/opencode#27988). `registered()` measures the
@@ -46,7 +51,21 @@ LIMIT_SOURCE = "upstream #27988; `opencode debug agents` measures the real count
 
 MANIFEST_SCHEMA = 1
 _INDEX_MAX_BYTES = 8 * 1024 * 1024
+_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024
 _MEASURE_TTL = 60.0
+
+# Upstream's ``resolve_opencode_color``: CSS names where one exists, Tailwind
+# 500 otherwise, and a grey fallback for anything unrecognised.
+NAMED_COLORS = {
+    "cyan": "#00FFFF", "blue": "#3498DB", "green": "#2ECC71", "red": "#E74C3C",
+    "purple": "#9B59B6", "orange": "#F39C12", "teal": "#008080",
+    "indigo": "#6366F1", "pink": "#E84393", "gold": "#EAB308",
+    "amber": "#F59E0B", "neon-green": "#10B981", "neon-cyan": "#06B6D4",
+    "metallic-blue": "#3B82F6", "yellow": "#EAB308", "violet": "#8B5CF6",
+    "rose": "#F43F5E", "lime": "#84CC16", "gray": "#6B7280",
+    "fuchsia": "#D946EF", "slate": "#64748B", "navy": "#000080",
+}
+FALLBACK_COLOR = "#6B7280"
 
 
 class CatalogError(Exception):
@@ -592,3 +611,240 @@ def team_file(divisions: Optional[Iterable[str]] = None,
         "agents": [a["slug"] for a in selected],
         "text": "\n".join(a["slug"] for a in selected) + "\n",
     }
+
+
+# --------------------------------------------------------------------------- #
+# Acquisition (explicit and pinned)
+#
+# This is the one path where Perun writes an agent file. It installs from the
+# *pinned index commit*, converts with upstream's rules, and refuses to touch
+# anything it does not already track. Upstream's own installer still works; its
+# output is adopted instead.
+# --------------------------------------------------------------------------- #
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(name: str) -> str:
+    """Upstream's slug rule: it becomes the filename, so it must match exactly."""
+    return _SLUG_RE.sub("-", (name or "").lower()).strip("-")
+
+
+def resolve_color(value: str) -> str:
+    """Upstream's ``resolve_opencode_color`` (CSS names, Tailwind 500, fallback)."""
+    raw = (value or "").strip().lower()
+    mapped = NAMED_COLORS.get(raw, raw)
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", mapped):
+        return "#" + mapped[1:].upper()
+    if re.fullmatch(r"[0-9a-fA-F]{6}", mapped):
+        return "#" + mapped.upper()
+    return FALLBACK_COLOR
+
+
+def _yaml_quote(value: str) -> str:
+    """Single-quoted YAML: keeps colons, hashes and Unicode literal."""
+    return "'" + (value or "").replace("'", "''") + "'"
+
+
+def parse_agent(text: str) -> tuple[Dict[str, str], str]:
+    """Split an upstream agent file into frontmatter fields and body."""
+    lines = text.splitlines()
+    fields: Dict[str, str] = {}
+    body_start = 0
+    if lines and lines[0].strip() == "---":
+        for index in range(1, len(lines)):
+            if lines[index].strip() != "---":
+                continue
+            for line in lines[1:index]:
+                key, sep, value = line.partition(":")
+                if not sep:
+                    continue
+                key = key.strip().lower()
+                if key in {"name", "description", "color", "emoji"}:
+                    value = value.strip()
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                        value = value[1:-1]
+                    fields[key] = value
+            body_start = index + 1
+            break
+    return fields, "\n".join(lines[body_start:]).strip("\n")
+
+
+def render_agent(fields: Dict[str, str], body: str, *, mode: str = "subagent") -> str:
+    """Upstream's OpenCode output: quoted scalars, hex colour, body verbatim."""
+    name = (fields.get("name") or "").strip()
+    description = " ".join((fields.get("description") or "").split())
+    if not name or not description:
+        raise CatalogError("agent file has no name/description")
+    return (
+        "---\n"
+        f"name: {_yaml_quote(name)}\n"
+        f"description: {_yaml_quote(description)}\n"
+        f"mode: {mode}\n"
+        f"color: '{resolve_color(fields.get('color', ''))}'\n"
+        "---\n"
+        f"{body}\n"
+    )
+
+
+def archive_path(ref: str) -> Path:
+    safe = "".join(c for c in (ref or "") if c.isalnum() or c in "-_.")[:60] or "main"
+    return Path(config.HOME) / "agent_catalog" / "agency" / f"{safe}.tar.gz"
+
+
+def roster_archive(ref: str, *, force: bool = False) -> Path:
+    """The roster tarball for *ref*, cached so a re-install (and offline) works."""
+    path = archive_path(ref)
+    if path.is_file() and not force:
+        return path
+    request = urllib.request.Request(
+        TARBALL_URL.format(ref=ref), headers={"User-Agent": "perun-agent-catalog"})
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            chunks: List[bytes] = []
+            total = 0
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _ARCHIVE_MAX_BYTES:
+                    raise CatalogError("roster archive is unreasonably large")
+                chunks.append(chunk)
+    except (urllib.error.URLError, OSError) as exc:
+        if path.is_file():
+            LOG.warning("roster download failed (%s); using the cached snapshot", exc)
+            return path
+        raise CatalogError(
+            "could not download the roster; install with upstream's script and adopt "
+            f"the result instead ({exc})") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f".{os.urandom(4).hex()}.tmp")
+    tmp.write_bytes(b"".join(chunks))
+    os.replace(tmp, path)
+    return path
+
+
+def _read_bodies(path: Path, wanted: Dict[str, str]) -> Dict[str, str]:
+    """``slug -> raw markdown`` for the archive members the index points at."""
+    out: Dict[str, str] = {}
+    try:
+        with tarfile.open(path, mode="r:gz") as tar:
+            for item in tar.getmembers():
+                if not item.isfile() or not item.name.endswith(".md"):
+                    continue
+                parts = item.name.split("/")
+                if len(parts) < 3:
+                    continue
+                slug = wanted.get("/".join(parts[1:]))
+                if not slug or slug in out:
+                    continue
+                handle = tar.extractfile(item)
+                if handle is None:
+                    continue
+                out[slug] = handle.read().decode("utf-8", errors="replace")
+    except (tarfile.TarError, OSError) as exc:
+        raise CatalogError(f"roster archive unreadable: {exc}") from exc
+    return out
+
+
+def install(divisions: Optional[Iterable[str]] = None,
+            agents: Optional[Iterable[str]] = None, *,
+            scope: str = "global",
+            project_path: str | Path | None = None,
+            limit: Optional[int] = None) -> Dict[str, Any]:
+    """Install roster agents from the pinned index commit.
+
+    Refuses to clobber a file Perun does not track, or one edited since install.
+    """
+    index = load_index()
+    if not index["available"]:
+        raise CatalogError("agent index unavailable; regenerate it with tools/agency_index.py")
+    wanted_divs = {d for d in (divisions or []) if d}
+    wanted_slugs = {s for s in (agents or []) if s}
+    if wanted_slugs:
+        selected = [a for a in index["agents"] if a["slug"] in wanted_slugs]
+    elif wanted_divs:
+        selected = [a for a in index["agents"] if a["division"] in wanted_divs]
+    else:
+        selected = []
+    if not selected:
+        raise CatalogError("no agents selected")
+
+    if scope not in {"global", "project"}:
+        raise CatalogError(f"unsupported scope: {scope}")
+    if scope == "project" and not project_path:
+        raise CatalogError("a project is required for a project-scoped install")
+    base = (Path(project_path) / ".opencode" / "agents" if scope == "project"
+            else Path(config.OPENCODE_CONFIG_DIR) / "agents")
+
+    existing = {p.stem for p in _md_files(agent_dirs(project_path))}
+    ceiling = int(DEFAULT_LIMIT if limit is None else limit)
+    planned = existing | {a["slug"] for a in selected}
+    if len(planned) > ceiling:
+        raise CatalogError(
+            f"{len(planned)} agents would exceed the {ceiling}-agent ceiling "
+            f"({len(existing)} installed, {len(planned - existing)} new); "
+            f"narrow the divisions")
+
+    manifest = _load_manifest()
+    raw_bodies = _read_bodies(
+        roster_archive(index["commit"]), {a["path"]: a["slug"] for a in selected})
+    base.mkdir(parents=True, exist_ok=True)
+    installed: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for agent in selected:
+        raw = raw_bodies.get(agent["slug"])
+        if raw is None:
+            skipped.append({"path": agent["path"], "reason": "missing from the roster archive"})
+            continue
+        target = base / f"{agent['slug']}.md"
+        key = _key(target)
+        entry = manifest["agents"].get(key)
+        if target.exists():
+            if not entry:
+                skipped.append({"path": str(target),
+                                "reason": "exists and is not tracked by Perun"})
+                continue
+            if _hash(target) != str(entry.get("sha256") or ""):
+                skipped.append({"path": str(target),
+                                "reason": "edited since it was installed"})
+                continue
+        try:
+            text = render_agent(*parse_agent(raw))
+        except CatalogError as exc:
+            skipped.append({"path": agent["path"], "reason": str(exc)})
+            continue
+        tmp = target.with_suffix(f".{os.urandom(4).hex()}.tmp")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(tmp, target)
+        manifest["agents"][key] = {
+            "source": "agency-agents",
+            "commit": index["commit"],
+            "division": agent["division"],
+            "slug": agent["slug"],
+            "sha256": _hash(target),
+            "mode_intent": "subagent",
+            "installed_by": "perun",
+            "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        installed.append(str(target))
+    with _lock:
+        _save_manifest(manifest)
+    return {"ok": True, "commit": index["commit"], "scope": scope,
+            "installed": installed, "skipped": skipped,
+            "count": len(installed), "skipped_count": len(skipped)}
+
+
+def available(division: str = "") -> Dict[str, Any]:
+    """What the index offers, with what is already on disk marked."""
+    index = load_index()
+    if not index["available"]:
+        raise CatalogError("agent index unavailable")
+    installed = {p.stem for p in _md_files(agent_dirs())}
+    agents = [dict(agent, installed=agent["slug"] in installed)
+              for agent in index["agents"]
+              if not division or agent["division"] == division]
+    agents.sort(key=lambda a: (a["division"], a["slug"]))
+    return {"ok": True, "commit": index["commit"], "count": len(agents),
+            "divisions": index["divisions"], "agents": agents}

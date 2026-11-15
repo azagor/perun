@@ -7314,6 +7314,117 @@ function contextCard() {
     return card;
 }
 
+function agentRosterSettingsCard() {
+    const selected = new Set();
+    const budget = el('span', { class: 'badge' }, '…');
+    const note = el('div', { class: 'muted' }, '');
+    const divisions = el('div', { class: 'row wrap', style: 'gap:6px;margin:8px 0' });
+    const install = el('button', { class: 'btn primary', type: 'button' }, 'Install selected');
+    const adopt = el('button', { class: 'btn ghost', type: 'button' }, 'Adopt installed');
+    const backup = el('button', { class: 'btn ghost', type: 'button' }, 'Back up edited');
+    const actions = el('div', { class: 'form-actions' });
+    actions.appendChild(install);
+    actions.appendChild(adopt);
+    actions.appendChild(backup);
+
+    const head = el('div', { class: 'card-head' }, '<h4>Agent roster</h4>');
+    head.appendChild(budget);
+    const card = el('div', { class: 'card' });
+    card.appendChild(head);
+    card.appendChild(el('p', { class: 'muted' },
+        'Specialist agents from the Agency roster, installed into the global agent directory. '
+        + 'Perun downloads one pinned snapshot and converts it itself, so nothing follows upstream '
+        + 'between releases. It never overwrites an agent you have edited.'));
+    card.appendChild(divisions);
+    card.appendChild(actions);
+    card.appendChild(note);
+
+    let data = null;
+    const counts = () => (data && data.counts) || {};
+    const render = () => {
+        const slots = (data && data.slots) || {};
+        const registered = Number(slots.registered);
+        budget.textContent = Number.isFinite(registered)
+            ? `${registered} of ${slots.limit} registered`
+            : `${slots.installed || 0} installed`;
+        divisions.innerHTML = '';
+        const divs = (data && data.index && data.index.divisions) || {};
+        Object.keys(divs).sort().forEach((name) => {
+            const meta = divs[name] || {};
+            const btn = el('button', { class: 'btn ghost sm', type: 'button' },
+                `${meta.label || name} · ${meta.count || 0}`);
+            btn.addEventListener('click', () => {
+                if (selected.has(name)) {
+                    selected.delete(name);
+                    btn.classList.replace('primary', 'ghost');
+                } else {
+                    selected.add(name);
+                    btn.classList.replace('ghost', 'primary');
+                }
+                updateSelectionNote();
+            });
+            divisions.appendChild(btn);
+        });
+        backup.classList.toggle('hidden', !counts().modified);
+        updateSelectionNote();
+    };
+    const updateSelectionNote = () => {
+        const divs = (data && data.index && data.index.divisions) || {};
+        const chosen = [...selected];
+        const agents = chosen.reduce((n, d) => n + ((divs[d] || {}).count || 0), 0);
+        const base = `${counts().adopted || 0} tracked · ${counts().modified || 0} edited · `
+            + `${counts().candidate || 0} found but not tracked`;
+        note.textContent = chosen.length
+            ? `${chosen.join(', ')} — ${agents} agent(s) selected. ${base}`
+            : base;
+    };
+    const reload = async () => {
+        try {
+            data = await api('/api/agent-catalog/status');
+            render();
+        } catch (e) {
+            note.textContent = 'Roster unavailable: ' + e.message;
+        }
+    };
+    install.addEventListener('click', async () => {
+        if (!selected.size) { toast('Pick at least one division', 'err'); return; }
+        install.disabled = true;
+        install.textContent = 'Installing…';
+        try {
+            const res = await api('/api/agent-catalog/install',
+                { method: 'POST', body: { divisions: [...selected] } });
+            const skipped = res.skipped || [];
+            toast(`${res.count || 0} agent(s) installed`, 'ok');
+            if (skipped.length) toast(`${skipped.length} skipped — see the roster note`, '');
+            await reload();
+            note.textContent += skipped.length
+                ? ` · skipped: ${skipped.map((s) => s.reason).join('; ')}`
+                : '';
+            await loadAgents(true);
+        } catch (e) {
+            toast(e.message, 'err');
+        } finally {
+            install.disabled = false;
+            install.textContent = 'Install selected';
+        }
+    });
+    adopt.addEventListener('click', async () => {
+        try {
+            const res = await api('/api/agent-catalog/adopt', { method: 'POST', body: {} });
+            toast(`${(res.adopted || []).length} agent(s) adopted`, 'ok');
+            await reload();
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    backup.addEventListener('click', async () => {
+        try {
+            const res = await api('/api/agent-catalog/backup', { method: 'POST', body: {} });
+            toast(`${res.count || 0} file(s) backed up`, 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    reload();
+    return card;
+}
+
 async function viewSettings() {
     $('#topbar-title').textContent = 'Settings';
     await Promise.all([loadSettings(), loadTerminals()]);
@@ -7376,6 +7487,7 @@ async function viewSettings() {
     v.appendChild(card);
     v.appendChild(localAiCard());
     v.appendChild(contextCard());
+    v.appendChild(agentRosterSettingsCard());
 
     const routingPanel = el('div', { class: 'card' },
         `<div class="card-head"><h4>Routing decisions</h4><span class="badge" id="routing-mode">—</span></div>

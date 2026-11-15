@@ -6,6 +6,33 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.1
+
+*Released 2026-11-15.*
+
+### Install the roster from Settings
+
+Perun can now install Agency Agents itself, from the Settings page — no bash, no
+separate app, no terminal.
+
+* Settings → **Agent roster**: pick divisions (each with its agent count) and
+  install into the global agents directory. The slot meter shows what the runtime
+  actually registered (`opencode debug agents`), not what is on disk.
+* The install is **pinned**: it downloads the snapshot at the commit recorded in
+  `perun/data/agency_index.json` and converts it with upstream's rules (quoted
+  scalars, the named-colour table, body verbatim). Nothing follows upstream's
+  branch between Perun releases, and the tarball is cached so a re-install works
+  offline.
+* It refuses to exceed the ~119-agent ceiling, refuses to overwrite an agent
+  Perun does not track, and refuses to overwrite one whose hash changed since it
+  was installed. Upstream's own installer still works: `adopt` takes over its
+  output.
+* `GET /api/agent-catalog/available` lists the roster with an `installed` flag;
+  `POST /api/agent-catalog/install` takes `divisions`, `agents`, `scope`
+  (`global`/`project`) and `limit`. CLI: `perun agent-catalog available|install`.
+* Project-scoped installs are supported by the API and the CLI
+  (`install … --project <slug>`).
+
 ## v0.16.0
 
 *Released 2026-11-15.*

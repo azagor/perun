@@ -592,8 +592,7 @@ Discover OpenCode agents available to a project.
 * `list_agents(project_path)` — built-ins + global + project-local agents.
 
 ### `perun/agent_catalog.py`
-Custody of third-party agent rosters Perun does **not** install (Agency Agents).
-Upstream owns acquisition; Perun only tracks what landed on disk.
+Third-party agent rosters (Agency Agents): custody first, one pinned install path.
 * `load_index()` — the committed `perun/data/agency_index.json` (build-time
   artifact from `tools/agency_index.py`; no network, no markdown at runtime).
 * `agent_dirs()`, `discover()` — `candidate` / `adopted` / `modified` /
@@ -601,9 +600,14 @@ Upstream owns acquisition; Perun only tracks what landed on disk.
 * `registered()` — `opencode debug agents`, the runtime's real registration list
   (the silent drop past ~119 is invisible on disk); `slots()` compares it with
   the files and reports `DEFAULT_LIMIT` / `remaining` / `unregistered`.
+* `install()` — the one path that writes an agent file: downloads the snapshot
+  pinned to the index commit, converts it with upstream's rules (`parse_agent`,
+  `render_agent`, `resolve_color`, `slugify`), refuses a target it does not track
+  or one that was edited, and refuses rather than exceed the ceiling.
+  `available()` lists what the index offers with an `installed` flag.
 * `adopt()`, `accept()`, `forget()`, `remove()` (backup first, refuses an edited
   file), `promote()` (rewrites `mode:` and re-baselines the hash),
-  `backup_modified()`, `preflight()`, `team_file()` (refuses over the ceiling).
+  `backup_modified()`, `preflight()`, `team_file()`.
 * A manifest in the Perun home directory records provenance, hashes and
   `mode_intent`; `CatalogError` is surfaced as HTTP 400. `status()` composes the
   API payload.
@@ -1588,9 +1592,10 @@ FastAPI app + SSE + static dashboard.
   which proxies a 30 s single-use WebSocket ticket), providers (`/api/providers…` — read-only
   `opencode auth` status + logout), agents/skills/tools (`/api/agents?project=…`
   — project-scoped so project-local rosters appear; `/api/skills`, `/api/tools`),
-  the agent catalogue (`/api/agent-catalog/status|preflight|team` and
-  `POST /api/agent-catalog/{adopt,accept,forget,remove,promote,backup}` —
-  custody only, never an install),
+  the agent catalogue (`/api/agent-catalog/status|available|preflight|team` and
+  `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup}` —
+  `install` writes the pinned snapshot into the global or a project agent dir;
+  the rest is custody),
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
   snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
   unified), projects
@@ -2119,11 +2124,16 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   targets the shell that owns the terminal rather than the agent inside it — live
   and after a restart.
 * `test_agents.py` - OpenCode agent discovery (`perun/agents.py`).
-* `test_agent_catalog.py` - third-party roster custody: index lookup,
+* `test_agent_catalog.py` - roster custody: index lookup,
   candidate/adopted/modified/unlisted states, adopt, accept, forget, remove
   (backup + refusal on an edited file), promote (mode rewrite + re-baseline),
   preflight, backup, team-file ceiling, corrupt-index degradation, and the
   `opencode debug agents` probe.
+* `test_agent_catalog_install.py` - the pinned install path: upstream-shaped
+  rendering, colour table, slug parity with the shipped index, install/upgrade,
+  refusal for an untracked or edited target, ceiling refusal, `available()`, and
+  the download-failure fallback (cached snapshot, or a message naming the adopt
+  alternative).
 * `test_agency_index.py` - the build-time index: upstream slug parity,
   frontmatter quoting, non-division/nested files skipped, duplicate slugs, JSON
   round-trip.

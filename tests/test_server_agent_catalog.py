@@ -143,3 +143,57 @@ def test_project_scoped_agent_listing_includes_local_agents(client, project):
 
 def test_unknown_project_agent_listing_is_404(client):
     assert client.get("/api/agents?project=nope").status_code == 404
+
+
+def test_available_lists_what_the_pinned_roster_offers(client):
+    body = client.get("/api/agent-catalog/available?division=engineering").json()
+    assert body["ok"] is True
+    assert body["count"] > 10
+    assert all(a["division"] == "engineering" for a in body["agents"])
+    assert "code-reviewer" in {a["slug"] for a in body["agents"]}
+    assert body["agents"][0]["installed"] in (True, False)
+
+
+def test_install_from_the_dashboard_writes_converted_agents(client, monkeypatch, tmp_path):
+    import io
+    import tarfile
+
+    from perun import agent_catalog, config
+
+    archive = tmp_path / "roster.tar.gz"
+    with tarfile.open(archive, mode="w:gz") as tar:
+        data = ("---\nname: Code Reviewer\ndescription: Reviews code\ncolor: purple\n---\n"
+                "# Code Reviewer Agent\n\nBe specific.\n").encode("utf-8")
+        info = tarfile.TarInfo("agency-agents-abc/engineering/code-reviewer.md")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", tmp_path / "opencode")
+    (tmp_path / "opencode" / "agents").mkdir(parents=True)
+    monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
+    monkeypatch.setattr(agent_catalog, "load_index", lambda force=False: {
+        "available": True, "source": "test", "commit": "abc123",
+        "agents": [{"slug": "code-reviewer", "name": "Code Reviewer",
+                    "description": "Reviews code", "division": "engineering",
+                    "color": "purple", "emoji": "",
+                    "path": "engineering/code-reviewer.md"}],
+        "by_slug": {"code-reviewer": {"slug": "code-reviewer", "name": "Code Reviewer",
+                                      "description": "Reviews code",
+                                      "division": "engineering", "color": "purple",
+                                      "emoji": "", "path": "engineering/code-reviewer.md"}},
+        "divisions": {"engineering": {"label": "Engineering", "count": 1}},
+        "collisions": [], "error": ""})
+
+    r = client.post("/api/agent-catalog/install", json={"divisions": ["engineering"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == 1
+    assert (tmp_path / "opencode" / "agents" / "code-reviewer.md").is_file()
+
+    status = client.get("/api/agent-catalog/status?measure=false").json()
+    assert status["counts"]["adopted"] == 1
+
+
+def test_install_rejects_an_empty_selection(client):
+    r = client.post("/api/agent-catalog/install", json={})
+    assert r.status_code == 400
+    assert "no agents selected" in r.json()["detail"]

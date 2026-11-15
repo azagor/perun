@@ -165,16 +165,19 @@ with `python -m perun project-roots --add <name> <path>`.
   is never overwritten. `reset()` is the only way back, and it is always an
   explicit user action. A new managed agent must go through `managed_agent.ensure()`
   and never write the file directly.
-* **Third-party rosters are custody, not installation.** Perun never installs,
-  converts or overwrites an agent it did not write — upstream's Agency Agents
-  script/app owns acquisition. `perun/agent_catalog.py` recognises what is on
-  disk from the build-time index `perun/data/agency_index.json` (regenerate with
-  `tools/agency_index.py`; never fetch at runtime), records a sha256 in
-  `PERUN_HOME/agent_catalog.json`, and treats a hash mismatch as `modified`:
-  never deleted, never re-baselined without an explicit `accept`. The ~119-agent
-  ceiling is measured with `opencode debug agents`, never guessed from a file
-  count. A roster agent is never the room persona, a coroutine default, or
-  `perun-orchestrator`, and never widens the chat agent's guard allowlist.
+* **Third-party rosters are custody first, acquisition second.** Upstream's
+  Agency Agents script/app may install the roster, and Perun adopts the result
+  (`perun/agent_catalog.py`). Perun's own installer is a **single pinned
+  snapshot**: it converts from the commit recorded in
+  `perun/data/agency_index.json` (regenerate with `tools/agency_index.py`; never
+  fetch at runtime), never follows upstream's branch, and never overwrites a file
+  it does not already track or one whose hash changed since install. Provenance
+  and `mode_intent` live in `PERUN_HOME/agent_catalog.json`; a hash mismatch is
+  `modified` — never deleted, never re-baselined without an explicit `accept`.
+  The ~119-agent ceiling is measured with `opencode debug agents`, never guessed
+  from a file count, and every install refuses rather than exceed it. A roster
+  agent is never the room persona, a coroutine default, or `perun-orchestrator`,
+  and never widens the chat agent's guard allowlist.
 * **Every project room publishes its operator contact.** Derive the human from
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`

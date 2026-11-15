@@ -559,6 +559,32 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
             print(f"{len(result['adopted'])} adopted, {len(result['skipped'])} skipped")
             return 0
 
+        if action == "available":
+            data = agent_catalog.available(getattr(args, "division", "") or "")
+            if getattr(args, "json", False):
+                _print(data)
+                return 0
+            for division, meta in sorted(data["divisions"].items()):
+                print(f"  {division:<20} {meta.get('count', 0):>3}  {meta.get('label', '')}")
+            for agent in data["agents"]:
+                mark = "*" if agent["installed"] else " "
+                print(f"{mark} {agent['division']:<18} {agent['slug']}")
+            return 0
+
+        if action == "install":
+            scope = "project" if slug else "global"
+            result = agent_catalog.install(
+                args.divisions, args.agents, scope=scope,
+                project_path=path or None,
+                limit=getattr(args, "limit", 0) or None)
+            for target in result["installed"]:
+                print(f"installed {target}")
+            for skip in result["skipped"]:
+                print(f"skipped {skip['path']}: {skip['reason']}")
+            print(f"{result['count']} installed ({result['commit'][:12]}), "
+                  f"{result['skipped_count']} skipped")
+            return 0
+
         if action == "preflight":
             result = agent_catalog.preflight(path)
             print(result["message"])
@@ -2288,6 +2314,19 @@ def build_parser() -> argparse.ArgumentParser:
     cp = cat_sub.add_parser("adopt", help="record provenance for agents already installed")
     cp.add_argument("paths", nargs="*", help="specific files (default: every candidate)")
     cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("available", help="what the pinned roster offers")
+    cp.add_argument("--division", default="", help="filter to one division")
+    cp.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("install", help="install roster agents from the pinned snapshot")
+    cp.add_argument("divisions", nargs="*", help="division names (e.g. engineering security)")
+    cp.add_argument("--agent", dest="agents", action="append", default=[],
+                    help="install one agent slug (repeatable)")
+    cp.add_argument("--project", default="", help="install into this project instead of globally")
+    cp.add_argument("--limit", type=int, default=0, help="ceiling (default: 119)")
     cp.set_defaults(func=cmd_agent_catalog)
 
     cp = cat_sub.add_parser("preflight", help="what a re-run of the upstream installer overwrites")

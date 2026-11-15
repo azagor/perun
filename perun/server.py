@@ -1058,12 +1058,32 @@ def api_agent_catalog_team(divisions: str = "", limit: int = 0) -> dict[str, Any
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/agent-catalog/available")
+def api_agent_catalog_available(division: str = "") -> dict[str, Any]:
+    """What the pinned roster offers, and what is already installed."""
+    from . import agent_catalog
+
+    try:
+        return agent_catalog.available(division)
+    except agent_catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     from . import agent_catalog
 
     project = _catalog_project(str(payload.get("project") or ""))
     path = str(payload.get("path") or "")
     try:
+        if action == "install":
+            scope = str(payload.get("scope") or "global")
+            return agent_catalog.install(
+                [str(d) for d in (payload.get("divisions") or [])],
+                [str(a) for a in (payload.get("agents") or [])],
+                scope=scope,
+                project_path=project if scope == "project" else None,
+                limit=int(payload["limit"]) if payload.get("limit") else None,
+            )
         if action == "adopt":
             paths = payload.get("paths")
             return agent_catalog.adopt(paths or None, project)
@@ -1085,8 +1105,8 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 @app.post("/api/agent-catalog/{action}")
 def api_agent_catalog_action(action: str,
                              payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-    """Adopt / accept / forget / remove / promote / back up roster agents."""
-    if action not in {"adopt", "accept", "forget", "remove", "promote", "backup"}:
+    """Install / adopt / accept / forget / remove / promote / back up roster agents."""
+    if action not in {"install", "adopt", "accept", "forget", "remove", "promote", "backup"}:
         raise HTTPException(status_code=404, detail=f"unknown action: {action}")
     return _catalog_call(action, payload)
 
