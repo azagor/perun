@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T20:07:44+00:00",
+  "generated": "2026-11-15T20:53:40+00:00",
   "releases": [
+    {
+      "version": "0.16.5",
+      "date": "2026-11-15",
+      "body": "### Uninstall from the dashboard, and Perun's own agents are untouchable\n\n* Settings → **Agent roster** → **Installed** lists every installed agent with a\n  **Remove** button, a per-division removal chip (*Remove engineering (66)*), and\n  **Forget** for an edited one — an edited file is never deleted. Removal keeps a\n  backup, and OpenCode picks up installs and removals on its next start.\n* `GET /api/agent-catalog/installed` returns compact rows (no descriptions) and\n  `POST /api/agent-catalog/remove` accepts `path`, `paths` or `division`. CLI:\n  `perun agent-catalog installed`, `perun agent-catalog remove --division <name>`.\n* **Perun's own agents are explicitly protected.** `perun-*` templates and the\n  chat persona can no longer be adopted, installed over, promoted or deleted by\n  the catalogue, and are never listed. Before, that held only because they are\n  not in the roster index — an accident, not a rule.\n* The roster stays opt-in: nothing is installed by default, and every install is\n  removable from the same card.\n* The runtime baseline is only applied when the runtime reports at least one of\n  Perun's roster files; if it is looking at another directory the two counts\n  describe different machines, and the guard falls back to counting files\n  (`slots.baseline_source` says which)."
+    },
     {
       "version": "0.16.4",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.9",
       "date": "2026-11-13",
       "body": "### VS Code: an untrusted workspace is visible and recoverable\n\n* The companion now writes `~/.perun/vscode/extension.json` with `trusted: false`\n  in Restricted Mode (and `true` once trusted), so the dashboard can report\n  **“workspace untrusted (Restricted Mode)”** instead of the misleading\n  “companion not installed”.\n* `GET /api/vscode/status` exposes `extension_trusted`; the project's VS Code\n  card shows a **How to trust** hint — the banner's *Yes, I trust the authors*, or\n  Command Palette → *Workspaces: Manage Workspace Trust*. Perun never grants\n  trust itself, and opening the dashboard does not change it.\n* New **Perun: Manage Workspace Trust** command opens VS Code's trust UI; the\n  companion reconnects immediately on `onDidGrantWorkspaceTrust` (no window\n  reload) and refuses to start a TUI while the workspace is untrusted.\n* Companion 0.1.7.\n\n### VS Code: edit-follow no longer steals focus\n\n* **No automatic `code --goto`.** A background edit is never revealed by\n  launching VS Code; that activated the window and interrupted work in another\n  project. An explicit Open still uses `code --goto`.\n* In a focused window the companion highlights a visible file in place, or opens\n  a new file **beside** the active editor with `preserveFocus: true`, reusing\n  that column, so typing keeps going to your file.\n* In an unfocused window it changes nothing: a clickable\n  `$(edit) file:line` status item shows where the edit is, and\n  **Perun: Reveal Last Agent Edit** opens it deliberately. `reveal` mode now\n  means \"highlight only an already-open file\"; `open` keeps the beside preview.\n* Companion 0.1.8."
-    },
-    {
-      "version": "0.15.8",
-      "date": "2026-11-13",
-      "body": "### Session-rule parity guard\n\n* A node test requires both `web/js/session_pick.js` and\n  `extensions/vscode/src/session_pick.js` and fails on drift, so the dashboard's\n  Run and the companion's fast resume cannot diverge.\n* The companion manifest test covers `perun.resumeTui`, and the Config badge has\n  its own id instead of a broad selector."
     }
   ]
 }
