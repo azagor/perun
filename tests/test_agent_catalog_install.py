@@ -439,3 +439,44 @@ def test_removing_a_project_division_leaves_the_global_copies(tmp_path, monkeypa
     assert result["count"] == 1
     assert global_copy.exists()
     assert not project_copy.exists()
+
+
+def test_the_hash_cache_follows_the_file(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    target = base / "agents" / "code-reviewer.md"
+    target.write_text("---\nname: A\n---\n", encoding="utf-8")
+
+    first = agent_catalog._hash(target)
+    assert agent_catalog._hash(target) == first  # served from the cache
+    target.write_text("---\nname: A\n---\nchanged\n", encoding="utf-8")
+    assert agent_catalog._hash(target) != first
+
+
+def test_removing_many_writes_the_manifest_once(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    monkeypatch.setattr(agent_catalog, "load_index", lambda force=False: _index(
+        ("code-reviewer", "engineering"), ("ui-designer", "engineering")))
+    for slug in ("code-reviewer", "ui-designer"):
+        (base / "agents" / f"{slug}.md").write_text(_source(slug.title()), encoding="utf-8")
+    agent_catalog.adopt()
+
+    saves = []
+    original = agent_catalog._save_manifest
+    monkeypatch.setattr(agent_catalog, "_save_manifest",
+                        lambda payload: (saves.append(1), original(payload))[1])
+    result = agent_catalog.remove_many(division="engineering")
+    assert result["count"] == 2
+    assert len(saves) == 1
+
+
+def test_a_dry_run_lists_without_removing(env):
+    agents_dir, _ = env
+    agent_catalog.install(["engineering"])
+    plan = agent_catalog.remove_many(division="engineering", dry_run=True)
+    assert plan["dry_run"] is True
+    assert len(plan["would_remove"]) == 1
+    assert (agents_dir / "code-reviewer.md").exists()

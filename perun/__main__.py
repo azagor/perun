@@ -630,6 +630,19 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
 
         if action == "remove":
             if getattr(args, "division", ""):
+                plan = agent_catalog.remove_many(
+                    division=args.division, project_path=path or None,
+                    backup_first=not getattr(args, "no_backup", False),
+                    dry_run=True)
+                if getattr(args, "dry_run", False):
+                    for target in plan["would_remove"]:
+                        print(f"would remove {target}")
+                    print(f"{len(plan['would_remove'])} agent(s) would be removed")
+                    return 0
+                if not getattr(args, "yes", False):
+                    print(f"refusing to remove {len(plan['would_remove'])} agent(s) "
+                          f"without --yes (or preview them with --dry-run)")
+                    return 1
                 result = agent_catalog.remove_many(
                     division=args.division, project_path=path or None,
                     backup_first=not getattr(args, "no_backup", False))
@@ -2389,6 +2402,9 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--division", default="", help="remove every agent of a division")
     cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
     cp.add_argument("--no-backup", action="store_true", help="skip the backup copy")
+    cp.add_argument("--dry-run", action="store_true", help="list what would be removed")
+    cp.add_argument("--yes", action="store_true",
+                    help="confirm removing a whole division")
     cp.set_defaults(func=cmd_agent_catalog)
 
     cp = cat_sub.add_parser("promote", help="make an adopted subagent selectable as a primary")

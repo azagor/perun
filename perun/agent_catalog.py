@@ -196,12 +196,36 @@ def _key(path: str | Path) -> str:
         return str(path)
 
 
+_HASH_CACHE_MAX = 4096
+_hash_cache: Dict[str, tuple[int, int, str]] = {}
+
+
 def _hash(path: Path) -> str:
+    """sha256 of a file, cached by (mtime_ns, size).
+
+    The Settings card calls ``status`` and ``installed`` on every render, and
+    each walks every agent file; re-reading ~100 unchanged files per click is
+    pointless. A same-size, same-timestamp rewrite is the only way to fool this,
+    and the writers below invalidate the entry they touch.
+    """
+    stat = path.stat()
+    key = str(path)
+    cached = _hash_cache.get(key)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    if len(_hash_cache) >= _HASH_CACHE_MAX:
+        _hash_cache.clear()
+    _hash_cache[key] = (stat.st_mtime_ns, stat.st_size, value)
+    return value
+
+
+def _forget_hash(path: str | Path) -> None:
+    _hash_cache.pop(str(path), None)
 
 
 # --------------------------------------------------------------------------- #
@@ -595,25 +619,31 @@ def forget(path: str | Path) -> Dict[str, Any]:
     return {"ok": True, "forgotten": str(target)}
 
 
+def _remove_locked(manifest: Dict[str, Any], path: str | Path, *,
+                   backup_first: bool) -> str:
+    """Delete one tracked, unmodified file inside an open manifest transaction."""
+    target = Path(path).resolve()
+    _assert_touchable(target)
+    entry = _entry(manifest, target)
+    if not target.is_file():
+        raise CatalogError(f"missing: {target}")
+    if _hash(target) != str(entry.get("sha256") or ""):
+        raise CatalogError(
+            "this agent was edited since it was adopted; forget it or accept the "
+            "current content instead of deleting it")
+    copy = backups.save_copy(target, label="agency") if backup_first else None
+    target.unlink()
+    _forget_hash(target)
+    manifest["agents"].pop(str(target), None)
+    return str(copy) if copy else ""
+
+
 def remove(path: str | Path, *, backup_first: bool = True) -> Dict[str, Any]:
     """Delete an **unmodified** adopted file, after a backup."""
     target = Path(path).resolve()
-    copy: Optional[Path] = None
     with _manifest_txn() as manifest:
-        _assert_touchable(target)
-        entry = _entry(manifest, target)
-        if not target.is_file():
-            raise CatalogError(f"missing: {target}")
-        if _hash(target) != str(entry.get("sha256") or ""):
-            raise CatalogError(
-                "this agent was edited since it was adopted; forget it or accept the "
-                "current content instead of deleting it")
-        if backup_first:
-            copy = backups.save_copy(target, label="agency")
-        target.unlink()
-        manifest["agents"].pop(str(target), None)
-    return {"ok": True, "removed": str(target),
-            "backup": str(copy) if copy else ""}
+        copy = _remove_locked(manifest, target, backup_first=backup_first)
+    return {"ok": True, "removed": str(target), "backup": copy}
 
 
 def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
@@ -643,6 +673,7 @@ def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
             except OSError:  # pragma: no cover - best effort
                 pass
             raise CatalogError(f"could not rewrite {target.name}: {exc}") from exc
+        _forget_hash(target)
         entry["sha256"] = _hash(target)
         entry["mode_intent"] = mode
         manifest["agents"][str(target)] = entry
@@ -975,6 +1006,7 @@ def install(divisions: Optional[Iterable[str]] = None,
                 skipped.append({"path": str(target),
                                 "reason": f"could not be written: {exc}"})
                 continue
+            _forget_hash(target)
             manifest["agents"][key] = {
                 "source": "agency-agents",
                 "commit": index["commit"],
@@ -1009,7 +1041,8 @@ def installed(project_path: str | Path | None = None) -> Dict[str, Any]:
 def remove_many(paths: Optional[Iterable[str | Path]] = None, *,
                 division: str = "",
                 project_path: str | Path | None = None,
-                backup_first: bool = True) -> Dict[str, Any]:
+                backup_first: bool = True,
+                dry_run: bool = False) -> Dict[str, Any]:
     """Uninstall by explicit paths or by division; one refusal never stops the rest."""
     if paths:
         targets = [str(p) for p in paths]
@@ -1025,15 +1058,21 @@ def remove_many(paths: Optional[Iterable[str | Path]] = None, *,
         raise CatalogError("choose agents (paths) or a division to remove")
     if not targets:
         raise CatalogError(f"nothing installed in {division or 'that selection'}")
+    if dry_run:
+        return {"ok": True, "dry_run": True, "would_remove": targets,
+                "removed": [], "skipped": [], "count": 0, "skipped_count": 0}
 
     removed: List[str] = []
     skipped: List[Dict[str, str]] = []
-    for target in targets:
-        try:
-            remove(target, backup_first=backup_first)
-            removed.append(target)
-        except (CatalogError, OSError) as exc:
-            skipped.append({"path": target, "reason": str(exc)})
+    # One transaction for the whole batch: 66 agents are one manifest write, and
+    # a failure midway keeps every earlier removal.
+    with _manifest_txn() as manifest:
+        for target in targets:
+            try:
+                _remove_locked(manifest, target, backup_first=backup_first)
+                removed.append(str(Path(target).resolve()))
+            except (CatalogError, OSError) as exc:
+                skipped.append({"path": target, "reason": str(exc)})
     return {"ok": True, "removed": removed, "skipped": skipped,
             "count": len(removed), "skipped_count": len(skipped)}
 

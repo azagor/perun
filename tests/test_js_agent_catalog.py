@@ -68,3 +68,10 @@ def test_the_settings_card_lists_installed_agents_for_removal():
     # Edited agents are forgotten, never deleted.
     assert "Stopped tracking; the file is untouched" in text
     assert "never touches Perun" in text
+
+
+def test_the_installed_list_can_be_filtered_and_unlisted_rows_are_removable():
+    text = _js()
+    assert "Filter installed agents by division" in text
+    # An "unlisted" agent still matches its hash, so it must offer Remove.
+    assert "const edited = row.state === 'modified';" in text

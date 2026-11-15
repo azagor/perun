@@ -2101,9 +2101,11 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
   Without it a project-local roster is invisible to every Perun picker.
 
 **Removing a roster agent.** Settings → Agent roster → *Installed* removes one
-agent, a whole division, or forgets an edited one (the file stays). The same is
-available as `perun agent-catalog installed` / `remove <path>` /
-`remove --division <name>`. Removal keeps a backup under the `agency` label,
+agent, a whole division, or forgets an edited one (the file stays); the list can
+be filtered by division. The same is available as
+`perun agent-catalog installed` / `remove <path>` / `remove --division <name>`
+(with `--dry-run` to preview and `--yes` to confirm a whole division). Removal is
+batched into one manifest transaction, keeps a backup under the `agency` label,
 refuses a file edited since install (that is `forget`, which only drops Perun's
 record), and takes effect in OpenCode on its next start. A project scope removes
 only that project's copies; the machine-wide ones are removed without

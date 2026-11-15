@@ -263,3 +263,16 @@ def test_remove_with_an_empty_selection_is_a_400(client):
     r = client.post("/api/agent-catalog/remove", json={"paths": []})
     assert r.status_code == 400
     assert "choose agents" in r.json()["detail"]
+
+
+def test_remove_dry_run_previews_without_deleting(client, project):
+    path = _install(project)
+    client.post("/api/agent-catalog/adopt", json={"project": project["slug"]})
+
+    r = client.post("/api/agent-catalog/remove",
+                    json={"project": project["slug"], "division": "engineering",
+                          "dry_run": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["dry_run"] is True
+    assert r.json()["would_remove"]
+    assert path.exists()

@@ -7317,6 +7317,7 @@ function contextCard() {
 function agentRosterSettingsCard() {
     const selected = new Set();
     let installed = null;
+    let installedFilter = '';
     const budget = el('span', { class: 'badge' }, '…');
     const note = el('div', { class: 'muted' }, '');
     const divisions = el('div', { class: 'row wrap', style: 'gap:6px;margin:8px 0' });
@@ -7403,12 +7404,27 @@ function agentRosterSettingsCard() {
         });
         installedBox.appendChild(chips);
 
+        const select = el('select', { 'aria-label': 'Filter installed agents by division' });
+        select.appendChild(el('option', { value: '' }, `All divisions (${rows.length})`));
+        Object.keys(byDivision).sort().forEach((name) => {
+            select.appendChild(el('option', { value: name }, `${name} (${byDivision[name]})`));
+        });
+        select.value = installedFilter;
+        select.addEventListener('change', () => {
+            installedFilter = select.value;
+            renderInstalled();
+        });
+        installedBox.appendChild(select);
+
+        const visible = rows.filter((row) => !installedFilter || row.division === installedFilter);
         const list = el('div', { style: 'max-height:260px;overflow:auto' });
-        rows.forEach((row) => {
+        visible.forEach((row) => {
             const line = el('div', { class: 'row', style: 'gap:8px;align-items:center' });
             line.appendChild(el('span', { class: 'mono', style: 'flex:1' }, row.slug));
             line.appendChild(el('span', { class: 'muted' }, row.division || ''));
-            const edited = row.state === 'modified' || row.state === 'unlisted';
+            // Only an *edited* file must be forgotten; an unlisted one still
+            // matches its hash, so it can be removed like any other.
+            const edited = row.state === 'modified';
             const btn = el('button', { class: 'btn ghost sm', type: 'button' },
                 edited ? 'Forget' : 'Remove');
             btn.title = edited

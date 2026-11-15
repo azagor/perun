@@ -6,6 +6,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.7
+
+*Released 2026-11-15.*
+
+### Faster listing, and a safer bulk uninstall
+
+* File hashes are cached by `(mtime_ns, size)`, so the Settings card no longer
+  re-reads every agent file on each render; any writer invalidates the entry it
+  touches. A same-size, same-timestamp rewrite is the only case it could miss.
+* `remove_many` runs in **one** manifest transaction: removing a 66-agent
+  division is one write instead of 66, and a failure midway keeps every earlier
+  removal.
+* `remove --division` supports `--dry-run` (list, change nothing) and needs
+  `--yes` to actually delete; the API takes `dry_run` too.
+* The Installed list gains a division filter, and an `unlisted` agent (adopted,
+  hash still matching) now offers **Remove** instead of only **Forget**.
+
 ## v0.16.6
 
 *Released 2026-11-15.*

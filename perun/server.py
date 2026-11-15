@@ -1109,7 +1109,8 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
                     payload.get("paths") or None,
                     division=str(payload.get("division") or ""),
                     project_path=project or None,
-                    backup_first=bool(payload.get("backup", True)))
+                    backup_first=bool(payload.get("backup", True)),
+                    dry_run=bool(payload.get("dry_run", False)))
             return agent_catalog.remove(path, backup_first=bool(payload.get("backup", True)))
         if action == "promote":
             return agent_catalog.promote(path, str(payload.get("mode") or "all"))
