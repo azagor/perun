@@ -303,12 +303,15 @@ def discover(project_path: str | Path | None = None) -> List[Dict[str, Any]]:
     index = load_index()
     by_slug = index["by_slug"]
     manifest = _load_manifest()
+    protected = protected_ids()
     out: List[Dict[str, Any]] = []
 
     for path in _md_files(agent_dirs(project_path)):
         key = _key(path)
         entry = manifest["agents"].get(key)
         slug = path.stem
+        if slug.startswith("perun-") or slug in protected:
+            continue
         meta = by_slug.get(slug) or {}
         try:
             digest = _hash(path)
@@ -352,6 +355,25 @@ def _under(path: Path, root: Path) -> bool:
         return True
     except (ValueError, OSError):
         return False
+
+
+def protected_ids() -> set[str]:
+    """Agent ids Perun owns: never adopt, promote, overwrite or delete them."""
+    from . import managed_agent
+
+    try:
+        ids = managed_agent.managed_ids()
+    except Exception:  # pragma: no cover - the state file is best effort
+        LOG.debug("could not read managed agent ids", exc_info=True)
+        ids = set()
+    return {str(i) for i in ids if i} | {"perunchat"}
+
+
+def _assert_touchable(target: Path) -> None:
+    if (target.stem.startswith("perun-")
+            or target.stem in protected_ids()):
+        raise CatalogError(
+            f"{target.stem} is a Perun agent; the roster never touches it")
 
 
 # --------------------------------------------------------------------------- #
@@ -412,11 +434,18 @@ def slots(project_path: str | Path | None = None, measure: bool = True) -> Dict[
     project_files = _md_files(agent_dirs(project_path)) if project_path else []
     probe = registered(project_path) if measure else {"ok": False, "count": None, "ids": []}
     installed_ids = {p.stem for p in [*global_files, *project_files]}
+    registered_ids = set(probe.get("ids") or [])
     registered_count = probe.get("count")
+    overlap = len(installed_ids & registered_ids)
     ceiling = configured_limit()
-    baseline = (max(0, int(registered_count) - len(installed_ids))
-                if registered_count is not None else None)
-    unregistered = sorted(installed_ids - set(probe.get("ids") or [])) if probe.get("ok") else []
+    # The baseline is the registered agents that are *not* roster files (built-ins,
+    # Perun's own agents, hand-written ones). Only trust it once the runtime
+    # demonstrably sees at least one of our files: otherwise the runtime is
+    # looking at another directory and the two counts describe different machines.
+    baseline = (max(0, int(registered_count) - overlap)
+                if registered_count is not None and installed_ids and overlap
+                else None)
+    unregistered = sorted(installed_ids - registered_ids) if probe.get("ok") else []
     return {
         "installed_global": len(global_files),
         "installed_project": len(project_files),
@@ -425,6 +454,7 @@ def slots(project_path: str | Path | None = None, measure: bool = True) -> Dict[
         "registered_ok": bool(probe.get("ok")),
         "registered_error": probe.get("error") or "",
         "baseline": baseline,
+        "baseline_source": "runtime" if baseline is not None else "files",
         "projected": (baseline + len(installed_ids)) if baseline is not None else len(installed_ids),
         "unregistered": unregistered,
         "limit": ceiling,
@@ -506,12 +536,17 @@ def adopt(paths: Optional[Iterable[str | Path]] = None,
     ]
     adopted: List[str] = []
     skipped: List[Dict[str, str]] = []
+    protected = protected_ids()
     with _manifest_txn() as manifest:
         for path in wanted:
             try:
                 target = _resolve_target(path, project_path)
             except CatalogError as exc:
                 skipped.append({"path": str(path), "reason": str(exc)})
+                continue
+            if target.stem.startswith("perun-") or target.stem in protected:
+                skipped.append({"path": str(target),
+                                "reason": "a Perun agent; the roster never touches it"})
                 continue
             meta = index["by_slug"].get(target.stem)
             if not meta:
@@ -541,6 +576,7 @@ def accept(path: str | Path) -> Dict[str, Any]:
     """Re-baseline a file the operator has edited (and wants to keep)."""
     target = Path(path).resolve()
     with _manifest_txn() as manifest:
+        _assert_touchable(target)
         entry = _entry(manifest, target)
         if not target.is_file():
             raise CatalogError(f"missing: {target}")
@@ -553,6 +589,7 @@ def forget(path: str | Path) -> Dict[str, Any]:
     """Drop the manifest entry and leave the file exactly where it is."""
     target = Path(path).resolve()
     with _manifest_txn() as manifest:
+        _assert_touchable(target)
         _entry(manifest, target)
         manifest["agents"].pop(str(target), None)
     return {"ok": True, "forgotten": str(target)}
@@ -563,6 +600,7 @@ def remove(path: str | Path, *, backup_first: bool = True) -> Dict[str, Any]:
     target = Path(path).resolve()
     copy: Optional[Path] = None
     with _manifest_txn() as manifest:
+        _assert_touchable(target)
         entry = _entry(manifest, target)
         if not target.is_file():
             raise CatalogError(f"missing: {target}")
@@ -589,6 +627,7 @@ def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
         raise CatalogError(f"unsupported mode: {mode}")
     target = Path(path).resolve()
     with _manifest_txn() as manifest:
+        _assert_touchable(target)
         entry = _entry(manifest, target)
         if not target.is_file():
             raise CatalogError(f"missing: {target}")
@@ -878,7 +917,7 @@ def install(divisions: Optional[Iterable[str]] = None,
     if projected > ceiling:
         detail = (f"{baseline} non-roster + {len(planned)} roster"
                   if baseline is not None
-                  else f"{len(planned)} roster; the runtime count was unavailable")
+                  else f"{len(planned)} roster; no runtime baseline applied")
         raise CatalogError(
             f"{projected} agents would be registered, over the {ceiling}-agent "
             f"ceiling ({detail}: {len(existing)} installed, {len(new_slugs)} new); "
@@ -889,11 +928,16 @@ def install(divisions: Optional[Iterable[str]] = None,
     base.mkdir(parents=True, exist_ok=True)
     installed: List[str] = []
     skipped: List[Dict[str, str]] = []
+    protected = protected_ids()
     with _manifest_txn(save_on_error=True) as manifest:
         for agent in selected:
             raw = raw_bodies.get(agent["slug"])
             if raw is None:
                 skipped.append({"path": agent["path"], "reason": "missing from the roster archive"})
+                continue
+            if agent["slug"].startswith("perun-") or agent["slug"] in protected:
+                skipped.append({"path": agent["slug"],
+                                "reason": "a Perun agent; the roster never touches it"})
                 continue
             if scope == "project" and agent["slug"] in global_stems:
                 skipped.append({"path": agent["slug"],
@@ -946,6 +990,48 @@ def install(divisions: Optional[Iterable[str]] = None,
             "installed": installed, "skipped": skipped,
             "count": len(installed), "skipped_count": len(skipped),
             "projected": projected, "limit": ceiling}
+
+
+def installed(project_path: str | Path | None = None) -> Dict[str, Any]:
+    """Compact rows for the dashboard's uninstall list (no descriptions)."""
+    rows = [{"path": entry["path"], "slug": entry["slug"],
+             "division": entry["division"], "state": entry["state"]}
+            for entry in discover(project_path)
+            if entry["state"] in {"adopted", "modified", "unlisted"}]
+    by_division: Dict[str, int] = {}
+    for row in rows:
+        key = row["division"] or "other"
+        by_division[key] = by_division.get(key, 0) + 1
+    return {"ok": True, "count": len(rows), "agents": rows,
+            "by_division": by_division}
+
+
+def remove_many(paths: Optional[Iterable[str | Path]] = None, *,
+                division: str = "",
+                project_path: str | Path | None = None,
+                backup_first: bool = True) -> Dict[str, Any]:
+    """Uninstall by explicit paths or by division; one refusal never stops the rest."""
+    if paths:
+        targets = [str(p) for p in paths]
+    elif division:
+        targets = [entry["path"] for entry in discover(project_path)
+                   if entry["division"] == division
+                   and entry["state"] in {"adopted", "modified", "unlisted"}]
+    else:
+        raise CatalogError("choose agents (paths) or a division to remove")
+    if not targets:
+        raise CatalogError(f"nothing installed in {division or 'that selection'}")
+
+    removed: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for target in targets:
+        try:
+            remove(target, backup_first=backup_first)
+            removed.append(target)
+        except (CatalogError, OSError) as exc:
+            skipped.append({"path": target, "reason": str(exc)})
+    return {"ok": True, "removed": removed, "skipped": skipped,
+            "count": len(removed), "skipped_count": len(skipped)}
 
 
 def available(division: str = "",

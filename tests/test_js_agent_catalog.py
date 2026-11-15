@@ -41,7 +41,7 @@ def test_the_settings_card_can_install_from_the_pinned_snapshot():
     assert "v.appendChild(agentRosterSettingsCard())" in text
     assert "/api/agent-catalog/install" in text
     # The card must promise exactly what the backend guarantees.
-    assert "never overwrites an agent you have edited" in text
+    assert "never overwrites an agent you have" in text
     assert "pinned snapshot" in text
 
 
@@ -57,3 +57,14 @@ def test_the_panel_is_rendered_for_a_project_config_card():
     text = _js()
     assert 'id="pc-catalog"' in text
     assert "renderAgentCatalogPanel(card.querySelector('#pc-catalog'), p.slug)" in text
+
+
+def test_the_settings_card_lists_installed_agents_for_removal():
+    text = _js()
+    assert "/api/agent-catalog/installed" in text
+    assert "Installed" in text
+    assert "Remove ${name}" in text
+    assert "a backup is kept" in text
+    # Edited agents are forgotten, never deleted.
+    assert "Stopped tracking; the file is untouched" in text
+    assert "never touches Perun" in text

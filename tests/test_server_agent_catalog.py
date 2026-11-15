@@ -225,3 +225,35 @@ def test_the_ceiling_endpoint_round_trips(client):
     bad = client.post("/api/agent-catalog/limit", json={"limit": 0})
     assert bad.status_code == 400
     assert "between" in bad.json()["detail"]
+
+
+def test_installed_endpoint_lists_what_can_be_removed(client, project):
+    _install(project)
+    client.post("/api/agent-catalog/adopt", json={"project": project["slug"]})
+
+    body = client.get(f"/api/agent-catalog/installed?project={project['slug']}").json()
+    assert body["count"] == 1
+    assert body["agents"][0]["slug"] == "code-reviewer"
+    # Compact on purpose: the list must not carry every description.
+    assert "description" not in body["agents"][0]
+
+
+def test_remove_by_division_from_the_dashboard(client, project):
+    _install(project)
+    client.post("/api/agent-catalog/adopt", json={"project": project["slug"]})
+
+    r = client.post("/api/agent-catalog/remove",
+                    json={"project": project["slug"], "division": "engineering"})
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == 1
+    assert not (Path(project["path"]) / ".opencode" / "agents" / "code-reviewer.md").exists()
+
+
+def test_the_api_refuses_to_touch_a_perun_agent(client, tmp_path):
+    target = tmp_path / "perun-docs.md"
+    target.write_text("---\nname: Perun Docs\n---\n", encoding="utf-8")
+
+    r = client.post("/api/agent-catalog/remove", json={"path": str(target)})
+    assert r.status_code == 400
+    assert "Perun agent" in r.json()["detail"]
+    assert target.exists()

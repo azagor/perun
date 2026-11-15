@@ -177,7 +177,11 @@ with `python -m perun project-roots --add <name> <path>`.
   The ~119-agent ceiling is measured with `opencode debug agents`, never guessed
   from a file count, and every install refuses rather than exceed it. A roster
   agent is never the room persona, a coroutine default, or `perun-orchestrator`,
-  and never widens the chat agent's guard allowlist.
+  and never widens the chat agent's guard allowlist. Agent ids Perun owns
+  (`managed_agent.managed_ids()`: the `perun-*` templates and the chat persona)
+  are untouchable — the catalogue refuses to adopt, install over, promote or
+  delete them — and every roster install stays removable from the same surface
+  that made it.
 * **Every project room publishes its operator contact.** Derive the human from
   `perun_owner_name` (or `attention_operator_names`); never add per-project
   operator configuration. The notice is idempotent (a `project_room_welcome`

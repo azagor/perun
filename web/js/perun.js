@@ -7316,9 +7316,11 @@ function contextCard() {
 
 function agentRosterSettingsCard() {
     const selected = new Set();
+    let installed = null;
     const budget = el('span', { class: 'badge' }, '…');
     const note = el('div', { class: 'muted' }, '');
     const divisions = el('div', { class: 'row wrap', style: 'gap:6px;margin:8px 0' });
+    const installedBox = el('div', { class: 'mt' });
     const install = el('button', { class: 'btn primary', type: 'button' }, 'Install selected');
     const adopt = el('button', { class: 'btn ghost', type: 'button' }, 'Adopt installed');
     const backup = el('button', { class: 'btn ghost', type: 'button' }, 'Back up edited');
@@ -7334,7 +7336,9 @@ function agentRosterSettingsCard() {
     card.appendChild(el('p', { class: 'muted' },
         'Specialist agents from the Agency roster, installed into the global agent directory. '
         + 'Perun downloads one pinned snapshot and converts it itself, so nothing follows upstream '
-        + 'between releases. It never overwrites an agent you have edited.'));
+        + 'between releases. Every install is removable here; it never overwrites an agent you have '
+        + 'edited, and it never touches Perun\u2019s own agents.'));
+    card.appendChild(el('div', { class: 'muted' }, 'Choose divisions to install:'));
     card.appendChild(divisions);
     card.appendChild(actions);
     const limitInput = el('input', { type: 'number', min: '1', max: '1000', style: 'max-width:110px' });
@@ -7345,6 +7349,9 @@ function agentRosterSettingsCard() {
     limitRow.appendChild(saveLimit);
     card.appendChild(limitRow);
     card.appendChild(note);
+    card.appendChild(installedBox);
+    card.appendChild(el('div', { class: 'muted' },
+        'OpenCode picks up installs and removals on its next start.'));
 
     let data = null;
     const counts = () => (data && data.counts) || {};
@@ -7375,6 +7382,69 @@ function agentRosterSettingsCard() {
         });
         backup.classList.toggle('hidden', !counts().modified);
         updateSelectionNote();
+        renderInstalled();
+    };
+    const renderInstalled = () => {
+        installedBox.innerHTML = '';
+        const rows = (installed && installed.agents) || [];
+        installedBox.appendChild(el('div', { class: 'card-head' },
+            `<h4>Installed</h4><span class="badge">${rows.length}</span>`));
+        if (!rows.length) {
+            installedBox.appendChild(el('div', { class: 'muted' }, 'Nothing installed yet.'));
+            return;
+        }
+        const byDivision = (installed && installed.by_division) || {};
+        const chips = el('div', { class: 'row wrap', style: 'gap:6px;margin:6px 0' });
+        Object.keys(byDivision).sort().forEach((name) => {
+            const chip = el('button', { class: 'btn ghost sm', type: 'button' },
+                `Remove ${name} (${byDivision[name]})`);
+            chip.addEventListener('click', () => removeDivision(name));
+            chips.appendChild(chip);
+        });
+        installedBox.appendChild(chips);
+
+        const list = el('div', { style: 'max-height:260px;overflow:auto' });
+        rows.forEach((row) => {
+            const line = el('div', { class: 'row', style: 'gap:8px;align-items:center' });
+            line.appendChild(el('span', { class: 'mono', style: 'flex:1' }, row.slug));
+            line.appendChild(el('span', { class: 'muted' }, row.division || ''));
+            const edited = row.state === 'modified' || row.state === 'unlisted';
+            const btn = el('button', { class: 'btn ghost sm', type: 'button' },
+                edited ? 'Forget' : 'Remove');
+            btn.title = edited
+                ? 'Edited since install: stop tracking it, leave the file alone'
+                : 'Remove this agent (a backup is kept)';
+            btn.addEventListener('click', () => (edited
+                ? forgetAgent(row.path) : removeAgent(row.path)));
+            line.appendChild(btn);
+            list.appendChild(line);
+        });
+        installedBox.appendChild(list);
+    };
+    const removeAgent = async (path) => {
+        try {
+            const res = await api('/api/agent-catalog/remove', { method: 'POST', body: { path } });
+            toast(res.backup ? 'Agent removed (backup kept)' : 'Agent removed', 'ok');
+            await reload();
+            await loadAgents(true);
+        } catch (e) { toast(e.message, 'err'); }
+    };
+    const forgetAgent = async (path) => {
+        try {
+            await api('/api/agent-catalog/forget', { method: 'POST', body: { path } });
+            toast('Stopped tracking; the file is untouched', 'ok');
+            await reload();
+        } catch (e) { toast(e.message, 'err'); }
+    };
+    const removeDivision = async (division) => {
+        if (!confirm(`Remove every "${division}" agent?\n\nBackups are kept; edited agents are skipped, not deleted.`)) return;
+        try {
+            const res = await api('/api/agent-catalog/remove',
+                { method: 'POST', body: { division } });
+            toast(`${res.count} removed, ${res.skipped_count} kept`, 'ok');
+            await reload();
+            await loadAgents(true);
+        } catch (e) { toast(e.message, 'err'); }
     };
     const updateSelectionNote = () => {
         const divs = (data && data.index && data.index.divisions) || {};
@@ -7388,7 +7458,12 @@ function agentRosterSettingsCard() {
     };
     const reload = async () => {
         try {
-            data = await api('/api/agent-catalog/status?agents=false');
+            const [status, list] = await Promise.all([
+                api('/api/agent-catalog/status?agents=false'),
+                api('/api/agent-catalog/installed'),
+            ]);
+            data = status;
+            installed = list;
             render();
         } catch (e) {
             note.textContent = 'Roster unavailable: ' + e.message;

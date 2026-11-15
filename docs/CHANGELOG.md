@@ -6,6 +6,30 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.5
+
+*Released 2026-11-15.*
+
+### Uninstall from the dashboard, and Perun's own agents are untouchable
+
+* Settings → **Agent roster** → **Installed** lists every installed agent with a
+  **Remove** button, a per-division removal chip (*Remove engineering (66)*), and
+  **Forget** for an edited one — an edited file is never deleted. Removal keeps a
+  backup, and OpenCode picks up installs and removals on its next start.
+* `GET /api/agent-catalog/installed` returns compact rows (no descriptions) and
+  `POST /api/agent-catalog/remove` accepts `path`, `paths` or `division`. CLI:
+  `perun agent-catalog installed`, `perun agent-catalog remove --division <name>`.
+* **Perun's own agents are explicitly protected.** `perun-*` templates and the
+  chat persona can no longer be adopted, installed over, promoted or deleted by
+  the catalogue, and are never listed. Before, that held only because they are
+  not in the roster index — an accident, not a rule.
+* The roster stays opt-in: nothing is installed by default, and every install is
+  removable from the same card.
+* The runtime baseline is only applied when the runtime reports at least one of
+  Perun's roster files; if it is looking at another directory the two counts
+  describe different machines, and the guard falls back to counting files
+  (`slots.baseline_source` says which).
+
 ## v0.16.4
 
 *Released 2026-11-15.*

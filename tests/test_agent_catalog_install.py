@@ -237,9 +237,16 @@ def test_a_locked_file_is_skipped_and_earlier_writes_stay_tracked(tmp_path, monk
 
 
 def test_the_ceiling_counts_the_runtime_baseline(env, monkeypatch):
-    """11 registered with 0 roster files means 11 built-ins; the guard must add them."""
+    """12 registered over 1 visible roster file means 11 built-ins; add them."""
+    agents_dir, _ = env
+    (agents_dir / "code-reviewer.md").write_text("---\nname: Old\n---\n", encoding="utf-8")
     monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
-        "ok": True, "count": 11, "ids": ["build", "plan"], "error": ""})
+        "ok": True, "count": 12, "ids": ["build", "plan", "code-reviewer"], "error": ""})
+
+    budget = agent_catalog.slots(measure=True)
+    assert budget["baseline"] == 11
+    assert budget["baseline_source"] == "runtime"
+    assert budget["projected"] == 12
 
     with pytest.raises(agent_catalog.CatalogError) as exc:
         agent_catalog.install(["engineering"], limit=11)
@@ -247,8 +254,18 @@ def test_the_ceiling_counts_the_runtime_baseline(env, monkeypatch):
     assert "12 agents would be registered" in message
     assert "11 non-roster" in message
 
-    # One seat more is allowed.
-    assert agent_catalog.install(["engineering"], limit=12)["count"] == 1
+
+def test_the_baseline_is_not_trusted_when_the_runtime_sees_other_files(env, monkeypatch):
+    """The runtime pointing at another directory must not inflate the budget."""
+    agents_dir, _ = env
+    (agents_dir / "code-reviewer.md").write_text("---\nname: Old\n---\n", encoding="utf-8")
+    monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
+        "ok": True, "count": 120, "ids": ["build", "plan"], "error": ""})
+
+    budget = agent_catalog.slots(measure=True)
+    assert budget["baseline"] is None
+    assert budget["baseline_source"] == "files"
+    assert budget["projected"] == 1
 
 
 def test_a_project_install_skips_a_slug_that_exists_globally(tmp_path, monkeypatch):
@@ -336,3 +353,65 @@ def test_an_oversized_roster_member_is_skipped(tmp_path, monkeypatch):
     result = agent_catalog.install(["engineering"])
     assert result["count"] == 0
     assert "missing from the roster archive" in result["skipped"][0]["reason"]
+
+
+def test_installed_lists_compact_rows(env):
+    agent_catalog.install(["engineering"])
+    listing = agent_catalog.installed()
+    assert listing["count"] == 1
+    row = listing["agents"][0]
+    assert set(row) == {"path", "slug", "division", "state"}
+    assert listing["by_division"] == {"engineering": 1}
+
+
+def test_remove_by_division_skips_edited_agents(env):
+    agents_dir, _ = env
+    agent_catalog.install(["engineering"])
+    result = agent_catalog.remove_many(division="engineering")
+    assert result["count"] == 1
+    assert not (agents_dir / "code-reviewer.md").exists()
+
+    agent_catalog.install(["engineering"])
+    target = agents_dir / "code-reviewer.md"
+    target.write_text(target.read_text(encoding="utf-8") + "\nmine\n", encoding="utf-8")
+    kept = agent_catalog.remove_many(division="engineering")
+    assert kept["count"] == 0
+    assert kept["skipped_count"] == 1
+    assert target.exists()
+
+
+def test_remove_many_needs_a_selection(env):
+    with pytest.raises(agent_catalog.CatalogError):
+        agent_catalog.remove_many()
+
+
+def test_perun_agents_are_untouchable(env):
+    agents_dir, _ = env
+    target = agents_dir / "perun-docs.md"
+    target.write_text("---\nname: Perun Docs\n---\n", encoding="utf-8")
+
+    for action in (agent_catalog.accept, agent_catalog.forget,
+                   agent_catalog.remove, agent_catalog.promote):
+        with pytest.raises(agent_catalog.CatalogError) as exc:
+            action(str(target))
+        assert "Perun agent" in str(exc.value)
+    assert target.exists()
+
+    result = agent_catalog.adopt([str(target)])
+    assert result["adopted"] == []
+    assert "Perun agent" in result["skipped"][0]["reason"]
+
+
+def test_install_refuses_a_roster_entry_that_collides_with_a_perun_agent(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    monkeypatch.setattr(agent_catalog, "load_index",
+                        lambda force=False: _index(("perun-docs", "engineering")))
+    archive = _archive(tmp_path, {"engineering/perun-docs.md": _source("Perun Docs")})
+    monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
+
+    result = agent_catalog.install(["engineering"])
+    assert result["count"] == 0
+    assert "Perun agent" in result["skipped"][0]["reason"]
+    assert not (base / "agents" / "perun-docs.md").exists()

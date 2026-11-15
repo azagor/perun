@@ -181,6 +181,15 @@ def status(agent_id: str, version: int) -> Dict[str, Any]:
     }
 
 
+def managed_ids() -> set[str]:
+    """Every agent id Perun owns (recorded templates, plus the naming convention).
+
+    Used by the roster catalogue so a third-party install can never adopt,
+    overwrite, promote or delete one of Perun's own agents.
+    """
+    return {str(key) for key in _read_state()} | {"perunchat"}
+
+
 def available(agent_id: Optional[str] = None) -> bool:
     """Whether *agent_id* can be passed to ``opencode run --agent``."""
     agent_id = (agent_id or "").strip()

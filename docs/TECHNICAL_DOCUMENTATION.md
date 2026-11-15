@@ -2084,9 +2084,12 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
   registers built-ins and Perun's own agents, the budget is
   `baseline + roster files`: an install compares that projection with the
   ceiling, never the file count alone, and refuses rather than exceed it. The
-  ceiling is per machine (`perun agent-catalog limit <n>`, default 119, bounded
-  1–1000): this runtime registered 120 with nothing dropped, so the number is
-  advisory and re-measurable.
+  baseline is only trusted when the runtime reports at least one of the roster
+  files Perun sees (`baseline_source`); a runtime pointed at another directory
+  falls back to counting files. The ceiling is per machine
+  (`perun agent-catalog limit <n>`, default 119, bounded 1–1000): this runtime
+  registered 120 with nothing dropped, so the number is advisory and
+  re-measurable.
 * Guard rails: a `modified` file is never deleted, overwritten or re-baselined
   automatically (`accept` is explicit); `remove` backs up first and refuses an
   edited file; an upgrade or a `promote` backs up the previous bytes; an install
@@ -2097,9 +2100,22 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
 * Scope: `/api/agents?project=<slug>` scans the project's `.opencode/agents/`.
   Without it a project-local roster is invisible to every Perun picker.
 
-API: `GET /api/agent-catalog/status?project=&measure=`, `/available`, `/preflight`,
-`/team`, and `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup}`.
-CLI: `perun agent-catalog status|available|install|adopt|preflight|backup|accept|forget|remove|promote|team`.
+**Removing a roster agent.** Settings → Agent roster → *Installed* removes one
+agent, a whole division, or forgets an edited one (the file stays). The same is
+available as `perun agent-catalog installed` / `remove <path>` /
+`remove --division <name>`. Removal keeps a backup under the `agency` label,
+refuses a file edited since install (that is `forget`, which only drops Perun's
+record), and takes effect in OpenCode on its next start.
+
+**Perun's own agents are untouchable.** `managed_agent.managed_ids()` (the
+`perun-*` templates plus the chat persona) is consulted by the catalogue, which
+refuses to adopt, install over, promote or delete them and never lists them. This
+is an explicit rule, not a consequence of the roster index not containing them.
+
+API: `GET /api/agent-catalog/status?project=&measure=`, `/available`, `/installed`,
+`/preflight`, `/team`, and
+`POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit}`.
+CLI: `perun agent-catalog status|available|installed|install|adopt|preflight|backup|accept|forget|remove|promote|team|limit`.
 There are no MCP tools for this: it is an operator-owned mutating surface and MCP
 has no user identity.
 

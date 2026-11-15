@@ -1071,6 +1071,14 @@ def api_agent_catalog_available(division: str = "", project: str = "") -> dict[s
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/agent-catalog/installed")
+def api_agent_catalog_installed(project: str = "") -> dict[str, Any]:
+    """Compact installed rows — what the uninstall list needs, nothing more."""
+    from . import agent_catalog
+
+    return agent_catalog.installed(_catalog_project(project) or None)
+
+
 def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     from . import agent_catalog
 
@@ -1096,6 +1104,12 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if action == "forget":
             return agent_catalog.forget(path)
         if action == "remove":
+            if payload.get("division") or payload.get("paths"):
+                return agent_catalog.remove_many(
+                    payload.get("paths") or None,
+                    division=str(payload.get("division") or ""),
+                    project_path=project or None,
+                    backup_first=bool(payload.get("backup", True)))
             return agent_catalog.remove(path, backup_first=bool(payload.get("backup", True)))
         if action == "promote":
             return agent_catalog.promote(path, str(payload.get("mode") or "all"))

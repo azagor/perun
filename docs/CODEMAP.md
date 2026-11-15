@@ -615,6 +615,10 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   file), `promote()` (backs up, rewrites `mode:`, re-baselines the hash),
   `backup_modified()`, `preflight()`, `team_file()`. Every mutation runs inside
   `_manifest_txn()` so read-modify-write is serialized.
+* `installed()` — compact rows for the dashboard's uninstall list;
+  `remove_many(paths|division)` uninstalls a selection, reporting what it kept.
+* `protected_ids()` / `_assert_touchable()` — Perun's own agents (`perun-*`
+  templates and the chat persona) are refused by every mutation and never listed.
 * A manifest in the Perun home directory records provenance, hashes and
   `mode_intent`; `CatalogError` is surfaced as HTTP 400. `status()` composes the
   API payload.
@@ -1599,10 +1603,11 @@ FastAPI app + SSE + static dashboard.
   which proxies a 30 s single-use WebSocket ticket), providers (`/api/providers…` — read-only
   `opencode auth` status + logout), agents/skills/tools (`/api/agents?project=…`
   — project-scoped so project-local rosters appear; `/api/skills`, `/api/tools`),
-  the agent catalogue (`/api/agent-catalog/status|available|preflight|team` and
-  `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit}`
+  the agent catalogue (`/api/agent-catalog/status|available|installed|preflight|team`
+  and `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit}`
   — `install` writes the pinned snapshot into the global or a project agent dir;
-  `limit` sets the per-machine ceiling; the rest is custody),
+  `remove` takes `path`/`paths`/`division` and keeps a backup; `limit` sets the
+  per-machine ceiling; the rest is custody),
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
   snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
   unified), projects

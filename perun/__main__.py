@@ -618,7 +618,30 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
             print(f"forgot {result['forgotten']} (the file is untouched)")
             return 0
 
+        if action == "installed":
+            data = agent_catalog.installed(path or None)
+            if getattr(args, "json", False):
+                _print(data)
+                return 0
+            for row in data["agents"]:
+                print(f"{row['state']:<8} {row['division']:<18} {row['slug']}")
+            print(f"{data['count']} installed")
+            return 0
+
         if action == "remove":
+            if getattr(args, "division", ""):
+                result = agent_catalog.remove_many(
+                    division=args.division, project_path=path or None,
+                    backup_first=not getattr(args, "no_backup", False))
+                for gone in result["removed"]:
+                    print(f"removed {gone}")
+                for keep in result["skipped"]:
+                    print(f"kept {keep['path']}: {keep['reason']}")
+                print(f"{result['count']} removed, {result['skipped_count']} kept")
+                return 0
+            if not getattr(args, "path", ""):
+                print("error: give a path, or --division <name>")
+                return 1
             result = agent_catalog.remove(args.path,
                                           backup_first=not getattr(args, "no_backup", False))
             print(f"removed {result['removed']}"
@@ -2356,8 +2379,15 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("path")
     cp.set_defaults(func=cmd_agent_catalog)
 
-    cp = cat_sub.add_parser("remove", help="delete an unmodified adopted agent (backup first)")
-    cp.add_argument("path")
+    cp = cat_sub.add_parser("installed", help="list installed roster agents")
+    cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
+    cp.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("remove", help="uninstall a roster agent (backup first)")
+    cp.add_argument("path", nargs="?", default="", help="agent file to remove")
+    cp.add_argument("--division", default="", help="remove every agent of a division")
+    cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
     cp.add_argument("--no-backup", action="store_true", help="skip the backup copy")
     cp.set_defaults(func=cmd_agent_catalog)
 
