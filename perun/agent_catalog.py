@@ -224,7 +224,11 @@ def _load_manifest() -> Dict[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("agents"), dict):
         return {"schema": MANIFEST_SCHEMA, "agents": {}}
     entries = {str(k): v for k, v in payload["agents"].items() if isinstance(v, dict)}
-    return {"schema": MANIFEST_SCHEMA, "agents": entries}
+    # Keep sibling keys (the configured ceiling) instead of rebuilding the dict.
+    out = dict(payload)
+    out["schema"] = MANIFEST_SCHEMA
+    out["agents"] = entries
+    return out
 
 
 def _save_manifest(payload: Dict[str, Any]) -> None:
@@ -251,6 +255,37 @@ def _manifest_txn(*, save_on_error: bool = False):
                 _save_manifest(payload)
             raise
         _save_manifest(payload)
+
+
+LIMIT_MIN, LIMIT_MAX = 1, 1000
+
+
+def configured_limit() -> int:
+    """The operator's ceiling, defaulting to the upstream-reported ~119.
+
+    The runtime accepted 120 on the machine this was measured on, so the number
+    is advisory; an operator who has re-measured their build can raise it without
+    waiting for a Perun release.
+    """
+    raw = _load_manifest().get("limit", DEFAULT_LIMIT)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_LIMIT
+    return max(LIMIT_MIN, min(LIMIT_MAX, value))
+
+
+def set_limit(value: int) -> Dict[str, Any]:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise CatalogError("the agent ceiling must be a whole number") from None
+    if not LIMIT_MIN <= number <= LIMIT_MAX:
+        raise CatalogError(
+            f"the agent ceiling must be between {LIMIT_MIN} and {LIMIT_MAX}")
+    with _manifest_txn() as manifest:
+        manifest["limit"] = number
+    return {"ok": True, "limit": number}
 
 
 # --------------------------------------------------------------------------- #
@@ -378,6 +413,7 @@ def slots(project_path: str | Path | None = None, measure: bool = True) -> Dict[
     probe = registered(project_path) if measure else {"ok": False, "count": None, "ids": []}
     installed_ids = {p.stem for p in [*global_files, *project_files]}
     registered_count = probe.get("count")
+    ceiling = configured_limit()
     baseline = (max(0, int(registered_count) - len(installed_ids))
                 if registered_count is not None else None)
     unregistered = sorted(installed_ids - set(probe.get("ids") or [])) if probe.get("ok") else []
@@ -391,9 +427,9 @@ def slots(project_path: str | Path | None = None, measure: bool = True) -> Dict[
         "baseline": baseline,
         "projected": (baseline + len(installed_ids)) if baseline is not None else len(installed_ids),
         "unregistered": unregistered,
-        "limit": DEFAULT_LIMIT,
+        "limit": ceiling,
         "limit_source": LIMIT_SOURCE,
-        "remaining": (DEFAULT_LIMIT - int(registered_count)) if registered_count is not None else None,
+        "remaining": (ceiling - int(registered_count)) if registered_count is not None else None,
     }
 
 
@@ -642,7 +678,7 @@ def team_file(divisions: Optional[Iterable[str]] = None,
     selected = [a for a in index["agents"]
                 if not wanted or a["division"] in wanted]
     selected.sort(key=lambda a: (a["division"], a["slug"]))
-    ceiling = int(limit or DEFAULT_LIMIT)
+    ceiling = int(limit or configured_limit())
     if len(selected) > ceiling:
         raise CatalogError(
             f"{len(selected)} agents exceed the {ceiling}-agent ceiling; "
@@ -831,7 +867,7 @@ def install(divisions: Optional[Iterable[str]] = None,
     global_stems = {p.stem for p in _md_files(agent_dirs())}
     new_slugs = {a["slug"] for a in selected} - existing
     planned = existing | new_slugs
-    ceiling = int(DEFAULT_LIMIT if limit is None else limit)
+    ceiling = int(configured_limit() if limit is None else limit)
 
     # The ceiling is about *registered* agents, and the runtime also registers
     # built-ins and Perun's own agents. Counting only files is optimistic by

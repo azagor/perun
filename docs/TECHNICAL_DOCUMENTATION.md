@@ -2083,7 +2083,10 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
   and the `unregistered` files alongside the disk counts. Because the runtime also
   registers built-ins and Perun's own agents, the budget is
   `baseline + roster files`: an install compares that projection with the
-  ceiling, never the file count alone, and refuses rather than exceed it.
+  ceiling, never the file count alone, and refuses rather than exceed it. The
+  ceiling is per machine (`perun agent-catalog limit <n>`, default 119, bounded
+  1–1000): this runtime registered 120 with nothing dropped, so the number is
+  advisory and re-measurable.
 * Guard rails: a `modified` file is never deleted, overwritten or re-baselined
   automatically (`accept` is explicit); `remove` backs up first and refuses an
   edited file; an upgrade or a `promote` backs up the previous bytes; an install

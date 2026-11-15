@@ -213,3 +213,15 @@ def test_available_can_be_scoped_to_a_project(client, project):
     body = client.get(f"/api/agent-catalog/available?project={project['slug']}").json()
     assert body["ok"] is True
     assert body["count"] > 0
+
+
+def test_the_ceiling_endpoint_round_trips(client):
+    r = client.post("/api/agent-catalog/limit", json={"limit": 130})
+    assert r.status_code == 200, r.text
+    assert r.json()["limit"] == 130
+    status = client.get("/api/agent-catalog/status?measure=false").json()
+    assert status["slots"]["limit"] == 130
+
+    bad = client.post("/api/agent-catalog/limit", json={"limit": 0})
+    assert bad.status_code == 400
+    assert "between" in bad.json()["detail"]

@@ -561,6 +561,11 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
             print(f"{len(result['adopted'])} adopted, {len(result['skipped'])} skipped")
             return 0
 
+        if action == "limit":
+            result = agent_catalog.set_limit(args.value)
+            print(f"agent ceiling set to {result['limit']}")
+            return 0
+
         if action == "available":
             data = agent_catalog.available(getattr(args, "division", "") or "", path or None)
             if getattr(args, "json", False):
@@ -2316,6 +2321,10 @@ def build_parser() -> argparse.ArgumentParser:
     cp = cat_sub.add_parser("adopt", help="record provenance for agents already installed")
     cp.add_argument("paths", nargs="*", help="specific files (default: every candidate)")
     cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("limit", help="set the agent ceiling (default 119)")
+    cp.add_argument("value", type=int, help="maximum registered agents (1-1000)")
     cp.set_defaults(func=cmd_agent_catalog)
 
     cp = cat_sub.add_parser("available", help="what the pinned roster offers")

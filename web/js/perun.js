@@ -7337,6 +7337,13 @@ function agentRosterSettingsCard() {
         + 'between releases. It never overwrites an agent you have edited.'));
     card.appendChild(divisions);
     card.appendChild(actions);
+    const limitInput = el('input', { type: 'number', min: '1', max: '1000', style: 'max-width:110px' });
+    const saveLimit = el('button', { class: 'btn ghost sm', type: 'button' }, 'Save ceiling');
+    const limitRow = el('div', { class: 'row wrap', style: 'gap:8px;margin:6px 0' });
+    limitRow.appendChild(el('span', { class: 'lab' }, 'Agent ceiling'));
+    limitRow.appendChild(limitInput);
+    limitRow.appendChild(saveLimit);
+    card.appendChild(limitRow);
     card.appendChild(note);
 
     let data = null;
@@ -7347,6 +7354,7 @@ function agentRosterSettingsCard() {
         budget.textContent = Number.isFinite(registered)
             ? `${registered} of ${slots.limit} registered`
             : `${slots.installed || 0} installed`;
+        limitInput.value = slots.limit || 119;
         divisions.innerHTML = '';
         const divs = (data && data.index && data.index.divisions) || {};
         Object.keys(divs).sort().forEach((name) => {
@@ -7419,6 +7427,14 @@ function agentRosterSettingsCard() {
         try {
             const res = await api('/api/agent-catalog/backup', { method: 'POST', body: {} });
             toast(`${res.count || 0} file(s) backed up`, 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    saveLimit.addEventListener('click', async () => {
+        try {
+            const res = await api('/api/agent-catalog/limit',
+                { method: 'POST', body: { limit: Number(limitInput.value) } });
+            toast(`Agent ceiling set to ${res.limit}`, 'ok');
+            await reload();
         } catch (e) { toast(e.message, 'err'); }
     });
     reload();

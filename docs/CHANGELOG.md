@@ -6,6 +6,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.4
+
+*Released 2026-11-15.*
+
+### The agent ceiling is a setting, not a magic number
+
+* `perun agent-catalog limit <n>` — or the **Agent ceiling** field on the
+  Settings card — sets the ceiling for this machine. It is stored in the roster
+  manifest, defaults to the upstream-reported 119, and is bounded to 1–1000. This
+  runtime registers **120** with nothing dropped, so an operator who re-measures
+  their build can raise it without waiting for a Perun release.
+* `slots()` uses the configured value for `limit`, `remaining` and the install
+  guard, and the CLI reports when the machine is at the ceiling.
+* `tests/test_agents.py` now isolates the global agent directory instead of
+  reading the operator's real 113-agent install, and the install path gained a
+  positive project-scope test.
+
 ## v0.16.3
 
 *Released 2026-11-15.*

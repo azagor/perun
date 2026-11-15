@@ -283,6 +283,46 @@ def test_an_upgrade_keeps_a_backup_of_the_previous_file(env):
     assert any(p.read_text(encoding="utf-8") == original for p in copies)
 
 
+def test_the_ceiling_defaults_to_119_and_is_configurable(env):
+    assert agent_catalog.slots(measure=False)["limit"] == agent_catalog.DEFAULT_LIMIT
+    assert agent_catalog.set_limit(150)["limit"] == 150
+    # The setting survives alongside the custody entries it was saved with.
+    agent_catalog.install(["engineering"])
+    assert agent_catalog.slots(measure=False)["limit"] == 150
+    assert {e["slug"] for e in agent_catalog.discover()} == {"code-reviewer"}
+
+    with pytest.raises(agent_catalog.CatalogError) as exc:
+        agent_catalog.install(["engineering"], limit=0)
+    assert "ceiling" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", [0, 1001, -5])
+def test_an_invalid_ceiling_is_rejected(value):
+    with pytest.raises(agent_catalog.CatalogError):
+        agent_catalog.set_limit(value)
+
+
+def test_a_project_install_writes_into_the_project(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    project = tmp_path / "proj"
+    (project / ".opencode" / "agents").mkdir(parents=True)
+    monkeypatch.setattr(agent_catalog, "load_index",
+                        lambda force=False: _index(("code-reviewer", "engineering")))
+    archive = _archive(tmp_path, {"engineering/code-reviewer.md": _source()})
+    monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
+
+    result = agent_catalog.install(["engineering"], scope="project", project_path=project)
+    assert result["scope"] == "project"
+    target = project / ".opencode" / "agents" / "code-reviewer.md"
+    assert target.is_file()
+    assert not (base / "agents" / "code-reviewer.md").exists()
+    entries = agent_catalog.discover(project)
+    assert [(e["slug"], e["scope"], e["state"]) for e in entries] == [
+        ("code-reviewer", "project", "adopted")]
+
+
 def test_an_oversized_roster_member_is_skipped(tmp_path, monkeypatch):
     base = tmp_path / "opencode"
     (base / "agents").mkdir(parents=True)

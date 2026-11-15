@@ -601,6 +601,9 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   (the silent drop past ~119 is invisible on disk); `slots()` compares it with
   the files and reports `DEFAULT_LIMIT` / `remaining` / `unregistered`, plus the
   non-roster `baseline` and the resulting `projected` count.
+* `configured_limit()` / `set_limit()` — the ceiling is per machine, stored in
+  the manifest, default 119, bounded 1–1000 (the runtime here registers 120 with
+  nothing dropped, so the operator can re-measure and raise it).
 * `install()` — the one path that writes an agent file: downloads the snapshot
   pinned to the index commit, converts it with upstream's rules (`parse_agent`,
   `render_agent`, `resolve_color`, `slugify`), refuses a target it does not track
@@ -1597,9 +1600,9 @@ FastAPI app + SSE + static dashboard.
   `opencode auth` status + logout), agents/skills/tools (`/api/agents?project=…`
   — project-scoped so project-local rosters appear; `/api/skills`, `/api/tools`),
   the agent catalogue (`/api/agent-catalog/status|available|preflight|team` and
-  `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup}` —
-  `install` writes the pinned snapshot into the global or a project agent dir;
-  the rest is custody),
+  `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit}`
+  — `install` writes the pinned snapshot into the global or a project agent dir;
+  `limit` sets the per-machine ceiling; the rest is custody),
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
   snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
   unified), projects

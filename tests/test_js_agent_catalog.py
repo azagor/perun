@@ -45,6 +45,14 @@ def test_the_settings_card_can_install_from_the_pinned_snapshot():
     assert "pinned snapshot" in text
 
 
+def test_the_settings_card_exposes_the_ceiling():
+    text = _js()
+    assert "Agent ceiling" in text
+    assert "/api/agent-catalog/limit" in text
+    # The panels only need counts; asking for the full list would ship ~100 KB.
+    assert "agents=false" in text
+
+
 def test_the_panel_is_rendered_for_a_project_config_card():
     text = _js()
     assert 'id="pc-catalog"' in text

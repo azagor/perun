@@ -1077,6 +1077,8 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     project = _catalog_project(str(payload.get("project") or ""))
     path = str(payload.get("path") or "")
     try:
+        if action == "limit":
+            return agent_catalog.set_limit(payload.get("limit"))
         if action == "install":
             scope = str(payload.get("scope") or "global")
             return agent_catalog.install(
@@ -1108,7 +1110,8 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 def api_agent_catalog_action(action: str,
                              payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """Install / adopt / accept / forget / remove / promote / back up roster agents."""
-    if action not in {"install", "adopt", "accept", "forget", "remove", "promote", "backup"}:
+    if action not in {"install", "adopt", "accept", "forget", "remove", "promote",
+                      "backup", "limit"}:
         raise HTTPException(status_code=404, detail=f"unknown action: {action}")
     return _catalog_call(action, payload)
 

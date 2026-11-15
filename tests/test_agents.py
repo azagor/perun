@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from perun import agents, config
+
+
+@pytest.fixture(autouse=True)
+def isolated_global_agents(tmp_path, monkeypatch):
+    """Never read the operator's real ``~/.config/opencode/agents``."""
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    yield
 
 
 def test_builtins_returned():
