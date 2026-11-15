@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T18:16:37+00:00",
+  "generated": "2026-11-15T19:11:55+00:00",
   "releases": [
+    {
+      "version": "0.16.2",
+      "date": "2026-11-15",
+      "body": "### Roster audit fixes\n\n* An index `slug` is validated (`[a-z0-9-]`) before it can become a filename, so\n  a hand-edited or corrupt index can never write outside the agents directory.\n* An install saves the manifest even when one file fails mid-run: a locked file\n  or a full disk can no longer leave untracked agents on disk that Perun would\n  then refuse to touch. A failed write is reported as a skip, and its temp file\n  is removed.\n* Oversized archive members are skipped. The compressed download was capped; the\n  decompressed member was not.\n* The project roster panel no longer claims Perun never installs — it has since\n  v0.16.1. The static test now asserts the copy instead of the stale claim."
+    },
     {
       "version": "0.16.1",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.6",
       "date": "2026-11-13",
       "body": "### VS Code companion 0.1.6: fast resume vs session picker\n\n* The **Perun TUI** status-bar item now fast-resumes the newest TUI chat — the\n  dashboard's **Run** — instead of opening a picker.\n* **Perun: Choose TUI session…** (`perun.openTui`) is the picker: resume latest,\n  any of the last 50 sessions (headless ones labelled, never auto-selected), or\n  start a new session. `perun.openTui` keeps its id, so existing keybindings\n  still work.\n* Companion 0.1.6, suite 10/10."
-    },
-    {
-      "version": "0.15.5",
-      "date": "2026-11-13",
-      "body": "### VS Code companion 0.1.5: the session picker mirrors the dashboard\n\n* **“Resume latest” now means the newest TUI chat.** A session whose first run\n  was a headless job (a coroutine, a one-off run) is labelled `headless run`,\n  stays explicitly selectable, and is never auto-selected — the same rule the\n  dashboard's Run button uses.\n* Each entry shows time, status, origin (`TUI chat` / `headless run`) and the\n  OpenCode session id; the list covers the last 50 sessions, and “Start a new\n  session” is always present.\n* `src/session_pick.js` mirrors `web/js/session_pick.js` and is covered by\n  `tests/session_pick.test.js` (companion suite now 10 tests)."
     }
   ]
 }
