@@ -6,6 +6,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.2
+
+*Released 2026-11-15.*
+
+### Roster audit fixes
+
+* An index `slug` is validated (`[a-z0-9-]`) before it can become a filename, so
+  a hand-edited or corrupt index can never write outside the agents directory.
+* An install saves the manifest even when one file fails mid-run: a locked file
+  or a full disk can no longer leave untracked agents on disk that Perun would
+  then refuse to touch. A failed write is reported as a skip, and its temp file
+  is removed.
+* Oversized archive members are skipped. The compressed download was capped; the
+  decompressed member was not.
+* The project roster panel no longer claims Perun never installs — it has since
+  v0.16.1. The static test now asserts the copy instead of the stale claim.
+
 ## v0.16.1
 
 *Released 2026-11-15.*

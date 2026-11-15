@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -174,3 +175,81 @@ def test_a_download_failure_without_a_cache_explains_the_alternative(tmp_path, m
     with pytest.raises(agent_catalog.CatalogError) as exc:
         agent_catalog.roster_archive("cafebabe")
     assert "adopt" in str(exc.value)
+
+
+def test_a_hostile_slug_in_the_index_never_becomes_a_path(tmp_path, monkeypatch):
+    index_path = tmp_path / "index.json"
+    index_path.write_text(json.dumps({
+        "source": "x", "commit": "abc", "divisions": {},
+        "agents": [
+            {"slug": "../../evil", "name": "Evil", "description": "d",
+             "division": "x", "path": "x/e.md"},
+            {"slug": "ok-agent", "name": "Ok", "description": "d",
+             "division": "x", "path": "x/o.md"},
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setattr(agent_catalog, "INDEX_PATH", index_path)
+    agent_catalog._index_cache.update(key=None, data=None)
+
+    index = agent_catalog.load_index(force=True)
+    assert list(index["by_slug"]) == ["ok-agent"]
+
+
+def test_a_locked_file_is_skipped_and_earlier_writes_stay_tracked(tmp_path, monkeypatch):
+    import os
+
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    manifest = Path(config.HOME) / "agent_catalog.json"
+    if manifest.exists():
+        manifest.unlink()
+    monkeypatch.setattr(agent_catalog, "load_index",
+                        lambda force=False: _index(("first-agent", "engineering"),
+                                                   ("second-agent", "engineering")))
+    archive = _archive(tmp_path, {
+        "engineering/first-agent.md": _source("First Agent"),
+        "engineering/second-agent.md": _source("Second Agent"),
+    })
+    monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
+
+    real_replace = os.replace
+
+    def flaky(src, dst):
+        if str(dst).endswith("second-agent.md"):
+            raise PermissionError("locked by another process")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(agent_catalog.os, "replace", flaky)
+    result = agent_catalog.install(["engineering"])
+    try:
+        assert result["count"] == 1
+        assert "could not be written" in result["skipped"][0]["reason"]
+        # The manifest was still saved, so the written file is tracked.
+        assert {e["slug"]: e["state"] for e in agent_catalog.discover()} == {
+            "first-agent": "adopted"}
+        # No temp file is left behind.
+        assert not list((base / "agents").glob("*.tmp"))
+    finally:
+        if manifest.exists():
+            manifest.unlink()
+
+
+def test_an_oversized_roster_member_is_skipped(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    manifest = Path(config.HOME) / "agent_catalog.json"
+    if manifest.exists():
+        manifest.unlink()
+    monkeypatch.setattr(agent_catalog, "AGENT_MAX_BYTES", 16)
+    monkeypatch.setattr(agent_catalog, "load_index",
+                        lambda force=False: _index(("code-reviewer", "engineering")))
+    archive = _archive(tmp_path, {"engineering/code-reviewer.md": _source()})
+    monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
+
+    result = agent_catalog.install(["engineering"])
+    assert result["count"] == 0
+    assert "missing from the roster archive" in result["skipped"][0]["reason"]
+    if manifest.exists():
+        manifest.unlink()

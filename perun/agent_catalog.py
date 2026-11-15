@@ -52,6 +52,7 @@ LIMIT_SOURCE = "upstream #27988; `opencode debug agents` measures the real count
 MANIFEST_SCHEMA = 1
 _INDEX_MAX_BYTES = 8 * 1024 * 1024
 _ARCHIVE_MAX_BYTES = 64 * 1024 * 1024
+AGENT_MAX_BYTES = 512 * 1024
 _MEASURE_TTL = 60.0
 
 # Upstream's ``resolve_opencode_color``: CSS names where one exists, Tailwind
@@ -116,7 +117,9 @@ def load_index(force: bool = False) -> Dict[str, Any]:
         if not isinstance(raw, dict):
             continue
         slug = str(raw.get("slug") or "").strip()
-        if not slug or slug in by_slug:
+        # The slug becomes a filename on install; the index is data, so never
+        # let a hand-edited one point outside the agents directory.
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,119}", slug) or slug in by_slug:
             continue
         entry = {
             "slug": slug,
@@ -739,6 +742,11 @@ def _read_bodies(path: Path, wanted: Dict[str, str]) -> Dict[str, str]:
                 slug = wanted.get("/".join(parts[1:]))
                 if not slug or slug in out:
                     continue
+                # A roster agent is a few KB; the cap only bounds a corrupt or
+                # hostile archive (the compressed download is capped separately).
+                if item.size > AGENT_MAX_BYTES:
+                    LOG.warning("skipping oversized roster member: %s", item.name)
+                    continue
                 handle = tar.extractfile(item)
                 if handle is None:
                     continue
@@ -793,44 +801,58 @@ def install(divisions: Optional[Iterable[str]] = None,
     base.mkdir(parents=True, exist_ok=True)
     installed: List[str] = []
     skipped: List[Dict[str, str]] = []
-    for agent in selected:
-        raw = raw_bodies.get(agent["slug"])
-        if raw is None:
-            skipped.append({"path": agent["path"], "reason": "missing from the roster archive"})
-            continue
-        target = base / f"{agent['slug']}.md"
-        key = _key(target)
-        entry = manifest["agents"].get(key)
-        if target.exists():
-            if not entry:
-                skipped.append({"path": str(target),
-                                "reason": "exists and is not tracked by Perun"})
+    try:
+        for agent in selected:
+            raw = raw_bodies.get(agent["slug"])
+            if raw is None:
+                skipped.append({"path": agent["path"], "reason": "missing from the roster archive"})
                 continue
-            if _hash(target) != str(entry.get("sha256") or ""):
-                skipped.append({"path": str(target),
-                                "reason": "edited since it was installed"})
+            target = base / f"{agent['slug']}.md"
+            key = _key(target)
+            entry = manifest["agents"].get(key)
+            if target.exists():
+                if not entry:
+                    skipped.append({"path": str(target),
+                                    "reason": "exists and is not tracked by Perun"})
+                    continue
+                if _hash(target) != str(entry.get("sha256") or ""):
+                    skipped.append({"path": str(target),
+                                    "reason": "edited since it was installed"})
+                    continue
+            try:
+                text = render_agent(*parse_agent(raw))
+            except CatalogError as exc:
+                skipped.append({"path": agent["path"], "reason": str(exc)})
                 continue
-        try:
-            text = render_agent(*parse_agent(raw))
-        except CatalogError as exc:
-            skipped.append({"path": agent["path"], "reason": str(exc)})
-            continue
-        tmp = target.with_suffix(f".{os.urandom(4).hex()}.tmp")
-        tmp.write_text(text, encoding="utf-8", newline="\n")
-        os.replace(tmp, target)
-        manifest["agents"][key] = {
-            "source": "agency-agents",
-            "commit": index["commit"],
-            "division": agent["division"],
-            "slug": agent["slug"],
-            "sha256": _hash(target),
-            "mode_intent": "subagent",
-            "installed_by": "perun",
-            "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
-        installed.append(str(target))
-    with _lock:
-        _save_manifest(manifest)
+            tmp = target.with_suffix(f".{os.urandom(4).hex()}.tmp")
+            try:
+                tmp.write_text(text, encoding="utf-8", newline="\n")
+                os.replace(tmp, target)
+            except OSError as exc:
+                # A locked file (an open editor) is a skip, not a failed install.
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:  # pragma: no cover - best effort
+                    pass
+                skipped.append({"path": str(target),
+                                "reason": f"could not be written: {exc}"})
+                continue
+            manifest["agents"][key] = {
+                "source": "agency-agents",
+                "commit": index["commit"],
+                "division": agent["division"],
+                "slug": agent["slug"],
+                "sha256": _hash(target),
+                "mode_intent": "subagent",
+                "installed_by": "perun",
+                "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            installed.append(str(target))
+    finally:
+        # Saving only after the loop would leave a half-finished install with
+        # files on disk that Perun does not track (and would then refuse).
+        with _lock:
+            _save_manifest(manifest)
     return {"ok": True, "commit": index["commit"], "scope": scope,
             "installed": installed, "skipped": skipped,
             "count": len(installed), "skipped_count": len(skipped)}

@@ -3352,8 +3352,8 @@ async function renderAgentCatalogPanel(host, slug) {
     host.appendChild(el('div', { class: 'card-head' },
         `<h4>Agent roster</h4><span class="badge">${esc(budget)}</span>`));
     host.appendChild(el('p', { class: 'muted' },
-        'Perun does not install these: the Agency installer or its desktop app does. '
-        + 'Perun tracks what landed on disk so a re-install cannot silently overwrite your edits.'));
+        'Install them from Settings \u2192 Agent roster, or with the Agency installer and then '
+        + 'Adopt. Either way Perun tracks each file and never overwrites one you have edited.'));
     if (index.available) {
         host.appendChild(el('div', { class: 'muted' },
             `${index.agents} agents in ${Object.keys(index.divisions || {}).length} divisions · ${esc(String(index.commit).slice(0, 12))}`));

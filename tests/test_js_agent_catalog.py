@@ -24,12 +24,15 @@ def test_the_agent_picker_can_be_scoped_to_a_project():
     assert "typeof opts.agents === 'function'" in text
 
 
-def test_the_catalogue_panel_never_claims_to_install():
+def test_the_catalogue_panel_explains_both_install_paths():
     text = _js()
     assert "/api/agent-catalog/status?project=" in text
     assert "/api/agent-catalog/adopt" in text
     assert "/api/agent-catalog/backup" in text
-    assert "Perun does not install these" in text
+    # v0.16.1 added a Settings installer, so the project panel must not claim
+    # Perun never installs (that copy was stale).
+    assert "Install them from Settings" in text
+    assert "Perun does not install these" not in text
 
 
 def test_the_settings_card_can_install_from_the_pinned_snapshot():
