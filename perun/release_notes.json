@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T17:27:40+00:00",
+  "generated": "2026-11-15T18:16:37+00:00",
   "releases": [
+    {
+      "version": "0.16.1",
+      "date": "2026-11-15",
+      "body": "### Install the roster from Settings\n\nPerun can now install Agency Agents itself, from the Settings page — no bash, no\nseparate app, no terminal.\n\n* Settings → **Agent roster**: pick divisions (each with its agent count) and\n  install into the global agents directory. The slot meter shows what the runtime\n  actually registered (`opencode debug agents`), not what is on disk.\n* The install is **pinned**: it downloads the snapshot at the commit recorded in\n  `perun/data/agency_index.json` and converts it with upstream's rules (quoted\n  scalars, the named-colour table, body verbatim). Nothing follows upstream's\n  branch between Perun releases, and the tarball is cached so a re-install works\n  offline.\n* It refuses to exceed the ~119-agent ceiling, refuses to overwrite an agent\n  Perun does not track, and refuses to overwrite one whose hash changed since it\n  was installed. Upstream's own installer still works: `adopt` takes over its\n  output.\n* `GET /api/agent-catalog/available` lists the roster with an `installed` flag;\n  `POST /api/agent-catalog/install` takes `divisions`, `agents`, `scope`\n  (`global`/`project`) and `limit`. CLI: `perun agent-catalog available|install`.\n* Project-scoped installs are supported by the API and the CLI\n  (`install … --project <slug>`)."
+    },
     {
       "version": "0.16.0",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.5",
       "date": "2026-11-13",
       "body": "### VS Code companion 0.1.5: the session picker mirrors the dashboard\n\n* **“Resume latest” now means the newest TUI chat.** A session whose first run\n  was a headless job (a coroutine, a one-off run) is labelled `headless run`,\n  stays explicitly selectable, and is never auto-selected — the same rule the\n  dashboard's Run button uses.\n* Each entry shows time, status, origin (`TUI chat` / `headless run`) and the\n  OpenCode session id; the list covers the last 50 sessions, and “Start a new\n  session” is always present.\n* `src/session_pick.js` mirrors `web/js/session_pick.js` and is covered by\n  `tests/session_pick.test.js` (companion suite now 10 tests)."
-    },
-    {
-      "version": "0.15.4",
-      "date": "2026-11-13",
-      "body": "### Context governor: measurable and bounded\n\n* **Shadow mode is the default** (`context_governor_shadow`): the governor logs\n  what it *would* compact, minute by minute, and never calls OpenCode until the\n  operator turns shadow off. The Settings card shows the last pass\n  (\"checked 4 · would compact 1\") and each event's cost delta.\n* New limits: `context_governor_idle_minutes` (30; never touch a session whose\n  usage snapshot is older), `context_governor_max_per_day` (6; hard ceiling on\n  real compactions), and higher defaults (`150k` tokens, `100`-message cooldown)\n  so a compaction has time to pay for itself.\n* `settle()` closes the previous compaction's after-values as soon as the session\n  is idle, independently of the next compact decision — so an active session can\n  no longer starve the measurement and the three-strike self-disable actually\n  fires. The disable is recorded as an activity row.\n* The live-context estimate now handles both provider styles: Anthropic-style\n  disjoint fields (`input + cache.read`) and OpenAI-style inclusive\n  (`input`, cached is a subset).\n* An active session is re-checked immediately before the compact call."
     }
   ]
 }

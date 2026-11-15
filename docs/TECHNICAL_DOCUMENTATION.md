@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.16.0 (see §15). Third-party agent rosters: custody, not acquisition
+**Latest release:** v0.16.1 (see §15). Install agent rosters from Settings, pinned to the index commit
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3025,6 +3025,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-15 — v0.16.1: Install agent rosters from Settings, pinned to the index commit
+
 ### 2026-11-15 — v0.16.0: Third-party agent rosters: custody, not acquisition
 
 ### 2026-11-13 — v0.15.12: VS Code Mode B checks the project's own companion
