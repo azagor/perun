@@ -54,15 +54,17 @@ def _fetch(url: str, timeout: int = 90) -> bytes:
 
 
 def resolve_ref() -> str:
-    """The commit sha ``main`` currently points at, or ``main`` if that fails."""
+    """The commit sha ``main`` currently points at, or ``""`` if that fails.
+
+    Returning ``"main"`` here would quietly produce an *unpinned* index, and an
+    install from it would follow upstream's branch — the opposite of the
+    guarantee. Callers must refuse instead.
+    """
     try:
         payload = json.loads(_fetch(COMMIT_API, timeout=30).decode("utf-8"))
-        sha = str(payload.get("sha") or "").strip()
-        if sha:
-            return sha
+        return str(payload.get("sha") or "").strip()
     except (urllib.error.URLError, OSError, ValueError):
-        pass
-    return "main"
+        return ""
 
 
 def _frontmatter(text: str) -> Dict[str, str]:
@@ -194,6 +196,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     ref = args.ref.strip() or resolve_ref()
+    if not ref:
+        print("[agency-index] could not resolve main; pass --ref <sha> to pin the "
+              "index explicitly", file=sys.stderr)
+        return 2
     try:
         index = build(ref)
     except (urllib.error.URLError, OSError) as exc:

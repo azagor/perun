@@ -21,6 +21,7 @@ Two rules are load-bearing:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -234,6 +235,24 @@ def _save_manifest(payload: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+@contextlib.contextmanager
+def _manifest_txn(*, save_on_error: bool = False):
+    """Hold the lock across read-modify-write so two mutations cannot lose data.
+
+    ``save_on_error`` is for the install loop: files already written must stay
+    tracked even when a later one fails.
+    """
+    with _lock:
+        payload = _load_manifest()
+        try:
+            yield payload
+        except BaseException:
+            if save_on_error:
+                _save_manifest(payload)
+            raise
+        _save_manifest(payload)
+
+
 # --------------------------------------------------------------------------- #
 # Discovery
 # --------------------------------------------------------------------------- #
@@ -348,27 +367,39 @@ def registered(project_path: str | Path | None = None, force: bool = False) -> D
 # --------------------------------------------------------------------------- #
 
 def slots(project_path: str | Path | None = None, measure: bool = True) -> Dict[str, Any]:
-    """Installed files versus the runtime's registration ceiling."""
+    """Installed files versus the runtime's registration ceiling.
+
+    ``baseline`` is the part of the registered count that is *not* a roster file
+    (built-ins, Perun's own agents, hand-written ones). A budget check has to add
+    it, or installing 115 files would register 126 and silently drop 7.
+    """
     global_files = _md_files(agent_dirs())
     project_files = _md_files(agent_dirs(project_path)) if project_path else []
-    probe = registered(project_path, force=not measure) if measure else {"ok": False, "count": None, "ids": []}
+    probe = registered(project_path) if measure else {"ok": False, "count": None, "ids": []}
     installed_ids = {p.stem for p in [*global_files, *project_files]}
+    registered_count = probe.get("count")
+    baseline = (max(0, int(registered_count) - len(installed_ids))
+                if registered_count is not None else None)
     unregistered = sorted(installed_ids - set(probe.get("ids") or [])) if probe.get("ok") else []
     return {
         "installed_global": len(global_files),
         "installed_project": len(project_files),
         "installed": len(installed_ids),
-        "registered": probe.get("count"),
+        "registered": registered_count,
         "registered_ok": bool(probe.get("ok")),
         "registered_error": probe.get("error") or "",
+        "baseline": baseline,
+        "projected": (baseline + len(installed_ids)) if baseline is not None else len(installed_ids),
         "unregistered": unregistered,
         "limit": DEFAULT_LIMIT,
         "limit_source": LIMIT_SOURCE,
-        "remaining": (DEFAULT_LIMIT - int(probe["count"])) if probe.get("ok") else None,
+        "remaining": (DEFAULT_LIMIT - int(registered_count)) if registered_count is not None else None,
     }
 
 
-def status(project_path: str | Path | None = None, measure: bool = True) -> Dict[str, Any]:
+def status(project_path: str | Path | None = None, measure: bool = True,
+           agents: bool = True) -> Dict[str, Any]:
+    """The catalogue payload; ``agents=False`` drops the per-agent list."""
     index = load_index()
     entries = discover(project_path)
     counts = {"adopted": 0, "modified": 0, "candidate": 0, "unlisted": 0}
@@ -387,7 +418,8 @@ def status(project_path: str | Path | None = None, measure: bool = True) -> Dict
         },
         "slots": slots(project_path, measure=measure),
         "counts": counts,
-        "agents": entries,
+        "agents": entries if agents else [],
+        "agents_count": len(entries),
         "upstream": {
             "url": SOURCE_URL,
             "shell": _has_shell(),
@@ -436,78 +468,76 @@ def adopt(paths: Optional[Iterable[str | Path]] = None,
     wanted = [Path(p) for p in paths] if paths else [
         Path(a["path"]) for a in discover(project_path) if a["state"] == "candidate"
     ]
-    manifest = _load_manifest()
     adopted: List[str] = []
     skipped: List[Dict[str, str]] = []
-    for path in wanted:
-        try:
-            target = _resolve_target(path, project_path)
-        except CatalogError as exc:
-            skipped.append({"path": str(path), "reason": str(exc)})
-            continue
-        meta = index["by_slug"].get(target.stem)
-        if not meta:
-            skipped.append({"path": str(target), "reason": "not in the agent index"})
-            continue
-        manifest["agents"][_key(target)] = {
-            "source": "agency-agents",
-            "commit": index["commit"],
-            "division": meta["division"],
-            "slug": target.stem,
-            "sha256": _hash(target),
-            "mode_intent": "",
-            "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
-        adopted.append(str(target))
-    with _lock:
-        _save_manifest(manifest)
+    with _manifest_txn() as manifest:
+        for path in wanted:
+            try:
+                target = _resolve_target(path, project_path)
+            except CatalogError as exc:
+                skipped.append({"path": str(path), "reason": str(exc)})
+                continue
+            meta = index["by_slug"].get(target.stem)
+            if not meta:
+                skipped.append({"path": str(target), "reason": "not in the agent index"})
+                continue
+            manifest["agents"][_key(target)] = {
+                "source": "agency-agents",
+                "commit": index["commit"],
+                "division": meta["division"],
+                "slug": target.stem,
+                "sha256": _hash(target),
+                "mode_intent": "",
+                "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            adopted.append(str(target))
     return {"ok": True, "adopted": adopted, "skipped": skipped}
 
 
-def _entry_for(path: str | Path) -> tuple[Path, Dict[str, Any], Dict[str, Any]]:
-    target = Path(path).resolve()
-    manifest = _load_manifest()
+def _entry(manifest: Dict[str, Any], target: Path) -> Dict[str, Any]:
     entry = manifest["agents"].get(str(target))
     if not entry:
         raise CatalogError(f"not adopted: {target.name}")
-    return target, entry, manifest
+    return entry
 
 
 def accept(path: str | Path) -> Dict[str, Any]:
     """Re-baseline a file the operator has edited (and wants to keep)."""
-    target, entry, manifest = _entry_for(path)
-    if not target.is_file():
-        raise CatalogError(f"missing: {target}")
-    entry["sha256"] = _hash(target)
-    manifest["agents"][str(target)] = entry
-    with _lock:
-        _save_manifest(manifest)
+    target = Path(path).resolve()
+    with _manifest_txn() as manifest:
+        entry = _entry(manifest, target)
+        if not target.is_file():
+            raise CatalogError(f"missing: {target}")
+        entry["sha256"] = _hash(target)
+        manifest["agents"][str(target)] = entry
     return {"ok": True, "path": str(target), "sha256": entry["sha256"]}
 
 
 def forget(path: str | Path) -> Dict[str, Any]:
     """Drop the manifest entry and leave the file exactly where it is."""
-    target, _, manifest = _entry_for(path)
-    manifest["agents"].pop(str(target), None)
-    with _lock:
-        _save_manifest(manifest)
+    target = Path(path).resolve()
+    with _manifest_txn() as manifest:
+        _entry(manifest, target)
+        manifest["agents"].pop(str(target), None)
     return {"ok": True, "forgotten": str(target)}
 
 
 def remove(path: str | Path, *, backup_first: bool = True) -> Dict[str, Any]:
     """Delete an **unmodified** adopted file, after a backup."""
-    target, entry, manifest = _entry_for(path)
-    if not target.is_file():
-        raise CatalogError(f"missing: {target}")
-    if _hash(target) != str(entry.get("sha256") or ""):
-        raise CatalogError(
-            "this agent was edited since it was adopted; forget it or accept the "
-            "current content instead of deleting it")
-    copy = backups.save_copy(target, label="agency") if backup_first else None
-    target.unlink()
-    manifest["agents"].pop(str(target), None)
-    with _lock:
-        _save_manifest(manifest)
+    target = Path(path).resolve()
+    copy: Optional[Path] = None
+    with _manifest_txn() as manifest:
+        entry = _entry(manifest, target)
+        if not target.is_file():
+            raise CatalogError(f"missing: {target}")
+        if _hash(target) != str(entry.get("sha256") or ""):
+            raise CatalogError(
+                "this agent was edited since it was adopted; forget it or accept the "
+                "current content instead of deleting it")
+        if backup_first:
+            copy = backups.save_copy(target, label="agency")
+        target.unlink()
+        manifest["agents"].pop(str(target), None)
     return {"ok": True, "removed": str(target),
             "backup": str(copy) if copy else ""}
 
@@ -516,20 +546,31 @@ def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
     """Make an adopted agent selectable as a session primary.
 
     Upstream writes ``mode: subagent``, which a Perun Run cannot pick. This is an
-    explicit edit, so the hash is re-baselined and the intent is remembered.
+    explicit edit, so the file is backed up, the hash re-baselined and the intent
+    remembered.
     """
     if mode not in {"all", "primary", "subagent"}:
         raise CatalogError(f"unsupported mode: {mode}")
-    target, entry, manifest = _entry_for(path)
-    if not target.is_file():
-        raise CatalogError(f"missing: {target}")
-    text = target.read_text(encoding="utf-8", errors="replace")
-    target.write_text(_rewrite_mode(text, mode), encoding="utf-8")
-    entry["sha256"] = _hash(target)
-    entry["mode_intent"] = mode
-    manifest["agents"][str(target)] = entry
-    with _lock:
-        _save_manifest(manifest)
+    target = Path(path).resolve()
+    with _manifest_txn() as manifest:
+        entry = _entry(manifest, target)
+        if not target.is_file():
+            raise CatalogError(f"missing: {target}")
+        backups.save_copy(target, label="agency")
+        text = target.read_text(encoding="utf-8", errors="replace")
+        tmp = target.with_suffix(f".{os.urandom(4).hex()}.tmp")
+        try:
+            tmp.write_text(_rewrite_mode(text, mode), encoding="utf-8", newline="\n")
+            os.replace(tmp, target)
+        except OSError as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:  # pragma: no cover - best effort
+                pass
+            raise CatalogError(f"could not rewrite {target.name}: {exc}") from exc
+        entry["sha256"] = _hash(target)
+        entry["mode_intent"] = mode
+        manifest["agents"][str(target)] = entry
     return {"ok": True, "path": str(target), "mode": mode}
 
 
@@ -787,25 +828,40 @@ def install(divisions: Optional[Iterable[str]] = None,
             else Path(config.OPENCODE_CONFIG_DIR) / "agents")
 
     existing = {p.stem for p in _md_files(agent_dirs(project_path))}
+    global_stems = {p.stem for p in _md_files(agent_dirs())}
+    new_slugs = {a["slug"] for a in selected} - existing
+    planned = existing | new_slugs
     ceiling = int(DEFAULT_LIMIT if limit is None else limit)
-    planned = existing | {a["slug"] for a in selected}
-    if len(planned) > ceiling:
+
+    # The ceiling is about *registered* agents, and the runtime also registers
+    # built-ins and Perun's own agents. Counting only files is optimistic by
+    # exactly that baseline, which is the silent drop this guard exists to stop.
+    budget = slots(project_path, measure=True)
+    baseline = budget["baseline"]
+    projected = len(planned) + (baseline or 0)
+    if projected > ceiling:
+        detail = (f"{baseline} non-roster + {len(planned)} roster"
+                  if baseline is not None
+                  else f"{len(planned)} roster; the runtime count was unavailable")
         raise CatalogError(
-            f"{len(planned)} agents would exceed the {ceiling}-agent ceiling "
-            f"({len(existing)} installed, {len(planned - existing)} new); "
+            f"{projected} agents would be registered, over the {ceiling}-agent "
+            f"ceiling ({detail}: {len(existing)} installed, {len(new_slugs)} new); "
             f"narrow the divisions")
 
-    manifest = _load_manifest()
     raw_bodies = _read_bodies(
         roster_archive(index["commit"]), {a["path"]: a["slug"] for a in selected})
     base.mkdir(parents=True, exist_ok=True)
     installed: List[str] = []
     skipped: List[Dict[str, str]] = []
-    try:
+    with _manifest_txn(save_on_error=True) as manifest:
         for agent in selected:
             raw = raw_bodies.get(agent["slug"])
             if raw is None:
                 skipped.append({"path": agent["path"], "reason": "missing from the roster archive"})
+                continue
+            if scope == "project" and agent["slug"] in global_stems:
+                skipped.append({"path": agent["slug"],
+                                "reason": "already installed globally"})
                 continue
             target = base / f"{agent['slug']}.md"
             key = _key(target)
@@ -819,6 +875,8 @@ def install(divisions: Optional[Iterable[str]] = None,
                     skipped.append({"path": str(target),
                                     "reason": "edited since it was installed"})
                     continue
+                # An upgrade replaces the file; keep the previous bytes.
+                backups.save_copy(target, label="agency")
             try:
                 text = render_agent(*parse_agent(raw))
             except CatalogError as exc:
@@ -848,22 +906,19 @@ def install(divisions: Optional[Iterable[str]] = None,
                 "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
             installed.append(str(target))
-    finally:
-        # Saving only after the loop would leave a half-finished install with
-        # files on disk that Perun does not track (and would then refuse).
-        with _lock:
-            _save_manifest(manifest)
     return {"ok": True, "commit": index["commit"], "scope": scope,
             "installed": installed, "skipped": skipped,
-            "count": len(installed), "skipped_count": len(skipped)}
+            "count": len(installed), "skipped_count": len(skipped),
+            "projected": projected, "limit": ceiling}
 
 
-def available(division: str = "") -> Dict[str, Any]:
+def available(division: str = "",
+              project_path: str | Path | None = None) -> Dict[str, Any]:
     """What the index offers, with what is already on disk marked."""
     index = load_index()
     if not index["available"]:
         raise CatalogError("agent index unavailable")
-    installed = {p.stem for p in _md_files(agent_dirs())}
+    installed = {p.stem for p in _md_files(agent_dirs(project_path))}
     agents = [dict(agent, installed=agent["slug"] in installed)
               for agent in index["agents"]
               if not division or agent["division"] == division]

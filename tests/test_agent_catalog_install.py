@@ -39,22 +39,30 @@ def _source(name: str = "Code Reviewer", description: str = "Reviews — careful
             f"# {name} Agent\n\nBe specific.\n")
 
 
+@pytest.fixture(autouse=True)
+def isolated_manifest(monkeypatch):
+    """Clear the manifest and never shell out to `opencode` from this module."""
+    monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
+        "ok": False, "count": None, "ids": [], "error": "disabled in tests"})
+    manifest = Path(config.HOME) / "agent_catalog.json"
+    if manifest.exists():
+        manifest.unlink()
+    yield
+    if manifest.exists():
+        manifest.unlink()
+
+
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     base = tmp_path / "opencode"
     (base / "agents").mkdir(parents=True)
     monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
-    manifest = Path(config.HOME) / "agent_catalog.json"
-    if manifest.exists():
-        manifest.unlink()
     agent_catalog._index_cache.update(key=None, data=None)
     archive = _archive(tmp_path, {"engineering/code-reviewer.md": _source()})
     monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
     monkeypatch.setattr(agent_catalog, "load_index",
                         lambda force=False: _index(("code-reviewer", "engineering")))
     yield base / "agents", archive
-    if manifest.exists():
-        manifest.unlink()
 
 
 def test_render_matches_upstream_frontmatter():
@@ -201,9 +209,6 @@ def test_a_locked_file_is_skipped_and_earlier_writes_stay_tracked(tmp_path, monk
     base = tmp_path / "opencode"
     (base / "agents").mkdir(parents=True)
     monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
-    manifest = Path(config.HOME) / "agent_catalog.json"
-    if manifest.exists():
-        manifest.unlink()
     monkeypatch.setattr(agent_catalog, "load_index",
                         lambda force=False: _index(("first-agent", "engineering"),
                                                    ("second-agent", "engineering")))
@@ -222,26 +227,66 @@ def test_a_locked_file_is_skipped_and_earlier_writes_stay_tracked(tmp_path, monk
 
     monkeypatch.setattr(agent_catalog.os, "replace", flaky)
     result = agent_catalog.install(["engineering"])
-    try:
-        assert result["count"] == 1
-        assert "could not be written" in result["skipped"][0]["reason"]
-        # The manifest was still saved, so the written file is tracked.
-        assert {e["slug"]: e["state"] for e in agent_catalog.discover()} == {
-            "first-agent": "adopted"}
-        # No temp file is left behind.
-        assert not list((base / "agents").glob("*.tmp"))
-    finally:
-        if manifest.exists():
-            manifest.unlink()
+    assert result["count"] == 1
+    assert "could not be written" in result["skipped"][0]["reason"]
+    # The manifest was still saved, so the written file is tracked.
+    assert {e["slug"]: e["state"] for e in agent_catalog.discover()} == {
+        "first-agent": "adopted"}
+    # No temp file is left behind.
+    assert not list((base / "agents").glob("*.tmp"))
+
+
+def test_the_ceiling_counts_the_runtime_baseline(env, monkeypatch):
+    """11 registered with 0 roster files means 11 built-ins; the guard must add them."""
+    monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
+        "ok": True, "count": 11, "ids": ["build", "plan"], "error": ""})
+
+    with pytest.raises(agent_catalog.CatalogError) as exc:
+        agent_catalog.install(["engineering"], limit=11)
+    message = str(exc.value)
+    assert "12 agents would be registered" in message
+    assert "11 non-roster" in message
+
+    # One seat more is allowed.
+    assert agent_catalog.install(["engineering"], limit=12)["count"] == 1
+
+
+def test_a_project_install_skips_a_slug_that_exists_globally(tmp_path, monkeypatch):
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
+    project = tmp_path / "proj"
+    (project / ".opencode" / "agents").mkdir(parents=True)
+    (base / "agents" / "code-reviewer.md").write_text(
+        "---\nname: Global Copy\n---\n", encoding="utf-8")
+    monkeypatch.setattr(agent_catalog, "load_index",
+                        lambda force=False: _index(("code-reviewer", "engineering")))
+    archive = _archive(tmp_path, {"engineering/code-reviewer.md": _source()})
+    monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
+
+    result = agent_catalog.install(["engineering"], scope="project",
+                                   project_path=project)
+    assert result["count"] == 0
+    assert "already installed globally" in result["skipped"][0]["reason"]
+    assert not (project / ".opencode" / "agents" / "code-reviewer.md").exists()
+
+
+def test_an_upgrade_keeps_a_backup_of_the_previous_file(env):
+    agents_dir, _ = env
+    agent_catalog.install(["engineering"])
+    target = agents_dir / "code-reviewer.md"
+    original = target.read_text(encoding="utf-8")
+
+    result = agent_catalog.install(["engineering"])
+    assert result["count"] == 1
+    copies = list((Path(config.HOME) / "backups" / "agency").glob("code-reviewer.md-*"))
+    assert any(p.read_text(encoding="utf-8") == original for p in copies)
 
 
 def test_an_oversized_roster_member_is_skipped(tmp_path, monkeypatch):
     base = tmp_path / "opencode"
     (base / "agents").mkdir(parents=True)
     monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
-    manifest = Path(config.HOME) / "agent_catalog.json"
-    if manifest.exists():
-        manifest.unlink()
     monkeypatch.setattr(agent_catalog, "AGENT_MAX_BYTES", 16)
     monkeypatch.setattr(agent_catalog, "load_index",
                         lambda force=False: _index(("code-reviewer", "engineering")))
@@ -251,5 +296,3 @@ def test_an_oversized_roster_member_is_skipped(tmp_path, monkeypatch):
     result = agent_catalog.install(["engineering"])
     assert result["count"] == 0
     assert "missing from the roster archive" in result["skipped"][0]["reason"]
-    if manifest.exists():
-        manifest.unlink()

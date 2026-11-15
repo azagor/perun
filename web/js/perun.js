@@ -3335,7 +3335,7 @@ async function renderAgentCatalogPanel(host, slug) {
     host.innerHTML = '<div class="muted">Checking roster agents…</div>';
     let data;
     try {
-        data = await api(`/api/agent-catalog/status?project=${encodeURIComponent(slug)}`);
+        data = await api(`/api/agent-catalog/status?project=${encodeURIComponent(slug)}&agents=false`);
     } catch (e) {
         host.innerHTML = '<div class="muted">Roster status unavailable.</div>';
         return;
@@ -7380,7 +7380,7 @@ function agentRosterSettingsCard() {
     };
     const reload = async () => {
         try {
-            data = await api('/api/agent-catalog/status');
+            data = await api('/api/agent-catalog/status?agents=false');
             render();
         } catch (e) {
             note.textContent = 'Roster unavailable: ' + e.message;

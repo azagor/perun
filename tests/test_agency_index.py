@@ -90,3 +90,15 @@ def test_render_is_valid_json_and_round_trips():
     parsed = json.loads(agency_index.render(index))
     assert parsed["commit"] == "abc123"
     assert parsed["agents"][0]["description"] == "Describes — with an em dash"
+
+
+def test_an_unresolved_ref_is_refused_instead_of_unpinning(monkeypatch, tmp_path):
+    def offline(*args, **kwargs):
+        raise OSError("no network")
+
+    monkeypatch.setattr(agency_index, "_fetch", offline)
+    assert agency_index.resolve_ref() == ""
+
+    out = tmp_path / "index.json"
+    assert agency_index.main(["--out", str(out)]) == 2
+    assert not out.exists()

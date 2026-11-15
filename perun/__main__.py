@@ -536,6 +536,8 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
             registered = slots.get("registered")
             budget = (f"{registered}/{slots['limit']} registered"
                       if registered is not None else f"{slots['installed']} installed")
+            if registered is not None and registered >= slots["limit"]:
+                budget += " (at the ceiling; narrow a division before adding more)"
             print(f"budget: {budget} · {slots['installed_global']} global, "
                   f"{slots['installed_project']} project")
             if slots.get("unregistered"):
@@ -560,7 +562,7 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
             return 0
 
         if action == "available":
-            data = agent_catalog.available(getattr(args, "division", "") or "")
+            data = agent_catalog.available(getattr(args, "division", "") or "", path or None)
             if getattr(args, "json", False):
                 _print(data)
                 return 0

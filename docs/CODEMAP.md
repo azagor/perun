@@ -599,15 +599,19 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   `unlisted` per file, matched by the installed slug.
 * `registered()` — `opencode debug agents`, the runtime's real registration list
   (the silent drop past ~119 is invisible on disk); `slots()` compares it with
-  the files and reports `DEFAULT_LIMIT` / `remaining` / `unregistered`.
+  the files and reports `DEFAULT_LIMIT` / `remaining` / `unregistered`, plus the
+  non-roster `baseline` and the resulting `projected` count.
 * `install()` — the one path that writes an agent file: downloads the snapshot
   pinned to the index commit, converts it with upstream's rules (`parse_agent`,
   `render_agent`, `resolve_color`, `slugify`), refuses a target it does not track
-  or one that was edited, and refuses rather than exceed the ceiling.
-  `available()` lists what the index offers with an `installed` flag.
+  or one that was edited, backs up what it replaces, and compares
+  `baseline + files` — not files alone — against the ceiling.
+  `available(division, project_path)` lists what the index offers with an
+  `installed` flag.
 * `adopt()`, `accept()`, `forget()`, `remove()` (backup first, refuses an edited
-  file), `promote()` (rewrites `mode:` and re-baselines the hash),
-  `backup_modified()`, `preflight()`, `team_file()`.
+  file), `promote()` (backs up, rewrites `mode:`, re-baselines the hash),
+  `backup_modified()`, `preflight()`, `team_file()`. Every mutation runs inside
+  `_manifest_txn()` so read-modify-write is serialized.
 * A manifest in the Perun home directory records provenance, hashes and
   `mode_intent`; `CatalogError` is surfaced as HTTP 400. `status()` composes the
   API payload.

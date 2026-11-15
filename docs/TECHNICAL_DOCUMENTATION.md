@@ -2080,15 +2080,17 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
 * `opencode debug agents` is the authority for "what actually registered". The
   runtime silently drops agents past ~119 (`anomalyco/opencode#27988`), which no
   file count can reveal, so `slots()` reports `registered`, `limit`, `remaining`
-  and the `unregistered` files alongside the disk counts. An install refuses
-  rather than exceed the ceiling.
+  and the `unregistered` files alongside the disk counts. Because the runtime also
+  registers built-ins and Perun's own agents, the budget is
+  `baseline + roster files`: an install compares that projection with the
+  ceiling, never the file count alone, and refuses rather than exceed it.
 * Guard rails: a `modified` file is never deleted, overwritten or re-baselined
   automatically (`accept` is explicit); `remove` backs up first and refuses an
-  edited file; an install skips a target that exists and is not tracked, or whose
-  hash changed; `preflight` names what a re-install would overwrite (upstream's
-  installer `cp`s over an existing file with no backup); `promote` rewrites
-  `mode:` (upstream writes `subagent`, which a Run cannot select) and records
-  `mode_intent`.
+  edited file; an upgrade or a `promote` backs up the previous bytes; an install
+  skips a target that exists and is not tracked, or whose hash changed;
+  `preflight` names what a re-install would overwrite (upstream's installer `cp`s
+  over an existing file with no backup); `promote` rewrites `mode:` (upstream
+  writes `subagent`, which a Run cannot select) and records `mode_intent`.
 * Scope: `/api/agents?project=<slug>` scans the project's `.opencode/agents/`.
   Without it a project-local roster is invisible to every Perun picker.
 

@@ -6,6 +6,29 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.3
+
+*Released 2026-11-15.*
+
+### The roster guard counts registered agents, not files
+
+* `install` adds the runtime's non-roster baseline — built-ins, Perun's own
+  agents, anything hand-written — to the file count before comparing with the
+  ~119 ceiling. Counting files alone understated the budget by exactly that
+  baseline, so the last handful of agents could still be dropped. `status`
+  reports `baseline` and `projected`, and the CLI says when the machine is at the
+  ceiling.
+* An upgrade backs up the file it replaces, and `promote` backs up before
+  rewriting it — the same rule `remove` already followed.
+* Manifest mutations (adopt/accept/forget/remove/promote/install) now hold the
+  lock across read-modify-write, so two concurrent changes cannot drop an entry.
+* A project-scoped install skips a slug that already exists globally instead of
+  writing a shadowed copy that Perun's discovery would never list.
+* `available?project=<slug>` marks project-local installs; `status?agents=false`
+  omits the per-agent list (the panels only need the counts).
+* `tools/agency_index.py` refuses to write an index when it cannot resolve
+  `main`, instead of quietly recording `main` and following the branch.
+
 ## v0.16.2
 
 *Released 2026-11-15.*

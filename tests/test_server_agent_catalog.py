@@ -25,8 +25,11 @@ def client(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_runtime_probe(monkeypatch):
-    """Never shell out to `opencode debug agents` from the API tests."""
+def isolated_agents(tmp_path, monkeypatch):
+    """Never shell out to `opencode`, and never read the operator's real agents."""
+    base = tmp_path / "opencode"
+    (base / "agents").mkdir(parents=True)
+    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", base)
     monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
         "ok": False, "count": None, "ids": [], "error": "disabled in tests"})
     manifest = Path(config.HOME) / "agent_catalog.json"
@@ -168,8 +171,6 @@ def test_install_from_the_dashboard_writes_converted_agents(client, monkeypatch,
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
 
-    monkeypatch.setattr(config, "OPENCODE_CONFIG_DIR", tmp_path / "opencode")
-    (tmp_path / "opencode" / "agents").mkdir(parents=True)
     monkeypatch.setattr(agent_catalog, "roster_archive", lambda ref, force=False: archive)
     monkeypatch.setattr(agent_catalog, "load_index", lambda force=False: {
         "available": True, "source": "test", "commit": "abc123",
@@ -197,3 +198,18 @@ def test_install_rejects_an_empty_selection(client):
     r = client.post("/api/agent-catalog/install", json={})
     assert r.status_code == 400
     assert "no agents selected" in r.json()["detail"]
+
+
+def test_status_can_omit_the_agent_list(client, project):
+    full = client.get(f"/api/agent-catalog/status?project={project['slug']}&measure=false").json()
+    slim = client.get(
+        f"/api/agent-catalog/status?project={project['slug']}&measure=false&agents=false").json()
+    assert "agents" in full
+    assert slim["agents"] == []
+    assert slim["agents_count"] == full["agents_count"]
+
+
+def test_available_can_be_scoped_to_a_project(client, project):
+    body = client.get(f"/api/agent-catalog/available?project={project['slug']}").json()
+    assert body["ok"] is True
+    assert body["count"] > 0

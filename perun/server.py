@@ -1031,11 +1031,13 @@ def api_list_agents(refresh: bool = False, project: str = "") -> dict[str, Any]:
 
 
 @app.get("/api/agent-catalog/status")
-def api_agent_catalog_status(project: str = "", measure: bool = True) -> dict[str, Any]:
+def api_agent_catalog_status(project: str = "", measure: bool = True,
+                             agents: bool = True) -> dict[str, Any]:
     """Installed roster agents, custody state and the registration budget."""
     from . import agent_catalog
 
-    return agent_catalog.status(_catalog_project(project), measure=measure)
+    return agent_catalog.status(_catalog_project(project), measure=measure,
+                                agents=agents)
 
 
 @app.get("/api/agent-catalog/preflight")
@@ -1059,12 +1061,12 @@ def api_agent_catalog_team(divisions: str = "", limit: int = 0) -> dict[str, Any
 
 
 @app.get("/api/agent-catalog/available")
-def api_agent_catalog_available(division: str = "") -> dict[str, Any]:
+def api_agent_catalog_available(division: str = "", project: str = "") -> dict[str, Any]:
     """What the pinned roster offers, and what is already installed."""
     from . import agent_catalog
 
     try:
-        return agent_catalog.available(division)
+        return agent_catalog.available(division, _catalog_project(project) or None)
     except agent_catalog.CatalogError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
