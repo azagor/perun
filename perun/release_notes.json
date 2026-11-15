@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-13T22:56:35+00:00",
+  "generated": "2026-11-15T17:27:40+00:00",
   "releases": [
+    {
+      "version": "0.16.0",
+      "date": "2026-11-15",
+      "body": "### Third-party agent rosters: custody, not acquisition\n\nPerun can now track an external OpenCode agent roster — the Agency Agents set —\nwithout installing or converting it. Upstream's installer (or its desktop app)\nstays the only thing that writes agent files; Perun records provenance, counts\nthe runtime's real registration budget, protects edited copies and removes\ncleanly.\n\n* `perun/agent_catalog.py` + `perun/data/agency_index.json`: a build-time index\n  (`tools/agency_index.py`, pinned commit, 268 agents / 18 divisions) so\n  recognition is offline and never parses upstream markdown at runtime.\n* Custody states: `candidate`, `adopted`, `modified`, `unlisted`; hashes and\n  `mode_intent` live in `PERUN_HOME/agent_catalog.json`.\n* `opencode debug agents` is the source of truth for what registered — files on\n  disk cannot show the silent drop past ~119. `slots()` reports `registered`,\n  `remaining` and the files that did not register.\n* Guard rails: `remove` refuses an edited agent and backs up first; `preflight`\n  names what a re-install would overwrite (the upstream installer copies over an\n  existing file with no backup); `promote` makes a `subagent` selectable as a Run\n  agent and re-baselines its hash; `team` refuses a selection over the ceiling.\n* API `GET /api/agent-catalog/{status,preflight,team}` and\n  `POST /api/agent-catalog/{adopt,accept,forget,remove,promote,backup}`; CLI\n  `perun agent-catalog …`; a compact \"Agent roster\" panel in the project config\n  card. No MCP tools: this mutates the operator's agent directory.\n* `GET /api/agents?project=<slug>` scans the project's `.opencode/agents/`, so\n  project-local agents (where upstream installs by default) finally appear in\n  Perun's pickers; the machine-wide call is unchanged and the cache is keyed by\n  project."
+    },
     {
       "version": "0.15.12",
       "date": "2026-11-13",
@@ -45,11 +50,6 @@
       "version": "0.15.4",
       "date": "2026-11-13",
       "body": "### Context governor: measurable and bounded\n\n* **Shadow mode is the default** (`context_governor_shadow`): the governor logs\n  what it *would* compact, minute by minute, and never calls OpenCode until the\n  operator turns shadow off. The Settings card shows the last pass\n  (\"checked 4 · would compact 1\") and each event's cost delta.\n* New limits: `context_governor_idle_minutes` (30; never touch a session whose\n  usage snapshot is older), `context_governor_max_per_day` (6; hard ceiling on\n  real compactions), and higher defaults (`150k` tokens, `100`-message cooldown)\n  so a compaction has time to pay for itself.\n* `settle()` closes the previous compaction's after-values as soon as the session\n  is idle, independently of the next compact decision — so an active session can\n  no longer starve the measurement and the three-strike self-disable actually\n  fires. The disable is recorded as an activity row.\n* The live-context estimate now handles both provider styles: Anthropic-style\n  disjoint fields (`input + cache.read`) and OpenAI-style inclusive\n  (`input`, cached is a subset).\n* An active session is re-checked immediately before the compact call."
-    },
-    {
-      "version": "0.15.3",
-      "date": "2026-11-13",
-      "body": "* **Boundary compaction works against a live OpenCode.** A body-less\n  `POST /session/{id}/compact` is rejected with `Expected object`; the governor\n  now sends `{}`. Verified against the running service (a real compaction\n  message comes back).\n* Two fast **Prepare** clicks reserve the download slot before the worker starts,\n  so the second click gets a clean \"a download is already running\" instead of a\n  job that fails immediately.\n* The download progress poll stops when the Settings card is no longer on the\n  page, and both Settings cards share one `/api/local-ai` fetch per render.\n* Enabling **OpenCode small tasks** warns first when `opencode.json` contains\n  comments (the rewrite drops them; a backup is kept).\n* **The Local AI model is a picker** of the models the runtime reports (with\n  sizes), with a \"Custom / not installed\" field for a tag that has not been\n  pulled yet, instead of a free-text box.\n* MCP output budgets cache the Settings read for 5 s instead of reading\n  `config.json` on every tool call."
     }
   ]
 }
