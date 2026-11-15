@@ -508,6 +508,114 @@ def cmd_checks(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_agent_catalog(args: argparse.Namespace) -> int:
+    """Custody for third-party agent rosters Perun does not install."""
+    from . import agent_catalog
+
+    action = getattr(args, "catalog_action", "") or "status"
+    slug = (getattr(args, "project", "") or "").strip()
+    project = registry.get_project(slug) if slug else None
+    if slug and not project:
+        print(f"error: no such project: {slug}")
+        return 1
+    path = str(project["path"]) if project else ""
+
+    try:
+        if action == "status":
+            data = agent_catalog.status(path, measure=not getattr(args, "no_measure", False))
+            if getattr(args, "json", False):
+                _print(data)
+                return 0
+            index = data["index"]
+            if index["available"]:
+                print(f"roster: {index['agents']} agents in {len(index['divisions'])} divisions "
+                      f"({index['commit'][:12]})")
+            else:
+                print(f"roster: unavailable ({index['error']})")
+            slots = data["slots"]
+            registered = slots.get("registered")
+            budget = (f"{registered}/{slots['limit']} registered"
+                      if registered is not None else f"{slots['installed']} installed")
+            print(f"budget: {budget} · {slots['installed_global']} global, "
+                  f"{slots['installed_project']} project")
+            if slots.get("unregistered"):
+                print("  installed but not registered: " + ", ".join(slots["unregistered"]))
+            counts = data["counts"]
+            print(f"custody: {counts['adopted']} adopted, {counts['modified']} modified, "
+                  f"{counts['candidate']} to adopt, {counts['unlisted']} unlisted")
+            marks = {"adopted": "ok", "modified": "edit", "candidate": "new", "unlisted": "gone"}
+            for entry in data["agents"]:
+                print(f"  {marks.get(entry['state'], '?'):<5} {entry['division']:<18} "
+                      f"{entry['slug']:<34} {entry['state']}")
+            print("install: " + data["upstream"]["hint"])
+            return 0
+
+        if action == "adopt":
+            result = agent_catalog.adopt(args.paths or None, path)
+            for adopted in result["adopted"]:
+                print(f"adopted {adopted}")
+            for skip in result["skipped"]:
+                print(f"skipped {skip['path']}: {skip['reason']}")
+            print(f"{len(result['adopted'])} adopted, {len(result['skipped'])} skipped")
+            return 0
+
+        if action == "preflight":
+            result = agent_catalog.preflight(path)
+            print(result["message"])
+            for target in result["will_overwrite"]:
+                print(f"  overwrite {target}")
+            if result["backup_first"]:
+                print("run `perun agent-catalog backup` first — the installer keeps no copy")
+            return 0
+
+        if action == "backup":
+            result = agent_catalog.backup_modified(path)
+            for copy in result["copies"]:
+                print(f"backed up {copy['path']} -> {copy['backup'] or '(failed)'}")
+            print(f"{result['count']} file(s) backed up")
+            return 0
+
+        if action == "accept":
+            result = agent_catalog.accept(args.path)
+            print(f"accepted {result['path']} ({result['sha256'][:12]})")
+            return 0
+
+        if action == "forget":
+            result = agent_catalog.forget(args.path)
+            print(f"forgot {result['forgotten']} (the file is untouched)")
+            return 0
+
+        if action == "remove":
+            result = agent_catalog.remove(args.path,
+                                          backup_first=not getattr(args, "no_backup", False))
+            print(f"removed {result['removed']}"
+                  + (f" (backup: {result['backup']})" if result["backup"] else ""))
+            return 0
+
+        if action == "promote":
+            result = agent_catalog.promote(args.path, getattr(args, "mode", "all"))
+            print(f"{result['path']} now uses mode: {result['mode']}")
+            return 0
+
+        if action == "team":
+            result = agent_catalog.team_file(args.divisions, getattr(args, "limit", 0) or None)
+            if getattr(args, "out", ""):
+                Path(args.out).write_text(result["text"], encoding="utf-8", newline="\n")
+                print(f"{result['count']} agents -> {args.out}")
+            else:
+                print(result["text"], end="")
+            return 0
+    except agent_catalog.CatalogError as exc:
+        print(f"error: {exc}")
+        return 1
+    except OSError as exc:
+        print(f"error: {exc}")
+        return 1
+
+    print(f"error: unknown action: {action}")
+    return 1
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     _ensure()
     path = os.path.abspath(args.path)
@@ -2163,6 +2271,56 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("name", nargs="?", default="")
     cp.add_argument("--limit", type=int, default=20)
     cp.set_defaults(func=cmd_checks)
+
+    p = sub.add_parser(
+        "agent-catalog",
+        help="adopt and guard third-party OpenCode agents Perun does not install")
+    cat_sub = p.add_subparsers(dest="catalog_action")
+    p.set_defaults(func=cmd_agent_catalog, catalog_action="status", project="")
+
+    cp = cat_sub.add_parser("status", help="roster agents, custody state and slot budget")
+    cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
+    cp.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    cp.add_argument("--no-measure", action="store_true",
+                    help="skip the `opencode debug agents` probe")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("adopt", help="record provenance for agents already installed")
+    cp.add_argument("paths", nargs="*", help="specific files (default: every candidate)")
+    cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("preflight", help="what a re-run of the upstream installer overwrites")
+    cp.add_argument("--project", default="")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("backup", help="copy edited agents before a re-install")
+    cp.add_argument("--project", default="")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("accept", help="accept the current content of an edited agent")
+    cp.add_argument("path")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("forget", help="stop tracking an agent, leaving the file alone")
+    cp.add_argument("path")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("remove", help="delete an unmodified adopted agent (backup first)")
+    cp.add_argument("path")
+    cp.add_argument("--no-backup", action="store_true", help="skip the backup copy")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("promote", help="make an adopted subagent selectable as a primary")
+    cp.add_argument("path")
+    cp.add_argument("--mode", default="all", choices=["all", "primary", "subagent"])
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("team", help="a curated --agents-file list under the ceiling")
+    cp.add_argument("divisions", nargs="*", help="division names (default: all)")
+    cp.add_argument("--limit", type=int, default=0, help="ceiling (default: 119)")
+    cp.add_argument("--out", default="", help="write to a file instead of stdout")
+    cp.set_defaults(func=cmd_agent_catalog)
 
     p = sub.add_parser("add", help="register a project")
     p.add_argument("name")

@@ -591,6 +591,23 @@ Discover OpenCode agents available to a project.
 * `_scan_agent_dir()`, `_parse_frontmatter()`, `_agent_id_from_path()`.
 * `list_agents(project_path)` — built-ins + global + project-local agents.
 
+### `perun/agent_catalog.py`
+Custody of third-party agent rosters Perun does **not** install (Agency Agents).
+Upstream owns acquisition; Perun only tracks what landed on disk.
+* `load_index()` — the committed `perun/data/agency_index.json` (build-time
+  artifact from `tools/agency_index.py`; no network, no markdown at runtime).
+* `agent_dirs()`, `discover()` — `candidate` / `adopted` / `modified` /
+  `unlisted` per file, matched by the installed slug.
+* `registered()` — `opencode debug agents`, the runtime's real registration list
+  (the silent drop past ~119 is invisible on disk); `slots()` compares it with
+  the files and reports `DEFAULT_LIMIT` / `remaining` / `unregistered`.
+* `adopt()`, `accept()`, `forget()`, `remove()` (backup first, refuses an edited
+  file), `promote()` (rewrites `mode:` and re-baselines the hash),
+  `backup_modified()`, `preflight()`, `team_file()` (refuses over the ceiling).
+* A manifest in the Perun home directory records provenance, hashes and
+  `mode_intent`; `CatalogError` is surfaced as HTTP 400. `status()` composes the
+  API payload.
+
 ### `perun/scaffold.py`
 Starter-project skeleton + directory creation + safe backfill + dependency parsing
 + manifest anchor refresh.
@@ -1569,8 +1586,11 @@ FastAPI app + SSE + static dashboard.
   structured `/api/models`), PerunChat (`/api/perunchat/status`, `/api/perunchat/key`
   kept for legacy loopback callers, and loopback-only `POST /api/perunchat/ws-ticket`
   which proxies a 30 s single-use WebSocket ticket), providers (`/api/providers…` — read-only
-  `opencode auth` status + logout), agents/skills/tools (`/api/agents`,
-  `/api/skills`, `/api/tools`),
+  `opencode auth` status + logout), agents/skills/tools (`/api/agents?project=…`
+  — project-scoped so project-local rosters appear; `/api/skills`, `/api/tools`),
+  the agent catalogue (`/api/agent-catalog/status|preflight|team` and
+  `POST /api/agent-catalog/{adopt,accept,forget,remove,promote,backup}` —
+  custody only, never an install),
   terminals (`/api/terminals`), MCP servers (`/api/mcp/servers…` — config
   snapshot + live probe), search (`/api/search/*` — grep, ast-grep, global,
   unified), projects
@@ -2098,7 +2118,15 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   (marker or Perun's own handle, never the launch-time heuristic), plus that Stop
   targets the shell that owns the terminal rather than the agent inside it — live
   and after a restart.
-* `test_agents.py` — OpenCode agent discovery (`perun/agents.py`).
+* `test_agents.py` - OpenCode agent discovery (`perun/agents.py`).
+* `test_agent_catalog.py` - third-party roster custody: index lookup,
+  candidate/adopted/modified/unlisted states, adopt, accept, forget, remove
+  (backup + refusal on an edited file), promote (mode rewrite + re-baseline),
+  preflight, backup, team-file ceiling, corrupt-index degradation, and the
+  `opencode debug agents` probe.
+* `test_agency_index.py` - the build-time index: upstream slug parity,
+  frontmatter quoting, non-division/nested files skipped, duplicate slugs, JSON
+  round-trip.
 * `test_daemon.py` — PID file lifecycle, run record round-trip,
   `is_another_perun_running()`, detached start, `stop()`/`kill()`, and the
   degraded mode where `psutil` is absent (`tasklist`/`netstat` fallbacks, PID
@@ -2138,6 +2166,10 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   edit broadcast to the project.
 * `test_server_vscode.py` - link/unlink/status, ticket 404/200, WebSocket hello,
   Mode B conflict and launch-mode validation.
+* `test_server_agent_catalog.py` - catalogue status/budget, adopt → remove,
+  removal refused for an edited agent, path containment, team-file ceiling, and
+  project-scoped `/api/agents` (a project-local agent appears there and not in
+  the machine-wide list).
 * `test_js_vscode.py` - dashboard static assertions for the card, Config IDE
   panel, run-mode flow, wizard link and the extension manifest.
 * `test_telegram_format.py` - the rich-text layer: inline tags, escaping, code

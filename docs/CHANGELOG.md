@@ -6,6 +6,39 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.0
+
+*Released 2026-11-15.*
+
+### Third-party agent rosters: custody, not acquisition
+
+Perun can now track an external OpenCode agent roster — the Agency Agents set —
+without installing or converting it. Upstream's installer (or its desktop app)
+stays the only thing that writes agent files; Perun records provenance, counts
+the runtime's real registration budget, protects edited copies and removes
+cleanly.
+
+* `perun/agent_catalog.py` + `perun/data/agency_index.json`: a build-time index
+  (`tools/agency_index.py`, pinned commit, 268 agents / 18 divisions) so
+  recognition is offline and never parses upstream markdown at runtime.
+* Custody states: `candidate`, `adopted`, `modified`, `unlisted`; hashes and
+  `mode_intent` live in `PERUN_HOME/agent_catalog.json`.
+* `opencode debug agents` is the source of truth for what registered — files on
+  disk cannot show the silent drop past ~119. `slots()` reports `registered`,
+  `remaining` and the files that did not register.
+* Guard rails: `remove` refuses an edited agent and backs up first; `preflight`
+  names what a re-install would overwrite (the upstream installer copies over an
+  existing file with no backup); `promote` makes a `subagent` selectable as a Run
+  agent and re-baselines its hash; `team` refuses a selection over the ceiling.
+* API `GET /api/agent-catalog/{status,preflight,team}` and
+  `POST /api/agent-catalog/{adopt,accept,forget,remove,promote,backup}`; CLI
+  `perun agent-catalog …`; a compact "Agent roster" panel in the project config
+  card. No MCP tools: this mutates the operator's agent directory.
+* `GET /api/agents?project=<slug>` scans the project's `.opencode/agents/`, so
+  project-local agents (where upstream installs by default) finally appear in
+  Perun's pickers; the machine-wide call is unchanged and the cache is keyed by
+  project.
+
 ## v0.15.12
 
 *Released 2026-11-13.*

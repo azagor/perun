@@ -878,7 +878,7 @@ def api_update_dismiss() -> dict[str, Any]:
 
 _MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 _MODELS_TTL = 300.0
-_AGENTS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+_AGENTS_CACHE: dict[str, Any] = {"ts": 0.0, "data": None, "projects": {}}
 _AGENTS_TTL = 60.0
 
 
@@ -988,29 +988,117 @@ def api_provider_disconnect(provider_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/agents")
-def api_list_agents(refresh: bool = False) -> dict[str, Any]:
+def api_list_agents(refresh: bool = False, project: str = "") -> dict[str, Any]:
     """OpenCode agents available to the current installation / project.
 
     Combines documented built-ins with user-defined agents found on disk under
-    ``~/.config/opencode/agents/`` and, when a project path is provided, the
-    project-local ``.opencode/agents/`` directory.
+    ``~/.config/opencode/agents/`` and, when ``?project=<slug>`` is given, the
+    project-local ``.opencode/agents/`` directory. Upstream rosters install
+    project-locally, so a project-scoped call is how those show up at all.
     """
     from . import agents
 
     now = time.time()
-    if (not refresh and _AGENTS_CACHE["data"] is not None
-            and now - _AGENTS_CACHE["ts"] < _AGENTS_TTL):
-        return _AGENTS_CACHE["data"]
-    entries = agents.list_agents()
+    target = registry.get_project(project) if project else None
+    project_path = str((target or {}).get("path") or "")
+    if project and not project_path:
+        raise HTTPException(status_code=404, detail=f"unknown project: {project}")
+
+    cache_key = project_path or ""
+    cached = (_AGENTS_CACHE["projects"].get(cache_key) if cache_key
+              else _AGENTS_CACHE)
+    if (not refresh and cached.get("data") is not None
+            and now - float(cached.get("ts") or 0.0) < _AGENTS_TTL):
+        return cached["data"]
+
+    entries = (agents.list_agents(project_path) if project_path
+               else agents.list_agents())
     # Alphabetical, but keep primary agents before subagents for readability.
     def sort_key(a: dict[str, Any]) -> tuple[str, str]:
         mode = {"primary": "0", "all": "1"}.get(a.get("mode", ""), "2")
         return (mode, (a.get("name") or a.get("id") or "").lower())
 
     entries.sort(key=sort_key)
-    data = {"ok": True, "agents": entries, "count": len(entries)}
-    _AGENTS_CACHE.update(ts=now, data=data)
+    data = {"ok": True, "agents": entries, "count": len(entries),
+            "project": project, "scope": "project" if project_path else "global"}
+    if refresh:
+        _AGENTS_CACHE["projects"].clear()
+    if cache_key:
+        _AGENTS_CACHE["projects"][cache_key] = {"ts": now, "data": data}
+    else:
+        _AGENTS_CACHE.update(ts=now, data=data)
     return data
+
+
+@app.get("/api/agent-catalog/status")
+def api_agent_catalog_status(project: str = "", measure: bool = True) -> dict[str, Any]:
+    """Installed roster agents, custody state and the registration budget."""
+    from . import agent_catalog
+
+    return agent_catalog.status(_catalog_project(project), measure=measure)
+
+
+@app.get("/api/agent-catalog/preflight")
+def api_agent_catalog_preflight(project: str = "") -> dict[str, Any]:
+    """What a re-run of the upstream installer would overwrite right now."""
+    from . import agent_catalog
+
+    return agent_catalog.preflight(_catalog_project(project))
+
+
+@app.get("/api/agent-catalog/team")
+def api_agent_catalog_team(divisions: str = "", limit: int = 0) -> dict[str, Any]:
+    """A curated ``--agents-file`` list, refused when over the ceiling."""
+    from . import agent_catalog
+
+    wanted = [d.strip() for d in divisions.split(",") if d.strip()]
+    try:
+        return agent_catalog.team_file(wanted, limit or None)
+    except agent_catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import agent_catalog
+
+    project = _catalog_project(str(payload.get("project") or ""))
+    path = str(payload.get("path") or "")
+    try:
+        if action == "adopt":
+            paths = payload.get("paths")
+            return agent_catalog.adopt(paths or None, project)
+        if action == "accept":
+            return agent_catalog.accept(path)
+        if action == "forget":
+            return agent_catalog.forget(path)
+        if action == "remove":
+            return agent_catalog.remove(path, backup_first=bool(payload.get("backup", True)))
+        if action == "promote":
+            return agent_catalog.promote(path, str(payload.get("mode") or "all"))
+        if action == "backup":
+            return agent_catalog.backup_modified(project)
+    except agent_catalog.CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(status_code=404, detail=f"unknown action: {action}")
+
+
+@app.post("/api/agent-catalog/{action}")
+def api_agent_catalog_action(action: str,
+                             payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Adopt / accept / forget / remove / promote / back up roster agents."""
+    if action not in {"adopt", "accept", "forget", "remove", "promote", "backup"}:
+        raise HTTPException(status_code=404, detail=f"unknown action: {action}")
+    return _catalog_call(action, payload)
+
+
+def _catalog_project(project: str) -> str:
+    """Resolve a project slug to a path (empty for the global scope)."""
+    if not project:
+        return ""
+    target = registry.get_project(project)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"unknown project: {project}")
+    return str(target.get("path") or "")
 
 
 @app.get("/api/skills")

@@ -50,6 +50,9 @@ const state = {
     focusSupported: true,
     models: [],
     agents: [],
+    // Project-scoped lists: `state.agents` is the machine-wide scan, which does
+    // not include project-local `.opencode/agents/`.
+    agentsByProject: {},
     skills: [],
     tools: [],
     runSource: null,
@@ -504,26 +507,29 @@ async function loadModels(force) {
     if (state.models.length && !force) return;
     try { state.models = (await api('/api/models')).models || []; } catch (_) { state.models = []; }
 }
-async function loadAgents(force) {
-    if (state.agents.length && !force) return;
+async function loadAgents(force, project) {
+    const slug = String(project || '');
+    state.agentsByProject = state.agentsByProject || {};
+    if (slug && state.agentsByProject[slug] && !force) return state.agentsByProject[slug];
+    if (!slug && state.agents.length && !force) return state.agents;
+    const fallback = [
+        { id: 'build', name: 'Build', mode: 'primary', description: 'Default coding agent' },
+        { id: 'plan', name: 'Plan', mode: 'primary', description: 'Planning agent' },
+        { id: 'general', name: 'General', mode: 'subagent', description: 'General-purpose research' },
+        { id: 'explore', name: 'Explore', mode: 'subagent', description: 'Read-only exploration' },
+    ];
+    let list = fallback;
     try {
-        const res = await api('/api/agents');
-        state.agents = res.agents || [];
-        if (!state.agents.length) state.agents = [
-            { id: 'build', name: 'Build', mode: 'primary', description: 'Default coding agent' },
-            { id: 'plan', name: 'Plan', mode: 'primary', description: 'Planning agent' },
-            { id: 'general', name: 'General', mode: 'subagent', description: 'General-purpose research' },
-            { id: 'explore', name: 'Explore', mode: 'subagent', description: 'Read-only exploration' },
-        ];
+        // Project-local agents (where upstream rosters install) only appear when
+        // the request is scoped; the unscoped call stays the machine-wide list.
+        const res = await api(slug ? `/api/agents?project=${encodeURIComponent(slug)}` : '/api/agents');
+        list = res.agents || fallback;
     } catch (e) {
         console.error('loadAgents failed', e);
-        state.agents = [
-            { id: 'build', name: 'Build', mode: 'primary', description: 'Default coding agent' },
-            { id: 'plan', name: 'Plan', mode: 'primary', description: 'Planning agent' },
-            { id: 'general', name: 'General', mode: 'subagent', description: 'General-purpose research' },
-            { id: 'explore', name: 'Explore', mode: 'subagent', description: 'Read-only exploration' },
-        ];
     }
+    if (slug) state.agentsByProject[slug] = list;
+    else state.agents = list;
+    return list;
 }
 // Model entries are structured ({id, provider, name}); tolerate plain strings.
 const modelId = (m) => (typeof m === 'string' ? m : (m && (m.id || m.label)) || '');
@@ -1076,18 +1082,22 @@ function agentSelect(opts = {}) {
     const panel = el('div', { class: 'mselect-panel' });
     wrap.appendChild(input); wrap.appendChild(toggle); wrap.appendChild(panel);
 
+    // A project-scoped picker passes its own list (project-local agents never
+    // appear in the machine-wide scan).
+    const options = () => (typeof opts.agents === 'function' ? opts.agents() : state.agents) || [];
+
     let isOpen = false;
     const refresh = () => {
         const q = input.value.trim().toLowerCase();
         const entries = [];
-        for (const a of (state.agents || [])) {
+        for (const a of options()) {
             const id = a.id || '';
             if (!id || (q && !id.toLowerCase().includes(q) && !(a.name || '').toLowerCase().includes(q))) continue;
             entries.push(a);
         }
         panel.innerHTML = '';
         if (!entries.length) {
-            panel.appendChild(el('div', { class: 'mselect-empty' }, (state.agents || []).length ? 'No matching agent' : 'No agents detected'));
+            panel.appendChild(el('div', { class: 'mselect-empty' }, options().length ? 'No matching agent' : 'No agents detected'));
             return;
         }
         const current = input.value.trim();
@@ -3320,6 +3330,68 @@ async function proposalsCard(detail) {
     return card;
 }
 
+async function renderAgentCatalogPanel(host, slug) {
+    if (!host) return;
+    host.innerHTML = '<div class="muted">Checking roster agents…</div>';
+    let data;
+    try {
+        data = await api(`/api/agent-catalog/status?project=${encodeURIComponent(slug)}`);
+    } catch (e) {
+        host.innerHTML = '<div class="muted">Roster status unavailable.</div>';
+        return;
+    }
+    const slots = data.slots || {};
+    const counts = data.counts || {};
+    const index = data.index || {};
+    const registered = Number(slots.registered);
+    const budget = Number.isFinite(registered)
+        ? `${registered} of ${slots.limit} agents registered`
+        : `${slots.installed || 0} installed`;
+
+    host.innerHTML = '';
+    host.appendChild(el('div', { class: 'card-head' },
+        `<h4>Agent roster</h4><span class="badge">${esc(budget)}</span>`));
+    host.appendChild(el('p', { class: 'muted' },
+        'Perun does not install these: the Agency installer or its desktop app does. '
+        + 'Perun tracks what landed on disk so a re-install cannot silently overwrite your edits.'));
+    if (index.available) {
+        host.appendChild(el('div', { class: 'muted' },
+            `${index.agents} agents in ${Object.keys(index.divisions || {}).length} divisions · ${esc(String(index.commit).slice(0, 12))}`));
+    }
+    host.appendChild(el('div', { class: 'muted' },
+        `${counts.adopted || 0} adopted · ${counts.modified || 0} edited · ${counts.candidate || 0} to adopt`));
+    if ((slots.unregistered || []).length) {
+        host.appendChild(el('div', { class: 'muted' },
+            `Installed but not registered: ${esc(slots.unregistered.join(', '))}`));
+    }
+
+    const actions = el('div', { class: 'form-actions' });
+    if (counts.candidate) {
+        const adopt = el('button', { class: 'btn ghost sm' }, 'Adopt found agents');
+        adopt.addEventListener('click', async () => {
+            try {
+                const res = await api('/api/agent-catalog/adopt', { method: 'POST', body: { project: slug } });
+                toast(`${(res.adopted || []).length} agent(s) adopted`, 'ok');
+                renderAgentCatalogPanel(host, slug);
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        actions.appendChild(adopt);
+    }
+    if (counts.modified) {
+        const backup = el('button', { class: 'btn ghost sm' }, 'Back up edited agents');
+        backup.addEventListener('click', async () => {
+            try {
+                const res = await api('/api/agent-catalog/backup', { method: 'POST', body: { project: slug } });
+                toast(`${res.count || 0} file(s) backed up`, 'ok');
+            } catch (e) { toast(e.message, 'err'); }
+        });
+        actions.appendChild(backup);
+    }
+    const link = el('a', { class: 'btn ghost sm', href: (data.upstream || {}).url || '#', target: '_blank', rel: 'noopener' }, 'Open the roster');
+    actions.appendChild(link);
+    host.appendChild(actions);
+}
+
 function projectConfigForm(p) {
     const isControl = !!p.is_control;
     const delBtn = isControl ? '' : '<button class="btn danger" id="pc-delete">Delete project</button>';
@@ -3340,6 +3412,7 @@ function projectConfigForm(p) {
             <label class="field"><span class="lab">Agent override</span><span id="pc-agent-host"></span></label>
          </div>
          ${note}
+         <div class="mt" id="pc-catalog"></div>
          <div class="form-actions">
             <button class="btn primary" id="pc-save">Save</button>
             ${delBtn}
@@ -3350,9 +3423,16 @@ function projectConfigForm(p) {
     card.querySelector('#pc-build-model-host').appendChild(mBuild);
     const mModel = modelSelect({ placeholder: '(use default)', initial: p.model || '' });
     card.querySelector('#pc-model-host').appendChild(mModel);
-    const mAgent = agentSelect({ placeholder: '(use default)', initial: p.agent || '' });
+    const mAgent = agentSelect({
+        placeholder: '(use default)',
+        initial: p.agent || '',
+        agents: () => state.agentsByProject[p.slug] || state.agents,
+    });
     card.querySelector('#pc-agent-host').appendChild(mAgent);
-    if (!state.agents.length) loadAgents().then(() => mAgent.refresh?.()).catch(() => {});
+    // A project-local roster agent is invisible to the machine-wide scan, so the
+    // project list is the one this picker must show.
+    loadAgents(false, p.slug).then(() => mAgent.refresh?.()).catch(() => {});
+    renderAgentCatalogPanel(card.querySelector('#pc-catalog'), p.slug);
     card.querySelector('#pc-save').addEventListener('click', async () => {
         // Merge with existing agent_models so custom agent defaults set via
         // manifest/MCP are preserved; empty strings clear plan/build defaults.

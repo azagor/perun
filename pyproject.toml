@@ -30,7 +30,7 @@ packages = ["perun", "perun.integrations"]
 
 [tool.setuptools.package-data]
 "perun.integrations" = ["templates/*.md"]
-"perun" = ["release_notes.json"]
+"perun" = ["release_notes.json", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

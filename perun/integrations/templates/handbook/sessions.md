@@ -57,10 +57,17 @@ perun_list_projects / perun_project_info
 ```
 
 The agent list for a project is discoverable through the dashboard
-(`/api/agents`) and the OpenCode agent discovery layer: the built-ins
-(`build`, `plan`, `general`, `explore`), the global ones in
+(`/api/agents?project=<slug>`) and the OpenCode agent discovery layer: the
+built-ins (`build`, `plan`, `general`, `explore`), the global ones in
 `~/.config/opencode/agents/`, and the project-local ones in
 `.opencode/agents/`.
+
+Perun does not install third-party agents. A roster such as Agency Agents is
+installed by its own script or desktop app; Perun adopts what landed on disk,
+records a hash, measures the runtime's real registration budget
+(`perun agent-catalog status`) and protects edited copies before a re-install.
+See `perun agent-catalog --help` and the "Agent roster" panel in a project's
+config, and `docs/TECHNICAL_DOCUMENTATION.md` §9.2.
 
 ## Streaming and cancellation
 
