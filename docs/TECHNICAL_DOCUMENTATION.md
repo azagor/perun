@@ -2119,6 +2119,16 @@ against the registration ceiling. `promote` fans a mode change out to every copy
 one row per agent with its assignments, which is what the Settings and project
 cards render.
 
+**Picker policy.** `perun/agent_policy.py` decides which agents a surface may
+offer, consumed by `/api/agents?surface=` with **default-deny**: a request with
+no surface gets the project rules (built-ins plus agents assigned globally or to
+that project), so an unlabelled picker fails closed. `control` offers
+`perun-orchestrator` plus built-ins, `perunchat` only the room persona, `docs`
+only `perun-docs`, and `all` is explicit and unfiltered. It reads
+`assignments_map()` from the manifest, so a project copy outside the global
+directories still counts as assigned. Pure filtering - no file or OpenCode
+behaviour changes.
+
 **Removing a roster agent.** Settings → Agent roster → *Installed* removes one
 agent, a whole division, or forgets an edited one (the file stays); the list can
 be filtered by division. The same is available as

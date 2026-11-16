@@ -1632,7 +1632,7 @@ FastAPI app + SSE + static dashboard.
   kept for legacy loopback callers, and loopback-only `POST /api/perunchat/ws-ticket`
   which proxies a 30 s single-use WebSocket ticket), providers (`/api/providers…` — read-only
   `opencode auth` status + logout), agents/skills/tools (`/api/agents?project=…`
-  — project-scoped so project-local rosters appear; `/api/skills`, `/api/tools`),
+  — project-scoped so project-local rosters appear; `?surface=` applies the picker policy (project rules by default, `control`/`perunchat`/`docs`/`all` opt in); `/api/skills`, `/api/tools`),
   the agent catalogue (`/api/agent-catalog/status|available|installed|preflight|team`
   and `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit,assign,unassign}`
   — `install` writes the pinned snapshot into the global or a project agent dir;

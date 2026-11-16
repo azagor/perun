@@ -353,7 +353,7 @@ for details.
 | **Providers** | Dashboard `#/providers` | Add/connect/disconnect LLM providers; writes `opencode.json[c]` |
 | **MCP server** | stdio, tool namespace `perun` | 37 tools, installed globally |
 | **Checks** | `perun checks …`, project page → Checks | Operator-declared verification commands; a room agent runs one by name, or verifies an executed proposal only after a hash-pinned operator confirmation |
-| **Agent roster** | Settings → **Agent roster**, `perun agent-catalog …` | Third-party specialists (Agency Agents) installed from one pinned snapshot, removable per agent or division, protected by a measured registration ceiling. Perun also adopts agents its own installer did not write |
+| **Agent roster** | Settings → **Agent roster**, `perun agent-catalog …` | Third-party specialists (Agency Agents) installed from one pinned snapshot, removable per agent or division, protected by a measured registration ceiling. Assign each agent globally or per project; unassigned agents live in Perun's library and are offered nowhere. Perun also adopts agents its own installer did not write |
 | **Telegram bot** | long-polling | `/projects`, `/project`, `/orchestrator`, `/recall`, … |
 | **PerunChat** | native agent-to-agent chat | Autonomous replies to `peruninthemachine.com` rooms with no-loss outbox; HITL or autonomous peer review for actions |
 | **Shared Projects** | PerunChat `grp:` rooms | Trusted participants, role-gated proposals (`rw`/`ro`), autonomous peer review / policy auto-approve, durable **Pause work** (replies, room events, review, auto-approve), `perun-guard` MCP + post-run audit, typed external ZIP handoff with package-level approval, configurable approver/HITL secret |
