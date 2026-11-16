@@ -184,6 +184,7 @@ def assign(slugs: Iterable[str], target: str, *,
                 continue
             try:
                 source = cat._target_for(slug)
+                cat._assert_touchable(source)
             except cat.CatalogError as exc:
                 skipped.append({"path": slug, "reason": str(exc)})
                 continue

@@ -6,6 +6,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.17.1
+
+*Released 2026-11-16.*
+
+### Assignment refuses Perun's own agents
+
+* `assign` now checks the target through the same protection as every other
+  mutation: assigning `perun-orchestrator`, `perun-docs`, `perunchat` or any
+  other agent Perun owns is refused with *"a Perun agent; the roster never
+  touches it"* instead of reporting a successful assignment.
+* Found by the release verification, not by a test: the guard existed for
+  remove/promote but not for placement.
+
 ## v0.17.0
 
 *Released 2026-11-16.*

@@ -143,3 +143,12 @@ def test_the_ceiling_refuses_an_assignment(env):
     with pytest.raises(agent_catalog.CatalogError) as exc:
         assign.assign(["ui-designer"], "project:proj2", limit=0)
     assert "ceiling" in str(exc.value)
+
+
+def test_assign_refuses_a_perun_agent(env):
+    protected = env["base"] / "agents" / "perun-docs.md"
+    protected.write_text("---\nname: Perun Docs\nmode: primary\n---\nbody\n", encoding="utf-8")
+
+    result = assign.assign(["perun-docs"], "global")
+    assert result["count"] == 0
+    assert "Perun agent" in result["skipped"][0]["reason"]
