@@ -2087,9 +2087,10 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
   baseline is only trusted when the runtime reports at least one of the roster
   files Perun sees (`baseline_source`); a runtime pointed at another directory
   falls back to counting files. The ceiling is per machine
-  (`perun agent-catalog limit <n>`, default 119, bounded 1–1000): this runtime
-  registered 120 with nothing dropped, so the number is advisory and
-  re-measurable.
+  (`perun agent-catalog limit <n>`, default 300, bounded 1–1000). It is a
+  measured value, not upstream's: on OpenCode v2.2.5, `opencode debug agents
+  --standalone` registered 307 agents from 300 files with nothing dropped, so the
+  ~119 in #27988 is stale for this build.
 * Guard rails: a `modified` file is never deleted, overwritten or re-baselined
   automatically (`accept` is explicit); `remove` backs up first and refuses an
   edited file; an upgrade or a `promote` backs up the previous bytes; an install
@@ -2773,9 +2774,13 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 ## 12. MCP server
 
 `mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
-`db.init_db()`s, calls `control.ensure()` at import, calls
-`handbook.ensure_indexed()` at import (so the reference material is retrievable
-from the first call), and exposes **thirty-four** tools:
+`db.init_db()`s (cheap DDL every tool needs), then starts `control.ensure()` and
+`handbook.ensure_indexed()` on a **daemon thread** — that work can embed with a
+180 s request timeout, and OpenCode times out an MCP connect, so it must never sit
+in front of the handshake (the log showed `mcp connect failed: Request timed out`
+after exactly that long). The reference material is still retrievable from the
+first call; if it is not indexed yet, the tool indexes on demand. It exposes
+**thirty-four** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`

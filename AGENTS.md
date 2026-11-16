@@ -174,8 +174,9 @@ with `python -m perun project-roots --add <name> <path>`.
   it does not already track or one whose hash changed since install. Provenance
   and `mode_intent` live in `PERUN_HOME/agent_catalog.json`; a hash mismatch is
   `modified` — never deleted, never re-baselined without an explicit `accept`.
-  The ~119-agent ceiling is measured with `opencode debug agents`, never guessed
-  from a file count, and every install refuses rather than exceed it. A roster
+  The agent ceiling is a measured, per-machine value (`opencode debug agents`,
+  default 300; 307 registered on v2.2.5 with nothing dropped), never a stale
+  upstream number, and every install refuses rather than exceed it. A roster
   agent is never the room persona, a coroutine default, or `perun-orchestrator`,
   and never widens the chat agent's guard allowlist. Agent ids Perun owns
   (`managed_agent.managed_ids()`: the `perun-*` templates and the chat persona)

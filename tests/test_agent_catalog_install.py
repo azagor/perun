@@ -300,7 +300,7 @@ def test_an_upgrade_keeps_a_backup_of_the_previous_file(env):
     assert any(p.read_text(encoding="utf-8") == original for p in copies)
 
 
-def test_the_ceiling_defaults_to_119_and_is_configurable(env):
+def test_the_ceiling_defaults_to_the_shipped_value_and_is_configurable(env):
     assert agent_catalog.slots(measure=False)["limit"] == agent_catalog.DEFAULT_LIMIT
     assert agent_catalog.set_limit(150)["limit"] == 150
     # The setting survives alongside the custody entries it was saved with.
@@ -480,3 +480,21 @@ def test_a_dry_run_lists_without_removing(env):
     assert plan["dry_run"] is True
     assert len(plan["would_remove"]) == 1
     assert (agents_dir / "code-reviewer.md").exists()
+
+
+def test_the_refusal_tells_the_operator_how_to_raise_the_ceiling(env, monkeypatch):
+    agents_dir, _ = env
+    (agents_dir / "code-reviewer.md").write_text(_source(), encoding="utf-8")
+    monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
+        "ok": True, "count": 12, "ids": ["build", "code-reviewer"], "error": ""})
+
+    with pytest.raises(agent_catalog.CatalogError) as exc:
+        agent_catalog.install(["engineering"], limit=11)
+    assert "agent-catalog limit" in str(exc.value)
+
+
+def test_the_default_ceiling_reflects_the_measured_runtime():
+    # Measured on OpenCode v2.2.5: 307 agents registered from 300 files with
+    # nothing dropped. A stale 119 would block installs this build handles.
+    assert agent_catalog.DEFAULT_LIMIT >= 200
+    assert "measured" in agent_catalog.LIMIT_SOURCE

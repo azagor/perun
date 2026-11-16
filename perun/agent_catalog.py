@@ -44,11 +44,15 @@ LOG = logging.getLogger("perun.agent_catalog")
 SOURCE_URL = "https://github.com/msitarzewski/agency-agents"
 TARBALL_URL = "https://codeload.github.com/msitarzewski/agency-agents/tar.gz/{ref}"
 INDEX_PATH = Path(__file__).resolve().parent / "data" / "agency_index.json"
-# Upstream reports that OpenCode's runtime registers only ~119 agents and
-# silently drops the rest (anomalyco/opencode#27988). `registered()` measures the
-# real number, so this is only the ceiling to warn against.
-DEFAULT_LIMIT = 119
-LIMIT_SOURCE = "upstream #27988; `opencode debug agents` measures the real count"
+# Upstream reports that the runtime registers only ~119 agents and silently drops
+# the rest (anomalyco/opencode#27988). Measured on OpenCode v2.2.5 (2026-11-16)
+# with `opencode debug agents --standalone`: 307 agents registered from 300 files
+# plus 7 built-ins, with nothing dropped, and the count tracked the file count 1:1
+# from 110 to 300. The guard stays — a future build may reintroduce the cap — but
+# at a ceiling this build actually honours, and it is per machine.
+DEFAULT_LIMIT = 300
+LIMIT_SOURCE = ("measured on OpenCode v2.2.5: 307 registered, nothing dropped "
+                "(`opencode debug agents --standalone`); upstream #27988 is stale")
 
 MANIFEST_SCHEMA = 1
 _INDEX_MAX_BYTES = 8 * 1024 * 1024
@@ -952,7 +956,8 @@ def install(divisions: Optional[Iterable[str]] = None,
         raise CatalogError(
             f"{projected} agents would be registered, over the {ceiling}-agent "
             f"ceiling ({detail}: {len(existing)} installed, {len(new_slugs)} new); "
-            f"narrow the divisions")
+            f"narrow the divisions, or raise the ceiling with "
+            f"`perun agent-catalog limit {projected}`")
 
     raw_bodies = _read_bodies(
         roster_archive(index["commit"]), {a["path"]: a["slug"] for a in selected})

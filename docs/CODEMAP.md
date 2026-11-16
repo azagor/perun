@@ -602,8 +602,8 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   the files and reports `DEFAULT_LIMIT` / `remaining` / `unregistered`, plus the
   non-roster `baseline` and the resulting `projected` count.
 * `configured_limit()` / `set_limit()` — the ceiling is per machine, stored in
-  the manifest, default 119, bounded 1–1000 (the runtime here registers 120 with
-  nothing dropped, so the operator can re-measure and raise it).
+  the manifest, default 300 (measured on OpenCode v2.2.5: 307 registered from 300
+  files, nothing dropped; upstream's ~119 is stale), bounded 1–1000.
 * `install()` — the one path that writes an agent file: downloads the snapshot
   pinned to the index commit, converts it with upstream's rules (`parse_agent`,
   `render_agent`, `resolve_color`, `slugify`), refuses a target it does not track
@@ -1815,7 +1815,12 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). 37 tools: `perun_list_projects`,
+stdio MCP server (`perun`). `db.init_db()` runs at import (cheap DDL every tool
+needs); control registration and handbook indexing run from `main()` on a daemon
+thread (`_prepare_in_background`) so they never sit in front of the handshake —
+indexing embeds with a 180 s timeout and OpenCode times out the connect.
+`perun_context` ensures the index lazily for a cold first call. 37 tools:
+`perun_list_projects`,
 `perun_project_info`, `perun_create_project`, `perun_update_project`
 (also accepts `agent_models` as a JSON string),
 `perun_delete_project`, `perun_discover`, `perun_memory_search`,
@@ -2285,6 +2290,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   Python fallbacks, `search_capabilities()`.
 * `test_mcp_servers.py` — MCP config snapshot (global + project scopes, status
   derivation) and the on-demand live probe against a spawned throwaway server.
+* `test_mcp_startup.py` — the server answers the stdio handshake without waiting
+  for handbook indexing, and `main()` starts that work on a daemon thread.
 * `test_mcp_security.py` — MCP input validation: filename/path safety for
   instruction tools, pattern/max-results rejection in the search tools (loads
   `mcp/perun_mcp.py` directly, dodging the installed `mcp` package shadowing).

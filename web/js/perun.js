@@ -7362,7 +7362,7 @@ function agentRosterSettingsCard() {
         budget.textContent = Number.isFinite(registered)
             ? `${registered} of ${slots.limit} registered`
             : `${slots.installed || 0} installed`;
-        limitInput.value = slots.limit || 119;
+        limitInput.value = slots.limit || 300;
         divisions.innerHTML = '';
         const divs = (data && data.index && data.index.divisions) || {};
         Object.keys(divs).sort().forEach((name) => {
@@ -7502,6 +7502,8 @@ function agentRosterSettingsCard() {
             await loadAgents(true);
         } catch (e) {
             toast(e.message, 'err');
+            // A toast disappears; the refusal has to stay on screen.
+            note.textContent = e.message;
         } finally {
             install.disabled = false;
             install.textContent = 'Install selected';

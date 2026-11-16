@@ -6,6 +6,25 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.8
+
+*Released 2026-11-16.*
+
+### The ceiling is measured again, and MCP startup no longer blocks
+
+* The agent ceiling was **stale**. Upstream's "~119" comes from an old report;
+  measured on OpenCode v2.2.5 with `opencode debug agents --standalone`, **307**
+  agents registered from 300 files with nothing dropped, tracking 1:1 from 110 to
+  300. The default is now **300**, the refusal names the fix
+  (`perun agent-catalog limit <n>`), and the Settings card keeps the message on
+  screen instead of letting a toast disappear.
+* `mcp/perun_mcp.py` no longer does slow work before answering the stdio
+  handshake. Control-project registration and handbook indexing (which embeds
+  with a 180 s request timeout) moved to a daemon thread; `init_db()` stays
+  synchronous because every tool needs it and it is cheap DDL. This is the
+  `mcp connect failed: Request timed out` seen in OpenCode's log after ~184 s —
+  the handshake was waiting on an embedding call.
+
 ## v0.16.7
 
 *Released 2026-11-15.*

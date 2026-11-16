@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
 import time
 
 # FastMCP prints a startup banner to stdout by default, which corrupts the
@@ -68,24 +69,30 @@ from perun import checks, config, context, control, db, discovery, grep, handboo
 
 mcp = FastMCP("Perun")
 
+# Nothing slow may block the stdio handshake. OpenCode times out the MCP connect,
+# and the startup re-index embeds changed handbook docs with a 180 s request
+# timeout — logged as `mcp connect failed: Request timed out` after exactly that
+# long. ``init_db`` is cheap DDL every tool needs, so it stays synchronous;
+# control registration and indexing move to a daemon thread once the server is up.
 db.init_db()
 
-# The orchestrator (control plane) must exist for *every* tool call, so a brand
-# new machine with no projects can still be talked to. Registration is
-# idempotent and best-effort.
-try:
-    control.ensure()
-except Exception:  # pragma: no cover - never block the MCP server from starting
-    pass
 
-# Make sure the Perun Context store holds the handbook, so `perun_context`
-# works on a machine that never re-ran the installer. Indexing is
-# content-hash based: after the first run this costs a few small SELECTs and
-# no embedding calls.
-try:
-    handbook.ensure_indexed()
-except Exception:  # pragma: no cover - never block the MCP server from starting
-    pass
+def _prepare_in_background() -> None:
+    # The orchestrator (control plane) must exist for every tool call, so a brand
+    # new machine with no projects can still be talked to. Registration is
+    # idempotent and best-effort.
+    try:
+        control.ensure()
+    except Exception:  # pragma: no cover - never block the MCP server from starting
+        pass
+    # Index the handbook so `perun_context` works on a machine that never re-ran
+    # the installer. Content-hash based: after the first run this is a few small
+    # SELECTs and no embedding calls.
+    try:
+        handbook.ensure_indexed()
+    except Exception:  # pragma: no cover - never block the MCP server from starting
+        pass
+
 
 # Shared orchestrator for MCP-initiated runs so they live in the same in-memory
 # event bus and can be observed/cancelled consistently.
@@ -749,6 +756,12 @@ def perun_context(topic: str = "", project: str | None = None,
     if mode not in ("auto", "exact", "list"):
         return "[perun] mode must be one of: auto, exact, list"
     p = _resolve_project(project)
+    # The background preparer may still be indexing (startup must not block on
+    # it); this is idempotent and, after the first run, a few small SELECTs.
+    try:
+        handbook.ensure_indexed()
+    except Exception:  # pragma: no cover - a lookup still works without it
+        pass
     try:
         hits = context.search(topic, project_id=p["id"] if p else 0, k=k, mode=mode)
     except Exception as exc:  # pragma: no cover - defensive
@@ -1735,6 +1748,11 @@ def perun_attention_list(state: str = "open", limit: int = 20) -> str:
 
 
 def main() -> None:
+    # Started here, not at import: the module is also imported by tests and by
+    # `perun/handbook.py` to render the tool reference, and those must not leave
+    # a thread writing to the database.
+    threading.Thread(target=_prepare_in_background, name="perun-mcp-prepare",
+                     daemon=True).start()
     mcp.run()
 
 

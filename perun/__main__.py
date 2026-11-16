@@ -2359,7 +2359,7 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--project", default="", help="project slug (omit for the global scope)")
     cp.set_defaults(func=cmd_agent_catalog)
 
-    cp = cat_sub.add_parser("limit", help="set the agent ceiling (default 119)")
+    cp = cat_sub.add_parser("limit", help="set the agent ceiling (default 300)")
     cp.add_argument("value", type=int, help="maximum registered agents (1-1000)")
     cp.set_defaults(func=cmd_agent_catalog)
 
@@ -2373,7 +2373,7 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--agent", dest="agents", action="append", default=[],
                     help="install one agent slug (repeatable)")
     cp.add_argument("--project", default="", help="install into this project instead of globally")
-    cp.add_argument("--limit", type=int, default=0, help="ceiling (default: 119)")
+    cp.add_argument("--limit", type=int, default=0, help="ceiling (default: 300)")
     cp.set_defaults(func=cmd_agent_catalog)
 
     cp = cat_sub.add_parser("preflight", help="what a re-run of the upstream installer overwrites")
@@ -2414,7 +2414,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cp = cat_sub.add_parser("team", help="a curated --agents-file list under the ceiling")
     cp.add_argument("divisions", nargs="*", help="division names (default: all)")
-    cp.add_argument("--limit", type=int, default=0, help="ceiling (default: 119)")
+    cp.add_argument("--limit", type=int, default=0, help="ceiling (default: 300)")
     cp.add_argument("--out", default="", help="write to a file instead of stdout")
     cp.set_defaults(func=cmd_agent_catalog)
 
