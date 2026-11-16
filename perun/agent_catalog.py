@@ -37,7 +37,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from . import backups, config
+from . import agent_assignments, backups, config
 
 LOG = logging.getLogger("perun.agent_catalog")
 
@@ -411,6 +411,7 @@ def discover(project_path: str | Path | None = None) -> List[Dict[str, Any]]:
             "mode_intent": mode_intent,
             "adopted_at": str((entry or {}).get("adopted_at") or ""),
             "scope": "project" if project_path and _under(path, Path(project_path)) else "global",
+            "assignment": agent_assignments.assignment_of(path),
         })
 
     out.sort(key=lambda a: (a["division"], a["slug"], a["path"]))
@@ -755,7 +756,8 @@ def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
         entry["sha256"] = _hash(target)
         entry["mode_intent"] = mode
         manifest["agents"][str(target)] = entry
-    return {"ok": True, "path": str(target), "mode": mode}
+    spread = agent_assignments.fan_out(target.stem, owner=target)
+    return {"ok": True, "path": str(target), "mode": mode, "fan_out": spread}
 
 
 def _rewrite_mode(text: str, mode: str) -> str:
@@ -1104,17 +1106,31 @@ def install(divisions: Optional[Iterable[str]] = None,
 
 
 def installed(project_path: str | Path | None = None) -> Dict[str, Any]:
-    """Compact rows for the dashboard's uninstall list (no descriptions)."""
-    rows = [{"path": entry["path"], "slug": entry["slug"],
-             "division": entry["division"], "state": entry["state"],
-             "mode": _agent_mode(Path(entry["path"]))}
-            for entry in discover(project_path)
-            if entry["state"] in {"adopted", "modified", "unlisted"}]
+    """One row per agent: custody state, mode and where it is assigned."""
+    rows: Dict[str, Dict[str, Any]] = {}
+    for entry in discover(project_path):
+        if entry["state"] not in {"adopted", "modified", "unlisted", "candidate"}:
+            continue
+        row = rows.setdefault(entry["slug"], {
+            "slug": entry["slug"], "division": entry["division"],
+            "state": "adopted", "mode": "", "path": entry["path"],
+            "assignments": [], "paths": {}})
+        assignment = entry.get("assignment") or "global"
+        if assignment not in row["assignments"]:
+            row["assignments"].append(assignment)
+        row["paths"][assignment] = entry["path"]
+        row["mode"] = _agent_mode(Path(entry["path"]))
+        if entry["state"] == "modified" or row["state"] == "modified":
+            row["state"] = "modified"
+        elif entry["state"] == "candidate" and row["state"] != "modified":
+            row["state"] = "candidate"
+
+    ordered = sorted(rows.values(), key=lambda r: (r["division"], r["slug"]))
     by_division: Dict[str, int] = {}
-    for row in rows:
+    for row in ordered:
         key = row["division"] or "other"
         by_division[key] = by_division.get(key, 0) + 1
-    return {"ok": True, "count": len(rows), "agents": rows,
+    return {"ok": True, "count": len(ordered), "agents": ordered,
             "by_division": by_division}
 
 

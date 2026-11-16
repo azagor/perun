@@ -510,7 +510,7 @@ def cmd_checks(args: argparse.Namespace) -> int:
 
 def cmd_agent_catalog(args: argparse.Namespace) -> int:
     """Custody for third-party agent rosters Perun does not install."""
-    from . import agent_catalog
+    from . import agent_assignments, agent_catalog
 
     action = getattr(args, "catalog_action", "") or "status"
     slug = (getattr(args, "project", "") or "").strip()
@@ -592,6 +592,25 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
                   f"{result['skipped_count']} skipped")
             return 0
 
+        if action == "assign":
+            result = agent_assignments.assign(args.slugs, args.to,
+                                              limit=getattr(args, "limit", 0) or None)
+            for target in result["assigned"]:
+                print(f"assigned {target}")
+            for skip in result["skipped"]:
+                print(f"skipped {skip['path']}: {skip['reason']}")
+            print(f"{result['count']} assigned to {result['target']}")
+            return 0
+
+        if action == "unassign":
+            result = agent_assignments.unassign(args.slugs, args.to)
+            for gone in result["removed"]:
+                print(f"unassigned {gone}")
+            for keep in result["skipped"]:
+                print(f"kept {keep['path']}: {keep['reason']}")
+            print(f"{result['count']} removed from {result['target']}")
+            return 0
+
         if action == "preflight":
             result = agent_catalog.preflight(path)
             print(result["message"])
@@ -629,6 +648,15 @@ def cmd_agent_catalog(args: argparse.Namespace) -> int:
             return 0
 
         if action == "remove":
+            if getattr(args, "path", "") and not getattr(args, "division", ""):
+                raw = args.path
+                if os.sep not in raw and (not os.altsep or os.altsep not in raw):
+                    result = agent_assignments.remove_slug(
+                        raw[:-3] if raw.endswith(".md") else raw,
+                        backup_first=not getattr(args, "no_backup", False))
+                    print(f"removed {result['slug']} ({result['count']} file(s), "
+                          f"{result['skipped_count']} kept)")
+                    return 0
             if getattr(args, "division", ""):
                 plan = agent_catalog.remove_many(
                     division=args.division, project_path=path or None,
@@ -2361,6 +2389,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     cp = cat_sub.add_parser("limit", help="set the agent ceiling (default 300)")
     cp.add_argument("value", type=int, help="maximum registered agents (1-1000)")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("assign", help="make agents available globally or in a project")
+    cp.add_argument("slugs", nargs="+")
+    cp.add_argument("--to", required=True, help="global or project:<slug>")
+    cp.set_defaults(func=cmd_agent_catalog)
+
+    cp = cat_sub.add_parser("unassign", help="remove agents from a global/project target")
+    cp.add_argument("slugs", nargs="+")
+    cp.add_argument("--to", required=True, help="global or project:<slug>")
     cp.set_defaults(func=cmd_agent_catalog)
 
     cp = cat_sub.add_parser("available", help="what the pinned roster offers")

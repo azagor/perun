@@ -360,7 +360,9 @@ def test_installed_lists_compact_rows(env):
     listing = agent_catalog.installed()
     assert listing["count"] == 1
     row = listing["agents"][0]
-    assert set(row) == {"path", "slug", "division", "state", "mode"}
+    assert set(row) == {"path", "slug", "division", "state", "mode",
+                        "assignments", "paths"}
+    assert row["assignments"] == ["global"]
     assert listing["by_division"] == {"engineering": 1}
 
 

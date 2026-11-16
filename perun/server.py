@@ -1085,6 +1085,15 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     project = _catalog_project(str(payload.get("project") or ""))
     path = str(payload.get("path") or "")
     try:
+        if action == "assign":
+            return agent_catalog.assign(
+                [str(s) for s in (payload.get("slugs") or [])],
+                str(payload.get("target") or "global"),
+                limit=int(payload["limit"]) if payload.get("limit") else None)
+        if action == "unassign":
+            return agent_catalog.unassign(
+                [str(s) for s in (payload.get("slugs") or [])],
+                str(payload.get("target") or ""))
         if action == "limit":
             return agent_catalog.set_limit(payload.get("limit"))
         if action == "install":
@@ -1104,6 +1113,9 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if action == "forget":
             return agent_catalog.forget(path)
         if action == "remove":
+            if payload.get("slug"):
+                return agent_catalog.remove_slug(
+                    str(payload["slug"]), backup_first=bool(payload.get("backup", True)))
             if "paths" in payload or payload.get("division"):
                 return agent_catalog.remove_many(
                     payload.get("paths") or None,
@@ -1125,8 +1137,8 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 def api_agent_catalog_action(action: str,
                              payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """Install / adopt / accept / forget / remove / promote / back up roster agents."""
-    if action not in {"install", "adopt", "accept", "forget", "remove", "promote",
-                      "backup", "limit"}:
+    if action not in {"assign", "unassign", "install", "adopt", "accept", "forget",
+                      "remove", "promote", "backup", "limit"}:
         raise HTTPException(status_code=404, detail=f"unknown action: {action}")
     return _catalog_call(action, payload)
 
