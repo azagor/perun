@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T12:07:38+00:00",
+  "generated": "2026-11-16T13:26:52+00:00",
   "releases": [
+    {
+      "version": "0.16.10",
+      "date": "2026-11-16",
+      "body": "### Roster edge cases from the audit\n\n* `promote` / `accept` map an unreadable agent file to a 400 (`could not read …`)\n  instead of letting an `OSError` escape as a 500 traceback.\n* `_agent_mode` scans 80 frontmatter lines (matching the discovery parser), so a\n  long frontmatter still reports its mode and the toggle/badge stay honest.\n* Two unit cases pin the edges: an unknown slug is rejected, and an agent with no\n  `mode:` reports an empty mode."
+    },
     {
       "version": "0.16.9",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.1",
       "date": "2026-11-15",
       "body": "### Install the roster from Settings\n\nPerun can now install Agency Agents itself, from the Settings page — no bash, no\nseparate app, no terminal.\n\n* Settings → **Agent roster**: pick divisions (each with its agent count) and\n  install into the global agents directory. The slot meter shows what the runtime\n  actually registered (`opencode debug agents`), not what is on disk.\n* The install is **pinned**: it downloads the snapshot at the commit recorded in\n  `perun/data/agency_index.json` and converts it with upstream's rules (quoted\n  scalars, the named-colour table, body verbatim). Nothing follows upstream's\n  branch between Perun releases, and the tarball is cached so a re-install works\n  offline.\n* It refuses to exceed the ~119-agent ceiling, refuses to overwrite an agent\n  Perun does not track, and refuses to overwrite one whose hash changed since it\n  was installed. Upstream's own installer still works: `adopt` takes over its\n  output.\n* `GET /api/agent-catalog/available` lists the roster with an `installed` flag;\n  `POST /api/agent-catalog/install` takes `divisions`, `agents`, `scope`\n  (`global`/`project`) and `limit`. CLI: `perun agent-catalog available|install`.\n* Project-scoped installs are supported by the API and the CLI\n  (`install … --project <slug>`)."
-    },
-    {
-      "version": "0.16.0",
-      "date": "2026-11-15",
-      "body": "### Third-party agent rosters: custody, not acquisition\n\nPerun can now track an external OpenCode agent roster — the Agency Agents set —\nwithout installing or converting it. Upstream's installer (or its desktop app)\nstays the only thing that writes agent files; Perun records provenance, counts\nthe runtime's real registration budget, protects edited copies and removes\ncleanly.\n\n* `perun/agent_catalog.py` + `perun/data/agency_index.json`: a build-time index\n  (`tools/agency_index.py`, pinned commit, 268 agents / 18 divisions) so\n  recognition is offline and never parses upstream markdown at runtime.\n* Custody states: `candidate`, `adopted`, `modified`, `unlisted`; hashes and\n  `mode_intent` live in `PERUN_HOME/agent_catalog.json`.\n* `opencode debug agents` is the source of truth for what registered — files on\n  disk cannot show the silent drop past ~119. `slots()` reports `registered`,\n  `remaining` and the files that did not register.\n* Guard rails: `remove` refuses an edited agent and backs up first; `preflight`\n  names what a re-install would overwrite (the upstream installer copies over an\n  existing file with no backup); `promote` makes a `subagent` selectable as a Run\n  agent and re-baselines its hash; `team` refuses a selection over the ceiling.\n* API `GET /api/agent-catalog/{status,preflight,team}` and\n  `POST /api/agent-catalog/{adopt,accept,forget,remove,promote,backup}`; CLI\n  `perun agent-catalog …`; a compact \"Agent roster\" panel in the project config\n  card. No MCP tools: this mutates the operator's agent directory.\n* `GET /api/agents?project=<slug>` scans the project's `.opencode/agents/`, so\n  project-local agents (where upstream installs by default) finally appear in\n  Perun's pickers; the machine-wide call is unchanged and the cache is keyed by\n  project."
     }
   ]
 }

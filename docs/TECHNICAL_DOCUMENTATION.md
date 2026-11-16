@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.16.9 (see §15). Promote roster agents from the dashboard
+**Latest release:** v0.16.10 (see §15). Roster audit edge cases
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3059,6 +3059,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-16 — v0.16.10: Roster audit edge cases
+
 ### 2026-11-16 — v0.16.9: Promote roster agents from the dashboard
 
 ### 2026-11-16 — v0.16.8: Measured agent ceiling and a non-blocking MCP handshake
