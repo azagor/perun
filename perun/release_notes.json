@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T13:26:52+00:00",
+  "generated": "2026-11-16T15:56:25+00:00",
   "releases": [
+    {
+      "version": "0.17.0",
+      "date": "2026-11-16",
+      "body": "### Assign roster agents to projects\n\n* Placement is now explicit. A new `perun/agent_assignments.py` owns it: a copy\n  in the global agents directory is a **global** assignment, a copy under\n  `<project>/.opencode/agents/` is a **project** assignment, and both are derived\n  from where the file lives (the only truth OpenCode reads).\n* Settings -> Agent roster -> Installed shows each agent's assignment and a\n  **Global** toggle; **Remove** now removes the agent everywhere it is assigned.\n* Project config -> **Agents in this project**: tick the agents that project's TUI\n  should offer. Globally assigned agents are inherited and shown locked.\n* Project copies are **local-only**: the agents directory gets a `.gitignore`\n  containing `*`, so `git status` stays clean. Every removal keeps a backup.\n* Assigning an agent that is already global to a project is a no-op; unassign and\n  remove refuse a copy edited since install.\n* `promote` fans the new `mode:` out to every copy.\n* API: `POST /api/agent-catalog/{assign,unassign}`, `remove {slug}`. CLI:\n  `perun agent-catalog assign|unassign <slug...> --to global|project:<slug>`.\n* Install still writes globally in this release; the library/unassigned default\n  ships next, with the post-install assign prompt."
+    },
     {
       "version": "0.16.10",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.2",
       "date": "2026-11-15",
       "body": "### Roster audit fixes\n\n* An index `slug` is validated (`[a-z0-9-]`) before it can become a filename, so\n  a hand-edited or corrupt index can never write outside the agents directory.\n* An install saves the manifest even when one file fails mid-run: a locked file\n  or a full disk can no longer leave untracked agents on disk that Perun would\n  then refuse to touch. A failed write is reported as a skip, and its temp file\n  is removed.\n* Oversized archive members are skipped. The compressed download was capped; the\n  decompressed member was not.\n* The project roster panel no longer claims Perun never installs — it has since\n  v0.16.1. The static test now asserts the copy instead of the stale claim."
-    },
-    {
-      "version": "0.16.1",
-      "date": "2026-11-15",
-      "body": "### Install the roster from Settings\n\nPerun can now install Agency Agents itself, from the Settings page — no bash, no\nseparate app, no terminal.\n\n* Settings → **Agent roster**: pick divisions (each with its agent count) and\n  install into the global agents directory. The slot meter shows what the runtime\n  actually registered (`opencode debug agents`), not what is on disk.\n* The install is **pinned**: it downloads the snapshot at the commit recorded in\n  `perun/data/agency_index.json` and converts it with upstream's rules (quoted\n  scalars, the named-colour table, body verbatim). Nothing follows upstream's\n  branch between Perun releases, and the tarball is cached so a re-install works\n  offline.\n* It refuses to exceed the ~119-agent ceiling, refuses to overwrite an agent\n  Perun does not track, and refuses to overwrite one whose hash changed since it\n  was installed. Upstream's own installer still works: `adopt` takes over its\n  output.\n* `GET /api/agent-catalog/available` lists the roster with an `installed` flag;\n  `POST /api/agent-catalog/install` takes `divisions`, `agents`, `scope`\n  (`global`/`project`) and `limit`. CLI: `perun agent-catalog available|install`.\n* Project-scoped installs are supported by the API and the CLI\n  (`install … --project <slug>`)."
     }
   ]
 }
