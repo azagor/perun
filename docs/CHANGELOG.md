@@ -6,6 +6,29 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.9
+
+*Released 2026-11-16.*
+
+### Promote a roster agent from the dashboard
+
+* Settings → Agent roster → **Installed** gains a per-agent **Make primary ⇄
+  Primary** toggle. It sets `mode: all`: the agent becomes selectable in Run, the
+  Agent Console and the project/coroutine pickers, and stays delegable. One click
+  puts it back to `subagent`.
+* `promote` now **refuses a file edited since it was installed** instead of
+  silently re-baselining the edits. An **Accept** action on the row re-baselines a
+  deliberate edit, which is what unblocks promoting or removing it.
+* `installed()` reports each agent's current `mode`, read from the file (cached by
+  mtime/size and invalidated on every write) rather than from the manifest.
+* A `primary` badge and a **Primary only** filter, and the footer now says
+  OpenCode picks up promotions as well as installs and removals.
+* The toggle rests on a measurement, not an assumption: `perun-orchestrator` is a
+  file-based agent with `mode: primary` and its recorded runs complete, so
+  `--agent` accepts a file-based non-subagent agent.
+* New `_target_for()` resolves an agent by path or slug; it is the single place
+  the assignment work will redirect to the library copy.
+
 ## v0.16.8
 
 *Released 2026-11-16.*

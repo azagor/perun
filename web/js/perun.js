@@ -7318,6 +7318,7 @@ function agentRosterSettingsCard() {
     const selected = new Set();
     let installed = null;
     let installedFilter = '';
+    let onlyPrimary = false;
     const budget = el('span', { class: 'badge' }, '…');
     const note = el('div', { class: 'muted' }, '');
     const divisions = el('div', { class: 'row wrap', style: 'gap:6px;margin:8px 0' });
@@ -7352,7 +7353,7 @@ function agentRosterSettingsCard() {
     card.appendChild(note);
     card.appendChild(installedBox);
     card.appendChild(el('div', { class: 'muted' },
-        'OpenCode picks up installs and removals on its next start.'));
+        'OpenCode picks up installs, removals and promotions on its next start.'));
 
     let data = null;
     const counts = () => (data && data.counts) || {};
@@ -7404,6 +7405,7 @@ function agentRosterSettingsCard() {
         });
         installedBox.appendChild(chips);
 
+        const filters = el('div', { class: 'row wrap', style: 'gap:8px;margin:6px 0' });
         const select = el('select', { 'aria-label': 'Filter installed agents by division' });
         select.appendChild(el('option', { value: '' }, `All divisions (${rows.length})`));
         Object.keys(byDivision).sort().forEach((name) => {
@@ -7414,17 +7416,50 @@ function agentRosterSettingsCard() {
             installedFilter = select.value;
             renderInstalled();
         });
-        installedBox.appendChild(select);
+        filters.appendChild(select);
+        const primaryOnly = el('button', {
+            class: `btn sm ${onlyPrimary ? 'primary' : 'ghost'}`,
+            type: 'button',
+            'aria-pressed': onlyPrimary ? 'true' : 'false',
+        }, 'Primary only');
+        primaryOnly.addEventListener('click', () => {
+            onlyPrimary = !onlyPrimary;
+            renderInstalled();
+        });
+        filters.appendChild(primaryOnly);
+        installedBox.appendChild(filters);
 
-        const visible = rows.filter((row) => !installedFilter || row.division === installedFilter);
+        const visible = rows.filter((row) => {
+            if (installedFilter && row.division !== installedFilter) return false;
+            if (onlyPrimary && row.mode !== 'all' && row.mode !== 'primary') return false;
+            return true;
+        });
         const list = el('div', { style: 'max-height:260px;overflow:auto' });
         visible.forEach((row) => {
             const line = el('div', { class: 'row', style: 'gap:8px;align-items:center' });
             line.appendChild(el('span', { class: 'mono', style: 'flex:1' }, row.slug));
+            const isPrimary = row.mode === 'all' || row.mode === 'primary';
+            if (isPrimary) line.appendChild(el('span', { class: 'badge' }, 'primary'));
             line.appendChild(el('span', { class: 'muted' }, row.division || ''));
-            // Only an *edited* file must be forgotten; an unlisted one still
-            // matches its hash, so it can be removed like any other.
+
+            // Only an *edited* file must be accepted/forgotten; an unlisted one
+            // still matches its hash, so it can be removed like any other.
             const edited = row.state === 'modified';
+            if (edited) {
+                const accept = el('button', { class: 'btn ghost sm', type: 'button' }, 'Accept');
+                accept.title = 'Keep my edits and track them from now on';
+                accept.addEventListener('click', () => acceptAgent(row.path));
+                line.appendChild(accept);
+            } else {
+                const toggle = el('button', { class: 'btn ghost sm', type: 'button' },
+                    isPrimary ? 'Primary \u2713' : 'Make primary');
+                toggle.title = isPrimary
+                    ? 'Back to subagent (still delegable)'
+                    : 'Allow this agent as the session agent in Run and pickers';
+                toggle.addEventListener('click', () => setPrimary(row, !isPrimary));
+                line.appendChild(toggle);
+            }
+
             const btn = el('button', { class: 'btn ghost sm', type: 'button' },
                 edited ? 'Forget' : 'Remove');
             btn.title = edited
@@ -7449,6 +7484,24 @@ function agentRosterSettingsCard() {
         try {
             await api('/api/agent-catalog/forget', { method: 'POST', body: { path } });
             toast('Stopped tracking; the file is untouched', 'ok');
+            await reload();
+        } catch (e) { toast(e.message, 'err'); }
+    };
+    const setPrimary = async (row, makePrimary) => {
+        try {
+            await api('/api/agent-catalog/promote',
+                { method: 'POST', body: { path: row.path, mode: makePrimary ? 'all' : 'subagent' } });
+            toast(makePrimary
+                ? 'Selectable as a session agent (restart OpenCode to apply)'
+                : 'Back to subagent only (restart OpenCode to apply)', 'ok');
+            await reload();
+            await loadAgents(true);
+        } catch (e) { toast(e.message, 'err'); }
+    };
+    const acceptAgent = async (path) => {
+        try {
+            await api('/api/agent-catalog/accept', { method: 'POST', body: { path } });
+            toast('Edits accepted; the agent is tracked again', 'ok');
             await reload();
         } catch (e) { toast(e.message, 'err'); }
     };

@@ -612,10 +612,13 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   `available(division, project_path)` lists what the index offers with an
   `installed` flag.
 * `adopt()`, `accept()`, `forget()`, `remove()` (backup first, refuses an edited
-  file), `promote()` (backs up, rewrites `mode:`, re-baselines the hash),
+  file), `promote()` (backs up, refuses an edited file, rewrites `mode:`,
+  re-baselines the hash), `_target_for()` (path or slug → the owning file; the
+  indirection the assignment work will point at the library),
   `backup_modified()`, `preflight()`, `team_file()`. Every mutation runs inside
   `_manifest_txn()` so read-modify-write is serialized.
-* `installed()` — compact rows for the dashboard's uninstall list;
+* `installed()` - compact rows for the dashboard's uninstall list, including each
+  agent's current `mode` (read from the file, cached by mtime/size);
   `remove_many(paths|division)` uninstalls a selection, reporting what it kept.
 * `protected_ids()` / `_assert_touchable()` — Perun's own agents (`perun-*`
   templates and the chat persona) are refused by every mutation and never listed.

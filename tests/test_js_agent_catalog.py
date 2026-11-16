@@ -75,3 +75,14 @@ def test_the_installed_list_can_be_filtered_and_unlisted_rows_are_removable():
     assert "Filter installed agents by division" in text
     # An "unlisted" agent still matches its hash, so it must offer Remove.
     assert "const edited = row.state === 'modified';" in text
+
+
+def test_the_installed_list_can_promote_and_accept():
+    text = _js()
+    assert "Make primary" in text
+    assert "Primary only" in text
+    assert "/api/agent-catalog/promote" in text
+    assert "Selectable as a session agent" in text
+    # An edited row gets Accept (re-baseline), which is what unblocks promote.
+    assert "const acceptAgent" in text
+    assert "/api/agent-catalog/accept" in text

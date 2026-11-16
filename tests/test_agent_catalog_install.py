@@ -360,7 +360,7 @@ def test_installed_lists_compact_rows(env):
     listing = agent_catalog.installed()
     assert listing["count"] == 1
     row = listing["agents"][0]
-    assert set(row) == {"path", "slug", "division", "state"}
+    assert set(row) == {"path", "slug", "division", "state", "mode"}
     assert listing["by_division"] == {"engineering": 1}
 
 
@@ -498,3 +498,36 @@ def test_the_default_ceiling_reflects_the_measured_runtime():
     # nothing dropped. A stale 119 would block installs this build handles.
     assert agent_catalog.DEFAULT_LIMIT >= 200
     assert "measured" in agent_catalog.LIMIT_SOURCE
+
+
+def test_promote_refuses_an_edited_agent(env):
+    agents_dir, _ = env
+    agent_catalog.install(["engineering"])
+    path = agents_dir / "code-reviewer.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nmine\n", encoding="utf-8")
+
+    with pytest.raises(agent_catalog.CatalogError) as exc:
+        agent_catalog.promote(str(path), "all")
+    assert "accept the current content" in str(exc.value)
+
+
+def test_installed_reports_and_follows_the_mode(env):
+    agents_dir, _ = env
+    agent_catalog.install(["engineering"])
+    assert agent_catalog.installed()["agents"][0]["mode"] == "subagent"
+
+    row = agent_catalog.installed()["agents"][0]
+    agent_catalog.promote(row["path"], "all")
+    assert agent_catalog.installed()["agents"][0]["mode"] == "all"
+
+    agent_catalog.promote(row["path"], "subagent")
+    assert agent_catalog.installed()["agents"][0]["mode"] == "subagent"
+
+
+def test_target_for_resolves_a_slug(env):
+    agents_dir, _ = env
+    agent_catalog.install(["engineering"])
+    assert agent_catalog._target_for("code-reviewer") == (
+        agents_dir / "code-reviewer.md").resolve()
+    assert agent_catalog._target_for("code-reviewer.md") == (
+        agents_dir / "code-reviewer.md").resolve()

@@ -2093,11 +2093,15 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
   ~119 in #27988 is stale for this build.
 * Guard rails: a `modified` file is never deleted, overwritten or re-baselined
   automatically (`accept` is explicit); `remove` backs up first and refuses an
-  edited file; an upgrade or a `promote` backs up the previous bytes; an install
+  edited file; an upgrade or a `promote` backs up the previous bytes; `promote`
+  also **refuses a file edited since install** (the row offers `accept` first), so
+  a mode change can never silently adopt unrelated edits; an install
   skips a target that exists and is not tracked, or whose hash changed;
   `preflight` names what a re-install would overwrite (upstream's installer `cp`s
   over an existing file with no backup); `promote` rewrites `mode:` (upstream
-  writes `subagent`, which a Run cannot select) and records `mode_intent`.
+  writes `subagent`, which a Run cannot select) and records `mode_intent`; the
+  Settings card toggles it per agent (`all` ⇄ `subagent`), shows the current mode
+  read from the file, and OpenCode applies the change on its next start.
 * Scope: `/api/agents?project=<slug>` scans the project's `.opencode/agents/`.
   Without it a project-local roster is invisible to every Perun picker.
 

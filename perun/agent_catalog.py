@@ -202,6 +202,7 @@ def _key(path: str | Path) -> str:
 
 _HASH_CACHE_MAX = 4096
 _hash_cache: Dict[str, tuple[int, int, str]] = {}
+_mode_cache: Dict[str, tuple[int, int, str]] = {}
 
 
 def _hash(path: Path) -> str:
@@ -230,6 +231,45 @@ def _hash(path: Path) -> str:
 
 def _forget_hash(path: str | Path) -> None:
     _hash_cache.pop(str(path), None)
+    _mode_cache.pop(str(path), None)
+
+
+def _agent_mode(path: Path) -> str:
+    """The file's own ``mode:`` value (``""`` when absent), cached by mtime/size.
+
+    Read from the file rather than the manifest: a hand edit would make
+    ``mode_intent`` a lie, and the UI offers a toggle based on this value.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    key = str(path)
+    cached = _mode_cache.get(key)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    mode = ""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = []
+            for index, line in enumerate(handle):
+                if index > 40:  # frontmatter is at the head of the file
+                    break
+                lines.append(line)
+    except OSError:
+        return ""
+    if lines and lines[0].strip() == "---":
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            name, sep, value = line.partition(":")
+            if sep and name.strip().lower() == "mode":
+                mode = value.strip().strip("'\"")
+                break
+    if len(_mode_cache) >= _HASH_CACHE_MAX:
+        _mode_cache.clear()
+    _mode_cache[key] = (stat.st_mtime_ns, stat.st_size, mode)
+    return mode
 
 
 # --------------------------------------------------------------------------- #
@@ -602,7 +642,7 @@ def _entry(manifest: Dict[str, Any], target: Path) -> Dict[str, Any]:
 
 def accept(path: str | Path) -> Dict[str, Any]:
     """Re-baseline a file the operator has edited (and wants to keep)."""
-    target = Path(path).resolve()
+    target = _target_for(path)
     with _manifest_txn() as manifest:
         _assert_touchable(target)
         entry = _entry(manifest, target)
@@ -650,6 +690,30 @@ def remove(path: str | Path, *, backup_first: bool = True) -> Dict[str, Any]:
     return {"ok": True, "removed": str(target), "backup": copy}
 
 
+def _target_for(ref: str | Path) -> Path:
+    """Resolve an agent reference (path or slug) to the file that owns it.
+
+    Every owner operation goes through here so the storage can move without
+    touching the API: today it returns the tracked file, and the assignment work
+    redirects it to the library copy.
+    """
+    raw = str(ref).strip()
+    if not raw:
+        raise CatalogError("an agent path or slug is required")
+    if os.sep in raw or (os.altsep and os.altsep in raw):
+        return Path(raw).resolve()
+    slug = raw[:-3] if raw.endswith(".md") else raw
+    manifest = _load_manifest()
+    for key, entry in manifest["agents"].items():
+        if str(entry.get("slug") or "") == slug:
+            return Path(key)
+    for base in agent_dirs():
+        candidate = base / f"{slug}.md"
+        if candidate.is_file():
+            return candidate.resolve()
+    raise CatalogError(f"unknown agent: {slug}")
+
+
 def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
     """Make an adopted agent selectable as a session primary.
 
@@ -659,12 +723,16 @@ def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
     """
     if mode not in {"all", "primary", "subagent"}:
         raise CatalogError(f"unsupported mode: {mode}")
-    target = Path(path).resolve()
+    target = _target_for(path)
     with _manifest_txn() as manifest:
         _assert_touchable(target)
         entry = _entry(manifest, target)
         if not target.is_file():
             raise CatalogError(f"missing: {target}")
+        if _hash(target) != str(entry.get("sha256") or ""):
+            raise CatalogError(
+                "this agent was edited since it was adopted; accept the current "
+                "content before changing how it runs")
         backups.save_copy(target, label="agency")
         text = target.read_text(encoding="utf-8", errors="replace")
         tmp = target.with_suffix(f".{os.urandom(4).hex()}.tmp")
@@ -1032,7 +1100,8 @@ def install(divisions: Optional[Iterable[str]] = None,
 def installed(project_path: str | Path | None = None) -> Dict[str, Any]:
     """Compact rows for the dashboard's uninstall list (no descriptions)."""
     rows = [{"path": entry["path"], "slug": entry["slug"],
-             "division": entry["division"], "state": entry["state"]}
+             "division": entry["division"], "state": entry["state"],
+             "mode": _agent_mode(Path(entry["path"]))}
             for entry in discover(project_path)
             if entry["state"] in {"adopted", "modified", "unlisted"}]
     by_division: Dict[str, int] = {}

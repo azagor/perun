@@ -276,3 +276,23 @@ def test_remove_dry_run_previews_without_deleting(client, project):
     assert r.json()["dry_run"] is True
     assert r.json()["would_remove"]
     assert path.exists()
+
+
+def test_promote_round_trip_makes_an_agent_selectable(client, project):
+    path = _install(project)
+    client.post("/api/agent-catalog/adopt", json={"project": project["slug"]})
+
+    r = client.post("/api/agent-catalog/promote",
+                    json={"path": str(path), "mode": "all"})
+    assert r.status_code == 200, r.text
+    assert r.json()["mode"] == "all"
+
+    rows = client.get(f"/api/agent-catalog/installed?project={project['slug']}").json()
+    assert rows["agents"][0]["mode"] == "all"
+
+    back = client.post("/api/agent-catalog/promote",
+                       json={"path": str(path), "mode": "subagent"})
+    assert back.status_code == 200
+    assert back.json()["mode"] == "subagent"
+    assert client.get(f"/api/agent-catalog/installed?project={project['slug']}"
+                      ).json()["agents"][0]["mode"] == "subagent"
