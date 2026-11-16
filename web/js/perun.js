@@ -507,6 +507,14 @@ async function loadModels(force) {
     if (state.models.length && !force) return;
     try { state.models = (await api('/api/models')).models || []; } catch (_) { state.models = []; }
 }
+const _surfaceCache = {};
+function loadAgentsSurface(surface) {
+    if (_surfaceCache[surface]) return Promise.resolve(_surfaceCache[surface]);
+    return api(`/api/agents?surface=${encodeURIComponent(surface)}&refresh=true`)
+        .then((res) => (_surfaceCache[surface] = res.agents || []))
+        .catch(() => (_surfaceCache[surface] = []));
+}
+
 async function loadAgents(force, project) {
     const slug = String(project || '');
     state.agentsByProject = state.agentsByProject || {};
@@ -3410,18 +3418,29 @@ async function renderProjectAgents(host, slug) {
     host.innerHTML = '';
     host.appendChild(el('div', { class: 'card-head' },
         `<h4>Agents in this project</h4><span class="badge">${assigned.size}</span>`));
+    const allGlobal = rows.length > 0 && globals.size === rows.length;
     host.appendChild(el('p', { class: 'muted' },
-        'Tick an agent to make it available in this project\u2019s TUI. '
-        + 'Agents assigned globally are inherited (shown ticked and locked).'));
+        allGlobal
+            ? `All ${rows.length} installed agents are assigned globally, so this project `
+              + 'already has every one of them. To give this project its own subset, remove '
+              + 'the global assignment in Settings -> Installed, then tick it here.'
+            : 'Tick an agent to make it available in this project\u2019s TUI. '
+              + 'Agents assigned globally are inherited (shown ticked and locked).'));
     if (!rows.length) {
         host.appendChild(el('div', { class: 'muted' }, 'No agents installed.'));
         return;
     }
-    const select = el('select', { multiple: 'multiple', size: '8', style: 'min-width:320px' });
+    const select = el('select', {
+        multiple: 'multiple', size: '10',
+        style: 'min-width:340px;max-width:100%;background:#141414;color:#ece6d6;'
+            + 'border:1px solid #3a3a3a;border-radius:6px;padding:6px;font:inherit',
+    });
     rows.forEach((row) => {
         const inherited = globals.has(row.slug);
-        const option = el('option', { value: row.slug },
-            `${row.slug}${inherited ? ' (global)' : ''}`);
+        const option = el('option', {
+            value: row.slug,
+            style: `background:#141414;color:${inherited ? '#9a9488' : '#ece6d6'};padding:2px 4px`,
+        }, `${row.slug}${inherited ? '  - global (inherited)' : ''}`);
         option.selected = inherited || assigned.has(row.slug);
         option.disabled = inherited;
         select.appendChild(option);
@@ -4302,8 +4321,10 @@ async function viewOrchestrator() {
         onSelect: (id) => persistOrchModel(id),
     });
     v.querySelector('#orch-model-host').appendChild(msModel);
+    loadAgentsSurface('control');
     const msAgent = agentSelect({
         value: s.orchestrator_agent || '',
+        agents: () => _surfaceCache.control || [],
         placeholder: 'perun-orchestrator (default)',
         onSelect: (id) => persistOrchAgent(id),
     });
@@ -5376,7 +5397,8 @@ async function viewPerunChat() {
     // Same dropdown widgets as the Settings page; both stay free-typed too.
     const chatModelSel = modelSelect({ value: settings.perunchat_chat_model || '', placeholder: 'orchestrator / default model' });
     $('#pc-chat-model-host').appendChild(chatModelSel);
-    const chatAgentSel = agentSelect({ value: settings.perunchat_chat_agent || 'perunchat', placeholder: 'perunchat (chat persona)' });
+    loadAgentsSurface('perunchat');
+    const chatAgentSel = agentSelect({ value: settings.perunchat_chat_agent || 'perunchat', agents: () => _surfaceCache.perunchat || [], placeholder: 'perunchat (chat persona)' });
     $('#pc-chat-agent-host').appendChild(chatAgentSel);
 
     // Auto-join picker: options come from the gateway's discoverable rooms.
@@ -7572,7 +7594,9 @@ function agentRosterSettingsCard() {
         try {
             await api(`/api/agent-catalog/${on ? 'assign' : 'unassign'}`,
                 { method: 'POST', body: { slugs: [row.slug], target: 'global' } });
-            toast(on ? 'Available in every project' : 'Global assignment removed', 'ok');
+            toast(on
+                ? 'Available in every project'
+                : 'Moved back to the library (unassigned, still installed)', 'ok');
             await reload();
             await loadAgents(true);
         } catch (e) { toast(e.message, 'err'); }
@@ -7766,7 +7790,8 @@ async function viewSettings() {
     card.querySelector('#s-model-host').appendChild(msDefault);
     const sAgent = agentSelect({ value: s.default_agent || '', placeholder: '(none)' });
     card.querySelector('#s-agent-host').appendChild(sAgent);
-    const sOrchAgent = agentSelect({ value: s.orchestrator_agent || '', placeholder: 'perun-orchestrator (default)' });
+    loadAgentsSurface('control');
+    const sOrchAgent = agentSelect({ value: s.orchestrator_agent || '', agents: () => _surfaceCache.control || [], placeholder: 'perun-orchestrator (default)' });
 
     // ---- orchestrator (control plane) ----
     v.appendChild(sectionTitle('Orchestrator'));

@@ -626,6 +626,15 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   `mode_intent`; `CatalogError` is surfaced as HTTP 400. `status()` composes the
   API payload.
 
+### `perun/agent_policy.py`
+Which agents a surface may offer; default-deny so an unlabelled picker fails
+closed.
+* `allowed_ids(surface, project)` - project (built-ins + assigned), control
+  (`perun-orchestrator` + built-ins), perunchat, docs, or `all`.
+* `assigned_ids()` reads `agent_catalog.assignments_map()` (the manifest), so a
+  project copy outside the global dirs still counts.
+* `filter_agents()` - pure filtering; no file or OpenCode behaviour changes.
+
 ### `perun/agent_assignments.py`
 Where roster agents are placed. Custody stays in `agent_catalog`; this module
 imports it lazily so the two can reference each other without an import cycle.
@@ -2177,6 +2186,8 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   refusal for an untracked or edited target, ceiling refusal, `available()`, and
   the download-failure fallback (cached snapshot, or a message naming the adopt
   alternative).
+* `test_agent_policy.py` - default-deny, the four surfaces, unknown
+  surface falls back to project rules.
 * `test_agent_assignments.py` - placement: scope classification, target
   resolution, local-only `.gitignore`, the already-global no-op, fan-out through
   `promote`, remove-everywhere, untracked-target refusal and the ceiling.

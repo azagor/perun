@@ -7,6 +7,7 @@ or an OpenCode process.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,7 @@ def env(tmp_path, monkeypatch):
     manifest = Path(config.HOME) / "agent_catalog.json"
     if manifest.exists():
         manifest.unlink()
+    shutil.rmtree(assign.library_dir(), ignore_errors=True)
 
     global_agent = base / "agents" / "code-reviewer.md"
     global_agent.write_text(_agent("code-reviewer"), encoding="utf-8")
@@ -62,6 +64,7 @@ def env(tmp_path, monkeypatch):
            "local": local_agent}
     if manifest.exists():
         manifest.unlink()
+    shutil.rmtree(assign.library_dir(), ignore_errors=True)
 
 
 def test_assignment_of_classifies_each_scope(env, tmp_path):
@@ -152,3 +155,17 @@ def test_assign_refuses_a_perun_agent(env):
     result = assign.assign(["perun-docs"], "global")
     assert result["count"] == 0
     assert "Perun agent" in result["skipped"][0]["reason"]
+
+
+
+def test_unassigning_the_last_placement_demotes_to_the_library(env):
+    result = assign.unassign(["code-reviewer"], "global")
+    assert result["count"] == 1
+    assert result["demoted"]
+
+    library = assign.library_dir() / "code-reviewer.md"
+    assert library.is_file()
+    assert not env["global"].exists()
+    row = next(r for r in agent_catalog.installed()["agents"]
+               if r["slug"] == "code-reviewer")
+    assert row["assignments"] == ["library"]

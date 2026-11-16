@@ -1157,6 +1157,23 @@ def installed(project_path: str | Path | None = None) -> Dict[str, Any]:
             "by_division": by_division, "unassigned": unassigned}
 
 
+def assignments_map() -> Dict[str, set[str]]:
+    """Tracked agents by slug, with every place each one is placed.
+
+    Read from the manifest rather than a directory scan: a project copy lives
+    outside the global dirs, and the picker policy must see it.
+    """
+    projects = agent_assignments.project_paths()
+    out: Dict[str, set[str]] = {}
+    for path, entry in _load_manifest()["agents"].items():
+        if not Path(path).is_file():
+            continue
+        slug = str(entry.get("slug") or Path(path).stem)
+        out.setdefault(slug, set()).add(
+            agent_assignments.assignment_of(Path(path), projects))
+    return out
+
+
 def remove_many(paths: Optional[Iterable[str | Path]] = None, *,
                 division: str = "",
                 project_path: str | Path | None = None,

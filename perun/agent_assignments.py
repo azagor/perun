@@ -224,6 +224,7 @@ def unassign(slugs: Iterable[str], target: str, *,
         raise cat.CatalogError("no agents selected")
 
     removed: List[str] = []
+    demoted: List[str] = []
     skipped: List[Dict[str, str]] = []
     with cat._manifest_txn() as manifest:
         for slug in wanted:
@@ -237,6 +238,15 @@ def unassign(slugs: Iterable[str], target: str, *,
                     raise cat.CatalogError("edited since it was installed")
                 if backup_first:
                     backups.save_copy(path, label="agency")
+                # Removing the last placement must not delete the agent: it goes
+                # back to the library, unassigned, exactly like a fresh install.
+                siblings = [key for key, item in manifest["agents"].items()
+                            if str(item.get("slug") or "") == slug
+                            and str(Path(key).resolve()) != str(path)]
+                library = library_dir() / f"{slug}.md"
+                if not siblings and not library.exists():
+                    copy_to(cat, path, library, manifest, meta=dict(entry))
+                    demoted.append(str(library))
                 path.unlink()
                 cat._forget_hash(path)
                 manifest["agents"].pop(str(path), None)
@@ -246,8 +256,9 @@ def unassign(slugs: Iterable[str], target: str, *,
             except OSError as exc:
                 skipped.append({"path": str(path),
                                 "reason": f"could not be removed: {exc}"})
-    return {"ok": True, "target": target, "removed": removed, "skipped": skipped,
-            "count": len(removed), "skipped_count": len(skipped)}
+    return {"ok": True, "target": target, "removed": removed, "demoted": demoted,
+            "skipped": skipped, "count": len(removed),
+            "skipped_count": len(skipped)}
 
 
 def fan_out(slug: str, *, owner: str | Path = "",

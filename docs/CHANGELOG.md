@@ -6,6 +6,33 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.19.0
+
+*Released 2026-11-16.*
+
+### Picker policy: Perun's own agents stay in their lane
+
+* New `perun/agent_policy.py`, consumed by `/api/agents?surface=` with
+  **default-deny**: a request without a surface gets the project rules, so a
+  picker that forgets to name its surface fails closed.
+  * project (default) - built-ins + agents assigned globally or to that project
+  * control - `perun-orchestrator` + built-ins
+  * perunchat - the room persona only
+  * docs - `perun-docs` only
+  * all - unfiltered, explicit
+* The dashboard passes its surface explicitly: the orchestrator panel and the
+  Settings orchestrator field use `control`, the PerunChat chat persona uses
+  `perunchat`. Run, the wizard, coroutines and project surfaces now never offer
+  `perun-*`.
+* Assignment decisions come from the manifest (`assignments_map()`), so a project
+  copy outside the global dirs still counts as assigned.
+* Unassigning an agent's **last** placement no longer deletes it: it moves back to
+  the library, unassigned, exactly like a fresh install. Only **Remove** deletes.
+* Project panel readability: the agent list uses the dark palette (it was black
+  text on a dark background), and when every installed agent is global the panel
+  says so instead of showing a fully locked list - that is the state where
+  nothing is tickable, because the project already inherits everything.
+
 ## v0.18.0
 
 *Released 2026-11-16.*

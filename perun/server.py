@@ -987,8 +987,20 @@ def api_provider_disconnect(provider_id: str) -> dict[str, Any]:
     return _ok(**result)
 
 
+def _agents_view(payload: dict[str, Any], surface: str, project: str) -> dict[str, Any]:
+    """Apply the surface policy (default-deny) to a cached agent list."""
+    from . import agent_policy
+
+    filtered = agent_policy.filter_agents(payload.get("agents") or [], surface, project)
+    view = dict(payload)
+    view.update(agents=filtered, count=len(filtered),
+                surface=(surface or "project"))
+    return view
+
+
 @app.get("/api/agents")
-def api_list_agents(refresh: bool = False, project: str = "") -> dict[str, Any]:
+def api_list_agents(refresh: bool = False, project: str = "",
+                    surface: str = "") -> dict[str, Any]:
     """OpenCode agents available to the current installation / project.
 
     Combines documented built-ins with user-defined agents found on disk under
@@ -1009,7 +1021,7 @@ def api_list_agents(refresh: bool = False, project: str = "") -> dict[str, Any]:
               else _AGENTS_CACHE)
     if (not refresh and cached.get("data") is not None
             and now - float(cached.get("ts") or 0.0) < _AGENTS_TTL):
-        return cached["data"]
+        return _agents_view(cached["data"], surface, project)
 
     entries = (agents.list_agents(project_path) if project_path
                else agents.list_agents())
@@ -1027,7 +1039,7 @@ def api_list_agents(refresh: bool = False, project: str = "") -> dict[str, Any]:
         _AGENTS_CACHE["projects"][cache_key] = {"ts": now, "data": data}
     else:
         _AGENTS_CACHE.update(ts=now, data=data)
-    return data
+    return _agents_view(data, surface, project)
 
 
 @app.get("/api/agent-catalog/status")

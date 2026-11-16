@@ -134,6 +134,10 @@ def test_project_scoped_agent_listing_includes_local_agents(client, project):
     server._AGENTS_CACHE.update(ts=0.0, data=None)
     server._AGENTS_CACHE["projects"].clear()
 
+    client.post("/api/agent-catalog/adopt", json={"project": project["slug"]})
+    client.post("/api/agent-catalog/assign",
+                json={"slugs": ["code-reviewer"], "target": f"project:{project['slug']}"})
+
     scoped = client.get(f"/api/agents?project={project['slug']}&refresh=true").json()
     assert scoped["scope"] == "project"
     assert any(a["id"] == "code-reviewer" for a in scoped["agents"])
@@ -321,3 +325,21 @@ def test_installed_rows_expose_their_assignment(client, project):
     row = body["agents"][0]
     assert row["assignments"] == [f"project:{project['slug']}"]
     assert row["paths"][f"project:{project['slug']}"]
+
+
+def test_the_control_surface_offers_the_orchestrator_but_not_the_roster(client):
+    agents_dir = Path(config.OPENCODE_CONFIG_DIR) / "agents"
+    (agents_dir / "perun-orchestrator.md").write_text(
+        "---\\nname: Orchestrator\\nmode: primary\\n---\\nbody\\n", encoding="utf-8")
+    (agents_dir / "code-reviewer.md").write_text(
+        "---\\nname: Reviewer\\nmode: subagent\\n---\\nbody\\n", encoding="utf-8")
+
+    control = client.get("/api/agents?surface=control&refresh=true").json()
+    ids = {a["id"] for a in control["agents"]}
+    assert "perun-orchestrator" in ids
+    assert "code-reviewer" not in ids
+
+    project = client.get("/api/agents?refresh=true").json()
+    pids = {a["id"] for a in project["agents"]}
+    assert "perun-orchestrator" not in pids
+    assert "code-reviewer" not in pids  # unassigned, so not offered
