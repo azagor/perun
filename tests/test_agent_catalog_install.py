@@ -531,3 +531,15 @@ def test_target_for_resolves_a_slug(env):
         agents_dir / "code-reviewer.md").resolve()
     assert agent_catalog._target_for("code-reviewer.md") == (
         agents_dir / "code-reviewer.md").resolve()
+
+
+def test_target_for_rejects_an_unknown_slug(env):
+    with pytest.raises(agent_catalog.CatalogError) as exc:
+        agent_catalog._target_for("no-such-agent")
+    assert "unknown agent" in str(exc.value)
+
+
+def test_agent_mode_is_empty_without_a_mode_line(tmp_path):
+    path = tmp_path / "plain.md"
+    path.write_text("---\nname: Plain\ndescription: no mode\n---\nbody\n", encoding="utf-8")
+    assert agent_catalog._agent_mode(path) == ""

@@ -253,7 +253,7 @@ def _agent_mode(path: Path) -> str:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             lines = []
             for index, line in enumerate(handle):
-                if index > 40:  # frontmatter is at the head of the file
+                if index > 80:  # frontmatter is at the head of the file
                     break
                 lines.append(line)
     except OSError:
@@ -648,7 +648,10 @@ def accept(path: str | Path) -> Dict[str, Any]:
         entry = _entry(manifest, target)
         if not target.is_file():
             raise CatalogError(f"missing: {target}")
-        entry["sha256"] = _hash(target)
+        try:
+            entry["sha256"] = _hash(target)
+        except OSError as exc:
+            raise CatalogError(f"could not read {target.name}: {exc}") from exc
         manifest["agents"][str(target)] = entry
     return {"ok": True, "path": str(target), "sha256": entry["sha256"]}
 
@@ -734,7 +737,10 @@ def promote(path: str | Path, mode: str = "all") -> Dict[str, Any]:
                 "this agent was edited since it was adopted; accept the current "
                 "content before changing how it runs")
         backups.save_copy(target, label="agency")
-        text = target.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise CatalogError(f"could not read {target.name}: {exc}") from exc
         tmp = target.with_suffix(f".{os.urandom(4).hex()}.tmp")
         try:
             tmp.write_text(_rewrite_mode(text, mode), encoding="utf-8", newline="\n")

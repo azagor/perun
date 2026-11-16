@@ -6,6 +6,19 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.16.10
+
+*Released 2026-11-16.*
+
+### Roster edge cases from the audit
+
+* `promote` / `accept` map an unreadable agent file to a 400 (`could not read …`)
+  instead of letting an `OSError` escape as a 500 traceback.
+* `_agent_mode` scans 80 frontmatter lines (matching the discovery parser), so a
+  long frontmatter still reports its mode and the toggle/badge stay honest.
+* Two unit cases pin the edges: an unknown slug is rejected, and an agent with no
+  `mode:` reports an empty mode.
+
 ## v0.16.9
 
 *Released 2026-11-16.*
