@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-15T21:28:55+00:00",
+  "generated": "2026-11-16T11:18:03+00:00",
   "releases": [
+    {
+      "version": "0.16.8",
+      "date": "2026-11-16",
+      "body": "### The ceiling is measured again, and MCP startup no longer blocks\n\n* The agent ceiling was **stale**. Upstream's \"~119\" comes from an old report;\n  measured on OpenCode v2.2.5 with `opencode debug agents --standalone`, **307**\n  agents registered from 300 files with nothing dropped, tracking 1:1 from 110 to\n  300. The default is now **300**, the refusal names the fix\n  (`perun agent-catalog limit <n>`), and the Settings card keeps the message on\n  screen instead of letting a toast disappear.\n* `mcp/perun_mcp.py` no longer does slow work before answering the stdio\n  handshake. Control-project registration and handbook indexing (which embeds\n  with a 180 s request timeout) moved to a daemon thread; `init_db()` stays\n  synchronous because every tool needs it and it is cheap DDL. This is the\n  `mcp connect failed: Request timed out` seen in OpenCode's log after ~184 s —\n  the handshake was waiting on an embedding call."
+    },
     {
       "version": "0.16.7",
       "date": "2026-11-15",
@@ -45,11 +50,6 @@
       "version": "0.15.12",
       "date": "2026-11-13",
       "body": "### VS Code: per-project client count for Mode B\n\n* `GET /api/vscode/status?project=<slug>` returns `project_clients`; the\n  dashboard only attempts a VS Code terminal when **this** project has a\n  connected companion, so a window open for another project no longer causes a\n  failed request and a fallback notice.\n* The decision is a pure module (`web/js/vscode_launch.js`) covered by\n  `extensions/vscode/tests/vscode_launch.test.js`: untrusted or no client →\n  external terminal with the matching notice; a trusted connected window\n  overrides a stale untrusted heartbeat."
-    },
-    {
-      "version": "0.15.11",
-      "date": "2026-11-13",
-      "body": "### VS Code: a Restricted window no longer mislabels every project\n\n* An untrusted window never reaches `hello`, so its heartbeat now carries\n  `workspace_path`; the server resolves the project from it. Before, the empty\n  `project_slug` made **every** project card claim “workspace untrusted”.\n* The server heartbeat writes to a unique temp file before the atomic rename, so\n  two concurrent `hello` writes cannot collide.\n* Companion 0.1.10."
     }
   ]
 }

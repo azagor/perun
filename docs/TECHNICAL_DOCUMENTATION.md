@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.16.7 (see §15). Cache hashes, batch removals, explicit bulk uninstall
+**Latest release:** v0.16.8 (see §15). Measured agent ceiling and a non-blocking MCP handshake
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3055,6 +3055,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-16 — v0.16.8: Measured agent ceiling and a non-blocking MCP handshake
+
 ### 2026-11-15 — v0.16.7: Cache hashes, batch removals, explicit bulk uninstall
 
 ### 2026-11-15 — v0.16.6: Scope-check roster removal
