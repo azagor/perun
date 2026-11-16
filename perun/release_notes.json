@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T16:18:14+00:00",
+  "generated": "2026-11-16T17:15:30+00:00",
   "releases": [
+    {
+      "version": "0.18.0",
+      "date": "2026-11-16",
+      "body": "### Installs are unassigned until you place them\n\n* The dashboard's **Install selected** now writes to Perun's **library**\n  (`PERUN_HOME/agents/library/`), which OpenCode never reads. A new agent appears\n  in no TUI until you assign it - the opt-in model, finally end to end.\n  Programmatic `install()` keeps its global default, so nothing else changes.\n* Settings -> Installed shows **\"N unassigned\"** with **Assign all globally**, and\n  each row now reads `global`, `project only` or `unassigned`.\n* `assign` sources from the library copy, so a library agent can be placed in a\n  project or globally; the library file stays as the master and is not counted\n  against the registration ceiling (OpenCode never loads it).\n* `installed()` returns the `unassigned` list, and `available()` counts a library\n  agent as installed.\n* Library files are discovered like any other copy (`assignment: \"library\"`), so\n  promote, remove and the assignment fan-out work on them unchanged."
+    },
     {
       "version": "0.17.1",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.4",
       "date": "2026-11-15",
       "body": "### The agent ceiling is a setting, not a magic number\n\n* `perun agent-catalog limit <n>` — or the **Agent ceiling** field on the\n  Settings card — sets the ceiling for this machine. It is stored in the roster\n  manifest, defaults to the upstream-reported 119, and is bounded to 1–1000. This\n  runtime registers **120** with nothing dropped, so an operator who re-measures\n  their build can raise it without waiting for a Perun release.\n* `slots()` uses the configured value for `limit`, `remaining` and the install\n  guard, and the CLI reports when the machine is at the ceiling.\n* `tests/test_agents.py` now isolates the global agent directory instead of\n  reading the operator's real 113-agent install, and the install path gained a\n  positive project-scope test."
-    },
-    {
-      "version": "0.16.3",
-      "date": "2026-11-15",
-      "body": "### The roster guard counts registered agents, not files\n\n* `install` adds the runtime's non-roster baseline — built-ins, Perun's own\n  agents, anything hand-written — to the file count before comparing with the\n  ~119 ceiling. Counting files alone understated the budget by exactly that\n  baseline, so the last handful of agents could still be dropped. `status`\n  reports `baseline` and `projected`, and the CLI says when the machine is at the\n  ceiling.\n* An upgrade backs up the file it replaces, and `promote` backs up before\n  rewriting it — the same rule `remove` already followed.\n* Manifest mutations (adopt/accept/forget/remove/promote/install) now hold the\n  lock across read-modify-write, so two concurrent changes cannot drop an entry.\n* A project-scoped install skips a slug that already exists globally instead of\n  writing a shadowed copy that Perun's discovery would never list.\n* `available?project=<slug>` marks project-local installs; `status?agents=false`\n  omits the per-agent list (the panels only need the counts).\n* `tools/agency_index.py` refuses to write an index when it cannot resolve\n  `main`, instead of quietly recording `main` and following the branch."
     }
   ]
 }
