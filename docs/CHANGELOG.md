@@ -6,6 +6,30 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.17.0
+
+*Released 2026-11-16.*
+
+### Assign roster agents to projects
+
+* Placement is now explicit. A new `perun/agent_assignments.py` owns it: a copy
+  in the global agents directory is a **global** assignment, a copy under
+  `<project>/.opencode/agents/` is a **project** assignment, and both are derived
+  from where the file lives (the only truth OpenCode reads).
+* Settings -> Agent roster -> Installed shows each agent's assignment and a
+  **Global** toggle; **Remove** now removes the agent everywhere it is assigned.
+* Project config -> **Agents in this project**: tick the agents that project's TUI
+  should offer. Globally assigned agents are inherited and shown locked.
+* Project copies are **local-only**: the agents directory gets a `.gitignore`
+  containing `*`, so `git status` stays clean. Every removal keeps a backup.
+* Assigning an agent that is already global to a project is a no-op; unassign and
+  remove refuse a copy edited since install.
+* `promote` fans the new `mode:` out to every copy.
+* API: `POST /api/agent-catalog/{assign,unassign}`, `remove {slug}`. CLI:
+  `perun agent-catalog assign|unassign <slug...> --to global|project:<slug>`.
+* Install still writes globally in this release; the library/unassigned default
+  ships next, with the post-install assign prompt.
+
 ## v0.16.10
 
 *Released 2026-11-16.*

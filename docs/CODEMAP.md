@@ -626,6 +626,24 @@ Third-party agent rosters (Agency Agents): custody first, one pinned install pat
   `mode_intent`; `CatalogError` is surfaced as HTTP 400. `status()` composes the
   API payload.
 
+### `perun/agent_assignments.py`
+Where roster agents are placed. Custody stays in `agent_catalog`; this module
+imports it lazily so the two can reference each other without an import cycle.
+* `assignment_of()` - `global` / `project:<slug>` derived from the directory a
+  copy lives in (never stored separately; the filesystem is the truth OpenCode
+  reads).
+* `target_dir()`, `project_paths()`, `ensure_gitignore()` - project copies land in
+  `<project>/.opencode/agents/` with a `.gitignore` of `*` (local-only).
+* `copy_to()` - materialises a copy, refusing an untracked target or one edited
+  since install; backs up the copy it replaces.
+* `assign()`, `unassign()`, `remove_slug()` - placement operations; a project
+  assignment is a no-op when the agent is already global.
+* `fan_out()` - pushes the owner's bytes to every copy; `promote` calls it so a
+  mode change reaches project copies. The owner is passed explicitly because the
+  manifest is path-sorted and resolving by slug can pick the wrong copy.
+* `check_ceiling()` - the registration budget applies to an assignment, not to a
+  library-only agent.
+
 ### `perun/scaffold.py`
 Starter-project skeleton + directory creation + safe backfill + dependency parsing
 + manifest anchor refresh.
@@ -1607,7 +1625,7 @@ FastAPI app + SSE + static dashboard.
   `opencode auth` status + logout), agents/skills/tools (`/api/agents?project=…`
   — project-scoped so project-local rosters appear; `/api/skills`, `/api/tools`),
   the agent catalogue (`/api/agent-catalog/status|available|installed|preflight|team`
-  and `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit}`
+  and `POST /api/agent-catalog/{install,adopt,accept,forget,remove,promote,backup,limit,assign,unassign}`
   — `install` writes the pinned snapshot into the global or a project agent dir;
   `remove` takes `path`/`paths`/`division` and keeps a backup; `limit` sets the
   per-machine ceiling; the rest is custody),
@@ -2159,6 +2177,9 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   refusal for an untracked or edited target, ceiling refusal, `available()`, and
   the download-failure fallback (cached snapshot, or a message naming the adopt
   alternative).
+* `test_agent_assignments.py` - placement: scope classification, target
+  resolution, local-only `.gitignore`, the already-global no-op, fan-out through
+  `promote`, remove-everywhere, untracked-target refusal and the ceiling.
 * `test_agency_index.py` - the build-time index: upstream slug parity,
   frontmatter quoting, non-division/nested files skipped, duplicate slugs, JSON
   round-trip.

@@ -2105,6 +2105,17 @@ across 18 divisions, converted by its own script to `<slug>.md` with `name`,
 * Scope: `/api/agents?project=<slug>` scans the project's `.opencode/agents/`.
   Without it a project-local roster is invisible to every Perun picker.
 
+**Assignments.** An agent is placed by writing a copy where OpenCode reads it:
+the global agents directory is a *global* assignment, `<project>/.opencode/agents/`
+is a *project* assignment, and both are derived from the path, never stored
+separately. `perun/agent_assignments.py` owns this (`assign`, `unassign`,
+`remove_slug`, `fan_out`), keeping custody in the catalogue. A project copy is
+local-only (the directory gets a `.gitignore` of `*`), a project assignment is a
+no-op when the agent is already global, and an edited copy is never overwritten
+or removed. `promote` fans a mode change out to every copy; `installed()` returns
+one row per agent with its assignments, which is what the Settings and project
+cards render.
+
 **Removing a roster agent.** Settings → Agent roster → *Installed* removes one
 agent, a whole division, or forgets an edited one (the file stays); the list can
 be filtered by division. The same is available as

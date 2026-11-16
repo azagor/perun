@@ -3390,6 +3390,65 @@ async function renderAgentCatalogPanel(host, slug) {
     const link = el('a', { class: 'btn ghost sm', href: (data.upstream || {}).url || '#', target: '_blank', rel: 'noopener' }, 'Open the roster');
     actions.appendChild(link);
     host.appendChild(actions);
+
+    const projectAgents = el('div', { class: 'mt' });
+    host.appendChild(projectAgents);
+    renderProjectAgents(projectAgents, slug);
+}
+
+async function renderProjectAgents(host, slug) {
+    if (!host) return;
+    host.innerHTML = '<div class="muted">Loading agents…</div>';
+    let data;
+    try { data = await api(`/api/agent-catalog/installed?project=${encodeURIComponent(slug)}`); }
+    catch (e) { host.textContent = 'Agents unavailable.'; return; }
+    const rows = (data.agents || []).slice().sort((a, b) => a.slug.localeCompare(b.slug));
+    const target = `project:${slug}`;
+    const assigned = new Set(rows.filter((r) => (r.assignments || []).includes(target)).map((r) => r.slug));
+    const globals = new Set(rows.filter((r) => (r.assignments || []).includes('global')).map((r) => r.slug));
+
+    host.innerHTML = '';
+    host.appendChild(el('div', { class: 'card-head' },
+        `<h4>Agents in this project</h4><span class="badge">${assigned.size}</span>`));
+    host.appendChild(el('p', { class: 'muted' },
+        'Tick an agent to make it available in this project\u2019s TUI. '
+        + 'Agents assigned globally are inherited (shown ticked and locked).'));
+    if (!rows.length) {
+        host.appendChild(el('div', { class: 'muted' }, 'No agents installed.'));
+        return;
+    }
+    const select = el('select', { multiple: 'multiple', size: '8', style: 'min-width:320px' });
+    rows.forEach((row) => {
+        const inherited = globals.has(row.slug);
+        const option = el('option', { value: row.slug },
+            `${row.slug}${inherited ? ' (global)' : ''}`);
+        option.selected = inherited || assigned.has(row.slug);
+        option.disabled = inherited;
+        select.appendChild(option);
+    });
+    host.appendChild(select);
+    const apply = el('button', { class: 'btn primary sm', type: 'button' }, 'Apply');
+    apply.addEventListener('click', async () => {
+        const picked = new Set(Array.from(select.selectedOptions).map((o) => o.value));
+        const add = [...picked].filter((s) => !assigned.has(s) && !globals.has(s));
+        const drop = [...assigned].filter((s) => !picked.has(s));
+        try {
+            if (add.length) {
+                await api('/api/agent-catalog/assign',
+                    { method: 'POST', body: { slugs: add, target } });
+            }
+            if (drop.length) {
+                await api('/api/agent-catalog/unassign',
+                    { method: 'POST', body: { slugs: drop, target } });
+            }
+            toast(`${add.length} added, ${drop.length} removed`, 'ok');
+            await renderProjectAgents(host, slug);
+            await loadAgents(true, slug);
+        } catch (e) { toast(e.message, 'err'); }
+    });
+    const actions = el('div', { class: 'form-actions' });
+    actions.appendChild(apply);
+    host.appendChild(actions);
 }
 
 function projectConfigForm(p) {
@@ -7441,6 +7500,17 @@ function agentRosterSettingsCard() {
             const isPrimary = row.mode === 'all' || row.mode === 'primary';
             if (isPrimary) line.appendChild(el('span', { class: 'badge' }, 'primary'));
             line.appendChild(el('span', { class: 'muted' }, row.division || ''));
+            const assignments = row.assignments || ['global'];
+            const globalOn = assignments.includes('global');
+            line.appendChild(el('span', { class: 'muted' },
+                globalOn ? 'global' : 'project only'));
+            const globalBtn = el('button', { class: 'btn ghost sm', type: 'button' },
+                globalOn ? 'Global \u2713' : 'Global');
+            globalBtn.title = globalOn
+                ? 'Remove the global assignment (project copies stay)'
+                : 'Make this agent available in every project';
+            globalBtn.addEventListener('click', () => setGlobal(row, !globalOn));
+            line.appendChild(globalBtn);
 
             // Only an *edited* file must be accepted/forgotten; an unlisted one
             // still matches its hash, so it can be removed like any other.
@@ -7466,16 +7536,25 @@ function agentRosterSettingsCard() {
                 ? 'Edited since install: stop tracking it, leave the file alone'
                 : 'Remove this agent (a backup is kept)';
             btn.addEventListener('click', () => (edited
-                ? forgetAgent(row.path) : removeAgent(row.path)));
+                ? forgetAgent(row.path) : removeAgent(row.slug)));
             line.appendChild(btn);
             list.appendChild(line);
         });
         installedBox.appendChild(list);
     };
-    const removeAgent = async (path) => {
+    const removeAgent = async (slug) => {
         try {
-            const res = await api('/api/agent-catalog/remove', { method: 'POST', body: { path } });
-            toast(res.backup ? 'Agent removed (backup kept)' : 'Agent removed', 'ok');
+            const res = await api('/api/agent-catalog/remove', { method: 'POST', body: { slug } });
+            toast(`${res.count || 0} file(s) removed (backup kept)`, 'ok');
+            await reload();
+            await loadAgents(true);
+        } catch (e) { toast(e.message, 'err'); }
+    };
+    const setGlobal = async (row, on) => {
+        try {
+            await api(`/api/agent-catalog/${on ? 'assign' : 'unassign'}`,
+                { method: 'POST', body: { slugs: [row.slug], target: 'global' } });
+            toast(on ? 'Available in every project' : 'Global assignment removed', 'ok');
             await reload();
             await loadAgents(true);
         } catch (e) { toast(e.message, 'err'); }

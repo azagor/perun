@@ -86,3 +86,19 @@ def test_the_installed_list_can_promote_and_accept():
     # An edited row gets Accept (re-baseline), which is what unblocks promote.
     assert "const acceptAgent" in text
     assert "/api/agent-catalog/accept" in text
+
+
+def test_the_project_panel_can_assign_agents():
+    text = _js()
+    assert "Agents in this project" in text
+    assert "renderProjectAgents" in text
+    assert "/api/agent-catalog/assign" in text
+    assert "/api/agent-catalog/unassign" in text
+    assert "Assign" in text or "Apply" in text
+
+
+def test_the_settings_row_can_toggle_the_global_assignment():
+    text = _js()
+    assert "setGlobal" in text
+    assert "Global \\u2713" in text
+    assert "removeAgent(row.slug)" in text

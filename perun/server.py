@@ -1080,18 +1080,18 @@ def api_agent_catalog_installed(project: str = "") -> dict[str, Any]:
 
 
 def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
-    from . import agent_catalog
+    from . import agent_assignments, agent_catalog
 
     project = _catalog_project(str(payload.get("project") or ""))
     path = str(payload.get("path") or "")
     try:
         if action == "assign":
-            return agent_catalog.assign(
+            return agent_assignments.assign(
                 [str(s) for s in (payload.get("slugs") or [])],
                 str(payload.get("target") or "global"),
                 limit=int(payload["limit"]) if payload.get("limit") else None)
         if action == "unassign":
-            return agent_catalog.unassign(
+            return agent_assignments.unassign(
                 [str(s) for s in (payload.get("slugs") or [])],
                 str(payload.get("target") or ""))
         if action == "limit":
@@ -1114,7 +1114,7 @@ def _catalog_call(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             return agent_catalog.forget(path)
         if action == "remove":
             if payload.get("slug"):
-                return agent_catalog.remove_slug(
+                return agent_assignments.remove_slug(
                     str(payload["slug"]), backup_first=bool(payload.get("backup", True)))
             if "paths" in payload or payload.get("division"):
                 return agent_catalog.remove_many(

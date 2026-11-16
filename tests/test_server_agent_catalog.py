@@ -296,3 +296,28 @@ def test_promote_round_trip_makes_an_agent_selectable(client, project):
     assert back.json()["mode"] == "subagent"
     assert client.get(f"/api/agent-catalog/installed?project={project['slug']}"
                       ).json()["agents"][0]["mode"] == "subagent"
+
+
+def test_assign_to_an_unknown_project_is_a_400(client):
+    r = client.post("/api/agent-catalog/assign",
+                    json={"slugs": ["code-reviewer"], "target": "project:nope"})
+    assert r.status_code == 400
+    assert "unknown project" in r.json()["detail"]
+
+
+def test_remove_by_slug_removes_the_project_copy(client, project):
+    path = _install(project)
+    client.post("/api/agent-catalog/adopt", json={"project": project["slug"]})
+
+    r = client.post("/api/agent-catalog/remove", json={"slug": "code-reviewer"})
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == 1
+    assert not path.exists()
+
+
+def test_installed_rows_expose_their_assignment(client, project):
+    _install(project)
+    body = client.get(f"/api/agent-catalog/installed?project={project['slug']}").json()
+    row = body["agents"][0]
+    assert row["assignments"] == [f"project:{project['slug']}"]
+    assert row["paths"][f"project:{project['slug']}"]
