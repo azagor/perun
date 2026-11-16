@@ -6,6 +6,26 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.18.0
+
+*Released 2026-11-16.*
+
+### Installs are unassigned until you place them
+
+* The dashboard's **Install selected** now writes to Perun's **library**
+  (`PERUN_HOME/agents/library/`), which OpenCode never reads. A new agent appears
+  in no TUI until you assign it - the opt-in model, finally end to end.
+  Programmatic `install()` keeps its global default, so nothing else changes.
+* Settings -> Installed shows **"N unassigned"** with **Assign all globally**, and
+  each row now reads `global`, `project only` or `unassigned`.
+* `assign` sources from the library copy, so a library agent can be placed in a
+  project or globally; the library file stays as the master and is not counted
+  against the registration ceiling (OpenCode never loads it).
+* `installed()` returns the `unassigned` list, and `available()` counts a library
+  agent as installed.
+* Library files are discovered like any other copy (`assignment: "library"`), so
+  promote, remove and the assignment fan-out work on them unchanged.
+
 ## v0.17.1
 
 *Released 2026-11-16.*

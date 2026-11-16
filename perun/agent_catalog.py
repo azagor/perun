@@ -374,7 +374,8 @@ def discover(project_path: str | Path | None = None) -> List[Dict[str, Any]]:
     protected = protected_ids()
     out: List[Dict[str, Any]] = []
 
-    for path in _md_files(agent_dirs(project_path)):
+    for path in [*_md_files(agent_dirs(project_path)),
+                 *_md_files([agent_assignments.library_dir()])]:
         key = _key(path)
         entry = manifest["agents"].get(key)
         slug = path.stem
@@ -587,6 +588,9 @@ def _resolve_target(path: str | Path, project_path: str | Path | None = None) ->
         raise CatalogError(f"not an agent file: {target.name}")
     resolved = target.resolve()
     allowed = [d.resolve() for d in agent_dirs(project_path) if d.is_dir()]
+    lib = agent_assignments.library_dir().resolve()
+    if lib.is_dir():
+        allowed.append(lib)
     if not any(resolved.parent == base for base in allowed):
         raise CatalogError(f"outside the agent directories: {target}")
     if not resolved.is_file():
@@ -708,9 +712,20 @@ def _target_for(ref: str | Path) -> Path:
         return Path(raw).resolve()
     slug = raw[:-3] if raw.endswith(".md") else raw
     manifest = _load_manifest()
+    lib = agent_assignments.library_dir()
+    owner = ""
+    fallback = ""
     for key, entry in manifest["agents"].items():
-        if str(entry.get("slug") or "") == slug:
-            return Path(key)
+        if str(entry.get("slug") or "") != slug:
+            continue
+        if _under(Path(key), lib):
+            owner = key
+        elif not fallback:
+            fallback = key
+    if owner:
+        return Path(owner)
+    if fallback:
+        return Path(fallback)
     for base in agent_dirs():
         candidate = base / f"{slug}.md"
         if candidate.is_file():
@@ -985,7 +1000,7 @@ def _read_bodies(path: Path, wanted: Dict[str, str]) -> Dict[str, str]:
 
 def install(divisions: Optional[Iterable[str]] = None,
             agents: Optional[Iterable[str]] = None, *,
-            scope: str = "global",
+            scope: str = "global",  # product surfaces pass "library" (unassigned)
             project_path: str | Path | None = None,
             limit: Optional[int] = None) -> Dict[str, Any]:
     """Install roster agents from the pinned index commit.
@@ -1006,12 +1021,15 @@ def install(divisions: Optional[Iterable[str]] = None,
     if not selected:
         raise CatalogError("no agents selected")
 
-    if scope not in {"global", "project"}:
+    if scope not in {"library", "global", "project"}:
         raise CatalogError(f"unsupported scope: {scope}")
     if scope == "project" and not project_path:
         raise CatalogError("a project is required for a project-scoped install")
-    base = (Path(project_path) / ".opencode" / "agents" if scope == "project"
-            else Path(config.OPENCODE_CONFIG_DIR) / "agents")
+    # The library is the master copy: OpenCode never reads it, so nothing is
+    # registered until the operator assigns the agent somewhere.
+    base = (agent_assignments.library_dir() if scope == "library"
+            else (Path(project_path) / ".opencode" / "agents" if scope == "project"
+                  else Path(config.OPENCODE_CONFIG_DIR) / "agents"))
 
     existing = {p.stem for p in _md_files(agent_dirs(project_path))}
     global_stems = {p.stem for p in _md_files(agent_dirs())}
@@ -1022,10 +1040,13 @@ def install(divisions: Optional[Iterable[str]] = None,
     # The ceiling is about *registered* agents, and the runtime also registers
     # built-ins and Perun's own agents. Counting only files is optimistic by
     # exactly that baseline, which is the silent drop this guard exists to stop.
-    budget = slots(project_path, measure=True)
+    if scope == "library":
+        budget = {"baseline": None}
+    else:
+        budget = slots(project_path, measure=True)
     baseline = budget["baseline"]
     projected = len(planned) + (baseline or 0)
-    if projected > ceiling:
+    if scope != "library" and projected > ceiling:
         detail = (f"{baseline} non-roster + {len(planned)} roster"
                   if baseline is not None
                   else f"{len(planned)} roster; no runtime baseline applied")
@@ -1130,8 +1151,10 @@ def installed(project_path: str | Path | None = None) -> Dict[str, Any]:
     for row in ordered:
         key = row["division"] or "other"
         by_division[key] = by_division.get(key, 0) + 1
+    unassigned = sorted(row["slug"] for row in ordered
+                        if set(row["assignments"]) == {"library"})
     return {"ok": True, "count": len(ordered), "agents": ordered,
-            "by_division": by_division}
+            "by_division": by_division, "unassigned": unassigned}
 
 
 def remove_many(paths: Optional[Iterable[str | Path]] = None, *,
@@ -1179,7 +1202,8 @@ def available(division: str = "",
     index = load_index()
     if not index["available"]:
         raise CatalogError("agent index unavailable")
-    installed = {p.stem for p in _md_files(agent_dirs(project_path))}
+    present = _md_files([agent_assignments.library_dir(), *agent_dirs(project_path)])
+    installed = {p.stem for p in present}
     agents = [dict(agent, installed=agent["slug"] in installed)
               for agent in index["agents"]
               if not division or agent["division"] == division]

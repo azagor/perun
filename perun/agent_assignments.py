@@ -32,6 +32,11 @@ def global_dir() -> Path:
     return Path(config.OPENCODE_CONFIG_DIR) / "agents"
 
 
+def library_dir() -> Path:
+    """Unassigned agents: Perun's master copies, invisible to OpenCode."""
+    return Path(config.HOME) / "agents" / "library"
+
+
 def project_dir(project_path: str | Path) -> Path:
     return Path(project_path) / ".opencode" / "agents"
 
@@ -58,6 +63,8 @@ def _under(path: str | Path, root: str | Path) -> bool:
 def assignment_of(path: str | Path, projects: Dict[str, str] | None = None) -> str:
     """``global`` | ``project:<slug>`` | ``external`` for a tracked copy."""
     target = Path(path).resolve()
+    if _under(target, library_dir()):
+        return "library"
     if _under(target, global_dir()):
         return "global"
     for slug, root in (projects if projects is not None else project_paths()).items():

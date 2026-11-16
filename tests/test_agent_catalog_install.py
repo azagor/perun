@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import io
+import shutil
 import json
 import tarfile
 from pathlib import Path
 
 import pytest
 
-from perun import agent_catalog, config
+from perun import agent_assignments, agent_catalog, config
 
 
 def _index(*entries: tuple[str, str], commit: str = "cafebabe1234") -> dict:
@@ -45,11 +46,14 @@ def isolated_manifest(monkeypatch):
     monkeypatch.setattr(agent_catalog, "registered", lambda *a, **k: {
         "ok": False, "count": None, "ids": [], "error": "disabled in tests"})
     manifest = Path(config.HOME) / "agent_catalog.json"
+    library = agent_assignments.library_dir()
     if manifest.exists():
         manifest.unlink()
+    shutil.rmtree(library, ignore_errors=True)
     yield
     if manifest.exists():
         manifest.unlink()
+    shutil.rmtree(library, ignore_errors=True)
 
 
 @pytest.fixture()
@@ -545,3 +549,35 @@ def test_agent_mode_is_empty_without_a_mode_line(tmp_path):
     path = tmp_path / "plain.md"
     path.write_text("---\nname: Plain\ndescription: no mode\n---\nbody\n", encoding="utf-8")
     assert agent_catalog._agent_mode(path) == ""
+
+
+
+def test_a_library_install_is_unassigned(env):
+    result = agent_catalog.install(["engineering"], scope="library")
+    assert result["count"] == 1
+
+    lib = agent_assignments.library_dir() / "code-reviewer.md"
+    assert lib.is_file()
+    assert not (config.OPENCODE_CONFIG_DIR / "agents" / "code-reviewer.md").exists()
+
+    listing = agent_catalog.installed()
+    row = next(r for r in listing["agents"] if r["slug"] == "code-reviewer")
+    assert row["assignments"] == ["library"]
+    assert "code-reviewer" in listing["unassigned"]
+
+
+def test_assigning_from_the_library_materialises_a_copy(env):
+    agent_catalog.install(["engineering"], scope="library")
+    result = agent_assignments.assign(["code-reviewer"], "global")
+    assert result["count"] == 1
+    assert (config.OPENCODE_CONFIG_DIR / "agents" / "code-reviewer.md").is_file()
+
+    row = next(r for r in agent_catalog.installed()["agents"]
+               if r["slug"] == "code-reviewer")
+    assert set(row["assignments"]) == {"library", "global"}
+    assert "code-reviewer" not in agent_catalog.installed()["unassigned"]
+
+
+def test_a_library_file_is_not_counted_as_registered(env):
+    agent_catalog.install(["engineering"], scope="library")
+    assert agent_catalog.slots(measure=False)["installed_global"] == 0

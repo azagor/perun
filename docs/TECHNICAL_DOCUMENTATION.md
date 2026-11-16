@@ -2112,7 +2112,10 @@ separately. `perun/agent_assignments.py` owns this (`assign`, `unassign`,
 `remove_slug`, `fan_out`), keeping custody in the catalogue. A project copy is
 local-only (the directory gets a `.gitignore` of `*`), a project assignment is a
 no-op when the agent is already global, and an edited copy is never overwritten
-or removed. `promote` fans a mode change out to every copy; `installed()` returns
+or removed. The dashboard installs into the **library**
+(`PERUN_HOME/agents/library/`, invisible to OpenCode) and assigns from there,
+so a new agent is unassigned until placed; the library copy is not counted
+against the registration ceiling. `promote` fans a mode change out to every copy; `installed()` returns
 one row per agent with its assignments, which is what the Settings and project
 cards render.
 

@@ -7412,7 +7412,7 @@ function agentRosterSettingsCard() {
     card.appendChild(note);
     card.appendChild(installedBox);
     card.appendChild(el('div', { class: 'muted' },
-        'OpenCode picks up installs, removals and promotions on its next start.'));
+        'Installs are unassigned until you place them. OpenCode picks up assignments, removals and promotions on its next start.'));
 
     let data = null;
     const counts = () => (data && data.counts) || {};
@@ -7450,6 +7450,23 @@ function agentRosterSettingsCard() {
         const rows = (installed && installed.agents) || [];
         installedBox.appendChild(el('div', { class: 'card-head' },
             `<h4>Installed</h4><span class="badge">${rows.length}</span>`));
+        const waiting = (installed && installed.unassigned) || [];
+        if (waiting.length) {
+            const bar = el('div', { class: 'row wrap', style: 'gap:8px;margin:6px 0;align-items:center' });
+            bar.appendChild(el('span', { class: 'muted' }, `${waiting.length} unassigned`));
+            const all = el('button', { class: 'btn primary sm', type: 'button' }, 'Assign all globally');
+            all.addEventListener('click', async () => {
+                try {
+                    await api('/api/agent-catalog/assign',
+                        { method: 'POST', body: { slugs: waiting, target: 'global' } });
+                    toast('Assigned globally', 'ok');
+                    await reload();
+                    await loadAgents(true);
+                } catch (e) { toast(e.message, 'err'); }
+            });
+            bar.appendChild(all);
+            installedBox.appendChild(bar);
+        }
         if (!rows.length) {
             installedBox.appendChild(el('div', { class: 'muted' }, 'Nothing installed yet.'));
             return;
@@ -7502,8 +7519,9 @@ function agentRosterSettingsCard() {
             line.appendChild(el('span', { class: 'muted' }, row.division || ''));
             const assignments = row.assignments || ['global'];
             const globalOn = assignments.includes('global');
+            const inProject = assignments.some((a) => a.startsWith('project:'));
             line.appendChild(el('span', { class: 'muted' },
-                globalOn ? 'global' : 'project only'));
+                globalOn ? 'global' : inProject ? 'project only' : 'unassigned'));
             const globalBtn = el('button', { class: 'btn ghost sm', type: 'button' },
                 globalOn ? 'Global \u2713' : 'Global');
             globalBtn.title = globalOn
@@ -7623,9 +7641,9 @@ function agentRosterSettingsCard() {
         install.textContent = 'Installing…';
         try {
             const res = await api('/api/agent-catalog/install',
-                { method: 'POST', body: { divisions: [...selected] } });
+                { method: 'POST', body: { divisions: [...selected], scope: 'library' } });
             const skipped = res.skipped || [];
-            toast(`${res.count || 0} agent(s) installed`, 'ok');
+            toast(`${res.count || 0} agent(s) installed - unassigned until you place them`, 'ok');
             if (skipped.length) toast(`${skipped.length} skipped — see the roster note`, '');
             await reload();
             note.textContent += skipped.length
