@@ -2042,6 +2042,11 @@ session**), `perun_await_operator` (**wait again on an already-asked question**)
   the dashboard prompts for the password once it is running.
 * `run.py` — launcher (`python run.py serve`).
 * `pyproject.toml` — packaging + `perun` console script + pytest config.
+* `tools/agency_index.py` — build-time generator for
+  `perun/data/agency_index.json` (the roster metadata Perun reads at runtime).
+  Pins a commit, parses upstream frontmatter, refuses to record an unresolved
+  `main`. `--check` fails when the committed index is stale; run it deliberately
+  when upstream adds agents, then commit the JSON.
 * `tools/release.py` - release pipeline: validates both repos, **refuses to run
   without the private `.perun/owner-workspace` marker and re-verifies it after
   the reverse sync** (it keeps the hidden control project listed on the owner's

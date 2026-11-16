@@ -133,6 +133,17 @@ Console → pick project → (optional) pick session / model / agent → type pr
 the run ends with a `[status]` line and the button re-enables. The project card
 and session list refresh automatically.
 
+### Install a specialist roster (optional, reversible)
+Settings → **Agent roster** lists the divisions with their agent counts.
+Installing writes **one pinned snapshot** into the global agents directory, so a
+project never runs a mix of versions, and the card then lists every installed
+agent with **Remove**, a per-division removal, and **Forget** for one you edited.
+The budget badge is the runtime's real registered count (measured with
+`opencode debug agents`), not a file count; an install that would exceed the
+per-machine ceiling is refused with the numbers rather than half-applied. The
+roster is opt-in: nothing is installed by default, and one click removes what one
+click added.
+
 ### Coroutines (work that runs itself)
 `#/coroutines` lists durable jobs and their next fire, health and history. A job
 has exactly one trigger — interval, five-field cron, one-shot, manual, or a
