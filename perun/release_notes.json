@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T17:15:30+00:00",
+  "generated": "2026-11-16T18:21:07+00:00",
   "releases": [
+    {
+      "version": "0.19.0",
+      "date": "2026-11-16",
+      "body": "### Picker policy: Perun's own agents stay in their lane\n\n* New `perun/agent_policy.py`, consumed by `/api/agents?surface=` with\n  **default-deny**: a request without a surface gets the project rules, so a\n  picker that forgets to name its surface fails closed.\n  * project (default) - built-ins + agents assigned globally or to that project\n  * control - `perun-orchestrator` + built-ins\n  * perunchat - the room persona only\n  * docs - `perun-docs` only\n  * all - unfiltered, explicit\n* The dashboard passes its surface explicitly: the orchestrator panel and the\n  Settings orchestrator field use `control`, the PerunChat chat persona uses\n  `perunchat`. Run, the wizard, coroutines and project surfaces now never offer\n  `perun-*`.\n* Assignment decisions come from the manifest (`assignments_map()`), so a project\n  copy outside the global dirs still counts as assigned.\n* Unassigning an agent's **last** placement no longer deletes it: it moves back to\n  the library, unassigned, exactly like a fresh install. Only **Remove** deletes.\n* Project panel readability: the agent list uses the dark palette (it was black\n  text on a dark background), and when every installed agent is global the panel\n  says so instead of showing a fully locked list - that is the state where\n  nothing is tickable, because the project already inherits everything."
+    },
     {
       "version": "0.18.0",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.5",
       "date": "2026-11-15",
       "body": "### Uninstall from the dashboard, and Perun's own agents are untouchable\n\n* Settings → **Agent roster** → **Installed** lists every installed agent with a\n  **Remove** button, a per-division removal chip (*Remove engineering (66)*), and\n  **Forget** for an edited one — an edited file is never deleted. Removal keeps a\n  backup, and OpenCode picks up installs and removals on its next start.\n* `GET /api/agent-catalog/installed` returns compact rows (no descriptions) and\n  `POST /api/agent-catalog/remove` accepts `path`, `paths` or `division`. CLI:\n  `perun agent-catalog installed`, `perun agent-catalog remove --division <name>`.\n* **Perun's own agents are explicitly protected.** `perun-*` templates and the\n  chat persona can no longer be adopted, installed over, promoted or deleted by\n  the catalogue, and are never listed. Before, that held only because they are\n  not in the roster index — an accident, not a rule.\n* The roster stays opt-in: nothing is installed by default, and every install is\n  removable from the same card.\n* The runtime baseline is only applied when the runtime reports at least one of\n  Perun's roster files; if it is looking at another directory the two counts\n  describe different machines, and the guard falls back to counting files\n  (`slots.baseline_source` says which)."
-    },
-    {
-      "version": "0.16.4",
-      "date": "2026-11-15",
-      "body": "### The agent ceiling is a setting, not a magic number\n\n* `perun agent-catalog limit <n>` — or the **Agent ceiling** field on the\n  Settings card — sets the ceiling for this machine. It is stored in the roster\n  manifest, defaults to the upstream-reported 119, and is bounded to 1–1000. This\n  runtime registers **120** with nothing dropped, so an operator who re-measures\n  their build can raise it without waiting for a Perun release.\n* `slots()` uses the configured value for `limit`, `remaining` and the install\n  guard, and the CLI reports when the machine is at the ceiling.\n* `tests/test_agents.py` now isolates the global agent directory instead of\n  reading the operator's real 113-agent install, and the install path gained a\n  positive project-scope test."
     }
   ]
 }
