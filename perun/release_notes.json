@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T11:18:03+00:00",
+  "generated": "2026-11-16T12:07:38+00:00",
   "releases": [
+    {
+      "version": "0.16.9",
+      "date": "2026-11-16",
+      "body": "### Promote a roster agent from the dashboard\n\n* Settings → Agent roster → **Installed** gains a per-agent **Make primary ⇄\n  Primary** toggle. It sets `mode: all`: the agent becomes selectable in Run, the\n  Agent Console and the project/coroutine pickers, and stays delegable. One click\n  puts it back to `subagent`.\n* `promote` now **refuses a file edited since it was installed** instead of\n  silently re-baselining the edits. An **Accept** action on the row re-baselines a\n  deliberate edit, which is what unblocks promoting or removing it.\n* `installed()` reports each agent's current `mode`, read from the file (cached by\n  mtime/size and invalidated on every write) rather than from the manifest.\n* A `primary` badge and a **Primary only** filter, and the footer now says\n  OpenCode picks up promotions as well as installs and removals.\n* The toggle rests on a measurement, not an assumption: `perun-orchestrator` is a\n  file-based agent with `mode: primary` and its recorded runs complete, so\n  `--agent` accepts a file-based non-subagent agent.\n* New `_target_for()` resolves an agent by path or slug; it is the single place\n  the assignment work will redirect to the library copy."
+    },
     {
       "version": "0.16.8",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.0",
       "date": "2026-11-15",
       "body": "### Third-party agent rosters: custody, not acquisition\n\nPerun can now track an external OpenCode agent roster — the Agency Agents set —\nwithout installing or converting it. Upstream's installer (or its desktop app)\nstays the only thing that writes agent files; Perun records provenance, counts\nthe runtime's real registration budget, protects edited copies and removes\ncleanly.\n\n* `perun/agent_catalog.py` + `perun/data/agency_index.json`: a build-time index\n  (`tools/agency_index.py`, pinned commit, 268 agents / 18 divisions) so\n  recognition is offline and never parses upstream markdown at runtime.\n* Custody states: `candidate`, `adopted`, `modified`, `unlisted`; hashes and\n  `mode_intent` live in `PERUN_HOME/agent_catalog.json`.\n* `opencode debug agents` is the source of truth for what registered — files on\n  disk cannot show the silent drop past ~119. `slots()` reports `registered`,\n  `remaining` and the files that did not register.\n* Guard rails: `remove` refuses an edited agent and backs up first; `preflight`\n  names what a re-install would overwrite (the upstream installer copies over an\n  existing file with no backup); `promote` makes a `subagent` selectable as a Run\n  agent and re-baselines its hash; `team` refuses a selection over the ceiling.\n* API `GET /api/agent-catalog/{status,preflight,team}` and\n  `POST /api/agent-catalog/{adopt,accept,forget,remove,promote,backup}`; CLI\n  `perun agent-catalog …`; a compact \"Agent roster\" panel in the project config\n  card. No MCP tools: this mutates the operator's agent directory.\n* `GET /api/agents?project=<slug>` scans the project's `.opencode/agents/`, so\n  project-local agents (where upstream installs by default) finally appear in\n  Perun's pickers; the machine-wide call is unchanged and the cache is keyed by\n  project."
-    },
-    {
-      "version": "0.15.12",
-      "date": "2026-11-13",
-      "body": "### VS Code: per-project client count for Mode B\n\n* `GET /api/vscode/status?project=<slug>` returns `project_clients`; the\n  dashboard only attempts a VS Code terminal when **this** project has a\n  connected companion, so a window open for another project no longer causes a\n  failed request and a fallback notice.\n* The decision is a pure module (`web/js/vscode_launch.js`) covered by\n  `extensions/vscode/tests/vscode_launch.test.js`: untrusted or no client →\n  external terminal with the matching notice; a trusted connected window\n  overrides a stale untrusted heartbeat."
     }
   ]
 }
