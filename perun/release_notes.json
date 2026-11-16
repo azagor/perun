@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T15:56:25+00:00",
+  "generated": "2026-11-16T16:18:14+00:00",
   "releases": [
+    {
+      "version": "0.17.1",
+      "date": "2026-11-16",
+      "body": "### Assignment refuses Perun's own agents\n\n* `assign` now checks the target through the same protection as every other\n  mutation: assigning `perun-orchestrator`, `perun-docs`, `perunchat` or any\n  other agent Perun owns is refused with *\"a Perun agent; the roster never\n  touches it\"* instead of reporting a successful assignment.\n* Found by the release verification, not by a test: the guard existed for\n  remove/promote but not for placement."
+    },
     {
       "version": "0.17.0",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.3",
       "date": "2026-11-15",
       "body": "### The roster guard counts registered agents, not files\n\n* `install` adds the runtime's non-roster baseline — built-ins, Perun's own\n  agents, anything hand-written — to the file count before comparing with the\n  ~119 ceiling. Counting files alone understated the budget by exactly that\n  baseline, so the last handful of agents could still be dropped. `status`\n  reports `baseline` and `projected`, and the CLI says when the machine is at the\n  ceiling.\n* An upgrade backs up the file it replaces, and `promote` backs up before\n  rewriting it — the same rule `remove` already followed.\n* Manifest mutations (adopt/accept/forget/remove/promote/install) now hold the\n  lock across read-modify-write, so two concurrent changes cannot drop an entry.\n* A project-scoped install skips a slug that already exists globally instead of\n  writing a shadowed copy that Perun's discovery would never list.\n* `available?project=<slug>` marks project-local installs; `status?agents=false`\n  omits the per-agent list (the panels only need the counts).\n* `tools/agency_index.py` refuses to write an index when it cannot resolve\n  `main`, instead of quietly recording `main` and following the branch."
-    },
-    {
-      "version": "0.16.2",
-      "date": "2026-11-15",
-      "body": "### Roster audit fixes\n\n* An index `slug` is validated (`[a-z0-9-]`) before it can become a filename, so\n  a hand-edited or corrupt index can never write outside the agents directory.\n* An install saves the manifest even when one file fails mid-run: a locked file\n  or a full disk can no longer leave untracked agents on disk that Perun would\n  then refuse to touch. A failed write is reported as a skip, and its temp file\n  is removed.\n* Oversized archive members are skipped. The compressed download was capped; the\n  decompressed member was not.\n* The project roster panel no longer claims Perun never installs — it has since\n  v0.16.1. The static test now asserts the copy instead of the stale claim."
     }
   ]
 }
