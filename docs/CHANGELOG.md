@@ -4,7 +4,13 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Owner workspace: azagor-only push rule
+
+* The git instructions now state that only the `azagor` GitHub account may push
+  to `azagor/perun`, `azagor/perun_chat` and `azagor/perun_internal`, and
+  document the per-repo credential helper that supplies the azagor token. A
+  machine whose active `gh` account belongs to someone else no longer produces
+  an avoidable 403 on release.
 
 ## v0.20.0
 
