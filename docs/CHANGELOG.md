@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.20.0
+
+*Released 2026-11-18.*
+
 ### PerunChat dashboard: chat with a friend, invite them, and see their chats
 
 * Each friend row now offers **Chat** — opens the bilateral private room (the

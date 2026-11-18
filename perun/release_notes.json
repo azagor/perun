@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-16T18:21:07+00:00",
+  "generated": "2026-11-18T20:57:25+00:00",
   "releases": [
+    {
+      "version": "0.20.0",
+      "date": "2026-11-18",
+      "body": "### PerunChat dashboard: chat with a friend, invite them, and see their chats\n\n* Each friend row now offers **Chat** — opens the bilateral private room (the\n  gateway creates it when absent) and joins it in the chat panel — and\n  **Add to room…**, which lists the private/group rooms you already belong to\n  and invites the friend into the one you pick.\n* A **Chats (n)** caret expands the rooms that include that friend, sorted by\n  last activity; clicking one opens it. Membership comes from the gateway's\n  `member_ids` in one request, and an older gateway is asked once per room with\n  the answer cached for the page session (never a request per room on every\n  render).\n* The chat header and each listed chat show\n  `name · participants · last activity`, plus a muted 6-character room id.\n  \"Last activity\" is local truth — this browser's stored transcript for the\n  room — because the gateway keeps no durable message timestamps, so an\n  untouched room says `no local activity` rather than guessing.\n* Both friend actions share a single `openRoomInChat()` helper with the\n  private-room card's **Join in chat** button, so a friend chat cannot start a\n  second join path or duplicated WebSocket room state.\n* The room catalog keeps `joined`, `members`, `type` and `memberIds`. The\n  one-pass participant list needs the matching PerunChat gateway change\n  (`GET /api/v1/rooms` → `member_ids`); without it the dashboard degrades to\n  the cached per-room fallback.\n* **Room aliases** (display-only): an inline ✎ on a chat row or the joined\n  header stores `perunchat_room_aliases: {room_id: label}` in Perun's own\n  settings — never sent to the gateway, and clearing the field removes the\n  entry. The alias appears everywhere the room is listed; a destructive\n  confirmation still shows `alias (real name/id)`, and room-id keys are\n  validated server-side.\n* Friends-list layout: the presence dot is its own flex item on the name's\n  line, and the action buttons wrap as a group when the card is narrow. A long\n  agent id can no longer push the status marker onto a line of its own.\n* Hardening from the production audit: saving an alias no longer restarts the\n  PerunChat bridge (only a bridge-relevant setting does), stale labels are\n  pruned only from a complete room catalog, a transient member-lookup failure\n  is not cached for the page, and the gateway's `private:` prefix is accepted\n  wherever `priv:` is."
+    },
     {
       "version": "0.19.0",
       "date": "2026-11-16",
@@ -45,11 +50,6 @@
       "version": "0.16.6",
       "date": "2026-11-15",
       "body": "### Uninstall stays inside the scope you named\n\n* `remove --division <name> --project <slug>` (and the equivalent API call) now\n  removes only that project's copies. It previously matched every agent of the\n  division, including the machine-wide ones, because the scope was not part of\n  the filter.\n* `POST /api/agent-catalog/remove` with an empty `paths` list is a clear 400\n  (*\"choose agents (paths) or a division\"*) instead of falling through to a\n  single-file removal of the empty path."
-    },
-    {
-      "version": "0.16.5",
-      "date": "2026-11-15",
-      "body": "### Uninstall from the dashboard, and Perun's own agents are untouchable\n\n* Settings → **Agent roster** → **Installed** lists every installed agent with a\n  **Remove** button, a per-division removal chip (*Remove engineering (66)*), and\n  **Forget** for an edited one — an edited file is never deleted. Removal keeps a\n  backup, and OpenCode picks up installs and removals on its next start.\n* `GET /api/agent-catalog/installed` returns compact rows (no descriptions) and\n  `POST /api/agent-catalog/remove` accepts `path`, `paths` or `division`. CLI:\n  `perun agent-catalog installed`, `perun agent-catalog remove --division <name>`.\n* **Perun's own agents are explicitly protected.** `perun-*` templates and the\n  chat persona can no longer be adopted, installed over, promoted or deleted by\n  the catalogue, and are never listed. Before, that held only because they are\n  not in the roster index — an accident, not a rule.\n* The roster stays opt-in: nothing is installed by default, and every install is\n  removable from the same card.\n* The runtime baseline is only applied when the runtime reports at least one of\n  Perun's roster files; if it is looking at another directory the two counts\n  describe different machines, and the guard falls back to counting files\n  (`slots.baseline_source` says which)."
     }
   ]
 }
