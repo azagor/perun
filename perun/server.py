@@ -3822,6 +3822,7 @@ def api_get_settings() -> dict[str, Any]:
     data.setdefault("perunchat_auto_reply", False)
     data.setdefault("perunchat_auto_join", [])
     data.setdefault("perunchat_trusted", [])
+    data.setdefault("perunchat_room_aliases", {})
     data.setdefault("perunchat_chat_model", "")
     data.setdefault("perunchat_chat_agent", "")
     return _ok(settings=data)
@@ -4353,6 +4354,7 @@ def _coerce_setting(key: str, value: Any) -> Any:
         "roots", "telegram_allowed_chats", "perunchat_auto_join",
         "perunchat_trusted", "attention_projects", "attention_operator_names",
     }
+    dict_fields = {"perunchat_room_aliases"}
     str_fields = {
         "host", "default_model", "default_agent", "orchestrator_model",
         "orchestrator_agent", "ollama_host", "embed_model", "telegram_token",
@@ -4409,6 +4411,26 @@ def _coerce_setting(key: str, value: Any) -> Any:
         if isinstance(value, (list, tuple)):
             return [str(p).strip() for p in value if str(p).strip()]
         raise HTTPException(status_code=400, detail=f"{key} must be a list")
+    if key in dict_fields:
+        # Display-only labels: keys must be real room ids (so a bad dashboard
+        # build cannot grow the config with junk) and values are bounded text.
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=400, detail=f"{key} must be an object")
+        if len(value) > 500:
+            raise HTTPException(status_code=400, detail=f"{key} has too many entries")
+        clean: dict[str, str] = {}
+        for room_id, label in value.items():
+            rid = str(room_id or "").strip()
+            if not re.match(r"^(priv|private|grp|pub):[a-zA-Z0-9._:-]+$", rid):
+                raise HTTPException(status_code=400,
+                                    detail=f"invalid room id in {key}: {rid}")
+            text = str(label or "").strip()
+            if len(text) > 60:
+                raise HTTPException(status_code=400,
+                                    detail=f"alias for {rid} is too long")
+            if text:
+                clean[rid] = text
+        return clean
     if key == "attention_default_delivery":
         mode = str(value or "").strip().lower()
         if mode not in ("queue", "steer"):
@@ -4535,8 +4557,15 @@ def api_update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             logging.getLogger("perun.server").debug(
                 "could not apply OpenCode small_model", exc_info=True)
     # Restart the autonomous PerunChat bridge so key/endpoint/auto_reply changes
-    # take effect without a full restart.
-    if PERUNCHAT_BRIDGE is not None:
+    # take effect without a full restart. Only a setting the bridge actually
+    # consumes justifies bouncing it: a display-only edit (room aliases) must
+    # not drop the room socket or stall the request while workers drain.
+    bridge_fields = {
+        "perunchat_api_key", "perunchat_api_endpoint", "perunchat_auto_reply",
+        "perunchat_ingest_events", "perunchat_auto_join", "perunchat_chat_model",
+        "perunchat_chat_agent", "perunchat_trusted",
+    }
+    if PERUNCHAT_BRIDGE is not None and bridge_fields & staged.keys():
         PERUNCHAT_BRIDGE.restart()
     data = SETTINGS.to_dict()
     data["telegram_token"] = ""

@@ -328,6 +328,10 @@ class Settings:
     # (project names, file paths, tools) only in private/group rooms with agents
     # on this list. Public rooms never receive internal context regardless of trust.
     perunchat_trusted: list[str] = field(default_factory=list)
+    # Display-only room labels keyed by room id. Local to this installation and
+    # never sent to the gateway: the real name and id stay untouched, and a
+    # destructive confirmation still shows ``alias (real name/id)``.
+    perunchat_room_aliases: dict[str, str] = field(default_factory=dict)
     # Display name used when the local operator approves or rejects shared-project
     # action proposals. Falls back to the OS username, then "owner".
     perun_owner_name: str = ""

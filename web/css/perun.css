@@ -521,6 +521,14 @@ select { cursor: pointer; }
 .perunchat-needs-you { border: 1px solid var(--amber); border-radius: var(--radius-sm); padding: 8px 10px; margin: 8px 0; background: rgba(224, 168, 60, .08); font-size: .86rem; }
 .perunchat-list-box { min-height: 80px; }
 .perunchat-list-box .row:last-child { border-bottom: none; }
+/* Friends list: the presence dot is its own flex item, so a wrapped or long
+   name can never push it onto a line of its own. The actions wrap as a group
+   instead of squeezing the identity line, which is how the card adapts. */
+.pc-friend-row { flex-wrap: wrap; align-items: center; row-gap: 6px; }
+.pc-friend-who { flex: 1 1 18ch; min-width: 12ch; gap: 6px; align-items: flex-start; }
+.pc-friend-status { flex: none; line-height: 1; }
+.pc-friend-name { min-width: 0; overflow-wrap: anywhere; }
+.pc-friend-actions { flex: 0 0 auto; margin-left: auto; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .perunchat-reply-bar { display: none; margin-bottom: 8px; padding: 8px 10px; border-radius: 6px; background: rgba(201, 162, 39, 0.08); border: 1px solid var(--border-strong); font-size: 13px; }
 
 /* ==========================================================================

@@ -4,7 +4,43 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### PerunChat dashboard: chat with a friend, invite them, and see their chats
+
+* Each friend row now offers **Chat** — opens the bilateral private room (the
+  gateway creates it when absent) and joins it in the chat panel — and
+  **Add to room…**, which lists the private/group rooms you already belong to
+  and invites the friend into the one you pick.
+* A **Chats (n)** caret expands the rooms that include that friend, sorted by
+  last activity; clicking one opens it. Membership comes from the gateway's
+  `member_ids` in one request, and an older gateway is asked once per room with
+  the answer cached for the page session (never a request per room on every
+  render).
+* The chat header and each listed chat show
+  `name · participants · last activity`, plus a muted 6-character room id.
+  "Last activity" is local truth — this browser's stored transcript for the
+  room — because the gateway keeps no durable message timestamps, so an
+  untouched room says `no local activity` rather than guessing.
+* Both friend actions share a single `openRoomInChat()` helper with the
+  private-room card's **Join in chat** button, so a friend chat cannot start a
+  second join path or duplicated WebSocket room state.
+* The room catalog keeps `joined`, `members`, `type` and `memberIds`. The
+  one-pass participant list needs the matching PerunChat gateway change
+  (`GET /api/v1/rooms` → `member_ids`); without it the dashboard degrades to
+  the cached per-room fallback.
+* **Room aliases** (display-only): an inline ✎ on a chat row or the joined
+  header stores `perunchat_room_aliases: {room_id: label}` in Perun's own
+  settings — never sent to the gateway, and clearing the field removes the
+  entry. The alias appears everywhere the room is listed; a destructive
+  confirmation still shows `alias (real name/id)`, and room-id keys are
+  validated server-side.
+* Friends-list layout: the presence dot is its own flex item on the name's
+  line, and the action buttons wrap as a group when the card is narrow. A long
+  agent id can no longer push the status marker onto a line of its own.
+* Hardening from the production audit: saving an alias no longer restarts the
+  PerunChat bridge (only a bridge-relevant setting does), stale labels are
+  pruned only from a complete room catalog, a transient member-lookup failure
+  is not cached for the page, and the gateway's `private:` prefix is accepted
+  wherever `priv:` is.
 
 ## v0.19.0
 

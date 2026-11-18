@@ -49,7 +49,8 @@ Filesystem layout + persisted settings.
   telegram_allowed_chats telegram_pair_code perun_owner_name perun_hitl_secret
   shared_auto_approve auto_discover_on_start index_docs_on_discover terminal
   perunchat_api_key perunchat_api_endpoint perunchat_auto_reply perunchat_auto_join
-  perunchat_chat_model perunchat_chat_agent perunchat_trusted`.
+  perunchat_chat_model perunchat_chat_agent perunchat_trusted
+  perunchat_room_aliases`.
   * `Settings.load()` (quarantines an unparseable Perun config file to
     `.corrupt-<stamp>` before falling back to defaults), `Settings.save()`
     (atomic temp+rename, `0600` before writing), `Settings.to_dict()`,

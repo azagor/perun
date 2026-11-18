@@ -107,6 +107,83 @@ def test_settings_can_update_perunchat_credentials(client) -> None:
     assert server.SETTINGS.perunchat() == ("prn_test_new", "wss://chat.example.com/v1/chat/ws")
 
 
+def test_room_aliases_round_trip_and_never_reach_the_gateway(client, monkeypatch) -> None:
+    """Aliases are local display state; the gateway must never hear about them."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_proxy(method, path, body=None, params=None):
+        calls.append((method, path))
+        return {"ok": True, "rooms": []}
+
+    monkeypatch.setattr(server, "_perunchat_proxy", fake_proxy)
+    r = client.patch(
+        "/api/settings",
+        headers=_token_header(),
+        json={"perunchat_room_aliases": {"priv:abc123": "Ada"}},
+    )
+    assert r.status_code == 200
+    assert r.json()["settings"]["perunchat_room_aliases"] == {"priv:abc123": "Ada"}
+    assert server.SETTINGS.perunchat_room_aliases == {"priv:abc123": "Ada"}
+    # Clearing is an empty map, and the gateway is never called.
+    cleared = client.patch(
+        "/api/settings",
+        headers=_token_header(),
+        json={"perunchat_room_aliases": {}},
+    )
+    assert cleared.status_code == 200
+    assert server.SETTINGS.perunchat_room_aliases == {}
+    assert calls == []
+
+
+def test_room_aliases_reject_junk_and_oversized_labels(client) -> None:
+    headers = _token_header()
+    assert client.patch(
+        "/api/settings", headers=headers,
+        json={"perunchat_room_aliases": {"not-a-room": "x"}},
+    ).status_code == 400
+    assert client.patch(
+        "/api/settings", headers=headers,
+        json={"perunchat_room_aliases": {"priv:abc": "x" * 61}},
+    ).status_code == 400
+    assert client.patch(
+        "/api/settings", headers=headers,
+        json={"perunchat_room_aliases": ["priv:abc"]},
+    ).status_code == 400
+
+
+def test_alias_save_does_not_bounce_the_perunchat_bridge(client, monkeypatch) -> None:
+    """Display-only settings must not restart the bridge.
+
+    Alias saves are frequent, and ``restart()`` drains room workers and
+    reconnects the gateway socket, which can interrupt in-flight replies.
+    """
+
+    class _Bridge:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def restart(self) -> None:
+            self.calls += 1
+
+    bridge = _Bridge()
+    monkeypatch.setattr(server, "PERUNCHAT_BRIDGE", bridge)
+    headers = _token_header()
+
+    client.patch("/api/settings", headers=headers,
+                 json={"perunchat_room_aliases": {"priv:abc": "Ada"}})
+    assert bridge.calls == 0
+
+    client.patch("/api/settings", headers=headers,
+                 json={"perunchat_auto_join": ["pub:global:general"]})
+    assert bridge.calls == 1
+
+
 def test_perunchat_rooms_forwards_to_gateway(client, monkeypatch) -> None:
     """The dashboard room picker calls /api/perunchat/rooms, which must proxy
     the gateway's /api/v1/rooms discovery endpoint with the stored key."""

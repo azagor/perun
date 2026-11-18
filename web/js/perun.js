@@ -5412,6 +5412,103 @@ async function viewPerunChat() {
     $('#pc-autojoin-host').appendChild(joinSel);
 
     let roomCatalog = [];
+    // Display-only aliases live in Perun's own settings; they never travel to
+    // the gateway. An empty alias means "use the real room name/id", and a
+    // destructive confirmation always shows ``alias (real)``.
+    let roomAliases = Object.assign({}, settings.perunchat_room_aliases || {});
+    function roomLabel(rid) {
+        const alias = String(roomAliases[rid] || '').trim();
+        return alias || roomDisplayLabel(rid) || rid;
+    }
+
+    // Persist one display label. The whole map is replaced in the PATCH so a
+    // clearing (empty text) is expressible; nothing here touches the gateway.
+    async function saveRoomAlias(roomId, label) {
+        const text = String(label || '').trim();
+        // The PATCH replaces the whole map, so re-read it first: a label saved
+        // from another dashboard tab must survive this save. This edit wins for
+        // this room; everything else is the server's current truth.
+        let next;
+        try {
+            const fresh = await api('/api/settings');
+            next = Object.assign({}, ((fresh.settings || {}).perunchat_room_aliases) || {});
+        } catch (e) {
+            next = Object.assign({}, roomAliases);
+        }
+        if (text) next[roomId] = text;
+        else delete next[roomId];
+        // Drop labels for rooms this installation no longer knows about. Only a
+        // complete picture may prune: an empty/failed catalog would read as
+        // "every room is gone" and silently wipe the map.
+        if (roomCatalog.length) {
+            try {
+                const privateIds = (await api('/api/perunchat/rooms/private')).rooms || [];
+                const known = new Set(roomCatalog.map((r) => r.value));
+                for (const rid of privateIds) known.add(rid);
+                known.add(roomId);
+                for (const rid of Object.keys(next)) {
+                    if (!known.has(rid)) delete next[rid];
+                }
+            } catch (e) { /* keep the map as-is when the room list is unavailable */ }
+        }
+        try {
+            const res = await api('/api/settings', {
+                method: 'PATCH',
+                body: { perunchat_room_aliases: next },
+            });
+            const saved = res && res.settings && res.settings.perunchat_room_aliases;
+            roomAliases = Object.assign({}, saved || next);
+            if (state.settings) {
+                state.settings.perunchat_room_aliases = Object.assign({}, roomAliases);
+            }
+            toast(text ? `Alias saved: ${text}` : 'Alias cleared', 'ok');
+            await refreshRooms();
+            await refreshPrivateRooms();
+            updateJoinedStatus();
+        } catch (e) {
+            toast(e.message, 'err');
+            throw e;
+        }
+    }
+
+    // Inline editor, not a browser prompt: it appears under the row that owns
+    // the room, Enter saves, Escape cancels, and an empty value clears.
+    function editRoomAlias(roomId, anchor, onDone) {
+        document.querySelectorAll('.pc-alias-editor').forEach((n) => n.remove());
+        const box = el('div', { class: 'pc-alias-editor row', style: 'gap:6px; padding:6px 0;' });
+        const input = el('input', {
+            type: 'text',
+            class: 'grow',
+            value: roomAliases[roomId] || '',
+            placeholder: 'Display name (empty clears it)',
+            'aria-label': 'Room display name',
+            maxlength: '60',
+        });
+        const save = el('button', { class: 'btn primary small' }, 'Save');
+        const cancel = el('button', { class: 'btn ghost small' }, 'Cancel');
+        box.appendChild(input);
+        box.appendChild(save);
+        box.appendChild(cancel);
+        anchor.after(box);
+        input.focus();
+        const close = () => box.remove();
+        cancel.addEventListener('click', close);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') save.click();
+            if (e.key === 'Escape') close();
+        });
+        save.addEventListener('click', async () => {
+            try {
+                await saveRoomAlias(roomId, input.value);
+                close();
+                if (onDone) onDone();
+            } catch (e) { /* saveRoomAlias already surfaced the error */ }
+        });
+    }
+    // room_id -> { ids, at } filled only for gateways whose /rooms does not
+    // return member_ids yet. Cleared with the catalog so a membership change
+    // cannot leave a stale answer behind.
+    const roomMembersCache = new Map();
     // Shared-project rooms have machine ids (``grp:perun:<slug>:chat``). Label
     // them with the human project name so a chat can be identified at a glance
     // instead of pattern-matching hashes and slugs.
@@ -5423,17 +5520,30 @@ async function viewPerunChat() {
     }
     async function refreshRooms() {
         if (!status.configured) return;
+        roomMembersCache.clear();
         try {
             const r = await api('/api/perunchat/rooms');
             roomCatalog = (r.rooms || []).map((x) => ({
                 value: x.room_id,
-                label: roomDisplayLabel(x.room_id) || x.room_id,
+                label: roomLabel(x.room_id),
                 description: [
                     x.active ? 'live' : '',
                     x.joined ? 'joined' : '',
                     x.online_count != null ? `${x.online_count} online` : '',
                     x.members ? `${x.members} member${x.members === 1 ? '' : 's'}` : '',
                 ].filter(Boolean).join(' · ') || undefined,
+                // Raw fields are kept for the friends actions: "Add to room…"
+                // must not offer a room the caller never joined, and the
+                // per-friend chat list needs the same membership signal.
+                joined: !!x.joined,
+                members: x.members || 0,
+                type: x.type || inferRoomType(x.room_id),
+                // Gateways since the per-friend chat list return the persisted
+                // membership list; an older one omits it and the list falls
+                // back to one cached /members call per room.
+                memberIds: Array.isArray(x.member_ids)
+                    ? x.member_ids.map((a) => String(a).toLowerCase())
+                    : null,
             }));
             // Keep rooms that are configured but not in the gateway catalog.
             const known = new Set(roomCatalog.map((x) => x.value));
@@ -5441,7 +5551,7 @@ async function viewPerunChat() {
                 if (!known.has(rid)) {
                     roomCatalog.push({
                         value: rid,
-                        label: roomDisplayLabel(rid) || rid,
+                        label: roomLabel(rid),
                         description: 'configured',
                     });
                 }
@@ -5577,7 +5687,7 @@ async function viewPerunChat() {
             if (sel) {
                 sel.innerHTML = '<option value="">— select —</option>';
                 for (const r of rooms) {
-                    const opt = el('option', { value: r }, esc(r));
+                    const opt = el('option', { value: r }, esc(roomLabel(r)));
                     sel.appendChild(opt);
                 }
             }
@@ -5636,6 +5746,9 @@ async function viewPerunChat() {
             box.querySelectorAll('[data-remove-mem]').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const mid = btn.getAttribute('data-remove-mem');
+                    const real = roomDisplayLabel(roomId) || roomId;
+                    const shown = roomAliases[roomId] ? `${roomAliases[roomId]} (${real})` : real;
+                    if (!confirm(`Remove ${mid} from ${shown}?`)) return;
                     try {
                         await api(`/api/perunchat/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(mid)}`, { method: 'DELETE' });
                         toast('Member removed', 'ok');
@@ -5674,11 +5787,7 @@ async function viewPerunChat() {
     document.getElementById('pc-priv-join-chat').addEventListener('click', () => {
         const roomId = document.getElementById('pc-priv-select').value;
         if (!roomId) { toast('Select a private room first', 'err'); return; }
-        const typeSel = document.getElementById('pc-chat-type');
-        if (typeSel) typeSel.value = 'PRIVATE';
-        refreshRoomSelect();
-        setCurrentRoomId(roomId);
-        joinCurrentRoom();
+        openRoomInChat(roomId);
         toast('Joined private room in chat', 'ok');
     });
 
@@ -5789,7 +5898,7 @@ async function viewPerunChat() {
     function inferRoomType(roomId) {
         if (!roomId) return 'PUBLIC';
         const p = roomId.split(':')[0];
-        if (p === 'priv') return 'PRIVATE';
+        if (p === 'priv' || p === 'private') return 'PRIVATE';
         if (p === 'grp') return 'GROUP';
         return 'PUBLIC';
     }
@@ -5844,9 +5953,38 @@ async function viewPerunChat() {
     function updateJoinedStatus() {
         const box = $('#pc-joined-status');
         if (!box) return;
-        box.textContent = joinedRoom
-            ? `Joined: ${joinedRoom} (${joinedRoomType || inferRoomType(joinedRoom)})`
-            : 'Not joined to any room.';
+        if (!joinedRoom) {
+            box.textContent = 'Not joined to any room.';
+            return;
+        }
+        const room = joinedRoom;
+        const label = roomLabel(room);
+        const activity = relativeActivity(roomActivityTs(room));
+        const paint = (count) => {
+            if (joinedRoom !== room || !box.isConnected) return;
+            // An unreadable membership list is not the same as an empty room:
+            // say "unknown" instead of claiming zero participants.
+            const who = count == null
+                ? 'participants unknown'
+                : `${count} participant${count === 1 ? '' : 's'}`;
+            box.innerHTML = `Joined: ${esc(label)} `
+                + `<span class="muted">· ${esc(room.slice(-6))} · ${who} · ${esc(activity)}</span> `
+                + '<button class="btn ghost small" data-alias-edit aria-label="Rename this room (display only)" title="Rename this room (display only)">✎</button>';
+            const pencil = box.querySelector('[data-alias-edit]');
+            if (pencil) {
+                pencil.addEventListener('click', () => editRoomAlias(room, box, updateJoinedStatus));
+            }
+        };
+        // Name, id and activity are local; the participant count needs one
+        // membership lookup, filled in when it arrives rather than blocking.
+        const entry = roomCatalog.find((r) => r.value === room);
+        if (entry) paint(entry.members || 0);
+        else paint(null);
+        if (entry && Array.isArray(entry.memberIds)) {
+            paint(entry.memberIds.length);
+        } else {
+            roomMembers(room).then((res) => paint(res.error ? null : res.ids.length));
+        }
     }
 
     function joinCurrentRoom() {
@@ -5865,6 +6003,254 @@ async function viewPerunChat() {
             localStorage.setItem('perunchat_joined_room_type', type);
         } catch (e) { /* storage may be unavailable */ }
         sendFrame({ type: 'ROOM_JOIN', room_id: room, room_type: type, timestamp: Date.now() });
+    }
+
+    // Single "open this room" path. Friend rows and the private-room card both
+    // come here instead of duplicating the select/join dance: pick the room in
+    // the selector, then join, so the WebSocket handshake and the persisted
+    // "joined room" always agree.
+    function openRoomInChat(roomId) {
+        if (!roomId) return;
+        const typeSel = $('#pc-chat-type');
+        if (typeSel) typeSel.value = inferRoomType(roomId);
+        refreshRoomSelect();
+        setCurrentRoomId(roomId);
+        joinCurrentRoom();
+    }
+
+    // Friends tab -> "Chat": the gateway's bilateral private room *is* the
+    // direct chat, so this is an idempotent open-or-create followed by the
+    // normal join path (never a second room code path).
+    async function chatWithFriend(friendId) {
+        try {
+            const res = await api('/api/perunchat/rooms/private', {
+                method: 'POST',
+                body: { members: [friendId] },
+            });
+            if (!res || !res.room_id) throw new Error('Gateway returned no room');
+            await refreshPrivateRooms();
+            await refreshRooms();
+            openRoomInChat(res.room_id);
+            toast(`Chat with ${friendId}`, 'ok');
+        } catch (e) {
+            toast(e.message, 'err');
+        }
+    }
+
+    // Candidate rooms for "Add to room…": private rooms the caller belongs to
+    // (a member may invite) plus private/group rooms already joined according
+    // to the catalog. Manager rights stay a gateway decision — this only spares
+    // the operator an avoidable 403.
+    async function addRoomChoices() {
+        let privateIds = [];
+        try {
+            const res = await api('/api/perunchat/rooms/private');
+            privateIds = res.rooms || [];
+        } catch (e) { /* the catalog below still offers joined group rooms */ }
+        const seen = new Set();
+        const choices = [];
+        const push = (rid) => {
+            if (!rid || seen.has(rid)) return;
+            seen.add(rid);
+            choices.push({ value: rid, label: roomLabel(rid) });
+        };
+        for (const rid of privateIds) push(rid);
+        for (const room of roomCatalog) {
+            if (!room.joined) continue;
+            if (!/^(priv|private|grp):/.test(room.value)) continue;
+            push(room.value);
+        }
+        return choices;
+    }
+
+    // ---- Per-friend chat list -----------------------------------------------
+    // Membership comes from the gateway's ``member_ids`` when the deployment
+    // has it. Older gateways are asked once per room and the answer is cached
+    // for the page session: expanding a friend must never fan out a request
+    // per room on every render.
+
+    async function roomMembers(roomId) {
+        const cached = roomMembersCache.get(roomId);
+        if (cached) return cached;
+        try {
+            const res = await api(`/api/perunchat/rooms/${encodeURIComponent(roomId)}/members`);
+            const entry = {
+                ids: (res.members || []).map((a) => String(a).toLowerCase()),
+                at: Date.now(),
+            };
+            roomMembersCache.set(roomId, entry);
+            return entry;
+        } catch (e) {
+            // Never cache a failure: a transient 403 or network error must not
+            // hide this room from every friend for the rest of the page.
+            return { ids: [], at: Date.now(), error: e.message };
+        }
+    }
+
+    async function membersForRoom(room) {
+        if (Array.isArray(room.memberIds)) return room.memberIds;
+        return (await roomMembers(room.value)).ids;
+    }
+
+    // "Last activity" is client-side truth: this browser's stored transcript
+    // for the room. The gateway keeps no durable message timestamps, so an
+    // untouched room honestly says "no local activity" instead of guessing.
+    function roomActivityTs(roomId) {
+        try {
+            const raw = localStorage.getItem(chatHistoryKey(roomId));
+            if (!raw) return 0;
+            const stored = JSON.parse(raw);
+            if (!Array.isArray(stored)) return 0;
+            let latest = 0;
+            for (const msg of stored) latest = Math.max(latest, _msgTs(msg) || 0);
+            return latest;
+        } catch (e) { return 0; }
+    }
+
+    function relativeActivity(ts) {
+        if (!ts) return 'no local activity';
+        const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+        if (mins < 1) return 'active now';
+        if (mins < 60) return `${mins}m ago`;
+        const hours = Math.round(mins / 60);
+        if (hours < 24) return `${hours}h ago`;
+        return `${Math.round(hours / 24)}d ago`;
+    }
+
+    // Rooms that include the friend. With member_ids this is one pass over the
+    // catalog; without it, one cached fetch per room on first expand.
+    async function roomsForFriend(friendId) {
+        const friend = String(friendId).toLowerCase();
+        const found = [];
+        for (const room of roomCatalog) {
+            if (!/^(priv|private|grp|pub):/.test(room.value)) continue;
+            const ids = await membersForRoom(room);
+            if (!ids.includes(friend)) continue;
+            // Read this browser's stored transcript once per room: the sort
+            // comparator must not re-parse localStorage O(n log n) times.
+            found.push({ room, ids, activity: roomActivityTs(room.value) });
+        }
+        found.sort((a, b) => b.activity - a.activity);
+        return found;
+    }
+
+    // Synchronous count for the caret label, only when every room already
+    // carries its membership (new gateway). Otherwise the count appears once
+    // the friend expands and the fallback fetches have run.
+    function friendRoomCountSync(friendId) {
+        const friend = String(friendId).toLowerCase();
+        if (!roomCatalog.length) return null;
+        if (!roomCatalog.every((r) => Array.isArray(r.memberIds))) return null;
+        return roomCatalog.filter((r) => r.memberIds.includes(friend)).length;
+    }
+
+    // One inline panel per friends list at a time; the key says which friend
+    // and which action, so re-clicking the same control closes it.
+    let openFriendPanel = null;
+    function removeFriendPanels(root) {
+        root.querySelectorAll('.pc-friend-panel').forEach((n) => n.remove());
+        // Opening another friend's panel must also reset the caret it displaced,
+        // not just remove its DOM.
+        root.querySelectorAll('[data-chats]').forEach((b) => {
+            b.setAttribute('aria-expanded', 'false');
+            const caret = b.querySelector('[data-caret]');
+            if (caret) caret.textContent = '▸';
+        });
+        openFriendPanel = null;
+    }
+
+    async function toggleFriendChats(root, friendId, row, btn) {
+        const key = `${friendId}:chats`;
+        const wasOpen = openFriendPanel === key;
+        const caret = btn && btn.querySelector('[data-caret]');
+        const labelEl = btn && btn.querySelector('[data-chats-label]');
+        removeFriendPanels(root);
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        if (caret) caret.textContent = '▸';
+        if (wasOpen) return;
+        openFriendPanel = key;
+        if (btn) btn.setAttribute('aria-expanded', 'true');
+        if (caret) caret.textContent = '▾';
+        const panel = el('div', { class: 'pc-friend-panel', style: 'padding:6px 0 10px;' });
+        panel.dataset.friend = friendId;
+        panel.innerHTML = '<p class="muted" style="font-size:12px; margin:0;">Loading chats…</p>';
+        row.after(panel);
+        const chats = await roomsForFriend(friendId);
+        if (labelEl) labelEl.textContent = `Chats (${chats.length})`;
+        panel.innerHTML = '';
+        if (!chats.length) {
+            panel.innerHTML = '<p class="muted" style="font-size:12px; margin:0;">No shared rooms yet — use Chat to start one.</p>';
+            return;
+        }
+        for (const { room, ids, activity } of chats) {
+            const label = roomLabel(room.value);
+            const item = el('div', {
+                class: 'pc-friend-chat-row row',
+                style: 'justify-content:space-between; gap:8px; border-bottom:1px solid var(--border); padding:6px 0;',
+            });
+            const open = el('button', {
+                class: 'pc-friend-chat-open grow',
+                style: 'display:block; text-align:left; background:none; border:0; padding:0; cursor:pointer; color:inherit;',
+            },
+                `<span>${esc(label)} <span class="muted" style="font-size:11px;">${esc(room.value.slice(-6))}</span></span>
+                 <span class="muted" style="font-size:11px; display:block;">${ids.length} participant${ids.length === 1 ? '' : 's'} · ${esc(relativeActivity(activity))}</span>`);
+            open.addEventListener('click', () => openRoomInChat(room.value));
+            const rename = el('button', {
+                class: 'btn ghost small',
+                'aria-label': 'Rename this room (display only)',
+                title: 'Rename this room (display only)',
+            }, '✎');
+            rename.addEventListener('click', () => editRoomAlias(room.value, item, refreshSocial));
+            item.appendChild(open);
+            item.appendChild(rename);
+            panel.appendChild(item);
+        }
+    }
+
+    async function toggleAddToRoom(root, friendId, row) {
+        const key = `${friendId}:addroom`;
+        const wasOpen = openFriendPanel === key;
+        removeFriendPanels(root);
+        if (wasOpen) return;
+        openFriendPanel = key;
+
+        const panel = el('div', { class: 'pc-friend-panel row', style: 'gap:8px; padding:6px 0 8px; align-items:center;' });
+        const sel = el('select', { class: 'grow', 'aria-label': `Room for ${friendId}` });
+        sel.innerHTML = '<option value="">Loading rooms…</option>';
+        sel.disabled = true;
+        const add = el('button', { class: 'btn success small' }, 'Add');
+        add.disabled = true;
+        panel.appendChild(el('span', { class: 'muted', style: 'font-size:12px;' }, 'Add to room…'));
+        panel.appendChild(sel);
+        panel.appendChild(add);
+        row.after(panel);
+
+        const choices = await addRoomChoices();
+        if (!choices.length) {
+            sel.innerHTML = '<option value="">No rooms you can add to</option>';
+            return;
+        }
+        sel.innerHTML = '<option value="">— pick a room —</option>'
+            + choices.map((c) => `<option value="${esc(c.value)}">${esc(c.label)}</option>`).join('');
+        sel.disabled = false;
+        sel.addEventListener('change', () => { add.disabled = !sel.value; });
+        add.addEventListener('click', async () => {
+            if (!sel.value) return;
+            add.disabled = true;
+            try {
+                await api(`/api/perunchat/rooms/${encodeURIComponent(sel.value)}/members`, {
+                    method: 'POST',
+                    body: { agent_id: friendId },
+                });
+                toast(`Added ${friendId} to ${roomLabel(sel.value)}`, 'ok');
+                removeFriendPanels(root);
+                await refreshPrivateRooms();
+                await refreshRooms();
+            } catch (e) {
+                toast(e.message, 'err');
+                add.disabled = false;
+            }
+        });
     }
 
     $('#pc-chat-room-select').addEventListener('change', () => {
@@ -5939,13 +6325,28 @@ async function viewPerunChat() {
 
             const fList = $('#pc-friends-list');
             const fItems = friends.friends || [];
+            removeFriendPanels(fList);
             fList.innerHTML = fItems.length ? '' : '<p class="muted">No friends yet.</p>';
             for (const id of fItems) {
                 const st = onlineMap[id] || 'offline';
                 const badge = st === 'online' ? '🟢' : '⚪';
-                const row = el('div', { class: 'row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
-                    `<span>${badge} ${esc(id)}</span><button class="btn ghost danger small" data-remove="${esc(id)}">Remove</button>`);
-                row.querySelector('button').addEventListener('click', async () => {
+                const count = friendRoomCountSync(id);
+                const chatsLabel = count == null ? 'Chats' : `Chats (${count})`;
+                const row = el('div', { class: 'row pc-friend-row', style: 'justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border);' },
+                    `<div class="row pc-friend-who">
+                       <span class="pc-friend-status">${badge}</span>
+                       <span class="pc-friend-name">${esc(id)}</span>
+                     </div>
+                     <div class="row pc-friend-actions">
+                       <button class="btn primary small" data-chat="${esc(id)}">Chat</button>
+                       <button class="btn ghost small" data-chats="${esc(id)}" aria-expanded="false"><span data-caret>▸</span> <span data-chats-label>${esc(chatsLabel)}</span></button>
+                       <button class="btn ghost small" data-addroom="${esc(id)}">Add to room…</button>
+                       <button class="btn ghost danger small" data-remove="${esc(id)}">Remove</button>
+                     </div>`);
+                row.querySelector('[data-chat]').addEventListener('click', () => chatWithFriend(id));
+                row.querySelector('[data-chats]').addEventListener('click', (ev) => toggleFriendChats(fList, id, row, ev.currentTarget));
+                row.querySelector('[data-addroom]').addEventListener('click', () => toggleAddToRoom(fList, id, row));
+                row.querySelector('[data-remove]').addEventListener('click', async () => {
                     try { await api(`/api/perunchat/social/friends/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Friend removed', 'ok'); refreshSocial(); }
                     catch (e) { toast(e.message, 'err'); }
                 });
