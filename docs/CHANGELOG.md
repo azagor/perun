@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.20.1
+
+*Released 2026-11-18.*
+
 ### Owner workspace: azagor-only push rule
 
 * The git instructions now state that only the `azagor` GitHub account may push

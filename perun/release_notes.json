@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-18T20:57:25+00:00",
+  "generated": "2026-11-18T21:07:27+00:00",
   "releases": [
+    {
+      "version": "0.20.1",
+      "date": "2026-11-18",
+      "body": "### Owner workspace: azagor-only push rule\n\n* The git instructions now state that only the `azagor` GitHub account may push\n  to `azagor/perun`, `azagor/perun_chat` and `azagor/perun_internal`, and\n  document the per-repo credential helper that supplies the azagor token. A\n  machine whose active `gh` account belongs to someone else no longer produces\n  an avoidable 403 on release."
+    },
     {
       "version": "0.20.0",
       "date": "2026-11-18",
@@ -45,11 +50,6 @@
       "version": "0.16.7",
       "date": "2026-11-15",
       "body": "### Faster listing, and a safer bulk uninstall\n\n* File hashes are cached by `(mtime_ns, size)`, so the Settings card no longer\n  re-reads every agent file on each render; any writer invalidates the entry it\n  touches. A same-size, same-timestamp rewrite is the only case it could miss.\n* `remove_many` runs in **one** manifest transaction: removing a 66-agent\n  division is one write instead of 66, and a failure midway keeps every earlier\n  removal.\n* `remove --division` supports `--dry-run` (list, change nothing) and needs\n  `--yes` to actually delete; the API takes `dry_run` too.\n* The Installed list gains a division filter, and an `unlisted` agent (adopted,\n  hash still matching) now offers **Remove** instead of only **Forget**."
-    },
-    {
-      "version": "0.16.6",
-      "date": "2026-11-15",
-      "body": "### Uninstall stays inside the scope you named\n\n* `remove --division <name> --project <slug>` (and the equivalent API call) now\n  removes only that project's copies. It previously matched every agent of the\n  division, including the machine-wide ones, because the scope was not part of\n  the filter.\n* `POST /api/agent-catalog/remove` with an empty `paths` list is a clear 400\n  (*\"choose agents (paths) or a division\"*) instead of falling through to a\n  single-file removal of the empty path."
     }
   ]
 }
