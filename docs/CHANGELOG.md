@@ -6,6 +6,23 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 _No unreleased changes yet._
 
+## v0.19.1
+
+*Released 2026-11-22.*
+
+### Global instructions: memory is an input
+
+The Perun kernel (injected into every project) now says what a stale-fact incident
+taught us:
+
+* **Memory is an input, not a summary.** Call `perun_context(<intent>)` and
+  `perun recall "<topic>"` before starting; when a fact points at a plan or resume
+  file, open it instead of re-deriving the state.
+* **Supersede, don't stack.** An event that invalidates a stored fact replaces it
+  with `perun_memory_supersede`, so the stale version cannot rank first.
+* **Missing MCP tools are not a reason to skip memory.** Fall back to the CLI
+  (`perun recall|remember|supersede`) and say so.
+
 ## v0.20.1
 
 *Released 2026-11-18.*

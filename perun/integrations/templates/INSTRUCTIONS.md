@@ -20,6 +20,14 @@ Each project also exposes a compact ``<slug>.codemap`` outline. Call
 
 Always true, never retrieved away:
 
+- **Memory is an input, not a summary.** Before starting work call
+  `perun_context(<intent>)` and `perun recall "<topic>"`; when a stored fact
+  points at a plan or resume file, open that file instead of re-deriving it.
+- **Supersede, don't stack.** When an event invalidates a stored fact, replace it
+  with `perun_memory_supersede`; additive facts leave the stale one ranking first.
+- **Missing MCP tools are not a reason to skip memory.** Fall back to the CLI
+  (`perun recall`, `perun remember`, `perun supersede`) and say that you did.
+
 - Resolve cross-project paths with `perun.project_roots.resolve(name, …)` —
   never hand-craft a relative path.
 - Never commit secrets; never paste credentials into a file or a prompt.
