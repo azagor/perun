@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-18T21:07:27+00:00",
+  "generated": "2026-11-22T19:32:32+00:00",
   "releases": [
+    {
+      "version": "0.19.1",
+      "date": "2026-11-22",
+      "body": "### Global instructions: memory is an input\n\nThe Perun kernel (injected into every project) now says what a stale-fact incident\ntaught us:\n\n* **Memory is an input, not a summary.** Call `perun_context(<intent>)` and\n  `perun recall \"<topic>\"` before starting; when a fact points at a plan or resume\n  file, open it instead of re-deriving the state.\n* **Supersede, don't stack.** An event that invalidates a stored fact replaces it\n  with `perun_memory_supersede`, so the stale version cannot rank first.\n* **Missing MCP tools are not a reason to skip memory.** Fall back to the CLI\n  (`perun recall|remember|supersede`) and say so."
+    },
     {
       "version": "0.20.1",
       "date": "2026-11-18",
@@ -45,11 +50,6 @@
       "version": "0.16.8",
       "date": "2026-11-16",
       "body": "### The ceiling is measured again, and MCP startup no longer blocks\n\n* The agent ceiling was **stale**. Upstream's \"~119\" comes from an old report;\n  measured on OpenCode v2.2.5 with `opencode debug agents --standalone`, **307**\n  agents registered from 300 files with nothing dropped, tracking 1:1 from 110 to\n  300. The default is now **300**, the refusal names the fix\n  (`perun agent-catalog limit <n>`), and the Settings card keeps the message on\n  screen instead of letting a toast disappear.\n* `mcp/perun_mcp.py` no longer does slow work before answering the stdio\n  handshake. Control-project registration and handbook indexing (which embeds\n  with a 180 s request timeout) moved to a daemon thread; `init_db()` stays\n  synchronous because every tool needs it and it is cheap DDL. This is the\n  `mcp connect failed: Request timed out` seen in OpenCode's log after ~184 s —\n  the handshake was waiting on an embedding call."
-    },
-    {
-      "version": "0.16.7",
-      "date": "2026-11-15",
-      "body": "### Faster listing, and a safer bulk uninstall\n\n* File hashes are cached by `(mtime_ns, size)`, so the Settings card no longer\n  re-reads every agent file on each render; any writer invalidates the entry it\n  touches. A same-size, same-timestamp rewrite is the only case it could miss.\n* `remove_many` runs in **one** manifest transaction: removing a 66-agent\n  division is one write instead of 66, and a failure midway keeps every earlier\n  removal.\n* `remove --division` supports `--dry-run` (list, change nothing) and needs\n  `--yes` to actually delete; the API takes `dry_run` too.\n* The Installed list gains a division filter, and an `unlisted` agent (adopted,\n  hash still matching) now offers **Remove** instead of only **Forget**."
     }
   ]
 }
