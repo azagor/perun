@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.19.1 (see §15). Memory is an input in the global kernel
+**Latest release:** v0.20.2 (see §15). Fastmcp pin and the memory kernel, above the 0.20 line
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3083,6 +3083,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-23 — v0.20.2: Fastmcp pin and the memory kernel, above the 0.20 line
+
 ### 2026-11-22 — v0.19.1: Memory is an input in the global kernel
 
 ### 2026-11-18 — v0.20.1: Document the azagor-only push rule

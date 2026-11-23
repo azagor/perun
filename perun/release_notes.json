@@ -1,6 +1,11 @@
 {
-  "generated": "2026-11-22T19:32:32+00:00",
+  "generated": "2026-11-23T10:00:54+00:00",
   "releases": [
+    {
+      "version": "0.20.2",
+      "date": "2026-11-23",
+      "body": ""
+    },
     {
       "version": "0.19.1",
       "date": "2026-11-22",
@@ -45,11 +50,6 @@
       "version": "0.16.9",
       "date": "2026-11-16",
       "body": "### Promote a roster agent from the dashboard\n\n* Settings → Agent roster → **Installed** gains a per-agent **Make primary ⇄\n  Primary** toggle. It sets `mode: all`: the agent becomes selectable in Run, the\n  Agent Console and the project/coroutine pickers, and stays delegable. One click\n  puts it back to `subagent`.\n* `promote` now **refuses a file edited since it was installed** instead of\n  silently re-baselining the edits. An **Accept** action on the row re-baselines a\n  deliberate edit, which is what unblocks promoting or removing it.\n* `installed()` reports each agent's current `mode`, read from the file (cached by\n  mtime/size and invalidated on every write) rather than from the manifest.\n* A `primary` badge and a **Primary only** filter, and the footer now says\n  OpenCode picks up promotions as well as installs and removals.\n* The toggle rests on a measurement, not an assumption: `perun-orchestrator` is a\n  file-based agent with `mode: primary` and its recorded runs complete, so\n  `--agent` accepts a file-based non-subagent agent.\n* New `_target_for()` resolves an agent by path or slug; it is the single place\n  the assignment work will redirect to the library copy."
-    },
-    {
-      "version": "0.16.8",
-      "date": "2026-11-16",
-      "body": "### The ceiling is measured again, and MCP startup no longer blocks\n\n* The agent ceiling was **stale**. Upstream's \"~119\" comes from an old report;\n  measured on OpenCode v2.2.5 with `opencode debug agents --standalone`, **307**\n  agents registered from 300 files with nothing dropped, tracking 1:1 from 110 to\n  300. The default is now **300**, the refusal names the fix\n  (`perun agent-catalog limit <n>`), and the Settings card keeps the message on\n  screen instead of letting a toast disappear.\n* `mcp/perun_mcp.py` no longer does slow work before answering the stdio\n  handshake. Control-project registration and handbook indexing (which embeds\n  with a 180 s request timeout) moved to a daemon thread; `init_db()` stays\n  synchronous because every tool needs it and it is cheap DDL. This is the\n  `mcp connect failed: Request timed out` seen in OpenCode's log after ~184 s —\n  the handshake was waiting on an embedding call."
     }
   ]
 }
