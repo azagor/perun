@@ -4,7 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
-_No unreleased changes yet._
+### Docs
+
+* Documented the two MCP startup failures we hit — a FastMCP 3.x or mixed install
+  (`No module named fastmcp.server.extensions`, `PrivateKeyJWTClientAuthenticator`)
+  and a handshake frozen by Modern Standby whose failure OpenCode caches per
+  project directory — plus the recovery: repair to the pinned `fastmcp>=2.0,<3`,
+  then `opencode reload` inside the project. Section 12 now also matches the
+  server's tool count (37).
 
 ## v0.20.2
 

@@ -2808,7 +2808,7 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 in front of the handshake (the log showed `mcp connect failed: Request timed out`
 after exactly that long). The reference material is still retrievable from the
 first call; if it is not indexed yet, the tool indexes on demand. It exposes
-**thirty-four** tools:
+**thirty-seven** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
@@ -2847,9 +2847,35 @@ first call; if it is not indexed yet, the tool indexes on demand. It exposes
   environments (e.g. the OpenCode `execute` runtime, which has no `require`/
   `fs` access) inspect files without leaving the Perun tool surface.
 
-`_resolve_project()` accepts a slug, a path, or `None` — for `None` it walks up
+`_resolve_project()` accepts a slug, a path, or `None` - for `None` it walks up
 from the current working directory to the nearest registered project. Project
 creation is shared with the HTTP wizard (`perun/projects.py`).
+
+### 12.1 When the MCP server will not connect
+
+OpenCode reports an MCP failure in the session and the `perun_*` tools vanish.
+Two causes dominate; check them in this order.
+
+* **Incompatible FastMCP.** A 3.x install (or a mixed install with 3.x files
+  beside 2.x) breaks the import: `No module named fastmcp.server.extensions` or
+  `cannot import name 'PrivateKeyJWTClientAuthenticator'`. The requirement is
+  pinned to `fastmcp>=2.0,<3`; repair with
+  `python -m pip install --force-reinstall "fastmcp>=2.0,<3"`, removing leftover
+  package directories first if the mixed-install error persists. Verify with
+  `python -c "import fastmcp; print(fastmcp.__version__)"`.
+* **A pending handshake that outlived the machine.** A connect started just
+  before Modern Standby is frozen and later reports `Request timed out`, and
+  OpenCode caches the failure **per project directory**, so a new session in
+  that directory inherits it. Check `opencode mcp list` from the project; if it
+  says `failed` or `pending`, run `opencode reload` in that directory. The
+  session is preserved and the server reconnects. Confirm with
+  `opencode mcp list` or, authoritatively,
+  `opencode api GET /api/mcp -H "x-opencode-directory: <absolute path>"`.
+
+While the tools are missing, memory is still reachable through the CLI
+(`perun recall`, `perun remember`, `perun supersede`); say that you used the
+fallback rather than silently skipping memory. A healthy handshake completes in
+a few seconds and lists all 37 tools.
 
 ---
 
