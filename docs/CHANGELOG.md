@@ -10,6 +10,18 @@ _No unreleased changes yet._
 
 *Released 2026-11-23.*
 
+### Fastmcp pin and the memory kernel
+
+* Pin `fastmcp` below 3. The 3.x upgrade broke the MCP server
+  (`No module named fastmcp.server.extensions`), taking every `perun_*` tool with
+  it; the requirement had no upper bound. A mixed install (3.x leftovers beside
+  2.14.7) also failed on `PrivateKeyJWTClientAuthenticator` until the package
+  directory was removed and reinstalled.
+* Re-release of the memory kernel (call `perun_context`/`perun recall` before
+  work, supersede instead of stacking stale facts, CLI fallback when MCP tools are
+  missing) so it ships **above** v0.20.1 - v0.19.1 was numerically behind the 0.20
+  line and could never reach those installs.
+
 ## v0.19.1
 
 *Released 2026-11-22.*

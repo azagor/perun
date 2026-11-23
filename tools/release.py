@@ -268,6 +268,28 @@ def git_push(repo: Path, refs: list[str]) -> None:
     print(f"[OK] Pushed {', '.join(refs)} from {repo.name}")
 
 
+def _require_monotonic(version: str) -> None:
+    """Refuse a version that is not greater than the highest existing tag.
+
+    v0.19.1 was once released on top of v0.20.1, so the update channel could
+    never offer it. Tag history is the only authority here.
+    """
+    import subprocess as _sp
+
+    try:
+        raw = _sp.run(["git", "tag", "--list", "v*"], capture_output=True, text=True,
+                      cwd=str(PUBLIC), timeout=30).stdout
+    except (OSError, _sp.SubprocessError):
+        return
+    def num(text: str) -> tuple:
+        return tuple(int(part) for part in text.lstrip("v").split(".") if part.isdigit())
+    best = max((num(line.strip()) for line in raw.splitlines() if line.strip()), default=())
+    if best and num(version) <= best:
+        highest = ".".join(str(part) for part in best)
+        raise SystemExit(f"[ERR] v{version} is not newer than the highest tag v{highest}; "
+                         f"bump above it (tags are immutable)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Perun release automation")
     parser.add_argument("version", help="Version to release, e.g. 0.8.24")
@@ -275,6 +297,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen without changing files")
     parser.add_argument("--skip-tests", action="store_true", help="Skip running the test suite")
     args = parser.parse_args()
+    _require_monotonic(args.version)
 
     version = args.version.strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
