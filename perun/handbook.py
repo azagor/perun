@@ -126,16 +126,36 @@ def _describe_param(name: str, spec: dict[str, Any], required: bool) -> str:
 def _list_mcp_tools() -> list[Any]:
     """Return the live MCP tool list, or an empty list on failure.
 
+    FastMCP 2.x exposes ``get_tools()`` (a coroutine returning a name->tool
+    mapping); 1.x exposed ``list_tools()``. Read whichever the installed
+    server offers, so the generated reference cannot silently go empty.
+
     Note: this helper uses ``asyncio.run()`` and must only be called from
     synchronous contexts (CLI, install paths, or threadpool workers).
     """
     module = _load_mcp_module()
     if module is None:
         return []
+
+    async def _load() -> list[Any]:
+        get_tools = getattr(module.mcp, "get_tools", None)
+        if get_tools is not None:
+            tools = await get_tools()
+            return list(tools.values()) if isinstance(tools, dict) else list(tools)
+        return list(await module.mcp.list_tools())
+
     try:
-        return asyncio.run(module.mcp.list_tools())
+        return asyncio.run(_load())
     except Exception:
         return []
+
+
+def _tool_schema(tool: Any) -> dict[str, Any]:
+    """JSON input schema of one tool across FastMCP versions."""
+    schema = (getattr(tool, "inputSchema", None)
+              or getattr(tool, "parameters", None)
+              or {})
+    return schema if isinstance(schema, dict) else {}
 
 
 def render_tool_reference() -> str:
@@ -162,7 +182,7 @@ def render_tool_reference() -> str:
         if desc:
             lines.append("")
             lines.append(desc)
-        schema = getattr(tool, "inputSchema", None) or {}
+        schema = _tool_schema(tool)
         props = schema.get("properties") or {}
         required = set(schema.get("required") or [])
         if props:
@@ -197,7 +217,7 @@ def tool_schema_stats() -> dict[str, Any]:
         payload.append({
             "name": tool.name,
             "description": tool.description,
-            "inputSchema": getattr(tool, "inputSchema", None) or {},
+            "inputSchema": _tool_schema(tool),
         })
     try:
         raw = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
