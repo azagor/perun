@@ -186,3 +186,23 @@ def test_a_persistent_schema_failure_is_recorded(monkeypatch):
     assert "database is locked" in records[-1]["db_init_error"]
     # The import cost is recorded before the schema work, so it survives.
     assert records[0]["total_seconds"] == 3.0
+
+
+def test_both_startup_writes_carry_the_run_identity(monkeypatch):
+    """The record is shared by every location's server; each write must say whose."""
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+    _fast_prepare(module, monkeypatch)
+
+    records = []
+    monkeypatch.setattr(module.db, "init_db", lambda: None)
+    monkeypatch.setattr(module.mcp_health, "record_startup", records.append)
+    module._DB_READY.clear()
+
+    module._prepare_in_background(module._STARTUP_BEGAN + 2.0)
+
+    assert len(records) == 2
+    for payload in records:
+        # Without the pid the second write merges into another server's record.
+        assert payload["pid"] == os.getpid()
+        assert payload["total_seconds"] == 2.0

@@ -565,31 +565,40 @@ Health, diagnosis and repair for the `perun` stdio MCP server.
 * `STARTUP_FILE` (the JSON startup record in the Perun home),
   `SLOW_STARTUP_SECONDS` (30 s of the client's 60 s deadline),
   `CONNECT_TIMEOUT_SECONDS`, `SETTLE_SECONDS`, `PENDING_SETTLE_SECONDS` (60 s —
-  the client's own deadline), `SETTLE_POLL_SECONDS`, `_RECORD_LOCK`.
-* `record_startup()` (merge + atomic replace under a lock; **never raises**, it
-  runs inside the MCP process), `read_startup()`.
+  the client's own deadline), `MATERIALIZE_SETTLE_SECONDS` (6 s — a location the
+  first read just materialized), `SETTLE_POLL_SECONDS`,
+  `MATERIALIZE_POLL_SECONDS`, `_RECORD_LOCK`.
+* `record_startup()` (merge + atomic replace, serialised within the process;
+  **never raises**, it runs inside the MCP process), `read_startup()`. A payload
+  naming a different `pid` is a concurrent start from another location, so it
+  replaces the record instead of merging into it: the file describes one run.
 * `server_status()` — the state OpenCode holds for one directory, read from
   `GET /api/mcp` (its own words: `connected`, `failed`, `pending`, `disabled`),
-  plus `reachable`: whether the service answered at all. An unreachable service
-  is never "not configured".
+  plus `reachable` (was the state readable at all) and `answered`/`http_status`
+  (it answered with an error status rather than silence, which needs a different
+  remedy). An unreadable state is never "not configured".
 * `settle()` — poll only while the state is `pending` (the one transient state);
   an empty state returns immediately instead of burning the window.
 * `revive()` — disconnect then connect through
   `POST /api/experimental/mcp/{server}/{disconnect,connect}`; the disconnect is
   what clears a connection stuck in `pending`, because a plain connect keeps
   answering the half-open attempt (only the client's state check decides, not the
-  HTTP exception). A dead service is not contacted.
+  HTTP exception). A service whose state cannot be read is not contacted.
 * `selftest()` — runs the client's own stdio handshake, timed, with a tool count.
-* `diagnose()` — verdict + remedy (`service_unreachable`, `stuck_pending`, …),
-  folding in a slow or failed measured start.
+* `diagnose()` — verdict + remedy (`ok`, `service_unreachable`, `service_error`,
+  `unknown_state`, `stuck_pending`, `not_configured`, …), folding in a slow or
+  failed measured start.
 * `project_directories()` — every location the service knows (plus every
   registered project that still exists on disk), deduped: the client keeps one MCP
   connection **per directory**, so a repair visits each one.
 * CLI: `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` — exit 0
   only when every location was verified (connected, or genuinely not configured,
-  through a service that answered); an unreachable service or an empty check
-  exits non-zero. `--all` re-reads a location that looked unconfigured, because
-  the first read is what materializes its MCP entry.
+  through a service that answered); an unreachable service, an error status or an
+  empty check exits non-zero. A location that lists no server is waited for
+  (`_await_materialized`), because the first read is what materializes its MCP
+  entry and the connect that follows is asynchronous; `--all` also prints why a
+  repair failed, and `--json` emits an object (with `error`) even when there is
+  nothing to check.
 
 ### `perun/discovery.py`
 Find & register OpenCode projects under roots.
@@ -1890,7 +1899,9 @@ is no schema and no lock to wait for. The schema reconcile retries
 (`_SCHEMA_ATTEMPTS`) so a transient write lock does not leave the process on an
 old schema, and both the import cost and the schema cost are written to the Perun
 home's startup record (`perun/mcp_health.py`) **from the thread**, never before
-`mcp.run()`. FastMCP's banner and PyPI version check are disabled
+`mcp.run()`. Both writes carry this process's `pid`/`total_seconds`, so a record
+left by a concurrent location's server is replaced rather than merged into. FastMCP's
+banner and PyPI version check are disabled
 (`mcp.run(show_banner=False)`, `FASTMCP_CHECK_FOR_UPDATES=off`).
 `perun_context` ensures the index lazily for a cold first call. 37 tools:
 `perun_list_projects`,

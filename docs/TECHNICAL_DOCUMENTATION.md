@@ -2814,11 +2814,13 @@ rich panels and the check is a network call, and together they cost several
 seconds of a 60 s deadline. Each start records its measured cost in
 `PERUN_HOME/mcp-startup.json`, written from the daemon thread so no file I/O sits
 in front of the handshake; the schema reconcile retries a transient write lock
-and records a failure (`db_init_error`) instead of passing silently. The record is
-reset to the current process's numbers on every start, so a short-lived run
-cannot inherit an older run's `prepared_at`. The reference material is still
-retrievable from the first call; if it is not indexed yet, the tool indexes on
-demand. It exposes **thirty-seven** tools:
+and records a failure (`db_init_error`) instead of passing silently. The file
+describes exactly **one run** — the newest start — and every write carries its
+own `pid`, `version` and `total_seconds`, so the servers of several locations
+starting at once replace each other instead of merging into a record that is true
+of none of them. The reference material is still retrievable from the first
+call; if it is not indexed yet, the tool indexes on demand. It exposes
+**thirty-seven** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
@@ -2878,9 +2880,16 @@ Exit code 0 means every location was **verified** through a service that
 answered: connected, or genuinely not configured there. A service that cannot be
 asked is a `service_unreachable` verdict with its own remedy (start or repair the
 service) and a non-zero exit — do not read it as "no MCP entry", and do not
-"fix" it by adding one. `pending` is the only transient state: `--all` re-reads a
-location that looked unconfigured, because the first read is what materializes
-its MCP entry. Two causes dominate; check them in this order.
+"fix" it by adding one. A service that answers with an **error status** is
+`service_error` (the remedy points at its log and the HTTP status): it is not
+unreachable, and restarting it is not the first thing to try. `pending` is the
+only transient *connection* state, but "no such server" is provisional too: the
+read itself is what makes OpenCode materialize a location, and the connect is
+asynchronous (measured: no row at t+0, `pending` at t+2 s, `connected` at t+4 s),
+so the command waits for the entry before judging it. A location that really has
+no `perun` entry simply stays that way, and a configured row with no state is
+`unknown_state` (run `--fix`) rather than advice to add what is already there.
+Two causes dominate; check them in this order.
 
 * **Incompatible FastMCP.** A 3.x install (or a mixed install with 3.x files
   beside 2.x) breaks the import: `No module named fastmcp.server.extensions` or

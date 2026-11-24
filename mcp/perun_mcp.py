@@ -82,7 +82,9 @@ mcp = FastMCP("Perun")
 # Diagnostics only: stderr is not the JSON-RPC stream, so a debug line is safe.
 LOG = logging.getLogger("perun.mcp")
 
-#: Set once the schema is reconciled. ``_db_init_seconds`` is what it cost.
+#: Set once the schema reconcile has run — including a failed one, because no
+#: tool path reconciles it afterwards. ``_db_init_seconds`` is what it cost and
+#: the startup record carries any failure, which is where it becomes visible.
 _DB_READY = threading.Event()
 _db_init_seconds = 0.0
 
@@ -106,16 +108,23 @@ if not config.DB_PATH.exists():
 
 
 def _prepare_in_background(ready_at: float) -> None:
+    # Every location starts its own MCP server and they all write this one
+    # record, so each write carries this run's identity: a record left by a
+    # concurrent process is replaced, not merged into. The identity goes in
+    # first, and again with the schema numbers, for the same reason.
+    identity = {
+        "version": _perun_version(),
+        "total_seconds": round(ready_at - _STARTUP_BEGAN, 3),
+        "pid": os.getpid(),
+        "python": sys.executable,
+    }
     # Record the import cost first: it is what the client's connect deadline
     # actually competes with, and it must not be lost if the schema reconcile
     # then blocks on another process's write lock. The schema fields are cleared
     # so a run that is torn down before they are measured cannot inherit the
     # previous process's numbers.
     mcp_health.record_startup({
-        "version": _perun_version(),
-        "total_seconds": round(ready_at - _STARTUP_BEGAN, 3),
-        "pid": os.getpid(),
-        "python": sys.executable,
+        **identity,
         "db_init_seconds": None,
         "db_init_error": "",
         "prepared_at": "",
@@ -144,8 +153,10 @@ def _prepare_in_background(ready_at: float) -> None:
         _db_init_seconds = time.monotonic() - started
         _DB_READY.set()
     # Recorded even when the home was created synchronously at import, so a
-    # brand-new install still reports what the schema cost.
+    # brand-new install still reports what the schema cost. The identity fields
+    # come again so a concurrent start's record is replaced, not merged into.
     mcp_health.record_startup({
+        **identity,
         "db_init_seconds": round(_db_init_seconds, 3),
         "db_init_error": db_error,
         "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),

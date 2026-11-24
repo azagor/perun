@@ -21,33 +21,48 @@ All notable changes are recorded here. Single source of truth for release notes.
   "could not ask" must never read as "nothing to fix".
 * Every MCP start records its measured cost in `PERUN_HOME/mcp-startup.json`, so
   a start creeping towards the client's 60 s deadline is visible instead of
-  guessed at. The record keeps only the current process's numbers: a short-lived
-  start that never reaches the schema step no longer inherits an older run's.
+  guessed at. The record describes exactly one run — the newest start — and each
+  write carries its own `pid`, so concurrent starts (one server per location)
+  replace each other instead of merging into a record that is true of neither.
 
 ### Fixed
 
 * `perun mcp-health` no longer reports an unreachable OpenCode service as "not
   configured" with exit code 0 (and the advice to add an MCP entry that is
-  already there). `server_status()` now says whether the service answered at all,
-  the verdict is `service_unreachable` with the remedy to start or repair the
-  service, and such a location fails the run. `--all` with no location to check
-  also exits non-zero instead of succeeding on an empty check.
+  already there). `server_status()` now says whether the connection state could
+  be read at all, the verdict is `service_unreachable` with the remedy to start
+  or repair the service, and such a location fails the run. `--all` with no
+  location to check also exits non-zero instead of succeeding on an empty check.
+* An OpenCode service that *answered* with an error status is no longer called
+  unreachable: the verdict is `service_error` and the remedy points at the
+  service log (and the HTTP status) instead of telling the operator to start a
+  service that is already running.
+* A location that reports no `perun` server is now given time to appear before it
+  is judged. Reading `/api/mcp` is what makes OpenCode materialize a location,
+  and the connect is asynchronous — measured as no row at t+0, `pending` at
+  t+2 s, `connected` at t+4 s — so the previous single re-read landed in that gap
+  and reported "not configured", with exit code 0, for locations it had just
+  started connecting.
 * A repair no longer waits out the whole settle window (120 s per location) when
   the connection state is empty — no such server, or a dead service. Only
   `pending` is transient, and it is polled for no longer than the client's own
   60 s deadline; a dead service is not contacted at all.
-* `--all` reads each location a second time when the first read says "not
-  configured". Reading `/api/mcp` is what makes OpenCode materialize a location's
-  MCP entry, so the first read can miss a connection that is one call away and
-  the verdict used to depend on how many times the command had been run.
+* `--all` now prints why a repair failed, and prints each failure's own remedy;
+  it used to show a bare "still down" and a single blanket "service unreachable"
+  remedy for every location.
+* A configured server whose client row carries no state is `unknown_state` with
+  the `--fix` remedy, instead of `not_configured` with the advice to add the
+  entry that is already there.
+* `mcp-health --json` stays parseable when there is nothing to check: the empty
+  answer is a JSON object with an `error` field, not prose on stderr.
 * A schema reconcile that loses a race with another Perun process's write lock is
   retried three times at startup (the failure used to be swallowed, leaving that
   process on an old schema for its whole life) and is recorded in
   `mcp-startup.json`, so `mcp-health` can name it instead of reporting a healthy
   server with an unmigrated database.
-* Nothing is written to disk before the MCP handshake is answered: the startup
-  record is now written from the preparation thread, after the server is able to
-  answer `initialize`, rather than in front of it.
+* Nothing is written to disk on the MCP handshake path: the startup record is
+  written from the preparation thread, so no file I/O sits in front of the
+  `initialize` the client times out.
 * The MCP server now answers `initialize` before it touches SQLite. The schema
   reconcile used to run on the import path, where every statement waits up to
   the 30 s busy timeout if another process holds the write lock — right in front

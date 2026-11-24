@@ -87,7 +87,24 @@ def test_status_marks_an_unreachable_service():
 
     assert status["reachable"] is False
     assert status["configured"] is False
+    assert status["answered"] is False
     assert "unreachable" in status["error"]
+
+
+def test_status_separates_an_http_error_from_silence():
+    """A 500 is an answer. Only silence means the service is not there."""
+    from perun import opencode_api
+
+    class Broken:
+        def mcp_servers(self, directory: str = ""):
+            raise opencode_api.OpenCodeHTTPError(500, "boom", "/api/mcp")
+
+    status = mcp_health.server_status("perun", r"C:\p", Broken())
+
+    assert status["reachable"] is False   # the connection state is still unknown
+    assert status["answered"] is True     # but the service did answer
+    assert status["http_status"] == 500
+    assert "HTTP 500" in status["error"]
 
 
 def test_diagnose_calls_an_unreachable_service_unreachable():
@@ -107,6 +124,38 @@ def test_diagnose_names_the_wedge_and_the_repair(monkeypatch):
 
     assert report["verdict"] == "stuck_pending"
     assert "--fix" in report["remedy"]
+
+
+def test_diagnose_names_an_error_status_as_an_answer(monkeypatch):
+    """It answered with an error: "start the service" would be wrong advice."""
+    from perun import opencode_api
+
+    class Broken:
+        def mcp_servers(self, directory: str = ""):
+            raise opencode_api.OpenCodeHTTPError(503, "unavailable", "/api/mcp")
+
+    monkeypatch.setattr(mcp_health, "read_startup", lambda: {})
+    report = mcp_health.diagnose("perun", r"C:\p", Broken())
+
+    assert report["verdict"] == "service_error"
+    assert report["answered"] is True
+    assert "503" in report["remedy"]
+    assert "did not answer" not in report["remedy"]
+
+
+def test_diagnose_calls_a_configured_row_without_a_state_unknown(monkeypatch):
+    """The entry is there; offering to add it again would contradict the read."""
+    class Statusless(FakeAPI):
+        def mcp_servers(self, directory: str = ""):
+            return [{"name": "perun"}]
+
+    monkeypatch.setattr(mcp_health, "read_startup", lambda: {})
+    report = mcp_health.diagnose("perun", r"C:\p", Statusless())
+
+    assert report["configured"] is True
+    assert report["verdict"] == "unknown_state"
+    assert "--fix" in report["remedy"]
+    assert "add the `perun` entry" not in report["remedy"]
 
 
 def test_diagnose_flags_a_slow_startup(monkeypatch):
@@ -239,6 +288,30 @@ def test_recording_a_startup_never_raises(tmp_path, monkeypatch):
     assert mcp_health.read_startup() == {}
 
 
+def test_startup_record_does_not_inherit_a_concurrent_process(tmp_path, monkeypatch):
+    """Every location starts its own server, and they share this one file."""
+    monkeypatch.setattr(mcp_health, "STARTUP_FILE", tmp_path / "mcp-startup.json")
+
+    # Two servers start together; B's import record lands second.
+    mcp_health.record_startup({"pid": 111, "total_seconds": 9.9,
+                               "db_init_seconds": None, "prepared_at": ""})
+    mcp_health.record_startup({"pid": 222, "total_seconds": 1.0,
+                               "db_init_seconds": None, "prepared_at": ""})
+    # A finishes its schema step and writes again with its own identity.
+    mcp_health.record_startup({"pid": 111, "total_seconds": 9.9,
+                               "db_init_seconds": 0.4,
+                               "db_init_error": "OperationalError: locked",
+                               "prepared_at": "2026-11-24T21:00:00"})
+
+    record = mcp_health.read_startup()
+    # One run's numbers, not a mixture of both.
+    assert record["pid"] == 111
+    assert record["total_seconds"] == 9.9
+    assert record["db_init_seconds"] == 0.4
+    assert record["db_init_error"] == "OperationalError: locked"
+    assert record["prepared_at"] == "2026-11-24T21:00:00"
+
+
 # ------------------------------------------------------------ directory ---- #
 
 def test_project_directories_merges_locations_and_registry(tmp_path, monkeypatch):
@@ -299,10 +372,12 @@ def test_project_directories_survives_an_unreachable_service(tmp_path, monkeypat
 
 def _report(server: str, directory: str, state: str = "connected",
             *, configured: bool | None = None,
-            reachable: bool = True) -> dict:
+            reachable: bool = True, answered: bool | None = None) -> dict:
     return {"server": server, "directory": directory, "state": state,
             "configured": (state != "") if configured is None else configured,
-            "reachable": reachable, "verdict": "ok", "remedy": "",
+            "reachable": reachable,
+            "answered": reachable if answered is None else answered,
+            "verdict": "ok", "remedy": "",
             "last_startup": {}, "error": ""}
 
 
@@ -373,7 +448,7 @@ def test_cmd_mcp_health_fails_when_there_is_nothing_to_check(monkeypatch):
 
 
 def test_cmd_mcp_health_rechecks_a_location_that_looked_unconfigured(monkeypatch):
-    """The first read materializes the location; the second one tells the truth."""
+    """The first read materializes the location; a later one tells the truth."""
     from perun import __main__ as cli
 
     reads = []
@@ -386,9 +461,48 @@ def test_cmd_mcp_health_rechecks_a_location_that_looked_unconfigured(monkeypatch
 
     monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a"])
     monkeypatch.setattr(mcp_health, "diagnose", fake_diagnose)
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_POLL_SECONDS", 0)
 
     assert cli.cmd_mcp_health(_args()) == 0
-    assert reads == [r"C:\a", r"C:\a"]
+    assert reads[0] == r"C:\a"
+    assert len(reads) >= 2
+
+
+def test_cmd_mcp_health_waits_for_a_location_it_just_materialized(monkeypatch, capsys):
+    """Measured: absent at t+0, pending at t+2, connected at t+4."""
+    from perun import __main__ as cli
+
+    states = [("", False), ("", False), ("pending", True), ("connected", True)]
+
+    def fake_diagnose(server, directory):
+        state, configured = states.pop(0) if states else ("connected", True)
+        return _report(server, directory, state, configured=configured)
+
+    monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a"])
+    monkeypatch.setattr(mcp_health, "diagnose", fake_diagnose)
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_POLL_SECONDS", 0)
+    monkeypatch.setattr(mcp_health, "PENDING_SETTLE_SECONDS", 0)
+    monkeypatch.setattr(mcp_health, "settle",
+                        lambda server, directory, wait=0: None)
+
+    assert cli.cmd_mcp_health(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"][0]["state"] == "connected"
+
+
+def test_cmd_mcp_health_gives_up_on_a_location_that_stays_unconfigured(
+        monkeypatch, capsys):
+    from perun import __main__ as cli
+
+    monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a"])
+    monkeypatch.setattr(mcp_health, "diagnose",
+                        lambda server, directory: _report(
+                            server, directory, "", configured=False))
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_SETTLE_SECONDS", 0)
+
+    assert cli.cmd_mcp_health(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"][0]["configured"] is False
 
 
 def test_cmd_mcp_health_settles_a_pending_location(monkeypatch):
@@ -408,3 +522,44 @@ def test_cmd_mcp_health_settles_a_pending_location(monkeypatch):
 
     assert cli.cmd_mcp_health(_args()) == 0
     assert settled == [(r"C:\a", mcp_health.PENDING_SETTLE_SECONDS)]
+
+
+def test_cmd_mcp_health_says_why_a_repair_failed(monkeypatch, capsys):
+    """A machine-wide repair is useless if it will not say what went wrong."""
+    from perun import __main__ as cli
+
+    monkeypatch.setattr(mcp_health, "project_directories",
+                        lambda: [r"C:\a", r"C:\b"])
+    monkeypatch.setattr(mcp_health, "diagnose",
+                        lambda server, directory: _report(server, directory, "failed"))
+    monkeypatch.setattr(mcp_health, "revive", lambda server, directory, **kw: {
+        "ok": False, "state": "failed", "already": False,
+        "error": "HTTP 500 for /api/experimental/mcp/perun/connect"})
+
+    assert cli.cmd_mcp_health(_args(fix=True, json=False)) == 1
+    out = capsys.readouterr().out
+    assert "still down" in out
+    assert "HTTP 500" in out
+
+
+def test_cmd_mcp_health_emits_json_when_there_is_nothing_to_check(monkeypatch, capsys):
+    """--json must stay parseable even on the empty answer."""
+    from perun import __main__ as cli
+
+    monkeypatch.setattr(mcp_health, "project_directories", lambda: [])
+
+    assert cli.cmd_mcp_health(_args(json=True)) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"] == []
+    assert "no OpenCode location" in payload["error"]
+
+
+def test_state_label_distinguishes_an_error_from_silence():
+    from perun import __main__ as cli
+
+    silent = _report("perun", r"C:\a", "", configured=False, reachable=False,
+                     answered=False)
+    answered = {**silent, "answered": True}
+
+    assert cli._mcp_state_label(silent) == "service unreachable"
+    assert cli._mcp_state_label(answered) == "service error"

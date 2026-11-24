@@ -26,7 +26,8 @@ Usage::
     python -m perun deploy-plan <slug> [--changed FILE ...] [--include-auto] [--json]
     python -m perun install [--uninstall] [--machine]
     python -m perun mcp
-    python -m perun mcp-health [--fix] [--selftest] [--json]
+    python -m perun mcp-health [--all | --directory DIR] [--server NAME]
+                               [--fix] [--selftest] [--json]
 """
 
 from __future__ import annotations
@@ -1362,19 +1363,26 @@ def cmd_mcp_health(args: argparse.Namespace) -> int:
         directories = [os.path.abspath(args.directory)
                        if getattr(args, "directory", "") else os.getcwd()]
     if not directories:
-        print("no OpenCode location to check — is the service running? "
-              "(`opencode service status`)", file=sys.stderr)
+        message = ("no OpenCode location to check — is the service running? "
+                   "(`opencode service status`)")
+        if getattr(args, "json", False):
+            _print({"server": server, "results": [], "selftest": None,
+                    "error": message})
+        else:
+            print(message, file=sys.stderr)
         return 1
 
     results = [_check_mcp_location(mcp_health, server, d, fix)
                for d in directories]
     # Reading /api/mcp for a directory is what makes OpenCode materialize that
-    # location's MCP entry, so the first read can say "not configured" for a
-    # location that is one call away from connecting. Read those once more; a
-    # location that is really unconfigured simply stays that way.
+    # location's MCP entry, and the connect that follows is asynchronous, so a
+    # location that reports no server is provisional: wait for the entry to
+    # appear before judging it. A single immediate re-read lands in that gap and
+    # would report "not configured" for a location that is two seconds from
+    # connected — having already started the connection.
     for index, report in enumerate(results):
         if report["reachable"] and not report["configured"]:
-            results[index] = _check_mcp_location(
+            results[index] = _await_materialized(
                 mcp_health, server, report["directory"], fix)
 
     probe = mcp_health.selftest() if getattr(args, "selftest", False) else None
@@ -1407,6 +1415,25 @@ def _check_mcp_location(mcp_health: Any, server: str, directory: str,
     return {**report, "revive": revived}
 
 
+def _await_materialized(mcp_health: Any, server: str, directory: str,
+                        fix: bool) -> dict[str, Any]:
+    """Wait for a location that reports no server, then judge it.
+
+    The read that returned "no such server" is what makes the service create the
+    location's entry, so the verdict is provisional until the entry appears. A
+    location that really has no ``perun`` entry simply stays that way.
+    """
+    deadline = time.monotonic() + mcp_health.MATERIALIZE_SETTLE_SECONDS
+    report = mcp_health.diagnose(server, directory)
+    while (not report["configured"] and report["reachable"]
+           and time.monotonic() < deadline):
+        time.sleep(mcp_health.MATERIALIZE_POLL_SECONDS)
+        report = mcp_health.diagnose(server, directory)
+    if report["configured"]:
+        return _check_mcp_location(mcp_health, server, directory, fix)
+    return {**report, "revive": None}
+
+
 def _mcp_location_healthy(report: dict[str, Any]) -> bool:
     if not report.get("reachable", False):
         return False
@@ -1437,7 +1464,8 @@ def _print_mcp_probe(probe: dict[str, Any] | None) -> None:
 
 def _mcp_state_label(report: dict[str, Any]) -> str:
     if not report.get("reachable", False):
-        return "service unreachable"
+        # An error status is still an answer; only silence is "unreachable".
+        return "service error" if report.get("answered") else "service unreachable"
     return report["state"] or "not configured"
 
 
@@ -1468,14 +1496,23 @@ def _print_mcp_health_all(payload: dict[str, Any]) -> None:
         revived = report.get("revive")
         if revived is not None:
             line += " → reconnected" if revived.get("ok") else " → still down"
-        if report.get("error") and not revived:
-            line += f" ({report['error'][:60]})"
+        # A location that is down must say why: this list is the whole point of
+        # a machine-wide repair, and a bare "still down" leaves nothing to act on.
+        reason = report.get("error") or ""
+        if revived is not None and not revived.get("ok"):
+            reason = revived.get("error") or reason
+        if reason and not (revived or {}).get("ok"):
+            line += f" ({reason[:60]})"
         print(line)
-    unreachable = [r for r in results if not r.get("reachable", False)]
-    if unreachable:
-        from . import mcp_health
-
-        print("remedy:     " + mcp_health.UNREACHABLE_REMEDY)
+    # Each failure has its own remedy (silence, an error status, a wedged
+    # connect), so print the distinct ones instead of one blanket guess.
+    remedies: list[str] = []
+    for report in results:
+        remedy = report.get("remedy") or ""
+        if not report.get("reachable", False) and remedy and remedy not in remedies:
+            remedies.append(remedy)
+    for remedy in remedies:
+        print("remedy:     " + remedy)
     _print_mcp_startup(next((r for r in results if r.get("last_startup")), {}))
     _print_mcp_probe(payload.get("selftest"))
 

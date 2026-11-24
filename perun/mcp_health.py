@@ -52,19 +52,39 @@ SETTLE_SECONDS = 120.0
 #: within that window; a diagnostic must not outlast it by much.
 PENDING_SETTLE_SECONDS = 60.0
 
+#: Reading ``/api/mcp`` for a directory makes the service materialize that
+#: location, and the connect then happens off the request: measured as no row at
+#: t+0, ``pending`` at t+2 s, ``connected`` at t+4 s. A location that reports no
+#: server is therefore provisional, never an instant "not configured".
+MATERIALIZE_SETTLE_SECONDS = 6.0
+
+#: Poll interval while waiting for a materialized location to list its server.
+MATERIALIZE_POLL_SECONDS = 1.0
+
 #: Poll interval while waiting for ``pending`` to settle.
 SETTLE_POLL_SECONDS = 2.0
 
 #: Two writers merge into one file from different threads of the same process
-#: (the import record, then the schema record), so the read-merge-write is locked.
+#: (the import record, then the schema record), so the read-merge-write is
+#: serialised. It does **not** cover other processes: every OpenCode location
+#: starts its own MCP server and they all write this one file, so a write whose
+#: ``pid`` differs from the record's replaces it instead of merging into it.
 _RECORD_LOCK = threading.Lock()
 
 
 def record_startup(payload: dict[str, Any]) -> None:
-    """Merge *payload* into the startup record. Never raises."""
+    """Merge *payload* into the startup record. Never raises.
+
+    A payload that names a different ``pid`` than the record is a concurrent
+    start from another location: the record describes one run, so it is replaced
+    rather than merged, and the payload must carry that run's identity fields.
+    """
     try:
         with _RECORD_LOCK:
             record = read_startup()
+            pid = payload.get("pid")
+            if pid is not None and record.get("pid") != pid:
+                record = {}
             record.update(payload)
             record["recorded_at"] = time.strftime(
                 "%Y-%m-%dT%H:%M:%S", time.localtime())
@@ -95,16 +115,26 @@ def server_status(server: str = "perun", directory: str = "",
 
     ``state`` is the service's own word (``connected``, ``failed``,
     ``pending``, ``disabled``) or ``""`` when it lists no such server.
-    ``reachable`` says whether the service answered at all: an unreachable
-    service must never be reported as "not configured", which would excuse a
-    dead connection instead of naming it.
+    ``reachable`` says whether the connection state could be read at all: an
+    unreadable state must never be reported as "not configured", which would
+    excuse a dead connection instead of naming it. ``answered`` separates the
+    two ways that can fail — the service answered with an error status
+    (``http_status``) or it did not answer at all — because the remedy differs.
     """
     directory = directory or os.getcwd()
     try:
         rows = _api(api).mcp_servers(directory)
+    except opencode_api.OpenCodeHTTPError as exc:
+        # The service answered, with an error. "Start the service" would be the
+        # wrong advice, but the connection state is still unknown.
+        return {"server": server, "directory": directory, "state": "",
+                "error": str(exc)[:300], "configured": False,
+                "reachable": False, "answered": True,
+                "http_status": exc.status}
     except Exception as exc:
         return {"server": server, "directory": directory, "state": "",
-                "error": str(exc)[:300], "configured": False, "reachable": False}
+                "error": str(exc)[:300], "configured": False,
+                "reachable": False, "answered": False, "http_status": None}
     for row in rows:
         if str(row.get("name") or "") != server:
             continue
@@ -116,9 +146,12 @@ def server_status(server: str = "perun", directory: str = "",
             "error": str(status.get("error") or "")[:300],
             "configured": True,
             "reachable": True,
+            "answered": True,
+            "http_status": None,
         }
     return {"server": server, "directory": directory, "state": "",
-            "error": "", "configured": False, "reachable": True}
+            "error": "", "configured": False, "reachable": True,
+            "answered": True, "http_status": None}
 
 
 def project_directories(api: Any = None) -> list[str]:
@@ -189,7 +222,7 @@ def revive(server: str = "perun", directory: str = "", api: Any = None,
 
     The disconnect is what breaks a connection stuck in ``pending`` — without it
     the client keeps answering the connect call with the old, half-open attempt.
-    Nothing is attempted through a service that cannot be reached.
+    Nothing is attempted through a service whose state cannot be read.
     """
     directory = directory or os.getcwd()
     client = _api(api)
@@ -282,6 +315,15 @@ UNREACHABLE_REMEDY = (
     "start or repair the service (`opencode service status`, `opencode serve`) "
     "and run this again")
 
+HTTP_ERROR_REMEDY = (
+    "the OpenCode service answered HTTP {status} instead of the MCP state, so "
+    "the connection is unknown — its own log has the cause; repair the service "
+    "and run this again")
+
+UNKNOWN_STATE_REMEDY = (
+    "the client lists the server but reports no state for it — run "
+    "`perun mcp-health --fix` to reconnect it")
+
 
 def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dict[str, Any]:
     """One verdict for the operator: state, measured startup, likely remedy."""
@@ -292,17 +334,31 @@ def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dic
     slow = bool(total and total >= SLOW_STARTUP_SECONDS)
     state = status["state"]
     if not status["reachable"]:
-        # "I could not ask" is not "there is nothing to ask about".
-        verdict = "service_unreachable"
-        remedy = UNREACHABLE_REMEDY
+        # "I could not ask" is not "there is nothing to ask about", and "the
+        # service answered with an error" is not "the service did not answer".
+        if status.get("answered"):
+            verdict = "service_error"
+            remedy = HTTP_ERROR_REMEDY.format(
+                status=status.get("http_status") or "an error")
+        else:
+            verdict = "service_unreachable"
+            remedy = UNREACHABLE_REMEDY
     else:
         verdict = {
             "connected": "ok",
             "failed": "connect_failed",
             "pending": "stuck_pending",
             "disabled": "not_connected",
-        }.get(state, "not_configured")
-        remedy = _REMEDY.get(state, "")
+        }.get(state)
+        if verdict is not None:
+            remedy = _REMEDY.get(state, "")
+        elif status["configured"]:
+            # The entry exists; "add the entry" would contradict what we just read.
+            verdict = "unknown_state"
+            remedy = UNKNOWN_STATE_REMEDY
+        else:
+            verdict = "not_configured"
+            remedy = _REMEDY[""]
     if slow:
         verdict = f"{verdict} (slow_startup)" if verdict != "ok" else "ok (slow_startup)"
         remedy = (remedy + "; " if remedy else "") + (
@@ -320,6 +376,7 @@ def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dic
         "error": status["error"],
         "configured": status["configured"],
         "reachable": status["reachable"],
+        "answered": status.get("answered", False),
         "verdict": verdict,
         "remedy": remedy,
         "last_startup": startup,
