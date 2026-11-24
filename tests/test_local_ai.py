@@ -370,6 +370,20 @@ def test_live_context_tokens_uses_the_newest_message():
     assert context_governor.live_context_tokens(api, "ses_x") == 1200
 
 
+def test_live_context_tokens_ignores_the_compaction_request():
+    """The summariser's own request carries the old context, not the after."""
+    class Api:
+        def message_page(self, session_id, *, limit=50, cursor=""):
+            return ([
+                {"id": "a1", "type": "assistant",
+                 "tokens": {"input": 1000, "cache": {"read": 5000}}},
+                {"id": "c1", "type": "compaction",
+                 "tokens": {"input": 500, "cache": {"read": 180000}}},
+            ], {})
+
+    assert context_governor.live_context_tokens(Api(), "ses_x") == 6000
+
+
 def test_compact_posts_an_empty_object():
     """A body-less POST is rejected by OpenCode with 'Expected object'."""
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
@@ -475,6 +489,34 @@ def test_settle_closes_the_previous_event():
     assert row["messages_after"] == 100
 
 
+def test_settle_waits_for_the_next_turn_after_a_compaction():
+    class CompactionOnlyAPI:
+        def session_active(self, session_id):
+            return False
+
+        def message_page(self, session_id, *, limit=50, cursor=""):
+            return ([{"id": "c1", "type": "compaction",
+                      "tokens": {"input": 500, "cache": {"read": 180000}}}], {})
+
+    registry.record_context_event(1, "compact", tokens_before=180000,
+                                  messages_before=100)
+    res = context_governor.settle(_session(usage_messages=104), CompactionOnlyAPI())
+    assert res == {"settled": False, "waiting": "next_turn"}
+    assert registry.last_context_event(1)["tokens_after"] == 0
+
+
+def test_settle_waits_for_the_usage_snapshot_to_advance():
+    api = FakeAPI(tokens=7000)
+    registry.record_context_event(1, "compact", tokens_before=9000,
+                                  messages_before=100)
+    first = context_governor.settle(_session(usage_messages=100), api)
+    assert first == {"settled": False, "waiting": "usage_snapshot"}
+    assert registry.last_context_event(1)["tokens_after"] == 0
+    second = context_governor.settle(_session(usage_messages=104), api)
+    assert second["settled"] is True
+    assert registry.last_context_event(1)["messages_after"] == 104
+
+
 def test_governor_disables_itself_when_compaction_does_not_help(monkeypatch):
     monkeypatch.setattr(context_governor, "_last_check", 0.0)
     project = registry.add_project("governor-test", r"C:\governor-test")
@@ -484,9 +526,10 @@ def test_governor_disables_itself_when_compaction_does_not_help(monkeypatch):
         "cost": 1.0, "models": {}, "complete": True})
     for _ in range(3):
         registry.record_context_event(session["id"], "compact",
-                                      tokens_before=10000)
+                                      tokens_before=10000, messages_before=100)
         registry.update_context_event(
-            registry.last_context_event(session["id"])["id"], tokens_after=9800)
+            registry.last_context_event(session["id"])["id"],
+            tokens_after=9800, messages_after=110)
     s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
                   context_governor_shadow=False, context_governor_turns=0)
     api = FakeAPI(tokens=9000)
@@ -496,6 +539,27 @@ def test_governor_disables_itself_when_compaction_does_not_help(monkeypatch):
     assert api.compactions == []
     assert any(row["kind"] == "context_governor"
                for row in registry.list_activity(limit=5))
+
+
+def test_governor_ignores_unmeasured_compactions(monkeypatch):
+    """A stale usage snapshot must not look like a failed compaction."""
+    monkeypatch.setattr(context_governor, "_last_check", 0.0)
+    project = registry.add_project("governor-stale", r"C:\governor-stale")
+    session = registry.create_session(project["id"], "ses_gov_stale")
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 10, "tokens_out": 1, "cache_read": 9000,
+        "cost": 1.0, "models": {}, "complete": True})
+    for _ in range(3):
+        registry.record_context_event(session["id"], "compact",
+                                      tokens_before=10000, messages_before=100)
+        # The old bug wrote the "before" message count back as "after".
+        registry.update_context_event(
+            registry.last_context_event(session["id"])["id"],
+            tokens_after=9800, messages_after=100)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=1000000,
+                  context_governor_shadow=False, context_governor_turns=0)
+    context_governor.tick(s, api=FakeAPI(tokens=9000))
+    assert s.context_governor_enabled is True
 
 
 def test_governor_tick_is_a_no_op_when_disabled(monkeypatch):

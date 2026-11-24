@@ -71,7 +71,15 @@ def live_context_tokens(api: opencode_api.OpenCodeAPI, session_id: str) -> int:
     except Exception:
         return 0
     for row in reversed(rows or []):
-        tokens = row.get("tokens") if isinstance(row, dict) else None
+        if not isinstance(row, dict):
+            continue
+        # A ``compaction`` row is the summariser's own request: its input is the
+        # *old* context plus the summary prompt, not the post-compaction size.
+        # Only a normal assistant turn reports the context that will be sent
+        # from now on.
+        if str(row.get("type") or "assistant") != "assistant":
+            continue
+        tokens = row.get("tokens")
         if isinstance(tokens, dict):
             total = context_tokens(tokens)
             if total:
@@ -92,7 +100,11 @@ def _events(session_pk: int, limit: int = 3) -> list[dict[str, Any]]:
 def _ineffective(session_pk: int) -> bool:
     """Three consecutive real compactions that did not shrink the context."""
     rows = [r for r in _events(session_pk, 3)
-            if r.get("action") == "compact" and int(r.get("tokens_after") or 0)]
+            if r.get("action") == "compact"
+            and int(r.get("tokens_after") or 0)
+            # An event whose after-values never advanced is unmeasured (the
+            # usage snapshot was stale), not evidence that compaction failed.
+            and int(r.get("messages_after") or 0) > int(r.get("messages_before") or 0)]
     if len(rows) < 3:
         return False
     return all(
@@ -148,8 +160,10 @@ def settle(session: dict[str, Any],
     if not pk or not sid:
         return {"settled": False}
     last = registry.last_context_event(pk)
-    if (not last or last.get("action") != "compact"
-            or int(last.get("tokens_after") or 0)):
+    if not last or last.get("action") != "compact":
+        return {"settled": False}
+    # Already measured: tokens and a message delta are both recorded.
+    if int(last.get("tokens_after") or 0) and int(last.get("messages_after") or 0):
         return {"settled": False}
     try:
         if api.session_active(sid):
@@ -158,11 +172,18 @@ def settle(session: dict[str, Any],
         return {"settled": False}
     tokens = live_context_tokens(api, sid)
     if not tokens:
-        return {"settled": False}
+        # The only token-bearing row is the compaction request itself; wait
+        # for the first normal assistant turn so "after" is a real post-state.
+        return {"settled": False, "waiting": "next_turn"}
+    messages = int(session.get("usage_messages") or 0)
+    if messages <= int(last.get("messages_before") or 0):
+        # The usage snapshot has not advanced past the compaction yet; writing
+        # it would copy the "before" cost/messages and fake a $0.00 delta.
+        return {"settled": False, "waiting": "usage_snapshot"}
     registry.update_context_event(
         int(last["id"]),
         tokens_after=tokens,
-        messages_after=int(session.get("usage_messages") or 0),
+        messages_after=messages,
         cost_after=float(session.get("cost_usd") or 0),
     )
     return {"settled": True, "tokens": tokens}

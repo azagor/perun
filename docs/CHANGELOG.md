@@ -4,6 +4,14 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Fixed
+
+* Context governor no longer mistakes the compaction request for the resulting
+  context. The summariser's own message carries the **old** context, so every
+  compaction looked ineffective and three in a row disabled the governor. The
+  after-state now waits for the first normal assistant turn and a usage snapshot
+  that advanced, and unmeasured events no longer count toward the self-disable.
+
 ### Docs
 
 * Documented the two MCP startup failures we hit — a FastMCP 3.x or mixed install
