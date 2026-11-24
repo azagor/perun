@@ -17,9 +17,10 @@ All notable changes are recorded here. Single source of truth for release notes.
   **old** context, and the message page is newest-first, so reversing it read the
   *oldest* turn in the window. Every compaction therefore looked ineffective and
   three in a row disabled the governor. The after-value now comes from the newest
-  normal assistant turn that is newer than the summariser row, and it waits for a
-  usage snapshot that advanced; unmeasured events no longer count toward the
-  self-disable.
+  normal assistant turn that is newer than the summariser message the compact
+  call returned (its id is recorded on the event), it waits for a usage snapshot
+  that advanced, and unmeasured events or interleaved shadow rows no longer count
+  toward the self-disable. Each session is measured once per tick.
 * MCP tool modules again expose callable tool names under FastMCP 2.x. The
   decorator returns a `FunctionTool` wrapper, which broke every direct caller
   (tests and the bridge); the module globals now point at the wrapped functions

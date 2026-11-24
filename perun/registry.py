@@ -2667,6 +2667,15 @@ def update_context_event(event_id: int, *, tokens_after: int = 0,
         )
 
 
+def set_context_event_anchor(event_id: int, compaction_message_id: str) -> None:
+    """Bind a compaction event to the message the API created for it."""
+    with db.db() as conn:
+        conn.execute(
+            "UPDATE context_events SET compaction_message_id=? WHERE id=?",
+            (str(compaction_message_id), int(event_id)),
+        )
+
+
 def last_context_event(session_pk: int) -> dict[str, Any] | None:
     with db.db() as conn:
         row = db.one(

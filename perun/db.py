@@ -711,7 +711,8 @@ CREATE TABLE IF NOT EXISTS context_events (
     cost_after    REAL NOT NULL DEFAULT 0,
     messages_after INTEGER NOT NULL DEFAULT 0,
     note          TEXT NOT NULL DEFAULT '',
-    created_at    TEXT NOT NULL DEFAULT ''
+    created_at    TEXT NOT NULL DEFAULT '',
+    compaction_message_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_context_events_session
     ON context_events(session_pk, id DESC);
@@ -875,6 +876,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # gains the operator-declared environment map on the next startup.
     "project_checks": [
         ("env", "TEXT NOT NULL DEFAULT '{}'"),
+    ],
+    # The id returned by ``POST /session/{id}/compact`` anchors the measured
+    # effect to the summariser request itself instead of wall-clock guesses.
+    "context_events": [
+        ("compaction_message_id", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 

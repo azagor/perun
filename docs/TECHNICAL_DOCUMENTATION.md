@@ -3094,9 +3094,11 @@ critical path and never sees a provider credential.
   records every decision in `context_events`. **Shadow mode is on by default**:
   it records `would-compact` rows and never calls OpenCode until the operator
   turns it off. `settle()` closes the previous compaction's after-values
-  independently of the next decision (so the measurement cannot be starved),
-  and three compactions that fail to shrink the context disable the governor
-  with an activity row.
+  independently of the next decision (so the measurement cannot be starved);
+  the value must come from a normal turn newer than the summariser message the
+  compact call created, so a turn that was already in flight is never mistaken
+  for the post-compaction state. Three measured compactions that fail to shrink
+  the context disable the governor with an activity row.
 * Prompt caching is the cost model: 98% of measured input is cache reads. Never
   rewrite a session prefix per turn; compaction is a boundary event.
 * Budgets: `perun_grep`/`perun_ast_grep`/`perun_global_*`/`perun_unified_search`

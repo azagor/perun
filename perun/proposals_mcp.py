@@ -424,11 +424,13 @@ def _restore_plain_tool_names() -> None:
 
     ``@mcp.tool`` returns a ``FunctionTool`` wrapper; the MCP server keeps its
     own registry, so rebinding the globals to the wrapped functions restores the
-    API that tests and the bridge have always imported.
+    API that tests and the bridge have always imported. The wrapper is detected
+    by shape, not by class name, so a FastMCP rename cannot silently disable it.
     """
     for name, obj in list(globals().items()):
         fn = getattr(obj, "fn", None)
-        if type(obj).__name__ == "FunctionTool" and callable(fn):
+        if (callable(fn) and hasattr(obj, "run")
+                and hasattr(obj, "parameters")):
             globals()[name] = fn
 
 

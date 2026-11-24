@@ -46,6 +46,15 @@ def test_importing_the_server_does_not_index(monkeypatch):
     assert not started.is_set()
 
 
+def test_importing_the_server_leaves_the_tools_callable(monkeypatch):
+    """Direct callers import the tool functions; FastMCP wraps them in 2.x."""
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+
+    assert callable(module.perun_grep)
+    assert not hasattr(module.perun_grep, "fn")
+
+
 def test_main_starts_the_preparation_off_the_critical_path(monkeypatch):
     spec, module, started = _load(monkeypatch)
     spec.loader.exec_module(module)

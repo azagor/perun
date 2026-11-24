@@ -463,6 +463,19 @@ def test_governor_compacts_and_records_the_event():
     assert event["messages_before"] == 100
 
 
+def test_governor_anchors_the_event_to_the_summariser_message():
+    class Api(FakeAPI):
+        def compact(self, session_id: str) -> dict:
+            self.compactions.append(session_id)
+            return {"id": "msg_c", "type": "compaction"}
+
+    api = Api(tokens=9000)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
+                  context_governor_shadow=False, context_governor_turns=0)
+    assert context_governor.maybe_compact(api, _session(), s)["compacted"] is True
+    assert registry.last_context_event(1)["compaction_message_id"] == "msg_c"
+
+
 def test_governor_respects_the_cooldown():
     api = FakeAPI(tokens=9000)
     s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
@@ -590,6 +603,59 @@ def test_settle_waits_while_the_summariser_has_not_run():
     assert registry.last_context_event(1)["tokens_after"] == 0
 
 
+def test_settle_uses_the_compaction_anchor_to_reject_an_earlier_turn():
+    """A turn below the summariser row is pre-compaction, whatever its clock."""
+    now = time.time()
+    event = registry.record_context_event(1, "compact", tokens_before=470000,
+                                          messages_before=100)
+    registry.set_context_event_anchor(event["id"], "c1")
+    api = _PageAPI([
+        _msg_row("c1", "compaction", now + 4),
+        _msg_row("a1", "assistant", now + 5, 470000),
+    ])
+    res = context_governor.settle(_session(usage_messages=104), api)
+    assert res == {"settled": False, "waiting": "next_turn"}
+    assert registry.last_context_event(1)["tokens_after"] == 0
+
+
+def test_settle_accepts_the_turn_above_the_compaction_anchor():
+    now = time.time()
+    event = registry.record_context_event(1, "compact", tokens_before=470000,
+                                          messages_before=100)
+    registry.set_context_event_anchor(event["id"], "c1")
+    api = _PageAPI([
+        _msg_row("a2", "assistant", now + 6, 58000),
+        _msg_row("c1", "compaction", now + 4),
+        _msg_row("a1", "assistant", now - 2, 470000),
+    ])
+    assert context_governor.settle(_session(usage_messages=104), api) == {
+        "settled": True, "tokens": 58000}
+
+
+def test_settle_accepts_a_full_page_when_the_anchor_scrolled_out():
+    """Fifty newer messages mean everything in the page postdates the anchor."""
+    now = time.time()
+    event = registry.record_context_event(1, "compact", tokens_before=470000,
+                                          messages_before=100)
+    registry.set_context_event_anchor(event["id"], "c-gone")
+    rows = [_msg_row(f"a{i}", "assistant", now + i, 60000 + i)
+            for i in range(1, 51)]
+    res = context_governor.settle(_session(usage_messages=104), _PageAPI(rows))
+    assert res == {"settled": True, "tokens": 60050}
+
+
+def test_settle_ignores_a_shadow_event():
+    registry.record_context_event(1, "would-compact", tokens_before=9000)
+    assert context_governor.settle(_session(), FakeAPI(tokens=7000)) == {
+        "settled": False}
+
+
+def test_iso_seconds_reads_aware_and_naive_timestamps():
+    assert context_governor._iso_seconds("not a date") == 0.0
+    assert context_governor._iso_seconds("2026-01-01T00:00:00") == \
+        context_governor._iso_seconds("2026-01-01T00:00:00+00:00")
+
+
 def test_governor_disables_itself_when_compaction_does_not_help(monkeypatch):
     monkeypatch.setattr(context_governor, "_last_check", 0.0)
     project = registry.add_project("governor-test", r"C:\governor-test")
@@ -633,6 +699,28 @@ def test_governor_ignores_unmeasured_compactions(monkeypatch):
                   context_governor_shadow=False, context_governor_turns=0)
     context_governor.tick(s, api=FakeAPI(tokens=9000))
     assert s.context_governor_enabled is True
+
+
+def test_governor_counts_only_compactions_in_the_ineffective_window(monkeypatch):
+    """An interleaved shadow row must not hide three failed compactions."""
+    monkeypatch.setattr(context_governor, "_last_check", 0.0)
+    project = registry.add_project("governor-mixed", r"C:\governor-mixed")
+    session = registry.create_session(project["id"], "ses_gov_mixed")
+    registry.update_session_usage(session["id"], {
+        "tokens_in": 10, "tokens_out": 1, "cache_read": 9000,
+        "cost": 1.0, "models": {}, "complete": True})
+    for _ in range(3):
+        registry.record_context_event(session["id"], "compact",
+                                      tokens_before=10000, messages_before=100)
+        registry.update_context_event(
+            registry.last_context_event(session["id"])["id"],
+            tokens_after=9800, messages_after=110)
+        registry.record_context_event(session["id"], "would-compact",
+                                      tokens_before=10000)
+    s = _settings(context_governor_enabled=True, context_governor_tokens=8000,
+                  context_governor_shadow=False, context_governor_turns=0)
+    context_governor.tick(s, api=FakeAPI(tokens=9000))
+    assert s.context_governor_enabled is False
 
 
 def test_governor_tick_is_a_no_op_when_disabled(monkeypatch):

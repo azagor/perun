@@ -18,7 +18,9 @@ Safety rules:
 
 ``settle()`` closes the previous compaction's after-values as soon as the session
 is observed idle, *before* the compact decision, so an active session at the next
-tick cannot prevent the measurement (and therefore the self-disable).
+tick cannot prevent the measurement (and therefore the self-disable). The
+measurement is anchored to the summariser message the compact call created, so a
+turn that was already in flight is never mistaken for the post-compaction state.
 """
 
 from __future__ import annotations
@@ -83,24 +85,34 @@ def _message_time(row: dict[str, Any]) -> float:
     return value / 1000.0 if value > 1e11 else value
 
 
-def _measure(api: opencode_api.OpenCodeAPI, session_id: str) -> dict[str, Any]:
-    """Newest assistant usage plus the newest compaction marker of one session.
+def _measure(api: opencode_api.OpenCodeAPI, session_id: str, *,
+             anchor: str = "") -> dict[str, Any]:
+    """Newest assistant usage plus the compaction markers of one session.
 
     ``/message`` returns messages newest-first. The timestamps decide which row
     is newest (a reordered page cannot flip the answer), and the first matching
-    row wins when a fake or an older service omits them.
+    row wins when a fake or an older service omits them. ``anchor`` is the id
+    the compact call returned, so the caller can tell whether a normal turn has
+    arrived since that exact summariser request.
     """
-    empty: dict[str, Any] = {"tokens": 0, "assistant_at": 0.0, "compaction_at": 0.0}
+    empty: dict[str, Any] = {
+        "tokens": 0, "assistant_at": 0.0, "compaction_at": 0.0,
+        "assistant_index": -1, "anchor_index": -1, "page_size": 0,
+    }
     try:
         rows, _info = api.message_page(session_id, limit=50)
     except Exception:
         return empty
     tokens = 0
     assistant_at = -1.0
+    assistant_index = -1
     compaction_at = 0.0
-    for row in rows or []:
+    anchor_index = -1
+    for index, row in enumerate(rows or []):
         if not isinstance(row, dict):
             continue
+        if anchor and str(row.get("id") or "") == anchor:
+            anchor_index = index
         when = _message_time(row)
         # A ``compaction`` row is the summariser's own request: its input is the
         # *old* context plus the summary prompt, not the post-compaction size.
@@ -116,11 +128,14 @@ def _measure(api: opencode_api.OpenCodeAPI, session_id: str) -> dict[str, Any]:
             continue
         total = context_tokens(usage)
         if total and when > assistant_at:
-            assistant_at, tokens = when, total
+            assistant_at, tokens, assistant_index = when, total, index
     return {
         "tokens": tokens,
         "assistant_at": max(assistant_at, 0.0),
         "compaction_at": compaction_at,
+        "assistant_index": assistant_index,
+        "anchor_index": anchor_index,
+        "page_size": len(rows or []),
     }
 
 
@@ -129,12 +144,14 @@ def live_context_tokens(api: opencode_api.OpenCodeAPI, session_id: str) -> int:
     return int(_measure(api, session_id)["tokens"])
 
 
-def _events(session_pk: int, limit: int = 3) -> list[dict[str, Any]]:
+def _events(session_pk: int, limit: int = 3,
+            action: str = "compact") -> list[dict[str, Any]]:
     with db.db() as conn:
         rows = db.rows(
             conn,
-            "SELECT * FROM context_events WHERE session_pk=? ORDER BY id DESC LIMIT ?",
-            (int(session_pk), int(limit)),
+            "SELECT * FROM context_events WHERE session_pk=? AND action=? "
+            "ORDER BY id DESC LIMIT ?",
+            (int(session_pk), str(action), int(limit)),
         )
         return [dict(r) for r in rows]
 
@@ -142,8 +159,7 @@ def _events(session_pk: int, limit: int = 3) -> list[dict[str, Any]]:
 def _ineffective(session_pk: int) -> bool:
     """Three consecutive real compactions that did not shrink the context."""
     rows = [r for r in _events(session_pk, 3)
-            if r.get("action") == "compact"
-            and int(r.get("tokens_after") or 0)
+            if int(r.get("tokens_after") or 0)
             # An event whose after-values never advanced is unmeasured (the
             # usage snapshot was stale), not evidence that compaction failed.
             and int(r.get("messages_after") or 0) > int(r.get("messages_before") or 0)]
@@ -206,7 +222,8 @@ def _iso_seconds(raw: str) -> float:
 
 
 def settle(session: dict[str, Any],
-           api: opencode_api.OpenCodeAPI) -> dict[str, Any]:
+           api: opencode_api.OpenCodeAPI,
+           measure: dict[str, Any] | None = None) -> dict[str, Any]:
     """Fill the previous compaction's after-values once the session is idle."""
     pk = int(session.get("id") or 0)
     sid = str(session.get("opencode_session_id") or "").strip()
@@ -223,32 +240,45 @@ def settle(session: dict[str, Any],
             return {"settled": False, "active": True}
     except Exception:
         return {"settled": False}
-    measure = _measure(api, sid)
+    anchor = str(last.get("compaction_message_id") or "")
+    if measure is None:
+        measure = _measure(api, sid, anchor=anchor)
     tokens = int(measure["tokens"])
     if not tokens:
         # The only token-bearing row is the compaction request itself; wait
         # for the first normal assistant turn so "after" is a real post-state.
         return {"settled": False, "waiting": "next_turn"}
-    started = _iso_seconds(str(last.get("created_at") or ""))
-    assistant_at = float(measure["assistant_at"])
-    if assistant_at:
-        # A turn that finished before the compaction was requested still
-        # carries the old context, and one that is older than the summariser
-        # row was written before OpenCode replaced the conversation.
-        if started and assistant_at <= started:
+    anchor_index = int(measure["anchor_index"])
+    if anchor and anchor_index >= 0:
+        # The page is newest-first: a turn below the summariser row predates it.
+        if int(measure["assistant_index"]) > anchor_index:
             return {"settled": False, "waiting": "next_turn"}
-        compaction_at = float(measure["compaction_at"])
-        if compaction_at >= started - _COMPACTION_SLACK:
-            if assistant_at <= compaction_at:
+    else:
+        # Legacy event, or the anchor scrolled out of the page: fall back to
+        # timestamps. A full page means the anchor is older than everything in
+        # it, so the newest turn is post-compaction either way.
+        started = _iso_seconds(str(last.get("created_at") or ""))
+        assistant_at = float(measure["assistant_at"])
+        if assistant_at:
+            # A turn that finished before the compaction was requested still
+            # carries the old context, and one that is older than the summariser
+            # row was written before OpenCode replaced the conversation.
+            if started and assistant_at <= started:
                 return {"settled": False, "waiting": "next_turn"}
-        elif started and time.time() - started < _COMPACTION_GRACE:
-            # The summariser row is not in the page yet, so the compaction has
-            # not been applied and the newest turn is still pre-compaction.
-            return {"settled": False, "waiting": "compaction"}
+            compaction_at = float(measure["compaction_at"])
+            if compaction_at >= started - _COMPACTION_SLACK:
+                if assistant_at <= compaction_at:
+                    return {"settled": False, "waiting": "next_turn"}
+            elif (started and int(measure["page_size"]) < 50
+                    and time.time() - started < _COMPACTION_GRACE):
+                # The summariser row is not visible yet, so the compaction has
+                # not been applied and the newest turn is still pre-compaction.
+                return {"settled": False, "waiting": "compaction"}
     messages = int(session.get("usage_messages") or 0)
     if messages <= int(last.get("messages_before") or 0):
-        # The usage snapshot has not advanced past the compaction yet; writing
-        # it would copy the "before" cost/messages and fake a $0.00 delta.
+        # Guard the cost/messages snapshot too: writing a "before" copy as
+        # "after" would fake a $0.00 delta (the compaction row itself advances
+        # the count, so the gates above decide whether a real turn exists).
         return {"settled": False, "waiting": "usage_snapshot"}
     registry.update_context_event(
         int(last["id"]),
@@ -263,6 +293,7 @@ def maybe_compact(
     api: opencode_api.OpenCodeAPI,
     session: dict[str, Any],
     settings: config.Settings,
+    measure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Decide for one session: skip, record a shadow event, or compact."""
     pk = int(session.get("id") or 0)
@@ -275,7 +306,8 @@ def maybe_compact(
     except Exception:
         return {"ok": True, "skipped": "service_unavailable"}
 
-    tokens = live_context_tokens(api, sid)
+    tokens = (int(measure["tokens"]) if measure is not None
+              else live_context_tokens(api, sid))
     if tokens < int(settings.context_governor_tokens or 0):
         return {"ok": True, "skipped": "below_threshold"}
 
@@ -314,11 +346,19 @@ def maybe_compact(
         pk, "compact", tokens_before=tokens, cost_before=cost,
         messages_before=messages)
     try:
-        api.compact(sid)
+        reply = api.compact(sid)
     except Exception as exc:
         registry.update_context_event(int(event.get("id") or 0),
                                       note=f"failed: {exc}"[:300])
         return {"ok": False, "reason": str(exc)[:300]}
+    # Anchor the measurement to the summariser request the API just created, so
+    # settle() can tell a post-compaction turn from an in-flight one.
+    anchor = str((reply or {}).get("id") or "") if isinstance(reply, dict) else ""
+    if anchor:
+        try:
+            registry.set_context_event_anchor(int(event.get("id") or 0), anchor)
+        except Exception:  # pragma: no cover - measurement still falls back
+            LOG.debug("could not record the compaction anchor", exc_info=True)
     LOG.info("compacted session %s at %d tokens", sid, tokens)
     return {"ok": True, "compacted": True, "tokens": tokens,
             "event": int(event.get("id") or 0)}
@@ -342,17 +382,29 @@ def tick(settings: config.Settings | None = None,
     skipped: list[str] = []
     sessions = registry.recent_sessions(limit=10)
     for session in sessions:
+        # One message page per session per tick, shared by the measurement and
+        # the decision (each carries full message content).
+        pk = int(session.get("id") or 0)
+        sid = str(session.get("opencode_session_id") or "").strip()
+        anchor = ""
+        if pk:
+            try:
+                last = registry.last_context_event(pk)
+            except Exception:  # pragma: no cover - governor must not break
+                last = None
+            anchor = str((last or {}).get("compaction_message_id") or "")
+        measure = _measure(api, sid, anchor=anchor) if sid else None
         # Close the previous compaction first, so the measurement cannot be
         # starved by an active session and the self-disable can fire.
         try:
-            settled = settle(session, api)
-            if _ineffective(int(session.get("id") or 0)):
+            settle(session, api, measure=measure)
+            if _ineffective(pk):
                 _disable(s, session, "compactions did not reduce the context")
                 break
         except Exception:  # pragma: no cover - governor must not break
             LOG.debug("governor settle failed", exc_info=True)
         try:
-            result = maybe_compact(api, session, s)
+            result = maybe_compact(api, session, s, measure=measure)
         except Exception as exc:  # pragma: no cover - governor must not break
             LOG.debug("governor check failed", exc_info=True)
             skipped.append(str(exc)[:120])

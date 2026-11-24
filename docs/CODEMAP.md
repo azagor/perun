@@ -412,10 +412,13 @@ OpenAI-compatible runtime).
 Opt-in boundary compaction; off by default because compaction rewrites the
 conversation and resets the provider's prompt cache. Shadow mode is on by
 default, so it records decisions without calling OpenCode.
-* `context_tokens()` — provider-style-aware size of one message's context.
-* `live_context_tokens()` — the newest assistant message's estimate.
-* `settle()` — closes the previous compaction's after-values when the session is
-  idle, independently of the next decision.
+* `context_tokens()` - provider-style-aware size of one message's context.
+* `_measure()` - newest assistant usage, the newest compaction marker and the
+  page position of the summariser message the compact call returned;
+  `live_context_tokens()` returns its token count.
+* `settle()` - closes the previous compaction's after-values when the session is
+  idle, independently of the next decision; only a turn newer than that
+  summariser message counts as the after-state.
 * `maybe_compact()` — idle window, cooldown, daily cap, shadow (`would-compact`)
   or a real `api.compact()` after a final active-session re-check.
 * `tick()` — one pass over `registry.recent_sessions()`, rate-limited to 60 s,
