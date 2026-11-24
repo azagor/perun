@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -43,21 +44,34 @@ CONNECT_TIMEOUT_SECONDS = 180.0
 #: Closing a live connection can also block; it must never hold up the repair.
 DISCONNECT_TIMEOUT_SECONDS = 60.0
 
-#: How long to wait for the client to report the final state.
+#: How long to wait for a repaired connection to report its final state.
 SETTLE_SECONDS = 120.0
+
+#: How long a *diagnosis* waits for a ``pending`` connection to resolve. The
+#: client itself gives up after 60 s, so a pending state has to become terminal
+#: within that window; a diagnostic must not outlast it by much.
+PENDING_SETTLE_SECONDS = 60.0
+
+#: Poll interval while waiting for ``pending`` to settle.
+SETTLE_POLL_SECONDS = 2.0
+
+#: Two writers merge into one file from different threads of the same process
+#: (the import record, then the schema record), so the read-merge-write is locked.
+_RECORD_LOCK = threading.Lock()
 
 
 def record_startup(payload: dict[str, Any]) -> None:
     """Merge *payload* into the startup record. Never raises."""
     try:
-        record = read_startup()
-        record.update(payload)
-        record["recorded_at"] = time.strftime(
-            "%Y-%m-%dT%H:%M:%S", time.localtime())
-        STARTUP_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = STARTUP_FILE.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        os.replace(tmp, STARTUP_FILE)
+        with _RECORD_LOCK:
+            record = read_startup()
+            record.update(payload)
+            record["recorded_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.localtime())
+            STARTUP_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = STARTUP_FILE.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            os.replace(tmp, STARTUP_FILE)
     except Exception:  # pragma: no cover - diagnostics must never break a start
         pass
 
@@ -80,15 +94,17 @@ def server_status(server: str = "perun", directory: str = "",
     """State the OpenCode service reports for one MCP server.
 
     ``state`` is the service's own word (``connected``, ``failed``,
-    ``pending``, ``disabled``) or ``""`` when the server is not configured for
-    that directory.
+    ``pending``, ``disabled``) or ``""`` when it lists no such server.
+    ``reachable`` says whether the service answered at all: an unreachable
+    service must never be reported as "not configured", which would excuse a
+    dead connection instead of naming it.
     """
     directory = directory or os.getcwd()
     try:
         rows = _api(api).mcp_servers(directory)
     except Exception as exc:
         return {"server": server, "directory": directory, "state": "",
-                "error": str(exc)[:300], "configured": False}
+                "error": str(exc)[:300], "configured": False, "reachable": False}
     for row in rows:
         if str(row.get("name") or "") != server:
             continue
@@ -99,9 +115,10 @@ def server_status(server: str = "perun", directory: str = "",
             "state": str(status.get("status") or ""),
             "error": str(status.get("error") or "")[:300],
             "configured": True,
+            "reachable": True,
         }
     return {"server": server, "directory": directory, "state": "",
-            "error": "", "configured": False}
+            "error": "", "configured": False, "reachable": True}
 
 
 def project_directories(api: Any = None) -> list[str]:
@@ -117,6 +134,10 @@ def project_directories(api: Any = None) -> list[str]:
     def add(path: Any) -> None:
         text = str(path or "").strip()
         if not text:
+            return
+        # A directory that no longer exists cannot hold a session, and asking
+        # the service about it would materialize a stale location there.
+        if not os.path.isdir(text):
             return
         key = os.path.normcase(os.path.normpath(text))
         if key in seen:
@@ -139,6 +160,28 @@ def project_directories(api: Any = None) -> list[str]:
     return directories
 
 
+def settle(server: str = "perun", directory: str = "", api: Any = None,
+           wait: float = SETTLE_SECONDS) -> dict[str, Any]:
+    """Poll while the client reports ``pending``, then return the last status.
+
+    Only ``pending`` is transient. An empty state means the service lists no
+    such server, or could not be asked at all — waiting cannot change either,
+    so an unreachable service is returned immediately instead of burning the
+    whole window on a state that will never settle.
+    """
+    client = _api(api)
+    status = server_status(server, directory, client)
+    # Monotonic: the machine may sleep mid-wait, and the window is a duration.
+    deadline = time.monotonic() + wait
+    while status["state"] == "pending" and time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(SETTLE_POLL_SECONDS, remaining))
+        status = server_status(server, directory, client)
+    return status
+
+
 def revive(server: str = "perun", directory: str = "", api: Any = None,
            connect_timeout: float = CONNECT_TIMEOUT_SECONDS,
            wait: float = SETTLE_SECONDS) -> dict[str, Any]:
@@ -146,6 +189,7 @@ def revive(server: str = "perun", directory: str = "", api: Any = None,
 
     The disconnect is what breaks a connection stuck in ``pending`` — without it
     the client keeps answering the connect call with the old, half-open attempt.
+    Nothing is attempted through a service that cannot be reached.
     """
     directory = directory or os.getcwd()
     client = _api(api)
@@ -153,6 +197,9 @@ def revive(server: str = "perun", directory: str = "", api: Any = None,
     if before["state"] == "connected":
         return {"ok": True, "state": "connected", "already": True,
                 "directory": directory, "server": server}
+    if not before["reachable"]:
+        return {"ok": False, "state": before["state"], "error": before["error"],
+                "directory": directory, "server": server, "already": False}
     try:
         client.mcp_disconnect(server, directory,
                               timeout=DISCONNECT_TIMEOUT_SECONDS)
@@ -168,11 +215,7 @@ def revive(server: str = "perun", directory: str = "", api: Any = None,
         failure = str(exc)[:300]
     else:
         failure = ""
-    deadline = time.time() + wait
-    status = server_status(server, directory, client)
-    while status["state"] in ("pending", "") and time.time() < deadline:
-        time.sleep(2.0)
-        status = server_status(server, directory, client)
+    status = settle(server, directory, client, wait)
     return {
         "ok": status["state"] == "connected",
         "state": status["state"],
@@ -234,6 +277,11 @@ _REMEDY = {
         "entry to the OpenCode MCP config",
 }
 
+UNREACHABLE_REMEDY = (
+    "the OpenCode service did not answer, so the connection state is unknown — "
+    "start or repair the service (`opencode service status`, `opencode serve`) "
+    "and run this again")
+
 
 def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dict[str, Any]:
     """One verdict for the operator: state, measured startup, likely remedy."""
@@ -243,24 +291,35 @@ def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dic
     total = float(startup.get("total_seconds") or 0.0)
     slow = bool(total and total >= SLOW_STARTUP_SECONDS)
     state = status["state"]
-    verdict = {
-        "connected": "ok",
-        "failed": "connect_failed",
-        "pending": "stuck_pending",
-        "disabled": "not_connected",
-    }.get(state, "not_configured")
-    remedy = _REMEDY.get(state, "")
+    if not status["reachable"]:
+        # "I could not ask" is not "there is nothing to ask about".
+        verdict = "service_unreachable"
+        remedy = UNREACHABLE_REMEDY
+    else:
+        verdict = {
+            "connected": "ok",
+            "failed": "connect_failed",
+            "pending": "stuck_pending",
+            "disabled": "not_connected",
+        }.get(state, "not_configured")
+        remedy = _REMEDY.get(state, "")
     if slow:
         verdict = f"{verdict} (slow_startup)" if verdict != "ok" else "ok (slow_startup)"
         remedy = (remedy + "; " if remedy else "") + (
             f"last start took {total:.0f}s of the client's 60s deadline — the "
             "import cost is the risk, see `perun mcp-health --selftest`")
+    db_error = str(startup.get("db_init_error") or "")
+    if db_error:
+        remedy = (remedy + "; " if remedy else "") + (
+            "the last start could not reconcile the database schema "
+            f"({db_error}); a restart retries it")
     return {
         "server": server,
         "directory": directory,
         "state": state,
         "error": status["error"],
         "configured": status["configured"],
+        "reachable": status["reachable"],
         "verdict": verdict,
         "remedy": remedy,
         "last_startup": startup,

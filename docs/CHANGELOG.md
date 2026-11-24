@@ -15,13 +15,39 @@ All notable changes are recorded here. Single source of truth for release notes.
   because the client keeps one connection **per directory** and caches a failure
   for all sessions in it. `--selftest` performs the client's own stdio handshake,
   timed, so a healthy server can be proven before the editor is blamed. Exit
-  code 0 means every location is connected.
+  code 0 means every location was **verified**: the service answered and the
+  server is connected there (or is genuinely not configured). A service that
+  cannot be asked is reported as unreachable and fails the command, because
+  "could not ask" must never read as "nothing to fix".
 * Every MCP start records its measured cost in `PERUN_HOME/mcp-startup.json`, so
   a start creeping towards the client's 60 s deadline is visible instead of
-  guessed at.
+  guessed at. The record keeps only the current process's numbers: a short-lived
+  start that never reaches the schema step no longer inherits an older run's.
 
 ### Fixed
 
+* `perun mcp-health` no longer reports an unreachable OpenCode service as "not
+  configured" with exit code 0 (and the advice to add an MCP entry that is
+  already there). `server_status()` now says whether the service answered at all,
+  the verdict is `service_unreachable` with the remedy to start or repair the
+  service, and such a location fails the run. `--all` with no location to check
+  also exits non-zero instead of succeeding on an empty check.
+* A repair no longer waits out the whole settle window (120 s per location) when
+  the connection state is empty — no such server, or a dead service. Only
+  `pending` is transient, and it is polled for no longer than the client's own
+  60 s deadline; a dead service is not contacted at all.
+* `--all` reads each location a second time when the first read says "not
+  configured". Reading `/api/mcp` is what makes OpenCode materialize a location's
+  MCP entry, so the first read can miss a connection that is one call away and
+  the verdict used to depend on how many times the command had been run.
+* A schema reconcile that loses a race with another Perun process's write lock is
+  retried three times at startup (the failure used to be swallowed, leaving that
+  process on an old schema for its whole life) and is recorded in
+  `mcp-startup.json`, so `mcp-health` can name it instead of reporting a healthy
+  server with an unmigrated database.
+* Nothing is written to disk before the MCP handshake is answered: the startup
+  record is now written from the preparation thread, after the server is able to
+  answer `initialize`, rather than in front of it.
 * The MCP server now answers `initialize` before it touches SQLite. The schema
   reconcile used to run on the import path, where every statement waits up to
   the 30 s busy timeout if another process holds the write lock — right in front

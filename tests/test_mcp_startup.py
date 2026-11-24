@@ -104,3 +104,85 @@ def test_the_handshake_path_has_no_network_version_check(monkeypatch):
     assert os.environ.get("FASTMCP_CHECK_FOR_UPDATES") == "off"
     assert os.environ.get("FASTMCP_SHOW_CLI_BANNER") == "false"
     assert module._STARTUP_BEGAN > 0
+
+
+def test_the_startup_record_is_written_off_the_handshake_path(monkeypatch):
+    """Recording costs disk I/O; the handshake must not wait for it."""
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+
+    written = threading.Event()
+    threads = []
+
+    def fake_record(payload):
+        threads.append(threading.current_thread())
+        written.set()
+
+    monkeypatch.setattr(module.mcp_health, "record_startup", fake_record)
+    monkeypatch.setattr(module.db, "init_db", lambda: None)
+    monkeypatch.setattr(module.mcp, "run", lambda **kw: None)
+    module._DB_READY.clear()
+
+    module.main()
+
+    assert written.wait(5) is True
+    assert threads, "the start recorded nothing"
+    assert all(t is not threading.main_thread() for t in threads), (
+        "the startup record was written before the handshake")
+
+
+def _fast_prepare(module, monkeypatch):
+    """Keep the preparation thread's unrelated work out of these tests."""
+    monkeypatch.setattr(module.handbook, "ensure_indexed", lambda: {})
+    monkeypatch.setattr(module.control, "ensure", lambda: {"ok": True})
+
+
+def test_a_transient_schema_failure_is_retried(monkeypatch):
+    """A lock holder at start must not leave this process on an old schema."""
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+    _fast_prepare(module, monkeypatch)
+
+    attempts = []
+    records = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(module.db, "init_db", flaky)
+    monkeypatch.setattr(module.mcp_health, "record_startup", records.append)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    module._DB_READY.clear()
+
+    module._prepare_in_background(module._STARTUP_BEGAN + 3.0)
+
+    assert len(attempts) == 3
+    assert records[-1]["db_init_error"] == ""
+    assert module._DB_READY.is_set()
+
+
+def test_a_persistent_schema_failure_is_recorded(monkeypatch):
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+    _fast_prepare(module, monkeypatch)
+
+    attempts = []
+    records = []
+
+    def locked():
+        attempts.append(1)
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(module.db, "init_db", locked)
+    monkeypatch.setattr(module.mcp_health, "record_startup", records.append)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    module._DB_READY.clear()
+
+    module._prepare_in_background(module._STARTUP_BEGAN + 3.0)
+
+    assert len(attempts) == module._SCHEMA_ATTEMPTS
+    assert "database is locked" in records[-1]["db_init_error"]
+    # The import cost is recorded before the schema work, so it survives.
+    assert records[0]["total_seconds"] == 3.0

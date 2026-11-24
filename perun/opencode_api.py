@@ -274,8 +274,9 @@ class OpenCodeAPI:
         The call blocks for the whole stdio handshake (the service holds it open
         for up to a minute), so callers must pass their own ``timeout``.
         """
+        name = urllib.parse.quote(str(server), safe="")
         self._request(
-            "POST", f"/api/experimental/mcp/{server}/connect",
+            "POST", f"/api/experimental/mcp/{name}/connect",
             body={}, location=str(directory), timeout=timeout,
         )
 
@@ -286,8 +287,9 @@ class OpenCodeAPI:
         Closing the child can take a while when the service is already wedged,
         so the caller decides how long to wait.
         """
+        name = urllib.parse.quote(str(server), safe="")
         self._request(
-            "POST", f"/api/experimental/mcp/{server}/disconnect",
+            "POST", f"/api/experimental/mcp/{name}/disconnect",
             body={}, location=str(directory), allow_404=True, timeout=timeout,
         )
 

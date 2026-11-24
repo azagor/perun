@@ -563,24 +563,33 @@ Perun's own reference material, as retrievable context docs.
 ### `perun/mcp_health.py`
 Health, diagnosis and repair for the `perun` stdio MCP server.
 * `STARTUP_FILE` (the JSON startup record in the Perun home),
-  `SLOW_STARTUP_SECONDS` (30 s of
-  the client's 60 s deadline), `CONNECT_TIMEOUT_SECONDS`.
-* `record_startup()` (merge + atomic replace; **never raises**, it runs inside
-  the MCP process), `read_startup()`.
+  `SLOW_STARTUP_SECONDS` (30 s of the client's 60 s deadline),
+  `CONNECT_TIMEOUT_SECONDS`, `SETTLE_SECONDS`, `PENDING_SETTLE_SECONDS` (60 s —
+  the client's own deadline), `SETTLE_POLL_SECONDS`, `_RECORD_LOCK`.
+* `record_startup()` (merge + atomic replace under a lock; **never raises**, it
+  runs inside the MCP process), `read_startup()`.
 * `server_status()` — the state OpenCode holds for one directory, read from
-  `GET /api/mcp` (its own words: `connected`, `failed`, `pending`, `disabled`).
+  `GET /api/mcp` (its own words: `connected`, `failed`, `pending`, `disabled`),
+  plus `reachable`: whether the service answered at all. An unreachable service
+  is never "not configured".
+* `settle()` — poll only while the state is `pending` (the one transient state);
+  an empty state returns immediately instead of burning the window.
 * `revive()` — disconnect then connect through
   `POST /api/experimental/mcp/{server}/{disconnect,connect}`; the disconnect is
   what clears a connection stuck in `pending`, because a plain connect keeps
   answering the half-open attempt (only the client's state check decides, not the
-  HTTP exception).
+  HTTP exception). A dead service is not contacted.
 * `selftest()` — runs the client's own stdio handshake, timed, with a tool count.
-* `diagnose()` — verdict + remedy, folding in a slow measured start.
+* `diagnose()` — verdict + remedy (`service_unreachable`, `stuck_pending`, …),
+  folding in a slow or failed measured start.
 * `project_directories()` — every location the service knows (plus every
-  registered project), deduped: the client keeps one MCP connection **per
-  directory**, so a repair visits each one.
-* CLI: `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` (exit 0
-  only when every location is connected; `--all --fix` repairs them all).
+  registered project that still exists on disk), deduped: the client keeps one MCP
+  connection **per directory**, so a repair visits each one.
+* CLI: `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` — exit 0
+  only when every location was verified (connected, or genuinely not configured,
+  through a service that answered); an unreachable service or an empty check
+  exits non-zero. `--all` re-reads a location that looked unconfigured, because
+  the first read is what materializes its MCP entry.
 
 ### `perun/discovery.py`
 Find & register OpenCode projects under roots.
@@ -1877,9 +1886,12 @@ daemon thread (`_prepare_in_background`), so nothing sits in front of the
 handshake — the client abandons a connect after 60 s, indexing embeds with a
 180 s timeout, and every SQLite statement waits up to the 30 s busy timeout. A
 brand-new home is the exception: `db.init_db()` runs synchronously because there
-is no schema and no lock to wait for. FastMCP's banner and PyPI version check are
-disabled (`mcp.run(show_banner=False)`, `FASTMCP_CHECK_FOR_UPDATES=off`) and the
-measured start is written to the Perun home's startup record (`perun/mcp_health.py`).
+is no schema and no lock to wait for. The schema reconcile retries
+(`_SCHEMA_ATTEMPTS`) so a transient write lock does not leave the process on an
+old schema, and both the import cost and the schema cost are written to the Perun
+home's startup record (`perun/mcp_health.py`) **from the thread**, never before
+`mcp.run()`. FastMCP's banner and PyPI version check are disabled
+(`mcp.run(show_banner=False)`, `FASTMCP_CHECK_FOR_UPDATES=off`).
 `perun_context` ensures the index lazily for a cold first call. 37 tools:
 `perun_list_projects`,
 `perun_project_info`, `perun_create_project`, `perun_update_project`

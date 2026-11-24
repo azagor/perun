@@ -86,6 +86,11 @@ LOG = logging.getLogger("perun.mcp")
 _DB_READY = threading.Event()
 _db_init_seconds = 0.0
 
+#: A schema reconcile can lose a race with another Perun process's write lock.
+#: Three short attempts cover that, and they happen off the handshake path.
+_SCHEMA_ATTEMPTS = 3
+_SCHEMA_RETRY_SECONDS = 1.0
+
 # Nothing slow may block the stdio handshake. OpenCode fails the connect after
 # 60 s, ``fastmcp`` alone costs several seconds to import, and every SQLite
 # statement waits up to the 30 s busy timeout — so the schema work moves to the
@@ -100,22 +105,51 @@ if not config.DB_PATH.exists():
     _DB_READY.set()
 
 
-def _prepare_in_background() -> None:
-    # Reconcile the schema first: every tool needs it, and it is the one step
-    # that can wait on another process's write lock.
+def _prepare_in_background(ready_at: float) -> None:
+    # Record the import cost first: it is what the client's connect deadline
+    # actually competes with, and it must not be lost if the schema reconcile
+    # then blocks on another process's write lock. The schema fields are cleared
+    # so a run that is torn down before they are measured cannot inherit the
+    # previous process's numbers.
+    mcp_health.record_startup({
+        "version": _perun_version(),
+        "total_seconds": round(ready_at - _STARTUP_BEGAN, 3),
+        "pid": os.getpid(),
+        "python": sys.executable,
+        "db_init_seconds": None,
+        "db_init_error": "",
+        "prepared_at": "",
+    })
+    # Reconcile the schema next: every tool needs it, and it is the one step
+    # that can wait on another process's write lock. A transient lock is worth
+    # retrying here, because a failure would otherwise leave this process on an
+    # old schema for its whole life — no tool path reconciles it again.
     global _db_init_seconds
+    db_error = ""
     if not _DB_READY.is_set():
         started = time.monotonic()
-        try:
-            db.init_db()
-        except Exception:  # pragma: no cover - a lock holder, retried on use
-            LOG.debug("schema reconcile failed at MCP start", exc_info=True)
+        for attempt in range(1, _SCHEMA_ATTEMPTS + 1):
+            try:
+                db.init_db()
+            except Exception as exc:  # pragma: no cover - a lock holder
+                db_error = f"{type(exc).__name__}: {exc}"[:200]
+                LOG.warning("schema reconcile failed at MCP start "
+                            "(attempt %d/%d): %s", attempt, _SCHEMA_ATTEMPTS,
+                            db_error)
+                if attempt < _SCHEMA_ATTEMPTS:
+                    time.sleep(_SCHEMA_RETRY_SECONDS)
+                continue
+            db_error = ""
+            break
         _db_init_seconds = time.monotonic() - started
         _DB_READY.set()
-        mcp_health.record_startup({
-            "db_init_seconds": round(_db_init_seconds, 3),
-            "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-        })
+    # Recorded even when the home was created synchronously at import, so a
+    # brand-new install still reports what the schema cost.
+    mcp_health.record_startup({
+        "db_init_seconds": round(_db_init_seconds, 3),
+        "db_init_error": db_error,
+        "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+    })
     # The orchestrator (control plane) must exist for every tool call, so a brand
     # new machine with no projects can still be talked to. Registration is
     # idempotent and best-effort.
@@ -1805,19 +1839,14 @@ _restore_plain_tool_names()
 
 
 def main() -> None:
+    # Timestamp only: the startup record itself is written from the preparation
+    # thread, so no file I/O sits in front of the handshake this client times out.
+    ready_at = time.monotonic()
     # Started here, not at import: the module is also imported by tests and by
     # `perun/handbook.py` to render the tool reference, and those must not leave
     # a thread writing to the database.
-    threading.Thread(target=_prepare_in_background, name="perun-mcp-prepare",
-                     daemon=True).start()
-    # The client's connect deadline is 60 s; record what this start actually
-    # cost so `perun mcp-health` can show it instead of guessing.
-    mcp_health.record_startup({
-        "version": _perun_version(),
-        "total_seconds": round(time.monotonic() - _STARTUP_BEGAN, 3),
-        "pid": os.getpid(),
-        "python": sys.executable,
-    })
+    threading.Thread(target=_prepare_in_background, args=(ready_at,),
+                     name="perun-mcp-prepare", daemon=True).start()
     mcp.run(show_banner=False)
 
 

@@ -1347,24 +1347,36 @@ def cmd_mcp_health(args: argparse.Namespace) -> int:
     OpenCode holds one MCP connection per location and caches a failure for the
     whole directory, so ``--all`` visits every location the service knows plus
     every registered project — one repair per directory, not per session.
+
+    Exit code 0 means every location was *verified*: the service answered and
+    the server is connected (or is genuinely not configured there). A location
+    the service could not be asked about is never a success.
     """
     from . import mcp_health
 
     server = getattr(args, "server", "perun") or "perun"
+    fix = bool(getattr(args, "fix", False))
     if getattr(args, "all", False):
         directories = mcp_health.project_directories()
     else:
         directories = [os.path.abspath(args.directory)
                        if getattr(args, "directory", "") else os.getcwd()]
-    results: list[dict[str, Any]] = []
-    for directory in directories:
-        report = mcp_health.diagnose(server, directory)
-        revived = None
-        if (getattr(args, "fix", False) and report["configured"]
-                and report["state"] != "connected"):
-            revived = mcp_health.revive(server, directory)
-            report = mcp_health.diagnose(server, directory)
-        results.append({**report, "revive": revived})
+    if not directories:
+        print("no OpenCode location to check — is the service running? "
+              "(`opencode service status`)", file=sys.stderr)
+        return 1
+
+    results = [_check_mcp_location(mcp_health, server, d, fix)
+               for d in directories]
+    # Reading /api/mcp for a directory is what makes OpenCode materialize that
+    # location's MCP entry, so the first read can say "not configured" for a
+    # location that is one call away from connecting. Read those once more; a
+    # location that is really unconfigured simply stays that way.
+    for index, report in enumerate(results):
+        if report["reachable"] and not report["configured"]:
+            results[index] = _check_mcp_location(
+                mcp_health, server, report["directory"], fix)
+
     probe = mcp_health.selftest() if getattr(args, "selftest", False) else None
     payload = {"server": server, "results": results, "selftest": probe}
 
@@ -1374,36 +1386,76 @@ def cmd_mcp_health(args: argparse.Namespace) -> int:
         _print_mcp_health(results[0], probe)
     else:
         _print_mcp_health_all(payload)
-    healthy = [r for r in results
-               if r["state"] == "connected" or not r["configured"]]
-    return 0 if len(healthy) == len(results) else 1
+    return 0 if all(_mcp_location_healthy(r) for r in results) else 1
+
+
+def _check_mcp_location(mcp_health: Any, server: str, directory: str,
+                        fix: bool) -> dict[str, Any]:
+    """One location: diagnose, settle a transient state, repair if asked."""
+    report = mcp_health.diagnose(server, directory)
+    if report["state"] == "pending":
+        # ``pending`` is transient by definition (the client gives up at 60 s),
+        # so the verdict is the state it reaches, not the snapshot.
+        mcp_health.settle(server, directory,
+                          wait=mcp_health.PENDING_SETTLE_SECONDS)
+        report = mcp_health.diagnose(server, directory)
+    revived = None
+    if fix and report["reachable"] and report["configured"] \
+            and report["state"] != "connected":
+        revived = mcp_health.revive(server, directory)
+        report = mcp_health.diagnose(server, directory)
+    return {**report, "revive": revived}
+
+
+def _mcp_location_healthy(report: dict[str, Any]) -> bool:
+    if not report.get("reachable", False):
+        return False
+    return report["state"] == "connected" or not report["configured"]
+
+
+def _print_mcp_startup(report: dict[str, Any]) -> None:
+    startup = report.get("last_startup") or {}
+    if not startup:
+        return
+    print(f"last start: {float(startup.get('total_seconds') or 0):.1f}s "
+          f"at {startup.get('recorded_at') or '?'} "
+          f"(import → ready to serve; client deadline is 60s)")
+    if startup.get("db_init_error"):
+        print(f"db init:    failed ({startup['db_init_error']})")
+
+
+def _print_mcp_probe(probe: dict[str, Any] | None) -> None:
+    if probe is None:
+        return
+    if probe.get("ok"):
+        print(f"selftest:   handshake "
+              f"{float(probe.get('initialize_seconds') or 0):.1f}s, "
+              f"{probe.get('tools')} tools")
+    else:
+        print(f"selftest:   failed — {probe.get('error')}")
+
+
+def _mcp_state_label(report: dict[str, Any]) -> str:
+    if not report.get("reachable", False):
+        return "service unreachable"
+    return report["state"] or "not configured"
 
 
 def _print_mcp_health(report: dict[str, Any], probe: dict[str, Any] | None) -> None:
     print(f"server:     {report['server']}")
     print(f"directory:  {report['directory']}")
-    print(f"state:      {report['state'] or 'not configured'}")
+    print(f"state:      {_mcp_state_label(report)}")
     print(f"verdict:    {report['verdict']}")
     if report.get("error"):
         print(f"error:      {report['error']}")
-    startup = report.get("last_startup") or {}
-    if startup:
-        print(f"last start: {float(startup.get('total_seconds') or 0):.1f}s "
-              f"at {startup.get('recorded_at') or '?'} "
-              f"(client deadline is 60s)")
+    _print_mcp_startup(report)
     revived = report.get("revive")
     if revived is not None:
         took = "already connected" if revived.get("already") else (
-            f"now {revived.get('state')}")
+            f"now {revived.get('state') or 'unknown'}")
         print(f"revive:     {took}"
               + (f" ({revived['error']})" if revived.get("error") else ""))
-    if probe is not None:
-        if probe.get("ok"):
-            print(f"selftest:   handshake "
-                  f"{float(probe.get('initialize_seconds') or 0):.1f}s, "
-                  f"{probe.get('tools')} tools")
-        else:
-            print(f"selftest:   failed — {probe.get('error')}")
+    _print_mcp_probe(probe)
     if report.get("remedy"):
         print(f"remedy:     {report['remedy']}")
 
@@ -1412,28 +1464,20 @@ def _print_mcp_health_all(payload: dict[str, Any]) -> None:
     results = payload["results"]
     print(f"{payload['server']} MCP — {len(results)} location(s)")
     for report in results:
-        state = report["state"] or "not configured"
-        line = f"  {report['directory']:<48} {state}"
+        line = f"  {report['directory']:<48} {_mcp_state_label(report)}"
         revived = report.get("revive")
         if revived is not None:
             line += " → reconnected" if revived.get("ok") else " → still down"
         if report.get("error") and not revived:
             line += f" ({report['error'][:60]})"
         print(line)
-    startup = next((r.get("last_startup") or {} for r in results
-                    if (r.get("last_startup") or {}).get("total_seconds")), {})
-    if startup:
-        print(f"last start: {float(startup.get('total_seconds') or 0):.1f}s "
-              f"at {startup.get('recorded_at') or '?'} "
-              f"(client deadline is 60s)")
-    probe = payload.get("selftest")
-    if probe is not None:
-        if probe.get("ok"):
-            print(f"selftest:   handshake "
-                  f"{float(probe.get('initialize_seconds') or 0):.1f}s, "
-                  f"{probe.get('tools')} tools")
-        else:
-            print(f"selftest:   failed — {probe.get('error')}")
+    unreachable = [r for r in results if not r.get("reachable", False)]
+    if unreachable:
+        from . import mcp_health
+
+        print("remedy:     " + mcp_health.UNREACHABLE_REMEDY)
+    _print_mcp_startup(next((r for r in results if r.get("last_startup")), {}))
+    _print_mcp_probe(payload.get("selftest"))
 
 
 def cmd_proposals_mcp(args: argparse.Namespace) -> int:

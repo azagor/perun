@@ -2812,9 +2812,13 @@ synchronously. FastMCP's startup banner and its PyPI version check are disabled
 (`mcp.run(show_banner=False)`, `FASTMCP_CHECK_FOR_UPDATES=off`): the banner renders
 rich panels and the check is a network call, and together they cost several
 seconds of a 60 s deadline. Each start records its measured cost in
-`PERUN_HOME/mcp-startup.json`. The reference material is still retrievable from
-the first call; if it is not indexed yet, the tool indexes on demand. It exposes
-**thirty-seven** tools:
+`PERUN_HOME/mcp-startup.json`, written from the daemon thread so no file I/O sits
+in front of the handshake; the schema reconcile retries a transient write lock
+and records a failure (`db_init_error`) instead of passing silently. The record is
+reset to the current process's numbers on every start, so a short-lived run
+cannot inherit an older run's `prepared_at`. The reference material is still
+retrievable from the first call; if it is not indexed yet, the tool indexes on
+demand. It exposes **thirty-seven** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
   `perun_create_project`, `perun_update_project` (also mirrors `model`/`agent`
@@ -2864,12 +2868,19 @@ Start with `python -m perun mcp-health` (add `--selftest` for a timed handshake,
 `--json` for scripts): it reports the state OpenCode holds for that directory, the
 measured cost of the last start, and the remedy. `--fix` disconnects and
 reconnects the server — the only way out of a connection wedged in `pending`
-(`python -m perun mcp-health --fix`; exit code 0 means connected). The client
-keeps **one connection per directory** and caches a failure for every session in
-it, so after a machine-wide incident repair them all at once:
-`python -m perun mcp-health --all --fix` visits every location the service knows
-plus every registered project, and a session in a directory never needs a reload.
-Two causes dominate; check them in this order.
+(`python -m perun mcp-health --fix`). The client keeps **one connection per
+directory** and caches a failure for every session in it, so after a machine-wide
+incident repair them all at once: `python -m perun mcp-health --all --fix` visits
+every location the service knows plus every registered project, and a session in
+a directory never needs a reload.
+
+Exit code 0 means every location was **verified** through a service that
+answered: connected, or genuinely not configured there. A service that cannot be
+asked is a `service_unreachable` verdict with its own remedy (start or repair the
+service) and a non-zero exit — do not read it as "no MCP entry", and do not
+"fix" it by adding one. `pending` is the only transient state: `--all` re-reads a
+location that looked unconfigured, because the first read is what materializes
+its MCP entry. Two causes dominate; check them in this order.
 
 * **Incompatible FastMCP.** A 3.x install (or a mixed install with 3.x files
   beside 2.x) breaks the import: `No module named fastmcp.server.extensions` or
