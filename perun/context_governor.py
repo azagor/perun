@@ -39,6 +39,12 @@ CHECK_INTERVAL_SECONDS = 60.0
 #: as effective (0.9 = 10% smaller).
 MIN_REDUCTION = 0.9
 
+#: Clock tolerance when matching the summariser row to the recorded event.
+_COMPACTION_SLACK = 5.0
+
+#: How long to wait for the summariser row before measuring anyway (seconds).
+_COMPACTION_GRACE = 600.0
+
 _last_check = 0.0
 
 #: Last tick summary, surfaced by ``GET /api/local-ai`` so a silent failure is
@@ -64,27 +70,63 @@ def context_tokens(tokens: dict[str, Any]) -> int:
     return inp or (inp + cached)
 
 
-def live_context_tokens(api: opencode_api.OpenCodeAPI, session_id: str) -> int:
-    """Current context size, estimated from the newest assistant message."""
+def _message_time(row: dict[str, Any]) -> float:
+    """Creation time of one message in epoch seconds (0 when unknown)."""
+    raw = row.get("time")
+    if isinstance(raw, dict):
+        raw = raw.get("created")
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    # OpenCode reports milliseconds since the epoch.
+    return value / 1000.0 if value > 1e11 else value
+
+
+def _measure(api: opencode_api.OpenCodeAPI, session_id: str) -> dict[str, Any]:
+    """Newest assistant usage plus the newest compaction marker of one session.
+
+    ``/message`` returns messages newest-first. The timestamps decide which row
+    is newest (a reordered page cannot flip the answer), and the first matching
+    row wins when a fake or an older service omits them.
+    """
+    empty: dict[str, Any] = {"tokens": 0, "assistant_at": 0.0, "compaction_at": 0.0}
     try:
         rows, _info = api.message_page(session_id, limit=50)
     except Exception:
-        return 0
-    for row in reversed(rows or []):
+        return empty
+    tokens = 0
+    assistant_at = -1.0
+    compaction_at = 0.0
+    for row in rows or []:
         if not isinstance(row, dict):
             continue
+        when = _message_time(row)
         # A ``compaction`` row is the summariser's own request: its input is the
         # *old* context plus the summary prompt, not the post-compaction size.
         # Only a normal assistant turn reports the context that will be sent
         # from now on.
+        if str(row.get("type") or "assistant") == "compaction":
+            compaction_at = max(compaction_at, when)
+            continue
         if str(row.get("type") or "assistant") != "assistant":
             continue
-        tokens = row.get("tokens")
-        if isinstance(tokens, dict):
-            total = context_tokens(tokens)
-            if total:
-                return total
-    return 0
+        usage = row.get("tokens")
+        if not isinstance(usage, dict):
+            continue
+        total = context_tokens(usage)
+        if total and when > assistant_at:
+            assistant_at, tokens = when, total
+    return {
+        "tokens": tokens,
+        "assistant_at": max(assistant_at, 0.0),
+        "compaction_at": compaction_at,
+    }
+
+
+def live_context_tokens(api: opencode_api.OpenCodeAPI, session_id: str) -> int:
+    """Current context size, estimated from the newest assistant message."""
+    return int(_measure(api, session_id)["tokens"])
 
 
 def _events(session_pk: int, limit: int = 3) -> list[dict[str, Any]]:
@@ -152,6 +194,17 @@ def _disable(settings: config.Settings, session: dict[str, Any], reason: str) ->
         LOG.debug("could not record the governor self-disable", exc_info=True)
 
 
+def _iso_seconds(raw: str) -> float:
+    """Parse an event timestamp into epoch seconds (0 when unreadable)."""
+    try:
+        seen = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return 0.0
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return seen.timestamp()
+
+
 def settle(session: dict[str, Any],
            api: opencode_api.OpenCodeAPI) -> dict[str, Any]:
     """Fill the previous compaction's after-values once the session is idle."""
@@ -170,11 +223,28 @@ def settle(session: dict[str, Any],
             return {"settled": False, "active": True}
     except Exception:
         return {"settled": False}
-    tokens = live_context_tokens(api, sid)
+    measure = _measure(api, sid)
+    tokens = int(measure["tokens"])
     if not tokens:
         # The only token-bearing row is the compaction request itself; wait
         # for the first normal assistant turn so "after" is a real post-state.
         return {"settled": False, "waiting": "next_turn"}
+    started = _iso_seconds(str(last.get("created_at") or ""))
+    assistant_at = float(measure["assistant_at"])
+    if assistant_at:
+        # A turn that finished before the compaction was requested still
+        # carries the old context, and one that is older than the summariser
+        # row was written before OpenCode replaced the conversation.
+        if started and assistant_at <= started:
+            return {"settled": False, "waiting": "next_turn"}
+        compaction_at = float(measure["compaction_at"])
+        if compaction_at >= started - _COMPACTION_SLACK:
+            if assistant_at <= compaction_at:
+                return {"settled": False, "waiting": "next_turn"}
+        elif started and time.time() - started < _COMPACTION_GRACE:
+            # The summariser row is not in the page yet, so the compaction has
+            # not been applied and the newest turn is still pre-compaction.
+            return {"settled": False, "waiting": "compaction"}
     messages = int(session.get("usage_messages") or 0)
     if messages <= int(last.get("messages_before") or 0):
         # The usage snapshot has not advanced past the compaction yet; writing

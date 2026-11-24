@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -384,6 +385,20 @@ def test_live_context_tokens_ignores_the_compaction_request():
     assert context_governor.live_context_tokens(Api(), "ses_x") == 6000
 
 
+def test_live_context_tokens_reads_the_newest_turn_not_the_last_row():
+    """Regression: the page is newest-first, so reversing it read the oldest."""
+    class Api:
+        def message_page(self, session_id, *, limit=50, cursor=""):
+            return ([
+                {"id": "a2", "type": "assistant", "time": {"created": 2_000_000},
+                 "tokens": {"input": 100, "cache": {"read": 57900}}},
+                {"id": "a1", "type": "assistant", "time": {"created": 1_000_000},
+                 "tokens": {"input": 100, "cache": {"read": 469900}}},
+            ], {})
+
+    assert context_governor.live_context_tokens(Api(), "ses_x") == 58000
+
+
 def test_compact_posts_an_empty_object():
     """A body-less POST is rejected by OpenCode with 'Expected object'."""
     api = opencode_api.OpenCodeAPI.__new__(opencode_api.OpenCodeAPI)
@@ -515,6 +530,64 @@ def test_settle_waits_for_the_usage_snapshot_to_advance():
     second = context_governor.settle(_session(usage_messages=104), api)
     assert second["settled"] is True
     assert registry.last_context_event(1)["messages_after"] == 104
+
+
+def _msg_row(mid: str, kind: str, when: float, tokens: int = 0) -> dict:
+    row = {"id": mid, "type": kind, "time": {"created": int(when * 1000)}}
+    if tokens:
+        row["tokens"] = {"input": 10, "cache": {"read": int(tokens) - 10}}
+    return row
+
+
+class _PageAPI:
+    """An idle session whose message page is fixed for the test."""
+
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+
+    def session_active(self, session_id: str) -> bool:
+        return False
+
+    def message_page(self, session_id: str, *, limit: int = 50, cursor: str = ""):
+        return (list(self.rows), {})
+
+
+def test_settle_waits_until_a_turn_follows_the_compaction():
+    now = time.time()
+    registry.record_context_event(1, "compact", tokens_before=470000,
+                                  messages_before=100)
+    api = _PageAPI([
+        _msg_row("c1", "compaction", now + 1),
+        _msg_row("a1", "assistant", now - 2, 470000),
+    ])
+    res = context_governor.settle(_session(usage_messages=104), api)
+    assert res == {"settled": False, "waiting": "next_turn"}
+    assert registry.last_context_event(1)["tokens_after"] == 0
+
+
+def test_settle_measures_the_turn_that_follows_the_compaction():
+    now = time.time()
+    registry.record_context_event(1, "compact", tokens_before=470000,
+                                  messages_before=100)
+    api = _PageAPI([
+        _msg_row("a2", "assistant", now + 30, 58000),
+        _msg_row("c1", "compaction", now + 4),
+        _msg_row("a1", "assistant", now - 2, 470000),
+    ])
+    res = context_governor.settle(_session(usage_messages=104), api)
+    assert res == {"settled": True, "tokens": 58000}
+    assert registry.last_context_event(1)["tokens_after"] == 58000
+
+
+def test_settle_waits_while_the_summariser_has_not_run():
+    """A turn that finishes before the summary is applied is still the old one."""
+    now = time.time()
+    registry.record_context_event(1, "compact", tokens_before=470000,
+                                  messages_before=100)
+    api = _PageAPI([_msg_row("a1", "assistant", now + 2, 470000)])
+    res = context_governor.settle(_session(usage_messages=104), api)
+    assert res == {"settled": False, "waiting": "compaction"}
+    assert registry.last_context_event(1)["tokens_after"] == 0
 
 
 def test_governor_disables_itself_when_compaction_does_not_help(monkeypatch):
