@@ -47,17 +47,27 @@ project is resolved from the current working directory.
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import threading
 import time
 
-# FastMCP prints a startup banner to stdout by default, which corrupts the
-# stdio JSON-RPC stream used by MCP clients. Suppress it before importing.
+# FastMCP prints a startup banner and, with it, queries PyPI for a newer
+# version. Both sit on the stdio handshake path that MCP clients time out, so
+# neither may run: the banner is suppressed here and again in ``mcp.run``, and
+# the update check is disabled outright (it is a network call with its own
+# timeout inside a 60 s budget).
 os.environ.setdefault("FASTMCP_SHOW_SERVER_BANNER", "false")
+os.environ.setdefault("FASTMCP_SHOW_CLI_BANNER", "false")
+os.environ.setdefault("FASTMCP_CHECK_FOR_UPDATES", "off")
 
 import json
 import sys
 from pathlib import Path
+
+# Everything below this line is the client's handshake latency, so it is
+# measured and recorded (``perun mcp-health`` reads it) instead of guessed at.
+_STARTUP_BEGAN = time.monotonic()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -65,19 +75,47 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastmcp import Context, FastMCP  # noqa: E402
 
-from perun import checks, config, context, control, db, discovery, grep, handbook, memory, orchestrator, projects, registry, secret_store  # noqa: E402
+from perun import checks, config, context, control, db, discovery, grep, handbook, mcp_health, memory, orchestrator, projects, registry, secret_store  # noqa: E402
 
 mcp = FastMCP("Perun")
 
-# Nothing slow may block the stdio handshake. OpenCode times out the MCP connect,
-# and the startup re-index embeds changed handbook docs with a 180 s request
-# timeout — logged as `mcp connect failed: Request timed out` after exactly that
-# long. ``init_db`` is cheap DDL every tool needs, so it stays synchronous;
-# control registration and indexing move to a daemon thread once the server is up.
-db.init_db()
+# Diagnostics only: stderr is not the JSON-RPC stream, so a debug line is safe.
+LOG = logging.getLogger("perun.mcp")
+
+#: Set once the schema is reconciled. ``_db_init_seconds`` is what it cost.
+_DB_READY = threading.Event()
+_db_init_seconds = 0.0
+
+# Nothing slow may block the stdio handshake. OpenCode fails the connect after
+# 60 s, ``fastmcp`` alone costs several seconds to import, and every SQLite
+# statement waits up to the 30 s busy timeout — so the schema work moves to the
+# daemon thread below instead of running before the server can answer
+# ``initialize``. The one case that stays synchronous is a brand-new home: there
+# is no schema at all yet, no other process can hold a lock on it, and a tool
+# call would otherwise hit a missing table.
+if not config.DB_PATH.exists():
+    _started = time.monotonic()
+    db.init_db()
+    _db_init_seconds = time.monotonic() - _started
+    _DB_READY.set()
 
 
 def _prepare_in_background() -> None:
+    # Reconcile the schema first: every tool needs it, and it is the one step
+    # that can wait on another process's write lock.
+    global _db_init_seconds
+    if not _DB_READY.is_set():
+        started = time.monotonic()
+        try:
+            db.init_db()
+        except Exception:  # pragma: no cover - a lock holder, retried on use
+            LOG.debug("schema reconcile failed at MCP start", exc_info=True)
+        _db_init_seconds = time.monotonic() - started
+        _DB_READY.set()
+        mcp_health.record_startup({
+            "db_init_seconds": round(_db_init_seconds, 3),
+            "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+        })
     # The orchestrator (control plane) must exist for every tool call, so a brand
     # new machine with no projects can still be talked to. Registration is
     # idempotent and best-effort.
@@ -1772,7 +1810,23 @@ def main() -> None:
     # a thread writing to the database.
     threading.Thread(target=_prepare_in_background, name="perun-mcp-prepare",
                      daemon=True).start()
-    mcp.run()
+    # The client's connect deadline is 60 s; record what this start actually
+    # cost so `perun mcp-health` can show it instead of guessing.
+    mcp_health.record_startup({
+        "version": _perun_version(),
+        "total_seconds": round(time.monotonic() - _STARTUP_BEGAN, 3),
+        "pid": os.getpid(),
+        "python": sys.executable,
+    })
+    mcp.run(show_banner=False)
+
+
+def _perun_version() -> str:
+    try:
+        from perun import __version__
+    except Exception:  # pragma: no cover - the package is importable above
+        return ""
+    return str(__version__)
 
 
 if __name__ == "__main__":

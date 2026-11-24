@@ -4,8 +4,31 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+### Added
+
+* `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` diagnoses
+  the Perun MCP connection: the state OpenCode holds for the directory, the
+  measured cost of the last start, and the remedy. `--fix` disconnects and
+  reconnects the server — the only way out of a connection wedged in `pending`,
+  where a plain connect keeps answering the half-open attempt — and `--all`
+  does it for every location the service knows plus every registered project,
+  because the client keeps one connection **per directory** and caches a failure
+  for all sessions in it. `--selftest` performs the client's own stdio handshake,
+  timed, so a healthy server can be proven before the editor is blamed. Exit
+  code 0 means every location is connected.
+* Every MCP start records its measured cost in `PERUN_HOME/mcp-startup.json`, so
+  a start creeping towards the client's 60 s deadline is visible instead of
+  guessed at.
+
 ### Fixed
 
+* The MCP server now answers `initialize` before it touches SQLite. The schema
+  reconcile used to run on the import path, where every statement waits up to
+  the 30 s busy timeout if another process holds the write lock — right in front
+  of a handshake the client abandons after 60 s. It moved to the preparation
+  thread (a brand-new home is still created synchronously: no schema, no lock);
+  measured start dropped from ~9.5 s to ~3.1 s. FastMCP's startup banner and its
+  PyPI version check are also disabled, since both sat in the same budget.
 * The generated `handbook.tools` reference refreshes again. FastMCP 2.x replaced
   `list_tools()` with `get_tools()`, so rendering the live registry returned an
   empty body and the context key kept serving a stale copy from before the

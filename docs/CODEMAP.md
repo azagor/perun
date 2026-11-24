@@ -560,6 +560,28 @@ Perun's own reference material, as retrievable context docs.
   `render_tool_reference()` (generated from the **live** MCP registry, so it
   cannot drift), `render_key_table()`, `render_kernel()`.
 
+### `perun/mcp_health.py`
+Health, diagnosis and repair for the `perun` stdio MCP server.
+* `STARTUP_FILE` (the JSON startup record in the Perun home),
+  `SLOW_STARTUP_SECONDS` (30 s of
+  the client's 60 s deadline), `CONNECT_TIMEOUT_SECONDS`.
+* `record_startup()` (merge + atomic replace; **never raises**, it runs inside
+  the MCP process), `read_startup()`.
+* `server_status()` — the state OpenCode holds for one directory, read from
+  `GET /api/mcp` (its own words: `connected`, `failed`, `pending`, `disabled`).
+* `revive()` — disconnect then connect through
+  `POST /api/experimental/mcp/{server}/{disconnect,connect}`; the disconnect is
+  what clears a connection stuck in `pending`, because a plain connect keeps
+  answering the half-open attempt (only the client's state check decides, not the
+  HTTP exception).
+* `selftest()` — runs the client's own stdio handshake, timed, with a tool count.
+* `diagnose()` — verdict + remedy, folding in a slow measured start.
+* `project_directories()` — every location the service knows (plus every
+  registered project), deduped: the client keeps one MCP connection **per
+  directory**, so a repair visits each one.
+* CLI: `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` (exit 0
+  only when every location is connected; `--all --fix` repairs them all).
+
 ### `perun/discovery.py`
 Find & register OpenCode projects under roots.
 * `SKIP_DIRS`, `OPENCODE_MARKERS`, `DOC_MARKERS`.
@@ -1849,10 +1871,15 @@ setup that belongs to the *machine* rather than to a user's OpenCode config.
 ## MCP server
 
 ### `mcp/perun_mcp.py`
-stdio MCP server (`perun`). `db.init_db()` runs at import (cheap DDL every tool
-needs); control registration and handbook indexing run from `main()` on a daemon
-thread (`_prepare_in_background`) so they never sit in front of the handshake —
-indexing embeds with a 180 s timeout and OpenCode times out the connect.
+stdio MCP server (`perun`). The import path touches no database: the schema
+reconcile, control registration and handbook indexing all run from `main()` on a
+daemon thread (`_prepare_in_background`), so nothing sits in front of the
+handshake — the client abandons a connect after 60 s, indexing embeds with a
+180 s timeout, and every SQLite statement waits up to the 30 s busy timeout. A
+brand-new home is the exception: `db.init_db()` runs synchronously because there
+is no schema and no lock to wait for. FastMCP's banner and PyPI version check are
+disabled (`mcp.run(show_banner=False)`, `FASTMCP_CHECK_FOR_UPDATES=off`) and the
+measured start is written to the Perun home's startup record (`perun/mcp_health.py`).
 `perun_context` ensures the index lazily for a cold first call. 37 tools:
 `perun_list_projects`,
 `perun_project_info`, `perun_create_project`, `perun_update_project`

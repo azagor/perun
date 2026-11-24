@@ -2801,13 +2801,19 @@ it (never locale-dependent `/V` text); `perun status` surfaces it as
 
 ## 12. MCP server
 
-`mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path`,
-`db.init_db()`s (cheap DDL every tool needs), then starts `control.ensure()` and
-`handbook.ensure_indexed()` on a **daemon thread** — that work can embed with a
-180 s request timeout, and OpenCode times out an MCP connect, so it must never sit
-in front of the handshake (the log showed `mcp connect failed: Request timed out`
-after exactly that long). The reference material is still retrievable from the
-first call; if it is not indexed yet, the tool indexes on demand. It exposes
+`mcp/perun_mcp.py` (FastMCP, stdio). It inserts the repo root on `sys.path` and
+then hands the stdio stream to FastMCP **without touching the database**: the
+handshake is what the client times out, so the schema reconcile, `control.ensure()`
+and `handbook.ensure_indexed()` all run on a **daemon thread** (indexing can embed
+with a 180 s request timeout, and every SQLite statement waits up to the 30 s busy
+timeout when another process holds the write lock). A brand-new home is the one
+exception — there is no schema at all and no lock to wait for, so it is created
+synchronously. FastMCP's startup banner and its PyPI version check are disabled
+(`mcp.run(show_banner=False)`, `FASTMCP_CHECK_FOR_UPDATES=off`): the banner renders
+rich panels and the check is a network call, and together they cost several
+seconds of a 60 s deadline. Each start records its measured cost in
+`PERUN_HOME/mcp-startup.json`. The reference material is still retrievable from
+the first call; if it is not indexed yet, the tool indexes on demand. It exposes
 **thirty-seven** tools:
 
 * **Registry:** `perun_list_projects`, `perun_project_info`,
@@ -2854,6 +2860,15 @@ creation is shared with the HTTP wizard (`perun/projects.py`).
 ### 12.1 When the MCP server will not connect
 
 OpenCode reports an MCP failure in the session and the `perun_*` tools vanish.
+Start with `python -m perun mcp-health` (add `--selftest` for a timed handshake,
+`--json` for scripts): it reports the state OpenCode holds for that directory, the
+measured cost of the last start, and the remedy. `--fix` disconnects and
+reconnects the server — the only way out of a connection wedged in `pending`
+(`python -m perun mcp-health --fix`; exit code 0 means connected). The client
+keeps **one connection per directory** and caches a failure for every session in
+it, so after a machine-wide incident repair them all at once:
+`python -m perun mcp-health --all --fix` visits every location the service knows
+plus every registered project, and a session in a directory never needs a reload.
 Two causes dominate; check them in this order.
 
 * **Incompatible FastMCP.** A 3.x install (or a mixed install with 3.x files
@@ -2867,8 +2882,8 @@ Two causes dominate; check them in this order.
   before Modern Standby is frozen and later reports `Request timed out`, and
   OpenCode caches the failure **per project directory**, so a new session in
   that directory inherits it. Check `opencode mcp list` from the project; if it
-  says `failed` or `pending`, run `opencode reload` in that directory. The
-  session is preserved and the server reconnects. Confirm with
+  says `failed` or `pending`, run `perun mcp-health --all --fix` (the same repair
+  as `opencode reload`, without restarting the session, for every directory). Confirm with
   `opencode mcp list` or, authoritatively,
   `opencode api GET /api/mcp -H "x-opencode-directory: <absolute path>"`.
 

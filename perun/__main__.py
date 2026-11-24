@@ -26,6 +26,7 @@ Usage::
     python -m perun deploy-plan <slug> [--changed FILE ...] [--include-auto] [--json]
     python -m perun install [--uninstall] [--machine]
     python -m perun mcp
+    python -m perun mcp-health [--fix] [--selftest] [--json]
 """
 
 from __future__ import annotations
@@ -1340,6 +1341,101 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp_health(args: argparse.Namespace) -> int:
+    """Diagnose the Perun MCP server, and repair connections with --fix.
+
+    OpenCode holds one MCP connection per location and caches a failure for the
+    whole directory, so ``--all`` visits every location the service knows plus
+    every registered project — one repair per directory, not per session.
+    """
+    from . import mcp_health
+
+    server = getattr(args, "server", "perun") or "perun"
+    if getattr(args, "all", False):
+        directories = mcp_health.project_directories()
+    else:
+        directories = [os.path.abspath(args.directory)
+                       if getattr(args, "directory", "") else os.getcwd()]
+    results: list[dict[str, Any]] = []
+    for directory in directories:
+        report = mcp_health.diagnose(server, directory)
+        revived = None
+        if (getattr(args, "fix", False) and report["configured"]
+                and report["state"] != "connected"):
+            revived = mcp_health.revive(server, directory)
+            report = mcp_health.diagnose(server, directory)
+        results.append({**report, "revive": revived})
+    probe = mcp_health.selftest() if getattr(args, "selftest", False) else None
+    payload = {"server": server, "results": results, "selftest": probe}
+
+    if getattr(args, "json", False):
+        _print(payload)
+    elif len(results) == 1:
+        _print_mcp_health(results[0], probe)
+    else:
+        _print_mcp_health_all(payload)
+    healthy = [r for r in results
+               if r["state"] == "connected" or not r["configured"]]
+    return 0 if len(healthy) == len(results) else 1
+
+
+def _print_mcp_health(report: dict[str, Any], probe: dict[str, Any] | None) -> None:
+    print(f"server:     {report['server']}")
+    print(f"directory:  {report['directory']}")
+    print(f"state:      {report['state'] or 'not configured'}")
+    print(f"verdict:    {report['verdict']}")
+    if report.get("error"):
+        print(f"error:      {report['error']}")
+    startup = report.get("last_startup") or {}
+    if startup:
+        print(f"last start: {float(startup.get('total_seconds') or 0):.1f}s "
+              f"at {startup.get('recorded_at') or '?'} "
+              f"(client deadline is 60s)")
+    revived = report.get("revive")
+    if revived is not None:
+        took = "already connected" if revived.get("already") else (
+            f"now {revived.get('state')}")
+        print(f"revive:     {took}"
+              + (f" ({revived['error']})" if revived.get("error") else ""))
+    if probe is not None:
+        if probe.get("ok"):
+            print(f"selftest:   handshake "
+                  f"{float(probe.get('initialize_seconds') or 0):.1f}s, "
+                  f"{probe.get('tools')} tools")
+        else:
+            print(f"selftest:   failed — {probe.get('error')}")
+    if report.get("remedy"):
+        print(f"remedy:     {report['remedy']}")
+
+
+def _print_mcp_health_all(payload: dict[str, Any]) -> None:
+    results = payload["results"]
+    print(f"{payload['server']} MCP — {len(results)} location(s)")
+    for report in results:
+        state = report["state"] or "not configured"
+        line = f"  {report['directory']:<48} {state}"
+        revived = report.get("revive")
+        if revived is not None:
+            line += " → reconnected" if revived.get("ok") else " → still down"
+        if report.get("error") and not revived:
+            line += f" ({report['error'][:60]})"
+        print(line)
+    startup = next((r.get("last_startup") or {} for r in results
+                    if (r.get("last_startup") or {}).get("total_seconds")), {})
+    if startup:
+        print(f"last start: {float(startup.get('total_seconds') or 0):.1f}s "
+              f"at {startup.get('recorded_at') or '?'} "
+              f"(client deadline is 60s)")
+    probe = payload.get("selftest")
+    if probe is not None:
+        if probe.get("ok"):
+            print(f"selftest:   handshake "
+                  f"{float(probe.get('initialize_seconds') or 0):.1f}s, "
+                  f"{probe.get('tools')} tools")
+        else:
+            print(f"selftest:   failed — {probe.get('error')}")
+
+
 def cmd_proposals_mcp(args: argparse.Namespace) -> int:
     """Run the perun-proposals coordination MCP server (stdio)."""
     _ensure()
@@ -2630,6 +2726,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="run the Perun MCP server (stdio)")
     p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser(
+        "mcp-health",
+        help="diagnose the Perun MCP connection, and repair it with --fix",
+        description="Report the state OpenCode has for the Perun MCP server, "
+                    "the measured cost of its last start, and -- with --fix -- "
+                    "disconnect and reconnect it (the only way out of a "
+                    "connection wedged in 'pending').")
+    p.add_argument("--server", default="perun",
+                   help="MCP server name as configured in OpenCode (default: perun)")
+    p.add_argument("--directory", default="",
+                   help="OpenCode location to inspect (default: the current directory)")
+    p.add_argument("--all", action="store_true",
+                   help="every location the service knows and every registered "
+                        "project (one MCP connection per directory)")
+    p.add_argument("--fix", action="store_true",
+                   help="disconnect and reconnect the server when it is not connected")
+    p.add_argument("--selftest", action="store_true",
+                   help="also start the server as a client would and time the handshake")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_mcp_health)
 
     p = sub.add_parser("proposals-mcp", help="run the Perun proposals coordination MCP server (stdio)")
     p.set_defaults(func=cmd_proposals_mcp)

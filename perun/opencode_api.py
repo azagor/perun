@@ -258,6 +258,39 @@ class OpenCodeAPI:
                 out.append(entry.strip())
         return out
 
+    # ---- MCP servers -------------------------------------------------- #
+    def mcp_servers(self, directory: str = "") -> List[Dict[str, Any]]:
+        """MCP servers and their states for *directory* (``GET /api/mcp``)."""
+        payload = self._request("GET", "/api/mcp", location=str(directory),
+                                allow_404=True)
+        data = (payload or {}).get("data") if isinstance(payload, dict) else None
+        rows = data if isinstance(data, list) else []
+        return [r for r in rows if isinstance(r, dict)]
+
+    def mcp_connect(self, server: str, directory: str = "",
+                    timeout: float | None = None) -> None:
+        """Ask the service to connect one MCP server.
+
+        The call blocks for the whole stdio handshake (the service holds it open
+        for up to a minute), so callers must pass their own ``timeout``.
+        """
+        self._request(
+            "POST", f"/api/experimental/mcp/{server}/connect",
+            body={}, location=str(directory), timeout=timeout,
+        )
+
+    def mcp_disconnect(self, server: str, directory: str = "",
+                       timeout: float | None = None) -> None:
+        """Drop one MCP connection; the only way out of a wedged ``pending``.
+
+        Closing the child can take a while when the service is already wedged,
+        so the caller decides how long to wait.
+        """
+        self._request(
+            "POST", f"/api/experimental/mcp/{server}/disconnect",
+            body={}, location=str(directory), allow_404=True, timeout=timeout,
+        )
+
     def create_session(self, directory: str, *, model: str = "",
                        agent: str = "", title: str = "") -> Dict[str, Any]:
         """Create a session in *directory* (the location is explicit)."""

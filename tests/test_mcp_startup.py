@@ -9,6 +9,7 @@ for the real server (``main()``), never for a module imported by a test.
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 import time
 from pathlib import Path
@@ -61,11 +62,45 @@ def test_main_starts_the_preparation_off_the_critical_path(monkeypatch):
 
     # `main()` is the production entry point; it must not wait for the work.
     calls = []
-    monkeypatch.setattr(module.mcp, "run", lambda: calls.append("run"))
+
+    def fake_run(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(module.mcp, "run", fake_run)
     began = time.time()
     module.main()
     elapsed = time.time() - began
 
-    assert calls == ["run"]
+    assert calls == [{"show_banner": False}]
     assert elapsed < 1.0
     assert started.wait(5) is True
+
+
+def test_startup_never_waits_for_the_database(monkeypatch):
+    """The schema work is the only step that can block on another process."""
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+
+    release = threading.Event()
+    calls = []
+    monkeypatch.setattr(module.db, "init_db", lambda: release.wait(10))
+    monkeypatch.setattr(module.mcp, "run", lambda **kw: calls.append("run"))
+    module._DB_READY.clear()
+    began = time.time()
+    module.main()
+    elapsed = time.time() - began
+
+    # `run` (the handshake) is entered while the schema work is still blocked.
+    assert calls == ["run"]
+    assert elapsed < 1.0, f"MCP start waited {elapsed:.1f}s for the database"
+    release.set()
+
+
+def test_the_handshake_path_has_no_network_version_check(monkeypatch):
+    """FastMCP's banner queries PyPI; that call has no business in a start."""
+    spec, module, _started = _load(monkeypatch)
+    spec.loader.exec_module(module)
+
+    assert os.environ.get("FASTMCP_CHECK_FOR_UPDATES") == "off"
+    assert os.environ.get("FASTMCP_SHOW_CLI_BANNER") == "false"
+    assert module._STARTUP_BEGAN > 0
