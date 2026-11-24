@@ -357,5 +357,21 @@ def guard_search_files(path: str, pattern: str) -> list[dict[str, Any]]:
     return matches[:100]
 
 
+def _restore_plain_tool_names() -> None:
+    """Keep the module-level tool names callable under FastMCP 2.x.
+
+    ``@mcp.tool`` returns a ``FunctionTool`` wrapper; the MCP server keeps its
+    own registry, so rebinding the globals to the wrapped functions restores the
+    API that tests and internal callers import directly.
+    """
+    for name, obj in list(globals().items()):
+        fn = getattr(obj, "fn", None)
+        if type(obj).__name__ == "FunctionTool" and callable(fn):
+            globals()[name] = fn
+
+
+_restore_plain_tool_names()
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

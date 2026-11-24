@@ -16,14 +16,27 @@ from perun.proposals_mcp import (
 )
 
 
+def _tool_fn(tool):
+    """FastMCP 2.x decorators return a ``FunctionTool``, not the function."""
+    return getattr(tool, "fn", tool)
+
+
 _TOOL_MAP = {
-    "propose": propose,
-    "approve": approve,
-    "list_proposals": list_proposals,
-    "get_proposal": get_proposal,
-    "approve_package": approve_package,
-    "reject_package": reject_package,
+    "propose": _tool_fn(propose),
+    "approve": _tool_fn(approve),
+    "list_proposals": _tool_fn(list_proposals),
+    "get_proposal": _tool_fn(get_proposal),
+    "approve_package": _tool_fn(approve_package),
+    "reject_package": _tool_fn(reject_package),
 }
+
+# Tests also call the tools directly; bind the callable, not the wrapper.
+propose = _TOOL_MAP["propose"]
+approve = _TOOL_MAP["approve"]
+list_proposals = _TOOL_MAP["list_proposals"]
+get_proposal = _TOOL_MAP["get_proposal"]
+approve_package = _TOOL_MAP["approve_package"]
+reject_package = _TOOL_MAP["reject_package"]
 
 
 def _now_iso() -> str:
@@ -428,7 +441,7 @@ def test_propose_rejects_unregistered_project(tool_runner, tmp_path, _settings, 
     monkeypatch.setattr(proposals_mcp_module, "_settings", lambda: _settings)
 
     with pytest.raises(ValueError, match="project is not registered"):
-        proposals_mcp_module.propose(
+        _TOOL_MAP["propose"](
             intent="add README", operations=[{"path": "README.md", "op": "create"}]
         )
 
@@ -437,8 +450,8 @@ def test_proposals_mcp_tool_names_match_permissions():
     """The actual MCP tool names are the bare function names, not prefixed."""
     import asyncio
 
-    tools = asyncio.run(proposals_mcp_module.mcp.list_tools())
-    assert {t.name for t in tools} == {
+    tools = asyncio.run(proposals_mcp_module.mcp.get_tools())
+    assert set(tools) == {
         "propose", "approve", "list_proposals", "get_proposal",
         "approve_package", "reject_package",
     }

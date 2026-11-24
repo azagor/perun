@@ -419,5 +419,21 @@ def reject_package(proposal_id: str, reason: str = "") -> dict[str, Any]:
     }
 
 
+def _restore_plain_tool_names() -> None:
+    """Keep the module-level tool names callable under FastMCP 2.x.
+
+    ``@mcp.tool`` returns a ``FunctionTool`` wrapper; the MCP server keeps its
+    own registry, so rebinding the globals to the wrapped functions restores the
+    API that tests and the bridge have always imported.
+    """
+    for name, obj in list(globals().items()):
+        fn = getattr(obj, "fn", None)
+        if type(obj).__name__ == "FunctionTool" and callable(fn):
+            globals()[name] = fn
+
+
+_restore_plain_tool_names()
+
+
 if __name__ == "__main__":
     mcp.run()

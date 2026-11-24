@@ -11,6 +11,11 @@ All notable changes are recorded here. Single source of truth for release notes.
   compaction looked ineffective and three in a row disabled the governor. The
   after-state now waits for the first normal assistant turn and a usage snapshot
   that advanced, and unmeasured events no longer count toward the self-disable.
+* MCP tool modules again expose callable tool names under FastMCP 2.x. The
+  decorator returns a `FunctionTool` wrapper, which broke every direct caller
+  (tests and the bridge); the module globals now point at the wrapped functions
+  while the MCP server keeps its own registry. The proposals tool-name test uses
+  `mcp.get_tools()`, the 2.x API.
 
 ### Docs
 

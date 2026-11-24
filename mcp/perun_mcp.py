@@ -1747,6 +1747,23 @@ def perun_attention_list(state: str = "open", limit: int = 20) -> str:
     return "[perun] Operator inbox:\n" + "\n".join(lines)
 
 
+def _restore_plain_tool_names() -> None:
+    """Keep the module-level tool names callable under FastMCP 2.x.
+
+    ``@mcp.tool`` returns a ``FunctionTool`` wrapper instead of the function.
+    The MCP server uses its own registry, so rebinding these globals to the
+    underlying callables only restores the importable API that tests and
+    internal callers have always used.
+    """
+    for name, obj in list(globals().items()):
+        fn = getattr(obj, "fn", None)
+        if type(obj).__name__ == "FunctionTool" and callable(fn):
+            globals()[name] = fn
+
+
+_restore_plain_tool_names()
+
+
 def main() -> None:
     # Started here, not at import: the module is also imported by tests and by
     # `perun/handbook.py` to render the tool reference, and those must not leave
