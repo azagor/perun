@@ -6,11 +6,20 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ### Fixed
 
+* The generated `handbook.tools` reference refreshes again. FastMCP 2.x replaced
+  `list_tools()` with `get_tools()`, so rendering the live registry returned an
+  empty body and the context key kept serving a stale copy from before the
+  upgrade (missing every tool added since). The handbook reads whichever API the
+  installed server offers and takes the argument schema from `parameters` when
+  `inputSchema` is absent.
 * Context governor no longer mistakes the compaction request for the resulting
-  context. The summariser's own message carries the **old** context, so every
-  compaction looked ineffective and three in a row disabled the governor. The
-  after-state now waits for the first normal assistant turn and a usage snapshot
-  that advanced, and unmeasured events no longer count toward the self-disable.
+  context. Two measurements were wrong: the summariser's own message carries the
+  **old** context, and the message page is newest-first, so reversing it read the
+  *oldest* turn in the window. Every compaction therefore looked ineffective and
+  three in a row disabled the governor. The after-value now comes from the newest
+  normal assistant turn that is newer than the summariser row, and it waits for a
+  usage snapshot that advanced; unmeasured events no longer count toward the
+  self-disable.
 * MCP tool modules again expose callable tool names under FastMCP 2.x. The
   decorator returns a `FunctionTool` wrapper, which broke every direct caller
   (tests and the bridge); the module globals now point at the wrapped functions
