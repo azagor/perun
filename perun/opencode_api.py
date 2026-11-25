@@ -260,9 +260,14 @@ class OpenCodeAPI:
 
     # ---- MCP servers -------------------------------------------------- #
     def mcp_servers(self, directory: str = "") -> List[Dict[str, Any]]:
-        """MCP servers and their states for *directory* (``GET /api/mcp``)."""
-        payload = self._request("GET", "/api/mcp", location=str(directory),
-                                allow_404=True)
+        """MCP servers and their states for *directory* (``GET /api/mcp``).
+
+        A 404 is **not** "no servers here": the service answers 404 for a
+        directory it cannot open (measured) and for a build without the
+        endpoint, so it propagates as ``OpenCodeHTTPError`` and the caller
+        reports a refused location instead of an unconfigured server.
+        """
+        payload = self._request("GET", "/api/mcp", location=str(directory))
         data = (payload or {}).get("data") if isinstance(payload, dict) else None
         rows = data if isinstance(data, list) else []
         return [r for r in rows if isinstance(r, dict)]

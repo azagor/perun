@@ -64,6 +64,13 @@ MATERIALIZE_POLL_SECONDS = 1.0
 #: Poll interval while waiting for ``pending`` to settle.
 SETTLE_POLL_SECONDS = 2.0
 
+#: ``os.replace`` fails on Windows while another process holds the destination
+#: open for reading (a read handle has no ``FILE_SHARE_DELETE``), and a
+#: diagnostics file is read by exactly such processes. A short retry keeps a
+#: record that is otherwise fine instead of silently dropping it.
+REPLACE_ATTEMPTS = 5
+REPLACE_RETRY_SECONDS = 0.05
+
 #: Two writers merge into one file from different threads of the same process
 #: (the import record, then the schema record), so the read-merge-write is
 #: serialised. It does **not** cover other processes: every OpenCode location
@@ -79,6 +86,7 @@ def record_startup(payload: dict[str, Any]) -> None:
     start from another location: the record describes one run, so it is replaced
     rather than merged, and the payload must carry that run's identity fields.
     """
+    tmp: Path | None = None
     try:
         with _RECORD_LOCK:
             record = read_startup()
@@ -91,9 +99,26 @@ def record_startup(payload: dict[str, Any]) -> None:
             STARTUP_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = STARTUP_FILE.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
-            os.replace(tmp, STARTUP_FILE)
-    except Exception:  # pragma: no cover - diagnostics must never break a start
+            for attempt in range(1, REPLACE_ATTEMPTS + 1):
+                try:
+                    os.replace(tmp, STARTUP_FILE)
+                except OSError:
+                    # Another process is reading it right now; retry briefly.
+                    if attempt == REPLACE_ATTEMPTS:
+                        raise
+                    time.sleep(REPLACE_RETRY_SECONDS)
+                else:
+                    tmp = None
+                    break
+    except Exception:  # diagnostics must never break a start
         pass
+    finally:
+        # A failed write must not leave temp files in the Perun home.
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def read_startup() -> dict[str, Any]:
@@ -119,7 +144,8 @@ def server_status(server: str = "perun", directory: str = "",
     unreadable state must never be reported as "not configured", which would
     excuse a dead connection instead of naming it. ``answered`` separates the
     two ways that can fail — the service answered with an error status
-    (``http_status``) or it did not answer at all — because the remedy differs.
+    (``http_status``; 404 means it refused the location) or it did not answer at
+    all — because the remedy differs.
     """
     directory = directory or os.getcwd()
     try:
@@ -154,6 +180,37 @@ def server_status(server: str = "perun", directory: str = "",
             "answered": True, "http_status": None}
 
 
+def directory_key(path: Any) -> str:
+    """Identity of a directory: case-, separator- and 8.3-insensitive.
+
+    OpenCode can list one directory under its long name and its 8.3 short form
+    (``C:\\Users\\LSZCZE~1\\...``); both are the same location, and a repair
+    must visit it once. ``realpath`` is what expands the short form.
+    """
+    text = str(path or "").strip()
+    return os.path.normcase(os.path.realpath(text)) if text else ""
+
+
+def service_locations(api: Any = None) -> list[str]:
+    """Every location the OpenCode service knows right now."""
+    return [str(path) for path in _api(api).locations() if str(path or "").strip()]
+
+
+def location_known(directory: str = "", api: Any = None) -> bool:
+    """Whether the service has a location for *directory*.
+
+    An unreadable location list answers ``False``: the caller then waits out its
+    window and reports ``not_confirmed``, which is what it actually knows.
+    """
+    key = directory_key(directory)
+    if not key:
+        return False
+    try:
+        return any(directory_key(path) == key for path in service_locations(api))
+    except Exception:
+        return False
+
+
 def project_directories(api: Any = None) -> list[str]:
     """Every directory that can hold a session: service locations + registry.
 
@@ -172,14 +229,14 @@ def project_directories(api: Any = None) -> list[str]:
         # the service about it would materialize a stale location there.
         if not os.path.isdir(text):
             return
-        key = os.path.normcase(os.path.normpath(text))
+        key = directory_key(text)
         if key in seen:
             return
         seen.add(key)
         directories.append(text)
 
     try:
-        for location in _api(api).locations():
+        for location in service_locations(api):
             add(location)
     except Exception:
         pass
@@ -320,9 +377,19 @@ HTTP_ERROR_REMEDY = (
     "the connection is unknown — its own log has the cause; repair the service "
     "and run this again")
 
+LOCATION_REFUSED_REMEDY = (
+    "the OpenCode service answered HTTP 404 for this directory — it cannot open "
+    "the path, or this OpenCode build has no MCP endpoint; check that the "
+    "directory exists and that OpenCode is up to date")
+
 UNKNOWN_STATE_REMEDY = (
     "the client lists the server but reports no state for it — run "
     "`perun mcp-health --fix` to reconnect it")
+
+NOT_CONFIRMED_REMEDY = (
+    "the service never took this directory as a location, so whether the server "
+    "is configured there is unknown — check that the path exists, then run this "
+    "again")
 
 
 def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dict[str, Any]:
@@ -337,9 +404,14 @@ def diagnose(server: str = "perun", directory: str = "", api: Any = None) -> dic
         # "I could not ask" is not "there is nothing to ask about", and "the
         # service answered with an error" is not "the service did not answer".
         if status.get("answered"):
-            verdict = "service_error"
-            remedy = HTTP_ERROR_REMEDY.format(
-                status=status.get("http_status") or "an error")
+            if status.get("http_status") == 404:
+                # It refused this location; "start the service" is wrong advice.
+                verdict = "location_refused"
+                remedy = LOCATION_REFUSED_REMEDY
+            else:
+                verdict = "service_error"
+                remedy = HTTP_ERROR_REMEDY.format(
+                    status=status.get("http_status") or "an error")
         else:
             verdict = "service_unreachable"
             remedy = UNREACHABLE_REMEDY

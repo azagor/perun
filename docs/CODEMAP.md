@@ -567,16 +567,24 @@ Health, diagnosis and repair for the `perun` stdio MCP server.
   `CONNECT_TIMEOUT_SECONDS`, `SETTLE_SECONDS`, `PENDING_SETTLE_SECONDS` (60 s —
   the client's own deadline), `MATERIALIZE_SETTLE_SECONDS` (6 s — a location the
   first read just materialized), `SETTLE_POLL_SECONDS`,
-  `MATERIALIZE_POLL_SECONDS`, `_RECORD_LOCK`.
+  `MATERIALIZE_POLL_SECONDS`, `REPLACE_ATTEMPTS`/`REPLACE_RETRY_SECONDS` (a
+  replace that collides with a reader is retried, 0.2 s in total),
+  `_RECORD_LOCK`.
 * `record_startup()` (merge + atomic replace, serialised within the process;
   **never raises**, it runs inside the MCP process), `read_startup()`. A payload
   naming a different `pid` is a concurrent start from another location, so it
-  replaces the record instead of merging into it: the file describes one run.
+  replaces the record instead of merging into it: the file describes one run. A
+  replace that a reader blocks (Windows) is retried, and a write that still fails
+  removes its temp file.
 * `server_status()` — the state OpenCode holds for one directory, read from
   `GET /api/mcp` (its own words: `connected`, `failed`, `pending`, `disabled`),
   plus `reachable` (was the state readable at all) and `answered`/`http_status`
   (it answered with an error status rather than silence, which needs a different
-  remedy). An unreadable state is never "not configured".
+  remedy; 404 means it refused the directory). An unreadable state is never
+  "not configured".
+* `directory_key()` — one identity per directory (`normcase(realpath(...))`), so
+  an 8.3 short name and its long form are the same location; `service_locations()`
+  and `location_known()` expose the service's own list for that comparison.
 * `settle()` — poll only while the state is `pending` (the one transient state);
   an empty state returns immediately instead of burning the window.
 * `revive()` — disconnect then connect through
@@ -586,19 +594,15 @@ Health, diagnosis and repair for the `perun` stdio MCP server.
   HTTP exception). A service whose state cannot be read is not contacted.
 * `selftest()` — runs the client's own stdio handshake, timed, with a tool count.
 * `diagnose()` — verdict + remedy (`ok`, `service_unreachable`, `service_error`,
-  `unknown_state`, `stuck_pending`, `not_configured`, …), folding in a slow or
-  failed measured start.
+  `location_refused` for a 404, `unknown_state`, `stuck_pending`,
+  `not_configured`, …), folding in a slow or failed measured start.
 * `project_directories()` — every location the service knows (plus every
-  registered project that still exists on disk), deduped: the client keeps one MCP
-  connection **per directory**, so a repair visits each one.
-* CLI: `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` — exit 0
-  only when every location was verified (connected, or genuinely not configured,
-  through a service that answered); an unreachable service, an error status or an
-  empty check exits non-zero. A location that lists no server is waited for
-  (`_await_materialized`), because the first read is what materializes its MCP
-  entry and the connect that follows is asynchronous; `--all` also prints why a
-  repair failed, and `--json` emits an object (with `error`) even when there is
-  nothing to check.
+  registered project that still exists on disk), deduped by `directory_key`: the
+  client keeps one MCP connection **per directory**, so a repair visits each one.
+* The CLI lives in `perun/__main__.py` (`cmd_mcp_health`): exit 0 only when every
+  location was verified (connected, or genuinely not configured, through a
+  service that answered); an unreachable service, an error status, a refused
+  location, an unconfirmed location or an empty check exits non-zero.
 
 ### `perun/discovery.py`
 Find & register OpenCode projects under roots.
@@ -1022,7 +1026,10 @@ cannot reach.
   (sums `tokens.input/output`, `tokens.cache.read` and `cost` over **every**
   cursor page of the session; records `pages`/`messages`/`complete`),
   `message_page()` and `iter_messages()` (the 200-message page + `cursor.next`
-  walk).
+  walk), and `mcp_servers(directory)` (`GET /api/mcp` - a 404 propagates as
+  `OpenCodeHTTPError`, because the service refuses a directory it cannot open
+  rather than listing no servers; `mcp_health` turns that into
+  `location_refused`, never "not configured").
 * Auth is HTTP Basic `opencode:<password>` using the password from OpenCode's
   own service file in the user's config directory (or
   `OPENCODE_SERVICE_PASSWORD`); it is kept in memory only — never logged,
@@ -1755,7 +1762,7 @@ memory facts; `docs audit [slug] [--all]` checks CODEMAP file/identifier/version
 traceability),
 `cmd_context` (**`perun context list|get|search|sync|map|index|verify|stats|dedupe`** —
 the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|status`**),
-`cmd_update` (**`perun update check|status|apply|dismiss`** — check GitHub releases and self-update Perun from the CLI or dashboard), `cmd_mcp`, `build_parser()`, `main()`.
+`cmd_update` (**`perun update check|status|apply|dismiss`** - check GitHub releases and self-update Perun from the CLI or dashboard), `cmd_mcp`, `cmd_mcp_health` (**`perun mcp-health [--all | --directory DIR] [--server NAME] [--fix] [--selftest] [--json]`** - diagnose and repair the Perun MCP connection, one per location), `build_parser()`, `main()`.
 * `_is_owner()` (best-effort owner check: always true on Windows, UID-checked on
   Unix), `_resolve_project_targets()` (owner-level `--all` includes hidden
   projects), `_context_project_id()` (slug/path → project id; the cwd's project by
@@ -1779,6 +1786,19 @@ the Context layer), `cmd_secret` (**`perun secret list|get|set|delete|password|s
   so token/password changes take effect without closing the dashboard.
   `start_or_reload_in_process_bridge()` is used by the unlock flow to start the
   bridge when it was not started due to a missing password.
+* `cmd_mcp_health` / `_check_mcp_location` / `_await_materialized` /
+  `_mcp_location_healthy` / `_mcp_state_label` / `_print_mcp_health_all` - the
+  MCP health surface. `--directory` names a path that must exist (a path the
+  service cannot open answers 404, which would read as a broken endpoint);
+  `--all` visits every service location plus every registered project, because
+  the client keeps one connection per directory. `_check_mcp_location` settles a
+  transient `pending` and, with `--fix`, disconnects then reconnects a non-
+  connected server. `_await_materialized` waits only for a location the service
+  did **not** know before the read — the read is what materializes it, and the
+  connect is asynchronous (absent at t+0, `pending` at t+2 s, `connected` at
+  t+4 s); a known location is judged immediately, and one the service never takes
+  is `not_confirmed`. The command exits 0 only when every location was verified,
+  and prints a remedy for every verdict that is not `ok`.
 
 ### `perun/release_notes.py`
 Changelog notes for the running version, shown on the self-update page.

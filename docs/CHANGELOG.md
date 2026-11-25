@@ -42,19 +42,40 @@ All notable changes are recorded here. Single source of truth for release notes.
   and the connect is asynchronous — measured as no row at t+0, `pending` at
   t+2 s, `connected` at t+4 s — so the previous single re-read landed in that gap
   and reported "not configured", with exit code 0, for locations it had just
-  started connecting.
+  started connecting. The wait is spent only where it can help: a location the
+  service already knew was not created by the read, so its empty answer is final
+  and is judged immediately.
+* A directory the service never takes as a location is `not_confirmed`, not "not
+  configured": nothing was verified about it either way, so it fails the run and
+  the remedy says so instead of advising an MCP entry.
+* An HTTP 404 for `/api/mcp` is a **refused location**, not "no servers here".
+  Measured: an existing directory the service has never seen answers 200, while a
+  path it cannot open answers 404. `OpenCodeAPI.mcp_servers()` no longer swallows
+  the 404, and the verdict is `location_refused` with a remedy that names the
+  path and the OpenCode build — the old behaviour reported a missing directory as
+  "not configured" with exit code 0.
+* `--directory` rejects a path that does not exist before asking the service, so
+  a stale path is named instead of being materialized as a location.
 * A repair no longer waits out the whole settle window (120 s per location) when
   the connection state is empty — no such server, or a dead service. Only
   `pending` is transient, and it is polled for no longer than the client's own
   60 s deadline; a dead service is not contacted at all.
-* `--all` now prints why a repair failed, and prints each failure's own remedy;
-  it used to show a bare "still down" and a single blanket "service unreachable"
-  remedy for every location.
+* `--all` now prints why a repair failed, and prints the remedy of **every**
+  failing verdict; it used to show a bare "still down", and a remedy only for a
+  location whose state could not be read at all, leaving a wedged `pending` or a
+  `failed` connect without its own remedy.
 * A configured server whose client row carries no state is `unknown_state` with
   the `--fix` remedy, instead of `not_configured` with the advice to add the
   entry that is already there.
 * `mcp-health --json` stays parseable when there is nothing to check: the empty
   answer is a JSON object with an `error` field, not prose on stderr.
+* Two directories that are the same location are now visited once: the identity
+  uses `os.path.realpath`, so an 8.3 short name (`C:\Users\LSZCZE~1\...`) and its
+  long form are not repaired (or counted) twice.
+* A startup record whose atomic replace collides with a reader is retried for a
+  few hundred milliseconds instead of being dropped (Windows refuses the replace
+  while another process holds the file open), and a write that still fails leaves
+  no `.tmp` file behind.
 * A schema reconcile that loses a race with another Perun process's write lock is
   retried three times at startup (the failure used to be swallowed, leaving that
   process on an old schema for its whole life) and is recorded in

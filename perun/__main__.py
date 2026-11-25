@@ -1359,9 +1359,21 @@ def cmd_mcp_health(args: argparse.Namespace) -> int:
     fix = bool(getattr(args, "fix", False))
     if getattr(args, "all", False):
         directories = mcp_health.project_directories()
+    elif getattr(args, "directory", ""):
+        directory = os.path.abspath(args.directory)
+        if not os.path.isdir(directory):
+            # A path the service cannot open answers 404, which reads as a
+            # broken endpoint; saying "no such directory" is the useful answer.
+            message = f"no such directory: {directory}"
+            if getattr(args, "json", False):
+                _print({"server": server, "results": [], "selftest": None,
+                        "error": message})
+            else:
+                print(message, file=sys.stderr)
+            return 1
+        directories = [directory]
     else:
-        directories = [os.path.abspath(args.directory)
-                       if getattr(args, "directory", "") else os.getcwd()]
+        directories = [os.getcwd()]
     if not directories:
         message = ("no OpenCode location to check — is the service running? "
                    "(`opencode service status`)")
@@ -1371,6 +1383,16 @@ def cmd_mcp_health(args: argparse.Namespace) -> int:
         else:
             print(message, file=sys.stderr)
         return 1
+
+    # A location the service already knew was not created by the reads below,
+    # so "no server here" is an answer for it. One it did not know is being
+    # materialized right now and has to be waited for. An unreadable list is
+    # no evidence either way, so every location is treated as new.
+    try:
+        known = {mcp_health.directory_key(d)
+                 for d in mcp_health.service_locations()}
+    except Exception:
+        known = set()
 
     results = [_check_mcp_location(mcp_health, server, d, fix)
                for d in directories]
@@ -1383,7 +1405,8 @@ def cmd_mcp_health(args: argparse.Namespace) -> int:
     for index, report in enumerate(results):
         if report["reachable"] and not report["configured"]:
             results[index] = _await_materialized(
-                mcp_health, server, report["directory"], fix)
+                mcp_health, server, report, fix,
+                known=mcp_health.directory_key(report["directory"]) in known)
 
     probe = mcp_health.selftest() if getattr(args, "selftest", False) else None
     payload = {"server": server, "results": results, "selftest": probe}
@@ -1415,27 +1438,42 @@ def _check_mcp_location(mcp_health: Any, server: str, directory: str,
     return {**report, "revive": revived}
 
 
-def _await_materialized(mcp_health: Any, server: str, directory: str,
-                        fix: bool) -> dict[str, Any]:
-    """Wait for a location that reports no server, then judge it.
+def _await_materialized(mcp_health: Any, server: str, report: dict[str, Any],
+                        fix: bool, known: bool) -> dict[str, Any]:
+    """Judge a location that reported no server, waiting if it is brand new.
 
-    The read that returned "no such server" is what makes the service create the
-    location's entry, so the verdict is provisional until the entry appears. A
-    location that really has no ``perun`` entry simply stays that way.
+    Reading ``/api/mcp`` is what makes OpenCode create a location's MCP entry,
+    and the connect that follows is asynchronous (measured: no row at t+0,
+    ``pending`` at t+2 s, ``connected`` at t+4 s). For a location the service
+    did not know before the read, the empty answer is therefore provisional; for
+    one it already knew, the entry was not created by this read, so the answer
+    is final and nothing is waited for.
     """
+    directory = report["directory"]
+    if known:
+        return {**report, "revive": None}
     deadline = time.monotonic() + mcp_health.MATERIALIZE_SETTLE_SECONDS
-    report = mcp_health.diagnose(server, directory)
-    while (not report["configured"] and report["reachable"]
-           and time.monotonic() < deadline):
+    while time.monotonic() < deadline:
         time.sleep(mcp_health.MATERIALIZE_POLL_SECONDS)
         report = mcp_health.diagnose(server, directory)
-    if report["configured"]:
-        return _check_mcp_location(mcp_health, server, directory, fix)
-    return {**report, "revive": None}
+        if report["configured"]:
+            return _check_mcp_location(mcp_health, server, directory, fix)
+        if not report["reachable"]:
+            # The service died mid-wait: report that, not a timeout.
+            return {**report, "revive": None}
+        if mcp_health.location_known(directory):
+            # Created, and it lists no server: this one really has no entry.
+            return {**report, "revive": None}
+    # The service never took the location, so nothing was verified either way.
+    return {**report, "verdict": "not_confirmed",
+            "remedy": mcp_health.NOT_CONFIRMED_REMEDY, "revive": None}
 
 
 def _mcp_location_healthy(report: dict[str, Any]) -> bool:
     if not report.get("reachable", False):
+        return False
+    if report.get("verdict") == "not_confirmed":
+        # The service never took the location, so nothing was verified.
         return False
     return report["state"] == "connected" or not report["configured"]
 
@@ -1463,9 +1501,14 @@ def _print_mcp_probe(probe: dict[str, Any] | None) -> None:
 
 
 def _mcp_state_label(report: dict[str, Any]) -> str:
+    verdict = report.get("verdict") or ""
+    if verdict == "location_refused":
+        return "location refused"
     if not report.get("reachable", False):
         # An error status is still an answer; only silence is "unreachable".
         return "service error" if report.get("answered") else "service unreachable"
+    if verdict == "not_confirmed":
+        return "not confirmed"
     return report["state"] or "not configured"
 
 
@@ -1504,12 +1547,16 @@ def _print_mcp_health_all(payload: dict[str, Any]) -> None:
         if reason and not (revived or {}).get("ok"):
             line += f" ({reason[:60]})"
         print(line)
-    # Each failure has its own remedy (silence, an error status, a wedged
-    # connect), so print the distinct ones instead of one blanket guess.
+    # Each failure has its own remedy (silence, an error status, a refused
+    # location, a wedged connect), so print the distinct ones instead of one
+    # blanket guess. A reachable failure — ``failed``, ``pending``,
+    # ``not_confirmed`` — needs its remedy just as much as an unreadable state
+    # does; only a verdict of ``ok`` has nothing to say.
     remedies: list[str] = []
     for report in results:
         remedy = report.get("remedy") or ""
-        if not report.get("reachable", False) and remedy and remedy not in remedies:
+        verdict = report.get("verdict") or ""
+        if verdict != "ok" and remedy and remedy not in remedies:
             remedies.append(remedy)
     for remedy in remedies:
         print("remedy:     " + remedy)

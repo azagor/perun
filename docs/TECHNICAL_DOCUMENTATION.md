@@ -2882,13 +2882,22 @@ asked is a `service_unreachable` verdict with its own remedy (start or repair th
 service) and a non-zero exit — do not read it as "no MCP entry", and do not
 "fix" it by adding one. A service that answers with an **error status** is
 `service_error` (the remedy points at its log and the HTTP status): it is not
-unreachable, and restarting it is not the first thing to try. `pending` is the
-only transient *connection* state, but "no such server" is provisional too: the
-read itself is what makes OpenCode materialize a location, and the connect is
-asynchronous (measured: no row at t+0, `pending` at t+2 s, `connected` at t+4 s),
-so the command waits for the entry before judging it. A location that really has
-no `perun` entry simply stays that way, and a configured row with no state is
-`unknown_state` (run `--fix`) rather than advice to add what is already there.
+unreachable, and restarting it is not the first thing to try. An HTTP **404** for
+`/api/mcp` is `location_refused`: the service answers 200 for an existing
+directory it has never seen (and materializes it), and 404 for a path it cannot
+open, so the remedy names the path and the OpenCode build — it is never "no
+servers configured here". `pending` is the only transient *connection* state, but
+"no such server" is provisional for a location being created right now: the read
+itself is what makes OpenCode materialize a location, and the connect is
+asynchronous (measured: no row at t+0, `pending` at t+2 s, `connected` at t+4 s).
+The wait is therefore spent only on a location the service did **not** know
+before the read; one it already knew was not created by this read, so an empty
+answer is final and is judged immediately. A location the service never takes is
+`not_confirmed` (non-zero exit): nothing was verified either way, so it is not
+reported as "not configured". A genuine absence simply stays absent, and a
+configured row with no state is `unknown_state` (run `--fix`) rather than advice
+to add what is already there. `--all` prints the remedy of every failing verdict,
+and `--directory` rejects a path that does not exist before asking the service.
 Two causes dominate; check them in this order.
 
 * **Incompatible FastMCP.** A 3.x install (or a mixed install with 3.x files

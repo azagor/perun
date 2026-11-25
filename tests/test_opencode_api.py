@@ -291,3 +291,23 @@ def test_session_forwards_a_per_call_timeout():
         assert client.kwargs == {"timeout": 0.5}
     finally:
         api.close()
+
+
+def test_mcp_servers_propagates_a_404_instead_of_returning_no_servers():
+    """A 404 means the service refused the directory, not "no servers here"."""
+    api = _api([StubResponse(404, None, "not found")])
+
+    with pytest.raises(opencode_api.OpenCodeHTTPError) as excinfo:
+        api.mcp_servers(r"C:\gone")
+
+    assert excinfo.value.status == 404
+
+
+def test_mcp_servers_returns_the_rows_the_service_lists():
+    api = _api([StubResponse(200, {"data": [{"name": "perun",
+                                             "status": {"status": "connected"}}]})])
+
+    rows = api.mcp_servers(r"C:\p")
+
+    assert [row["name"] for row in rows] == ["perun"]
+    assert rows[0]["status"]["status"] == "connected"

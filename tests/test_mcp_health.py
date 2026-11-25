@@ -372,13 +372,20 @@ def test_project_directories_survives_an_unreachable_service(tmp_path, monkeypat
 
 def _report(server: str, directory: str, state: str = "connected",
             *, configured: bool | None = None,
-            reachable: bool = True, answered: bool | None = None) -> dict:
+            reachable: bool = True, answered: bool | None = None,
+            verdict: str = "ok", remedy: str = "", error: str = "") -> dict:
     return {"server": server, "directory": directory, "state": state,
             "configured": (state != "") if configured is None else configured,
             "reachable": reachable,
             "answered": reachable if answered is None else answered,
-            "verdict": "ok", "remedy": "",
-            "last_startup": {}, "error": ""}
+            "verdict": verdict, "remedy": remedy,
+            "last_startup": {}, "error": error}
+
+
+def _service_knows(monkeypatch, *directories):
+    """The pre-read: these are the locations the service already had."""
+    monkeypatch.setattr(mcp_health, "service_locations",
+                        lambda api=None: list(directories))
 
 
 def _args(**overrides) -> argparse.Namespace:
@@ -396,6 +403,7 @@ def test_cmd_mcp_health_exits_zero_when_every_location_is_connected(monkeypatch)
     monkeypatch.setattr(mcp_health, "diagnose",
                         lambda server, directory: calls.append(directory)
                         or _report(server, directory))
+    _service_knows(monkeypatch, r"C:\a", r"C:\b")
 
     assert cli.cmd_mcp_health(_args()) == 0
     assert calls == [r"C:\a", r"C:\b"]
@@ -418,6 +426,7 @@ def test_cmd_mcp_health_repairs_every_broken_location(monkeypatch):
     monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a", r"C:\b"])
     monkeypatch.setattr(mcp_health, "diagnose", fake_diagnose)
     monkeypatch.setattr(mcp_health, "revive", fake_revive)
+    _service_knows(monkeypatch, r"C:\a", r"C:\b")
 
     assert cli.cmd_mcp_health(_args(fix=True)) == 0
     assert revived == [r"C:\b"]
@@ -435,6 +444,10 @@ def test_cmd_mcp_health_fails_when_the_service_is_unreachable(monkeypatch):
     monkeypatch.setattr(mcp_health, "revive",
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("must not revive through a dead service")))
+    monkeypatch.setattr(mcp_health, "location_known",
+                        lambda directory, api=None: (_ for _ in ()).throw(
+                            AssertionError("an unreachable report must not be waited for")))
+    _service_knows(monkeypatch)  # unknown, so only the caller's guard can skip it
 
     assert cli.cmd_mcp_health(_args(fix=True)) == 1
 
@@ -462,6 +475,8 @@ def test_cmd_mcp_health_rechecks_a_location_that_looked_unconfigured(monkeypatch
     monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a"])
     monkeypatch.setattr(mcp_health, "diagnose", fake_diagnose)
     monkeypatch.setattr(mcp_health, "MATERIALIZE_POLL_SECONDS", 0)
+    monkeypatch.setattr(mcp_health, "location_known", lambda directory, api=None: False)
+    _service_knows(monkeypatch)  # the service had never seen it
 
     assert cli.cmd_mcp_health(_args()) == 0
     assert reads[0] == r"C:\a"
@@ -484,14 +499,39 @@ def test_cmd_mcp_health_waits_for_a_location_it_just_materialized(monkeypatch, c
     monkeypatch.setattr(mcp_health, "PENDING_SETTLE_SECONDS", 0)
     monkeypatch.setattr(mcp_health, "settle",
                         lambda server, directory, wait=0: None)
+    monkeypatch.setattr(mcp_health, "location_known", lambda directory, api=None: False)
+    _service_knows(monkeypatch)  # the service had never seen it
 
     assert cli.cmd_mcp_health(_args()) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["results"][0]["state"] == "connected"
 
 
-def test_cmd_mcp_health_gives_up_on_a_location_that_stays_unconfigured(
+def test_cmd_mcp_health_does_not_wait_for_a_location_the_service_already_knew(
         monkeypatch, capsys):
+    """The read cannot have created it, so "no server" is the final answer."""
+    from perun import __main__ as cli
+
+    monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a"])
+    monkeypatch.setattr(mcp_health, "diagnose",
+                        lambda server, directory: _report(
+                            server, directory, "", configured=False,
+                            verdict="not_configured", remedy="add the entry"))
+    monkeypatch.setattr(mcp_health, "location_known",
+                        lambda directory, api=None: (_ for _ in ()).throw(
+                            AssertionError("a known location must not be waited for")))
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_POLL_SECONDS", 0)
+    _service_knows(monkeypatch, r"C:\a")
+
+    assert cli.cmd_mcp_health(_args()) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"][0]["configured"] is False
+    assert payload["results"][0]["verdict"] == "not_configured"
+
+
+def test_cmd_mcp_health_does_not_call_an_uncreated_location_unconfigured(
+        monkeypatch, capsys):
+    """The service never took the directory: nothing was verified, so it fails."""
     from perun import __main__ as cli
 
     monkeypatch.setattr(mcp_health, "project_directories", lambda: [r"C:\a"])
@@ -499,10 +539,17 @@ def test_cmd_mcp_health_gives_up_on_a_location_that_stays_unconfigured(
                         lambda server, directory: _report(
                             server, directory, "", configured=False))
     monkeypatch.setattr(mcp_health, "MATERIALIZE_SETTLE_SECONDS", 0)
+    monkeypatch.setattr(mcp_health, "location_known", lambda directory, api=None: False)
+    _service_knows(monkeypatch)  # the service had never seen it
 
-    assert cli.cmd_mcp_health(_args()) == 0
+    assert cli.cmd_mcp_health(_args()) == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["results"][0]["configured"] is False
+    report = payload["results"][0]
+    assert report["configured"] is False
+    assert report["verdict"] == "not_confirmed"
+    # The advice must not be "add the entry": the location was never created.
+    assert "add the `perun` entry" not in report["remedy"]
+    assert "unknown" in report["remedy"]
 
 
 def test_cmd_mcp_health_settles_a_pending_location(monkeypatch):
@@ -519,6 +566,7 @@ def test_cmd_mcp_health_settles_a_pending_location(monkeypatch):
     monkeypatch.setattr(mcp_health, "settle",
                         lambda server, directory, wait=0: settled.append(
                             (directory, wait)))
+    _service_knows(monkeypatch, r"C:\a")
 
     assert cli.cmd_mcp_health(_args()) == 0
     assert settled == [(r"C:\a", mcp_health.PENDING_SETTLE_SECONDS)]
@@ -535,6 +583,7 @@ def test_cmd_mcp_health_says_why_a_repair_failed(monkeypatch, capsys):
     monkeypatch.setattr(mcp_health, "revive", lambda server, directory, **kw: {
         "ok": False, "state": "failed", "already": False,
         "error": "HTTP 500 for /api/experimental/mcp/perun/connect"})
+    _service_knows(monkeypatch, r"C:\a", r"C:\b")
 
     assert cli.cmd_mcp_health(_args(fix=True, json=False)) == 1
     out = capsys.readouterr().out
@@ -563,3 +612,214 @@ def test_state_label_distinguishes_an_error_from_silence():
 
     assert cli._mcp_state_label(silent) == "service unreachable"
     assert cli._mcp_state_label(answered) == "service error"
+
+
+def test_state_label_names_a_refused_location_and_an_unconfirmed_one():
+    from perun import __main__ as cli
+
+    refused = _report("perun", r"C:\a", "", configured=False, reachable=False,
+                      answered=True, verdict="location_refused")
+    unconfirmed = _report("perun", r"C:\a", "", configured=False,
+                          verdict="not_confirmed")
+
+    assert cli._mcp_state_label(refused) == "location refused"
+    assert cli._mcp_state_label(unconfirmed) == "not confirmed"
+
+
+def test_cmd_mcp_health_prints_a_remedy_for_a_reachable_failure(
+        monkeypatch, capsys):
+    """A wedged connect is reachable; "no remedy" left the operator stuck."""
+    from perun import __main__ as cli
+
+    failed = "run `perun mcp-health --fix`; if it still fails, restart the editor"
+    monkeypatch.setattr(mcp_health, "project_directories",
+                        lambda: [r"C:\a", r"C:\b"])
+    monkeypatch.setattr(
+        mcp_health, "diagnose",
+        lambda server, directory: _report(
+            server, directory, "connected" if directory == r"C:\a" else "failed",
+            verdict="ok" if directory == r"C:\a" else "connect_failed",
+            remedy="" if directory == r"C:\a" else failed))
+    _service_knows(monkeypatch, r"C:\a", r"C:\b")
+
+    assert cli.cmd_mcp_health(_args(json=False)) == 1
+    out = capsys.readouterr().out
+    assert "remedy:     " + failed in out
+
+
+def test_cmd_mcp_health_prints_no_remedy_when_every_location_is_ok(
+        monkeypatch, capsys):
+    from perun import __main__ as cli
+
+    monkeypatch.setattr(mcp_health, "project_directories",
+                        lambda: [r"C:\a", r"C:\b"])
+    monkeypatch.setattr(mcp_health, "diagnose",
+                        lambda server, directory: _report(server, directory))
+    _service_knows(monkeypatch, r"C:\a", r"C:\b")
+
+    assert cli.cmd_mcp_health(_args(json=False)) == 0
+    assert "remedy:" not in capsys.readouterr().out
+
+
+def test_cmd_mcp_health_rejects_a_directory_that_does_not_exist(
+        monkeypatch, capsys, tmp_path):
+    """A path the service cannot open answers 404; say so before asking."""
+    from perun import __main__ as cli
+
+    missing = str(tmp_path / "gone")
+    monkeypatch.setattr(mcp_health, "project_directories",
+                        lambda: (_ for _ in ()).throw(
+                            AssertionError("--directory must not scan every location")))
+
+    assert cli.cmd_mcp_health(_args(all=False, directory=missing, json=True)) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"] == []
+    assert "no such directory" in payload["error"]
+    assert missing in payload["error"]
+
+
+def test_await_materialized_accepts_an_entry_that_appears_on_the_last_poll(
+        monkeypatch):
+    """The boundary is the deadline, not the poll count."""
+    from perun import __main__ as cli
+
+    clock = iter([0.0, 0.9])  # deadline, then a check still inside the window
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock, 99.0))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_SETTLE_SECONDS", 1.0)
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        mcp_health, "diagnose",
+        lambda server, directory: _report(server, directory, "connected",
+                                          configured=True))
+
+    report = cli._await_materialized(
+        mcp_health, "perun", _report("perun", r"C:\a", "", configured=False),
+        False, known=False)
+
+    assert report["state"] == "connected"
+    assert report["verdict"] == "ok"
+
+
+def test_await_materialized_reports_a_service_that_dies_mid_wait(monkeypatch):
+    """A dead service is not an unconfirmed location."""
+    from perun import __main__ as cli
+
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_SETTLE_SECONDS", 60.0)
+    monkeypatch.setattr(mcp_health, "MATERIALIZE_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        mcp_health, "diagnose",
+        lambda server, directory: _report(
+            server, directory, "", configured=False, reachable=False,
+            verdict="service_unreachable", remedy="start the service"))
+
+    report = cli._await_materialized(
+        mcp_health, "perun", _report("perun", r"C:\a", "", configured=False),
+        False, known=False)
+
+    assert report["verdict"] == "service_unreachable"
+    assert report["reachable"] is False
+
+
+def test_startup_record_retries_a_locked_replacement(tmp_path, monkeypatch):
+    """Windows refuses ``os.replace`` while another process reads the file."""
+    monkeypatch.setattr(mcp_health, "STARTUP_FILE", tmp_path / "mcp-startup.json")
+    monkeypatch.setattr(mcp_health, "REPLACE_RETRY_SECONDS", 0)
+    real_replace = os.replace
+    attempts = []
+
+    def flaky(src, dst):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError(13, "being used by another process", str(dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(mcp_health.os, "replace", flaky)
+
+    mcp_health.record_startup({"total_seconds": 2.0, "pid": 7})
+
+    assert len(attempts) == 3
+    assert mcp_health.read_startup()["total_seconds"] == 2.0
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_startup_record_leaves_no_temp_file_when_every_replace_fails(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(mcp_health, "STARTUP_FILE", tmp_path / "mcp-startup.json")
+    monkeypatch.setattr(mcp_health, "REPLACE_RETRY_SECONDS", 0)
+    monkeypatch.setattr(mcp_health.os, "replace",
+                        lambda src, dst: (_ for _ in ()).throw(
+                            PermissionError(13, "locked", str(dst))))
+
+    mcp_health.record_startup({"total_seconds": 2.0})
+
+    assert mcp_health.read_startup() == {}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_project_directories_dedupes_a_short_and_a_long_path(tmp_path, monkeypatch):
+    """The service can list one directory under its 8.3 name and its long name."""
+    from perun import registry
+
+    directory = tmp_path / "long_directory_name"
+    directory.mkdir()
+    short = str(tmp_path / "LONG_DI~1")
+
+    class Api(FakeAPI):
+        def locations(self):
+            return [str(directory), short]
+
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(
+        mcp_health.os.path, "realpath",
+        lambda path: str(directory) if str(path) == short else real_realpath(path))
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(
+        mcp_health.os.path, "isdir",
+        lambda path: True if str(path) == short else real_isdir(path))
+    monkeypatch.setattr(registry, "list_projects", lambda: [])
+
+    assert mcp_health.project_directories(Api()) == [str(directory)]
+
+
+def test_location_known_matches_the_short_and_the_long_form(monkeypatch):
+    monkeypatch.setattr(mcp_health, "service_locations",
+                        lambda api=None: [r"C:\Users\LSZCZE~1\proj"])
+
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(
+        mcp_health.os.path, "realpath",
+        lambda path: r"C:\Users\lszczepankowski\proj"
+        if str(path).lower() == r"c:\users\lszczce~1\proj".lower()
+        else real_realpath(path))
+
+    assert mcp_health.location_known(r"C:\Users\lszczepankowski\proj") is True
+
+
+def test_location_known_answers_false_when_the_list_is_unreadable(monkeypatch):
+    def broken(api=None):
+        raise RuntimeError("service down")
+
+    monkeypatch.setattr(mcp_health, "service_locations", broken)
+
+    assert mcp_health.location_known(r"C:\p") is False
+    assert mcp_health.location_known("") is False
+
+
+def test_diagnose_calls_a_404_a_refused_location(monkeypatch):
+    """A 404 is not "no server configured": the service refused the directory."""
+    from perun import opencode_api
+
+    class Refusing:
+        def mcp_servers(self, directory: str = ""):
+            raise opencode_api.OpenCodeHTTPError(404, "not found", "/api/mcp")
+
+    monkeypatch.setattr(mcp_health, "read_startup", lambda: {})
+    report = mcp_health.diagnose("perun", r"C:\gone", Refusing())
+
+    assert report["verdict"] == "location_refused"
+    assert report["answered"] is True
+    assert "404" in report["remedy"]
+    assert "add the `perun` entry" not in report["remedy"]
+    assert "did not answer" not in report["remedy"]
