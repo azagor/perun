@@ -1,6 +1,6 @@
 # Perun — Technical Documentation
 
-**Latest release:** v0.20.2 (see §15). Fastmcp pin and the memory kernel, above the 0.20 line
+**Latest release:** v0.20.3 (see §15). MCP health that names each failure and repairs every location, and an MCP start that no longer blocks the handshake
 
 **The Context layer (shipped, §3).** `AGENTS.md` is ambient context: it is paid
 for in full on every request of every session, and it grows without bound
@@ -3155,6 +3155,8 @@ critical path and never sees a provider credential.
 ---
 
 ## 15. Revision history
+### 2026-11-25 — v0.20.3: MCP health that names each failure and repairs every location, and an MCP start that no longer blocks the handshake
+
 ### 2026-11-23 — v0.20.2: Fastmcp pin and the memory kernel, above the 0.20 line
 
 ### 2026-11-22 — v0.19.1: Memory is an input in the global kernel

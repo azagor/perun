@@ -4,6 +4,12 @@ All notable changes are recorded here. Single source of truth for release notes.
 
 ## Unreleased
 
+_No unreleased changes yet._
+
+## v0.20.3
+
+*Released 2026-11-25.*
+
 ### Added
 
 * `python -m perun mcp-health [--all] [--fix] [--selftest] [--json]` diagnoses
