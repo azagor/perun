@@ -16,6 +16,11 @@ from pathlib import Path
 
 from perun import config, control, handbook
 
+#: Warm FastMCP before the clock starts: ``perun_mcp`` imports it too, and a cold
+#: FastMCP import (3-7 s) is not what ``test_importing_the_server_does_not_index``
+#: measures. Its budget is for *our* module, which is ~0.3 s.
+import fastmcp  # noqa: E402,F401
+
 MCP_PATH = Path(config.REPO_ROOT) / "mcp" / "perun_mcp.py"
 
 
